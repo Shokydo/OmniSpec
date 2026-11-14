@@ -69,8 +69,8 @@ jobs:
             **Обновления:** лаунчер сам проверяет этот репозиторий и предлагает обновиться.
 
             Требования: Windows 10/11 (на «десятке» нужен WebView2 — обычно уже установлен).
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   linux:
     name: Linux (портативный бинарник)
