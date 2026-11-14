@@ -1,0 +1,5 @@
+/target
+node_modules/
+*.omnispec-part
+.DS_Store
+apps/omnispec-app/gen/schemas/

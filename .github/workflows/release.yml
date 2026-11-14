@@ -1,0 +1,110 @@
+name: Release
+
+# Собираем OmniSpec.exe на Windows и публикуем релиз.
+# Лаунчер сам находит этот релиз через GitHub API и обновляется.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows (портативный exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Кэш зависимостей
+        uses: swatinem/rust-cache@v2
+
+      - name: Тесты ядра
+        run: cargo test -p omnispec-core
+
+      - name: Сверить версию в Cargo.toml с тегом
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($meta.packages | Where-Object { $_.name -eq 'omnispec-app' }).version
+          $tag = "${{ github.ref_name }}"
+          if ("v$version" -ne $tag) {
+            Write-Error "Тег $tag не совпадает с version = ""$version"" в Cargo.toml. Поменяй версию перед релизом."
+            exit 1
+          }
+
+      - name: Сборка
+        run: cargo build --release -p omnispec-app
+
+      - name: Подготовить артефакты
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/omnispec-app.exe dist/OmniSpec.exe
+          $hash = (Get-FileHash dist/OmniSpec.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  OmniSpec.exe" | Out-File -Encoding ascii dist/OmniSpec.exe.sha256
+          $size = [math]::Round((Get-Item dist/OmniSpec.exe).Length / 1MB, 1)
+          "Готово: OmniSpec.exe ($size МБ), sha256=$hash"
+
+      - name: Публикация релиза
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/OmniSpec.exe
+            dist/OmniSpec.exe.sha256
+          generate_release_notes: true
+          make_latest: true
+          body: |
+            ## OmniSpec ${{ github.ref_name }}
+
+            **Как установить:** скачай `OmniSpec.exe` и запусти. Больше ничего не нужно —
+            Java и файлы Minecraft лаунчер скачает сам при первом запуске.
+
+            **Обновления:** лаунчер сам проверяет этот репозиторий и предлагает обновиться.
+
+            Требования: Windows 10/11 (на «десятке» нужен WebView2 — обычно уже установлен).
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  linux:
+    name: Linux (портативный бинарник)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Кэш зависимостей
+        uses: swatinem/rust-cache@v2
+
+      - name: Системные библиотеки Tauri
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev librsvg2-dev patchelf
+
+      - name: Сборка
+        run: cargo build --release -p omnispec-app
+
+      - name: Подготовить артефакты
+        run: |
+          mkdir -p dist
+          cp target/release/omnispec-app dist/OmniSpec
+          chmod +x dist/OmniSpec
+          sha256sum dist/OmniSpec | sed 's|dist/||' > dist/OmniSpec.sha256
+
+      - name: Добавить файлы в релиз
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/OmniSpec
+            dist/OmniSpec.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

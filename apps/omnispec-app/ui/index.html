@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OmniSpec</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-cube" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7l-9-5Zm0 2.3 6.5 3.6L12 11.5 5.5 7.9 12 4.3ZM5 9.6l6 3.3v6.6l-6-3.3V9.6Zm8 9.9v-6.6l6-3.3v6.6l-6 3.3Z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><path d="M10.5 3a7.5 7.5 0 1 0 4.6 13.4l4.2 4.3 1.4-1.4-4.2-4.3A7.5 7.5 0 0 0 10.5 3Zm0 2a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11Z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 5h6l2 2h10v12H3V5Zm2 4v8h14V9H5Z"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 8.5A3.5 3.5 0 1 0 12 15.5 3.5 3.5 0 0 0 12 8.5Zm0 2a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Zm-1.4-8.4h2.8l.4 2.2 1.6.9 2.1-.8 1.4 2.4-1.7 1.5v1.8l1.7 1.5-1.4 2.4-2.1-.8-1.6.9-.4 2.2h-2.8l-.4-2.2-1.6-.9-2.1.8L3 9.1 4.7 7.6V5.8L3 4.3l1.4-2.4 2.1.8 1.6-.9.5-2.2Z" transform="translate(0 2)"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M3 4h18v16H3V4Zm2 2v12h14V6H5Zm2 2 3 3-3 3 2 2 5-5-5-5-2 2Z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7L8 5Z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></symbol>
+  <symbol id="i-restart" viewBox="0 0 24 24"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7Z"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a4 4 0 0 1 0-6l2-2a4 4 0 1 1 6 6l-1.5 1.5-1.4-1.4L16.5 9.6a2 2 0 1 0-2.8-2.8l-2 2a2 2 0 0 0 0 2.8L10 13Zm4-2a4 4 0 0 1 0 6l-2 2a4 4 0 1 1-6-6l1.5-1.5 1.4 1.4L7.5 14.4a2 2 0 1 0 2.8 2.8l2-2a2 2 0 0 0 0-2.8L14 11Z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4l1-2ZM6 8h12l-1 13H7L6 8Zm4 2v9h1v-9h-1Zm3 0v9h1v-9h-1Z"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z"/></symbol>
+  <symbol id="i-sort" viewBox="0 0 24 24"><path d="M5 6h14v2H5V6Zm2 5h10v2H7v-2Zm3 5h4v2h-4v-2Z"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 11h14v2H5z"/></symbol>
+  <symbol id="i-square" viewBox="0 0 24 24"><path d="M5 5h14v14H5V5Zm2 2v10h10V7H7Z"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6.4 5 5.6 5.6L17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4 6.4 5Z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M12 4V1L7 6l5 5V7a5 5 0 1 1-4.6 7h-2A7 7 0 1 0 12 4Z"/></symbol>
+  <symbol id="i-mod" viewBox="0 0 24 24"><path d="M4 7l8-4 8 4v10l-8 4-8-4V7Zm2 1.2v7.6l6 3 6-3V8.2l-6-3-6 3Z"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 2c1.2 0 2.6 2.3 3.1 5.5H8.9C9.4 7.3 10.8 5 12 5ZM5.2 11h2.7c-.1 1-.1 2 0 3H5.2a7 7 0 0 1 0-3Zm3.7 0h6.2c.1 1 .1 2 0 3H8.9c-.1-1-.1-2 0-3Zm7.2 0h2.7a7 7 0 0 1 0 3h-2.7c.1-1 .1-2 0-3ZM12 19c-1.2 0-2.6-2.3-3.1-5.5h6.2C14.6 16.7 13.2 19 12 19Z"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16 6.3 10.3l1.4-1.4L11 12.2V3ZM4 18h16v2H4v-2Z"/></symbol>
+  <symbol id="i-base" viewBox="0 0 24 24"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Zm0 2.2 5.6 2.8L12 10.8 6.4 8 12 5.2Z"/></symbol>
+</svg>
+
+<div class="app">
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo"><svg class="ic"><use href="#i-cube"/></svg></div>
+      <div class="brand-text">
+        <div class="brand-name">OmniSpec</div>
+        <div class="brand-sub">ЛАУНЧЕР</div>
+      </div>
+      <button class="icon-btn" id="btn-global-settings" title="Настройки"><svg class="ic"><use href="#i-settings"/></svg></button>
+    </div>
+
+    <div class="sidebar-section">
+      <span class="section-title">СБОРКИ</span>
+      <span class="badge" id="instances-count">0</span>
+      <div class="spacer"></div>
+      <button class="icon-btn" id="btn-grid" title="Вид"><svg class="ic"><use href="#i-grid"/></svg></button>
+      <button class="icon-btn" id="btn-sort" title="Сортировка"><svg class="ic"><use href="#i-sort"/></svg></button>
+    </div>
+
+    <label class="search">
+      <svg class="ic"><use href="#i-search"/></svg>
+      <input id="instance-search" type="text" placeholder="Сканировать" spellcheck="false" />
+    </label>
+
+    <div class="instance-list" id="instance-list"></div>
+
+    <div class="sidebar-foot">
+      <button class="btn btn-primary" id="btn-create"><svg class="ic"><use href="#i-plus"/></svg>Создать сборку</button>
+      <button class="btn btn-ghost" id="btn-import">+ Добавить существующую</button>
+      <div class="active-row">
+        <span class="muted">Активно</span>
+        <span id="active-count">0/0</span>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-small" id="btn-start-all"><svg class="ic"><use href="#i-play"/></svg>Запустить</button>
+        <button class="btn btn-small" id="btn-stop"><svg class="ic"><use href="#i-stop"/></svg>Остановить</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-small btn-wide" id="btn-restart"><svg class="ic"><use href="#i-restart"/></svg>Перезапустить</button>
+        <button class="btn btn-small btn-square" id="btn-settings-short" title="Настройки"><svg class="ic"><use href="#i-settings"/></svg></button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+    <header class="titlebar" data-tauri-drag-region>
+      <div class="tb-left" data-tauri-drag-region>
+        <div class="tb-icon" id="tb-icon"><svg class="ic"><use href="#i-base"/></svg></div>
+        <div class="tb-titles" data-tauri-drag-region>
+          <div class="tb-name" id="tb-name">OmniSpec</div>
+          <div class="tb-meta" data-tauri-drag-region>
+            <span class="dot" id="tb-dot"></span>
+            <span id="tb-status">сборка не выбрана</span>
+            <span class="sep">·</span>
+            <span id="tb-version" class="muted">—</span>
+          </div>
+        </div>
+      </div>
+      <div class="tb-center" data-tauri-drag-region id="tb-center">OmniSpec — лаунчер Minecraft</div>
+      <div class="tb-right">
+        <button class="icon-btn win" data-win="minimize" title="Свернуть"><svg class="ic"><use href="#i-minus"/></svg></button>
+        <button class="icon-btn win" data-win="maximize" title="Развернуть"><svg class="ic"><use href="#i-square"/></svg></button>
+        <button class="icon-btn win danger" data-win="close" title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+      </div>
+    </header>
+
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <span class="pill" id="loader-pill" hidden></span>
+      </div>
+      <div class="toolbar-right">
+        <button class="pill update-pill" id="btn-update" hidden>
+          <span class="update-dot"></span><span id="btn-update-text">Обновление</span>
+        </button>
+        <button class="icon-btn lg" id="btn-modrinth" title="Modrinth"><svg class="ic"><use href="#i-globe"/></svg></button>
+        <button class="icon-btn lg" id="btn-folder" title="Открыть папку сборки"><svg class="ic"><use href="#i-folder"/></svg></button>
+        <button class="icon-btn lg" id="btn-link" title="Ссылка на сборку"><svg class="ic"><use href="#i-link"/></svg></button>
+        <button class="btn btn-play" id="btn-play"><svg class="ic"><use href="#i-play"/></svg><span>Играть</span></button>
+        <button class="icon-btn lg" id="btn-tab-settings" title="Настройки сборки"><svg class="ic"><use href="#i-settings"/></svg></button>
+      </div>
+    </div>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab is-active" data-tab="console">Консоль</button>
+      <button class="tab" data-tab="files">Файлы</button>
+      <button class="tab" data-tab="mods">Моды <span class="tab-badge" id="badge-mods" hidden>0</span></button>
+      <button class="tab" data-tab="resourcepacks">Ресурспаки</button>
+      <button class="tab" data-tab="worlds">Миры</button>
+      <button class="tab" data-tab="modrinth">Modrinth</button>
+      <button class="tab" data-tab="settings">Настройки</button>
+      <button class="tab" data-tab="about">О лаунчере</button>
+      <div class="tabs-fill"></div>
+      <div class="progress" id="progress" hidden>
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+        <span class="progress-text" id="progress-text"></span>
+      </div>
+    </nav>
+
+    <section class="tab-body" id="tab-body"></section>
+  </main>
+</div>
+
+<!-- ============ МОДАЛКА СОЗДАНИЯ ============ -->
+<div class="modal-backdrop" id="modal-create" hidden>
+  <div class="modal">
+    <header class="modal-head">
+      <h2>Создание сборки</h2>
+      <button class="icon-btn" data-close-modal><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="modal-tabs" id="create-tabs">
+      <button class="mtab is-active" data-mode="manual">С нуля</button>
+      <button class="mtab" data-mode="modrinth">Из Modrinth</button>
+    </div>
+    <div class="modal-body" id="create-body"></div>
+    <footer class="modal-foot">
+      <span class="hint" id="create-hint"></span>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" data-close-modal>Отмена</button>
+      <button class="btn btn-primary" id="create-submit">Создать</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ============ МОДАЛКА ОБНОВЛЕНИЯ ============ -->
+<div class="modal-backdrop" id="modal-update" hidden>
+  <div class="modal" style="width:min(640px,92vw)">
+    <header class="modal-head">
+      <h2 id="upd-title">Доступно обновление</h2>
+      <button class="icon-btn" data-close-update><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="modal-body">
+      <div class="upd-meta">
+        <span class="tag" id="upd-versions">—</span>
+        <span class="muted" id="upd-date"></span>
+        <span class="spacer"></span>
+        <span class="muted" id="upd-asset"></span>
+      </div>
+      <pre class="upd-notes" id="upd-notes"></pre>
+      <div class="upd-progress" id="upd-progress" hidden>
+        <div class="progress-bar"><div class="progress-fill" id="upd-fill"></div></div>
+        <span class="progress-text" id="upd-progress-text"></span>
+      </div>
+    </div>
+    <footer class="modal-foot">
+      <button class="btn btn-ghost" id="upd-page">Открыть на GitHub</button>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" data-close-update>Позже</button>
+      <button class="btn btn-primary" id="upd-install">Обновить и перезапустить</button>
+    </footer>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<script src="app.js"></script>
+</body>
+</html>
