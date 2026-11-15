@@ -2292,7 +2292,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-app"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "futures",
  "omnispec-core",
@@ -2305,7 +2305,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "dirs 5.0.1",
  "futures",
@@ -2322,7 +2322,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-setup"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "libc",
  "omnispec-core",

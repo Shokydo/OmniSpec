@@ -75,7 +75,7 @@ cargo run -p omnispec-app
 Оба файла лежат в [releases](https://github.com/Shokydo/OmniSpec/releases/latest) и собираются
 GitHub Actions при каждом теге `vX.Y.Z`.
 
-**1. `OmniSpec-Установка.exe`** — установщик в стиле OmniPanel: чёрное окно консоли,
+**1. `OmniSpec-Setup.exe`** — установщик в стиле OmniPanel: чёрное окно консоли,
 шапка с правилами, «Версия / Куда установится / Внутри», список «Что будет сделано»
 и Enter/Esc. Разложит лаунчер в `%LOCALAPPDATA%\OmniSpec`, сделает ярлыки на
 рабочем столе и в «Пуск», запустит его. Права администратора не нужны, лаунчер
