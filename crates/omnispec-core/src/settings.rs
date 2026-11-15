@@ -130,6 +130,10 @@ pub struct Settings {
     #[serde(default)]
     pub categories: Vec<Category>,
 
+    /// Сохранённые пользователем пресеты скина.
+    #[serde(default)]
+    pub skin_presets: Vec<SkinPreset>,
+
     /// Тема интерфейса (id пресета из OmniPanel: dark, navy, light, … + custom).
     #[serde(default = "default_theme")]
     pub theme: String,
@@ -155,6 +159,29 @@ pub struct Category {
     /// Свёрнута ли папка в списке.
     #[serde(default)]
     pub collapsed: bool,
+}
+
+/// Пресет скина: палитра + модель, чтобы пресетов могло быть сколько угодно.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SkinPreset {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub variant: String,
+    #[serde(default)]
+    pub angle: i32,
+    #[serde(default)]
+    pub skin: String,
+    #[serde(default)]
+    pub hair: String,
+    #[serde(default)]
+    pub shirt: String,
+    #[serde(default)]
+    pub pants: String,
+    #[serde(default)]
+    pub shoe: String,
+    #[serde(default)]
+    pub accent: String,
 }
 
 impl Default for Settings {
@@ -190,6 +217,7 @@ impl Default for Settings {
             sound_fx: true,
             sound_volume: default_sound_volume(),
             categories: Vec::new(),
+            skin_presets: Vec::new(),
             theme: default_theme(),
             theme_bg: None,
             theme_accent: None,

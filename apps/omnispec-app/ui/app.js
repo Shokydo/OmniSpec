@@ -299,6 +299,11 @@
       <button class="ctx-item" data-act="icon"><svg class="ic"><use href="#i-image"/></svg>Иконка из картинки…</button>
       ${isImageIcon(meta.icon) ? `<button class="ctx-item" data-act="icon-reset"><svg class="ic"><use href="#i-close"/></svg>Вернуть обычную иконку</button>` : ""}
       <button class="ctx-item" data-act="rename"><svg class="ic"><use href="#i-pencil"/></svg>Переименовать</button>
+      ${categoriesOf().length ? `<div class="ctx-sep"></div>
+      <div class="ctx-caption">Переместить в</div>
+      ${categoriesOf().map((category) => `<button class="ctx-item" data-act="move:${esc(category.id)}">
+        <svg class="ic"><use href="#${meta.category === category.id ? "i-check" : "i-folder"}"/></svg>${esc(category.name)}</button>`).join("")}
+      <button class="ctx-item" data-act="move:" ${meta.category ? "" : "disabled"}><svg class="ic"><use href="#i-close"/></svg>Без категории</button>` : ""}
       <div class="ctx-sep"></div>
       <button class="ctx-item" data-act="folder"><svg class="ic"><use href="#i-folder"/></svg>Открыть папку сборки</button>
       <button class="ctx-item" data-act="refresh"><svg class="ic"><use href="#i-download"/></svg>Обновить файлы игры</button>
@@ -316,6 +321,11 @@
 
   async function runInstanceAction(action, meta) {
     const fresh = state.instances.find((item) => item.id === meta.id) || meta;
+    if (action.startsWith("move:")) {
+      const target = action.slice(5) || null;
+      await moveInstanceToCategory(fresh.id, target);
+      return;
+    }
     if (action === "play") {
       state.selectedId = fresh.id;
       renderSidebar();
@@ -413,7 +423,7 @@
   async function launchDuplicate(meta, accountUuid) {
     try {
       const plan = await api.launch(meta.id, accountUuid);
-      addSession(meta.id, plan && plan.run_id);
+      addSession(meta.id, plan && plan.run_id, plan && plan.account);
       renderSidebar();
       updateStatus();
       const who = (plan && plan.account) ? ` · ${plan.account}` : "";
@@ -735,7 +745,17 @@
     versions: async () => DEMO.versions,
     loaderVersions: async (kind) => (kind === "vanilla" ? [] : [{ version: "0.16.9", stable: true }, { version: "0.16.5", stable: true }, { version: "0.15.11", stable: false }]),
     installInstance: async () => null,
-    launch: async () => ({ version_id: "demo", java: "java", memory_mb: 4096, args: [], instance_id: "demo", game_dir: "", natives_dir: "", classpath_entries: 0 }),
+    launch: async (id, accountUuid) => {
+      const account = DEMO.accounts.find((item) => item.uuid === accountUuid)
+        || DEMO.accounts.find((item) => item.uuid === DEMO.active)
+        || DEMO.accounts[0];
+      return {
+        version_id: "demo", java: "java", memory_mb: 4096, args: [], instance_id: id || "demo",
+        game_dir: "", natives_dir: "", classpath_entries: 0,
+        run_id: `${id || "demo"}#${Math.random().toString(36).slice(2, 6)}`,
+        account: account ? account.username : ""
+      };
+    },
     stop: async () => null,
     running: async () => [],
     search: async (q) => {
@@ -996,20 +1016,27 @@
 
   /* ==================== САЙДБАР ==================== */
   /** Сессии запуска: у сборки может работать несколько окон (дубликаты). */
-  function addSession(instanceId, runId) {
+  function addSession(instanceId, runId, account) {
     if (!state.sessions) state.sessions = new Map();
-    if (!state.sessions.has(instanceId)) state.sessions.set(instanceId, new Set());
-    state.sessions.get(instanceId).add(runId || `local-${Date.now()}`);
+    if (!state.sessions.has(instanceId)) state.sessions.set(instanceId, new Map());
+    const key = runId || `local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    state.sessions.get(instanceId).set(key, { account: account || "" });
     state.running.add(instanceId);
+  }
+
+  /** Сессии сборки: первая — обычный запуск, остальные — дубликаты. */
+  function sessionsOf(instanceId) {
+    const map = state.sessions && state.sessions.get(instanceId);
+    return map ? Array.from(map.values()) : [];
   }
 
   function dropSession(instanceId, runId) {
     if (!state.sessions) state.sessions = new Map();
-    const set = state.sessions.get(instanceId);
-    if (set) {
-      if (runId) set.delete(runId);
-      else set.clear();
-      if (!set.size) state.sessions.delete(instanceId);
+    const map = state.sessions.get(instanceId);
+    if (map) {
+      if (runId) map.delete(runId);
+      else map.clear();
+      if (!map.size) state.sessions.delete(instanceId);
     }
     if (!state.sessions.has(instanceId)) state.running.delete(instanceId);
   }
@@ -1025,18 +1052,33 @@
     try { await api.saveSettings(state.settings); } catch (error) { /* не критично */ }
   }
 
-  function instanceRowHtml(item) {
+  function instanceRowHtml(item, options = {}) {
     const running = state.running.has(item.id);
-    return `<div class="instance ${item.id === state.selectedId ? "is-active" : ""}" data-id="${esc(item.id)}" draggable="true">
-      <div class="instance-icon">${instanceIconHtml(item)}</div>
-      <div class="instance-body">
-        <div class="instance-name">${esc(item.name)}</div>
-        <div class="instance-sub">MC ${esc(item.mc_version)} · ${esc(loaderLabel(item.loader))}</div>
+    const sessions = running ? sessionsOf(item.id) : [];
+    // первый запуск — сама сборка, остальные — дубликаты отдельными нодами
+    const dups = options.dups ? sessions.slice(1) : [];
+    const dupsHtml = dups.length
+      ? `<div class="instance-dups">${dups.map((session) => `
+          <div class="instance-dup" data-dup-of="${esc(item.id)}" title="Дубликат сборки${session.account ? ` · ${esc(session.account)}` : ""}">
+            <span class="dup-branch"></span>
+            <span class="dup-name">дубликат</span>
+            ${session.account ? `<span class="dup-sep">·</span><span class="dup-account">${esc(session.account)}</span>` : ""}
+          </div>`).join("")}</div>`
+      : "";
+    return `<div class="instance-wrap">
+      <div class="instance ${item.id === state.selectedId ? "is-active" : ""}" data-id="${esc(item.id)}">
+        <div class="instance-icon">${instanceIconHtml(item)}</div>
+        <div class="instance-body">
+          <div class="instance-name">${esc(item.name)}</div>
+          <div class="instance-sub">MC ${esc(item.mc_version)} · ${esc(loaderLabel(item.loader))}${sessions.length > 1 ? ` · <span class="dup-count">${sessions.length} окна</span>` : ""}</div>
+        </div>
+        <span class="instance-time" title="Время игры">${esc(playtimeLabel(item.playtime_secs))}</span>
+        ${running ? '<div class="instance-running" title="Запущена"></div>' : ""}
       </div>
-      <span class="instance-time" title="Время игры">${esc(playtimeLabel(item.playtime_secs))}</span>
-      ${running ? '<div class="instance-running" title="Запущена"></div>' : ""}
+      ${dupsHtml}
     </div>`;
   }
+
 
   function catGroupHtml({ id, name, items, open, running }) {
     return `<div class="cat ${open ? "is-open" : ""}" data-cat="${esc(id || "")}">
@@ -1045,7 +1087,7 @@
         <span class="cat-name">${esc(name)}</span>
         <span class="cat-count">${items.length}</span>
       </div>
-      <div class="cat-items">${items.map(instanceRowHtml).join("")}</div>
+      <div class="cat-items">${items.map((item) => instanceRowHtml(item, { dups: Boolean(running) })).join("")}</div>
     </div>`;
   }
 
@@ -1110,53 +1152,127 @@
     const list = $("#instance-list");
     // пустое место списка: создать / загрузить сборку / создать категорию
     list.oncontextmenu = (event) => {
-      const row = event.target.closest(".instance");
-      if (row) return; // по строке работает своё меню
-      event.preventDefault();
       const head = event.target.closest(".cat-head");
+      if (event.target.closest(".instance")) return; // по строке работает своё меню
+      event.preventDefault();
       if (head && head.dataset.catHead) openCategoryMenu(event.clientX, event.clientY, head.dataset.catHead);
       else openListMenu(event.clientX, event.clientY);
     };
 
     $$(".instance", list).forEach((el) => {
-      el.addEventListener("click", () => selectInstance(el.dataset.id));
+      el.addEventListener("click", () => {
+        if (consumeDragClick()) return;
+        selectInstance(el.dataset.id);
+      });
       el.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         const meta = state.instances.find((item) => item.id === el.dataset.id);
         if (meta) openInstanceMenu(event.clientX, event.clientY, meta);
       });
-      el.addEventListener("dragstart", (event) => {
-        event.dataTransfer.setData("text/omnispec-instance", el.dataset.id);
-        event.dataTransfer.effectAllowed = "move";
-        el.classList.add("is-drag");
-        list.classList.add("is-dragging");
-      });
-      el.addEventListener("dragend", () => {
-        el.classList.remove("is-drag");
-        list.classList.remove("is-dragging");
-        $$(".cat-head", list).forEach((head) => head.classList.remove("is-drop"));
+      el.addEventListener("mousedown", (event) => beginInstanceDrag(event, el));
+    });
+
+    $$(".instance-dup", list).forEach((el) => {
+      el.addEventListener("click", () => {
+        if (el.dataset.dupOf) selectInstance(el.dataset.dupOf);
       });
     });
 
-    // папки-категории как цели перетаскивания
+    // папка-категория: клик по заголовку сворачивает, drag переносит сборку
     $$(".cat", list).forEach((group) => {
       const id = group.dataset.cat;
       const head = group.querySelector(".cat-head");
       if (!head || id === "__running") return;
       if (id) head.addEventListener("click", () => toggleCategory(id));
-      head.addEventListener("dragover", (event) => {
-        if (!event.dataTransfer.types.includes("text/omnispec-instance")) return;
-        event.preventDefault();
-        head.classList.add("is-drop");
-      });
-      head.addEventListener("dragleave", () => head.classList.remove("is-drop"));
-      head.addEventListener("drop", (event) => {
-        event.preventDefault();
-        head.classList.remove("is-drop");
-        const instanceId = event.dataTransfer.getData("text/omnispec-instance");
-        if (instanceId) moveInstanceToCategory(instanceId, id || null);
-      });
+      head.dataset.dropCat = id;
+      group.dataset.dropCat = id;
     });
+    // сброс категории — перетащить на «Все сборки»/пустое место списка
+    list.dataset.dropCat = "__none";
+    if (!list.dataset.dragBound) {
+      list.dataset.dragBound = "1";
+      list.addEventListener("mousemove", () => {});
+    }
+  }
+
+  /* ── перетаскивание сборок между категориями (свой drag: HTML5 DnD в WebView2 режется) ── */
+  let dragState = null;
+  let dragClickGuard = false;
+  const consumeDragClick = () => {
+    if (!dragClickGuard) return false;
+    dragClickGuard = false;
+    return true;
+  };
+
+  function beginInstanceDrag(event, row) {
+    if (event.button !== 0) return;
+    if (event.target.closest(".instance-dup")) return;
+    dragState = {
+      id: row.dataset.id,
+      row,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+      ghost: null,
+      target: null
+    };
+    window.addEventListener("mousemove", onInstanceDragMove);
+    window.addEventListener("mouseup", onInstanceDragEnd);
+  }
+
+  function clearDropHighlight() {
+    $$(".cat-head.is-drop, .instance-list.is-drop").forEach((el) => el.classList.remove("is-drop"));
+  }
+
+  function onInstanceDragMove(event) {
+    if (!dragState) return;
+    const dx = event.clientX - dragState.startX;
+    const dy = event.clientY - dragState.startY;
+    if (!dragState.active && Math.hypot(dx, dy) < 5) return;
+    if (!dragState.active) {
+      dragState.active = true;
+      const meta = state.instances.find((item) => item.id === dragState.id);
+      const ghost = document.createElement("div");
+      ghost.className = "drag-ghost";
+      ghost.innerHTML = `<span class="drag-ghost-name">${esc(meta ? meta.name : "сборка")}</span>`;
+      document.body.appendChild(ghost);
+      dragState.ghost = ghost;
+      dragState.row.classList.add("is-drag");
+      document.body.classList.add("is-dragging");
+    }
+    dragState.ghost.style.left = `${event.clientX + 12}px`;
+    dragState.ghost.style.top = `${event.clientY + 10}px`;
+
+    const under = document.elementFromPoint(event.clientX, event.clientY);
+    const group = under ? under.closest(".cat[data-drop-cat]") : null;
+    const inList = under ? under.closest("#instance-list") : null;
+    clearDropHighlight();
+    if (group && group.dataset.dropCat !== "__running") {
+      dragState.target = group.dataset.dropCat || null;
+      const head = group.querySelector(".cat-head");
+      if (head) head.classList.add("is-drop");
+    } else if (inList) {
+      dragState.target = "__none";
+      $("#instance-list").classList.add("is-drop");
+    } else {
+      dragState.target = undefined;
+    }
+  }
+
+  async function onInstanceDragEnd() {
+    window.removeEventListener("mousemove", onInstanceDragMove);
+    window.removeEventListener("mouseup", onInstanceDragEnd);
+    if (!dragState) return;
+    const drag = dragState;
+    dragState = null;
+    clearDropHighlight();
+    document.body.classList.remove("is-dragging");
+    if (drag.ghost) drag.ghost.remove();
+    if (drag.row) drag.row.classList.remove("is-drag");
+    if (!drag.active) return;
+    dragClickGuard = true;
+    if (drag.target === undefined) return;
+    await moveInstanceToCategory(drag.id, drag.target === "__none" ? null : drag.target);
   }
 
   async function toggleCategory(id) {
@@ -3097,7 +3213,6 @@
   /* ==================== НАСТРОЙКИ ЛАУНЧЕРА (по категориям) ==================== */
   const PREFS = [
     { id: "profile", label: "Профиль" },
-    { id: "skin", label: "Скин" },
     { id: "look", label: "Оформление" },
     { id: "wall", label: "Фон" },
     { id: "fx", label: "Эффекты" },
@@ -3121,9 +3236,9 @@
       // история: сохранённая + то, что выбрали в этом сеансе
       recent: Array.isArray(settings.wallpaper_recent) ? settings.wallpaper_recent.slice(0, 6) : []
     };
-    state.skin = state.skin || { preset: SKIN_PRESETS[0].id, variant: "classic", angle: -18 };
+    skinState();
     if (state.skin.licensed === undefined) refreshAccountSkin().then(() => {
-      if (!$("#modal-prefs").hidden && prefsCategory === "skin") renderPrefs();
+      if (!$("#modal-prefs").hidden && prefsCategory === "profile") renderPrefs();
     });
     modal.hidden = false;
     renderPrefsAccountCard();
@@ -3144,7 +3259,6 @@
     const settings = state.settings || {};
     renderPrefsAccountCard();
     if (prefsCategory === "profile") body.innerHTML = prefsProfile();
-    if (prefsCategory === "skin") body.innerHTML = prefsSkin();
     if (prefsCategory === "look") body.innerHTML = prefsLook(settings);
     if (prefsCategory === "wall") body.innerHTML = prefsWall(settings);
     if (prefsCategory === "fx") body.innerHTML = prefsFx();
@@ -3153,8 +3267,10 @@
     if (prefsCategory === "updates") body.innerHTML = prefsUpdates(settings);
     if (prefsCategory === "sound") body.innerHTML = prefsSound(settings);
     bindPrefs();
-    if (prefsCategory === "profile") bindPrefsProfile();
-    if (prefsCategory === "skin") bindSkin();
+    if (prefsCategory === "profile") {
+      bindPrefsProfile();
+      bindSkin();
+    }
   }
 
   /** Профиль: слева список аккаунтов, справа — активный. */
@@ -3214,7 +3330,8 @@
               : "Офлайн-аккаунт: подходит для серверов без проверки лицензии."}</div>`
             : `<div class="profile-card is-empty"><span class="muted">Аккаунта пока нет</span></div>`}
         </section>
-      </div>`;
+      </div>
+      ${skinSectionHtml()}`;
   }
 
   function bindPrefsProfile() {
@@ -3980,117 +4097,245 @@
     });
   }
 
-  function prefsSkin() {
-    const skin = state.skin || {};
-    const licensed = skin.licensed;
+  /** Состояние раздела «Скин» (лежит в профиле). */
+  function skinState() {
+    if (!state.skin) {
+      const base = SKIN_PRESETS[0];
+      state.skin = { preset: base.id, variant: "classic", angle: -18, mode: "preset", colors: colorsOfPreset(base) };
+    }
+    if (!state.skin.colors) state.skin.colors = colorsOfPreset(SKIN_PRESETS[0]);
+    return state.skin;
+  }
+
+  /** Сохранённые пользователем пресеты (сколько угодно). */
+  function userSkinPresets() {
+    const list = state.settings && Array.isArray(state.settings.skin_presets) ? state.settings.skin_presets : [];
+    return list.filter((item) => item && item.id);
+  }
+
+  function colorsOfPreset(preset) {
+    return {
+      skin: preset.skin || "#c49a76",
+      hair: preset.hair || "#3b2a1c",
+      shirt: preset.shirt || "#2f8faf",
+      pants: preset.pants || "#3a3f8f",
+      shoe: preset.shoe || "#3b3b44",
+      accent: preset.accent || "#8fd6e8"
+    };
+  }
+
+  function allSkinPresets() {
+    return [...SKIN_PRESETS, ...userSkinPresets()];
+  }
+
+  function findSkinPreset(id) {
+    return allSkinPresets().find((preset) => preset.id === id) || null;
+  }
+
+  const SKIN_COLOR_FIELDS = [
+    ["skin", "кожа"], ["hair", "волосы"], ["shirt", "рубашка"],
+    ["pants", "штаны"], ["shoe", "обувь"], ["accent", "акцент"]
+  ];
+
+  function skinSectionHtml() {
+    const skin = skinState();
+    const licensed = Boolean(skin.licensed);
     const variant = skin.variant || "classic";
+    const presetButton = (preset, isUser) => `
+      <button class="skin-preset ${isUser ? "is-user" : ""} ${preset.id === skin.preset ? "is-active" : ""}"
+              data-preset="${esc(preset.id)}" ${isUser ? 'data-user="1"' : ""} title="${esc(preset.name)}">
+        <canvas data-preset-thumb="${esc(preset.id)}" width="64" height="64"></canvas>
+        <span>${esc(preset.name)}</span>
+        ${isUser ? `<span class="preset-del" data-del-preset="${esc(preset.id)}" title="Удалить пресет">×</span>` : ""}
+      </button>`;
     return `
-      <div class="skin-grid">
-        <div class="skin-stage">
-          <canvas id="skin-canvas" width="640" height="900"></canvas>
+      <section class="prefs-section skin-section">
+        <div class="prefs-label-row">
+          <span class="prefs-label">Скин аккаунта</span>
+          <div class="spacer"></div>
+          <span class="tag ${licensed ? "green" : ""}">${licensed ? "лицензия" : "только лицензия"}</span>
         </div>
-        <div class="skin-ctrl">
-          <section class="prefs-section">
-            <div class="prefs-label-row">
-              <span class="prefs-label">Модель скина</span>
-              <div class="spacer"></div>
-              <button class="btn btn-small" id="skin-custom">Свой PNG…</button>
-            </div>
+        <div class="skin-grid">
+          <div class="skin-stage"><canvas id="skin-canvas" width="640" height="900"></canvas></div>
+          <div class="skin-ctrl">
             <div class="chips" id="skin-variant">
               <button class="chip ${variant === "classic" ? "is-active" : ""}" data-variant="classic">Wide (4 px)</button>
               <button class="chip ${variant === "slim" ? "is-active" : ""}" data-variant="slim">Slim (3 px)</button>
             </div>
-            <div class="skin-angle" style="margin-top:12px">
+            <div class="skin-colors">
+              ${SKIN_COLOR_FIELDS.map(([field, label]) => `
+                <label class="skin-color" title="${label}">
+                  <input type="color" data-skin-color="${field}" value="${skin.colors[field] || "#000000"}" />
+                  <span>${label}</span>
+                </label>`).join("")}
+            </div>
+            <div class="skin-angle">
               <span class="prefs-label" style="margin:0">Поворот</span>
               <input type="range" id="skin-angle" min="-35" max="35" step="1" value="${Number(skin.angle ?? -18)}" />
               <span class="val" id="skin-angle-value">${Number(skin.angle ?? -18)}°</span>
             </div>
-            <div class="skin-note">Второй слой (кепка и жилет) виден при повороте фигуры.</div>
-          </section>
-          <section class="prefs-section">
-            <div class="prefs-label-row"><span class="prefs-label">Пресеты</span></div>
-            <div class="skin-presets" id="skin-presets">
-              ${SKIN_PRESETS.map((preset) => `
-                <button class="skin-preset ${preset.id === skin.preset ? "is-active" : ""}" data-preset="${preset.id}">
-                  <canvas data-preset-thumb="${preset.id}" width="64" height="64"></canvas>
-                  <span>${esc(preset.name)}</span>
-                </button>`).join("")}
+            <div class="prefs-label-row" style="margin:2px 0 0">
+              <span class="prefs-label">Пресеты</span>
+              <div class="spacer"></div>
+              <button class="btn btn-small" id="skin-save-preset">
+                <svg class="ic"><use href="#i-plus"/></svg>Сохранить пресет
+              </button>
             </div>
-          </section>
-          <div class="skin-row">
-            <button class="btn btn-primary btn-wide" id="skin-apply" ${licensed ? "" : "disabled"}>Применить к аккаунту</button>
+            <div class="skin-presets" id="skin-presets">
+              ${SKIN_PRESETS.map((preset) => presetButton(preset, false)).join("")}
+              ${userSkinPresets().map((preset) => presetButton(preset, true)).join("")}
+            </div>
+            <div class="skin-row">
+              <button class="btn" id="skin-custom">Свой PNG…</button>
+              <button class="btn btn-primary" id="skin-apply" ${licensed ? "" : "disabled"}>Применить к аккаунту</button>
+            </div>
+            <div class="skin-note ${licensed ? "" : "warn"}" id="skin-status">${licensed
+              ? "Второй слой — кепка и жилет; скин уйдёт в лицензионный аккаунт."
+              : "Смена скина только для лицензионного аккаунта. Пресеты можно посмотреть и сохранить."}</div>
           </div>
-          <div class="skin-note ${licensed ? "" : "warn"}" id="skin-status">${licensed
-            ? "Скин загрузится в лицензионный аккаунт — его увидят на серверах."
-            : "Смена скина доступна только для лицензионного аккаунта. Пресеты можно посмотреть."}</div>
         </div>
-      </div>`;
+      </section>`;
   }
 
   function currentSkinTexture() {
-    const skin = state.skin || {};
+    const skin = skinState();
     if (skin.mode === "account" && skin.accountTex) return skin.accountTex;
-    const preset = SKIN_PRESETS.find((item) => item.id === skin.preset) || SKIN_PRESETS[0];
     if (!skin.textures) skin.textures = {};
-    const key = `${preset.id}-${skin.variant || "classic"}`;
-    if (!skin.textures[key]) skin.textures[key] = buildSkinTexture(preset);
+    const key = `${skin.variant || "classic"}|${Object.values(skin.colors).join("-")}`;
+    if (!skin.textures[key]) skin.textures[key] = buildSkinTexture(skin.colors);
     return skin.textures[key];
   }
 
   function redrawSkinPreview() {
     const canvas = $("#skin-canvas");
     if (!canvas) return;
-    drawSkinPreview(canvas, currentSkinTexture(), (state.skin && state.skin.variant) || "classic", Number((state.skin && state.skin.angle) ?? -18));
+    const skin = skinState();
+    drawSkinPreview(canvas, currentSkinTexture(), skin.variant || "classic", Number(skin.angle ?? -18));
   }
 
   function bindSkin() {
-    const stage = $("#skin-canvas");
-    if (stage) redrawSkinPreview();
-    // миниатюры пресетов: голова в фас
+    const skin = skinState();
+    if ($("#skin-canvas")) redrawSkinPreview();
+
     $$("[data-preset-thumb]").forEach((thumb) => {
-      const preset = SKIN_PRESETS.find((item) => item.id === thumb.dataset.presetThumb);
+      const preset = findSkinPreset(thumb.dataset.presetThumb);
       if (!preset) return;
       const ctx = thumb.getContext("2d");
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(buildSkinTexture(preset), 8, 8, 8, 8, 0, 0, 64, 64);
+      ctx.drawImage(buildSkinTexture(colorsOfPreset(preset)), 8, 8, 8, 8, 0, 0, 64, 64);
     });
-    $$("#skin-presets .skin-preset").forEach((btn) => btn.addEventListener("click", () => {
-      state.skin.preset = btn.dataset.preset;
-      state.skin.mode = "preset";
-      $$("#skin-presets .skin-preset").forEach((el) => el.classList.toggle("is-active", el === btn));
-      redrawSkinPreview();
-    }));
+
+    $$("#skin-presets .skin-preset").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const preset = findSkinPreset(btn.dataset.preset);
+        if (!preset) return;
+        skin.preset = preset.id;
+        skin.mode = "preset";
+        skin.colors = colorsOfPreset(preset);
+        if (preset.variant === "classic" || preset.variant === "slim") skin.variant = preset.variant;
+        if (Number.isFinite(Number(preset.angle))) skin.angle = Number(preset.angle);
+        renderPrefs();
+      });
+      const del = btn.querySelector("[data-del-preset]");
+      if (del) del.addEventListener("click", (event) => {
+        event.stopPropagation();
+        deleteSkinPreset(del.dataset.delPreset);
+      });
+    });
+
     $$("#skin-variant .chip").forEach((chip) => chip.addEventListener("click", () => {
-      state.skin.variant = chip.dataset.variant;
+      skin.variant = chip.dataset.variant;
       $$("#skin-variant .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
       redrawSkinPreview();
     }));
+
+    $$("[data-skin-color]").forEach((input) => input.addEventListener("input", () => {
+      skin.colors = { ...skin.colors, [input.dataset.skinColor]: input.value };
+      skin.mode = "preset";
+      $$("#skin-presets .skin-preset").forEach((el) => el.classList.remove("is-active"));
+      redrawSkinPreview();
+    }));
+
     const angle = $("#skin-angle");
     if (angle) angle.addEventListener("input", () => {
-      state.skin.angle = Number(angle.value);
+      skin.angle = Number(angle.value);
       const label = $("#skin-angle-value");
       if (label) label.textContent = `${angle.value}°`;
       redrawSkinPreview();
     });
+
+    const savePreset = $("#skin-save-preset");
+    if (savePreset) savePreset.addEventListener("click", saveSkinPreset);
     const apply = $("#skin-apply");
     if (apply) apply.addEventListener("click", applySkinPreset);
     const custom = $("#skin-custom");
     if (custom) custom.addEventListener("click", applyCustomSkin);
   }
 
+  async function saveSkinPreset() {
+    const skin = skinState();
+    const name = await promptModal({
+      title: "Сохранить пресет скина",
+      label: "Название",
+      value: `Пресет ${userSkinPresets().length + 1}`
+    });
+    if (!name) return;
+    const preset = {
+      id: `skin-${Date.now().toString(36)}`,
+      name,
+      variant: skin.variant || "classic",
+      angle: Number(skin.angle ?? -18),
+      ...skin.colors
+    };
+    const next = { ...(state.settings || {}), skin_presets: [...userSkinPresets(), preset] };
+    state.settings = next;
+    try {
+      await api.saveSettings(next);
+    } catch (error) {
+      toast(String(error), "err");
+      return;
+    }
+    skin.preset = preset.id;
+    skin.mode = "preset";
+    toast(`Пресет «${name}» сохранён`, "ok");
+    renderPrefs();
+  }
+
+  async function deleteSkinPreset(id) {
+    const preset = userSkinPresets().find((item) => item.id === id);
+    if (!preset) return;
+    if (!confirm(`Удалить пресет «${preset.name}»?`)) return;
+    const next = { ...(state.settings || {}), skin_presets: userSkinPresets().filter((item) => item.id !== id) };
+    state.settings = next;
+    try {
+      await api.saveSettings(next);
+    } catch (error) {
+      toast(String(error), "err");
+      return;
+    }
+    const skin = skinState();
+    if (skin.preset === id) {
+      skin.preset = SKIN_PRESETS[0].id;
+      skin.colors = colorsOfPreset(SKIN_PRESETS[0]);
+    }
+    toast("Пресет удалён", "ok");
+    renderPrefs();
+  }
+
   async function applySkinPreset() {
-    const skin = state.skin || {};
+    const skin = skinState();
     if (!skin.licensed) return toast("Смена скина только для лицензии", "err");
-    const preset = SKIN_PRESETS.find((item) => item.id === skin.preset) || SKIN_PRESETS[0];
-    const texture = buildSkinTexture(preset);
+    const preset = findSkinPreset(skin.preset);
+    const name = preset ? preset.name : "свой";
+    const texture = buildSkinTexture(skin.colors);
     const button = $("#skin-apply");
     if (button) button.disabled = true;
     try {
-      const path = await api.saveSkinPng(texture.toDataURL("image/png"), `preset-${preset.id}`);
+      const path = await api.saveSkinPng(texture.toDataURL("image/png"), `preset-${skin.preset || "custom"}`);
       await api.applySkin(path, skin.variant || "classic");
       const status = $("#skin-status");
-      if (status) status.textContent = `Скин «${preset.name}» загружен в аккаунт.`;
-      toast(`Скин «${preset.name}» обновлён`, "ok");
+      if (status) status.textContent = `Скин «${name}» загружен в аккаунт.`;
+      toast(`Скин «${name}» обновлён`, "ok");
       await refreshAccountSkin();
       redrawSkinPreview();
     } catch (err) {
@@ -4101,7 +4346,7 @@
   }
 
   async function applyCustomSkin() {
-    const skin = state.skin || {};
+    const skin = skinState();
     const path = await api.pickFile("Скин 64×64 PNG", ["png"]).catch(() => null);
     if (!path) return;
     if (!skin.licensed) return toast("Смена скина только для лицензии", "err");
@@ -4123,8 +4368,9 @@
         canvas.width = 64;
         canvas.height = 64;
         canvas.getContext("2d").drawImage(image, 0, 0, 64, 64);
-        state.skin.accountTex = canvas;
-        state.skin.mode = "account";
+        const skin = skinState();
+        skin.accountTex = canvas;
+        skin.mode = "account";
         resolve(true);
       };
       image.onerror = () => resolve(false);
@@ -4134,14 +4380,15 @@
 
   async function refreshAccountSkin() {
     const info = await api.accountSkin().catch(() => null);
-    state.skin = state.skin || { preset: SKIN_PRESETS[0].id, variant: "classic", angle: -18 };
+    const skin = skinState();
     if (!info) return;
-    state.skin.licensed = Boolean(info.licensed);
-    if (info.variant && !state.skin.touchedVariant) state.skin.variant = info.variant === "slim" ? "slim" : "classic";
+    skin.licensed = Boolean(info.licensed);
+    if (info.variant && !skin.touchedVariant) skin.variant = info.variant === "slim" ? "slim" : "classic";
     if (info.data_url) {
-      await useSkinImage(info.data_url);
-    } else if (!state.skin.preset) {
-      state.skin.preset = SKIN_PRESETS[0].id;
+      const shown = await useSkinImage(info.data_url);
+      if (!shown) skin.mode = "preset";
+    } else if (!skin.preset) {
+      skin.preset = SKIN_PRESETS[0].id;
     }
   }
 
@@ -4446,7 +4693,7 @@
     try {
       const plan = await api.launch(meta.id);
       setProgress(null);
-      addSession(meta.id, plan && plan.run_id);
+      addSession(meta.id, plan && plan.run_id, plan && plan.account);
       pushLog(meta.id, `[omnispec] Java ${plan.java_major}: ${plan.java}`, "dim");
       pushLog(meta.id, `[omnispec] Память ${plan.memory_mb} МБ, артефактов в classpath: ${plan.classpath_entries}`, "dim");
       state.running.add(meta.id);
@@ -4805,7 +5052,6 @@
       const menu = $("#ctx-menu");
       if (menu && !menu.hidden) closeCtxMenu();
     });
-    on("#btn-launcher-settings", "click", () => openPrefs());
     on("#btn-quick-settings", "click", () => openPrefs());
     on("#btn-new-build", "click", openCreate);
     $$("[data-close-project]").forEach((el) => el.addEventListener("click", () => { $("#modal-project").hidden = true; }));
