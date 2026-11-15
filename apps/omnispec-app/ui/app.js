@@ -514,6 +514,7 @@
     accounts: () => invoke("accounts_info"),
     accountAddOffline: (username) => invoke("account_add_offline", { username }),
     accountSetActive: (uuid) => invoke("account_set_active", { uuid }),
+    accountRename: (uuid, username) => invoke("account_rename", { uuid, username }),
     accountRemove: (uuid) => invoke("account_remove", { uuid }),
     msStart: () => invoke("ms_login_start"),
     msPoll: (deviceCode) => invoke("ms_login_poll", { deviceCode }),
@@ -604,14 +605,32 @@
     installMod: async (_i, projectId) => ({ installed: [`${projectId}-1.0.0.jar`], skipped: [] }),
     installModVersion: async () => ({ installed: ["mod.jar"], skipped: [] }),
     installModpack: async () => DEMO.instances[0],
-    listDir: async () => ([
-      { name: "mods", is_dir: true, size: 0, path: "mods" },
-      { name: "config", is_dir: true, size: 0, path: "config" },
-      { name: "saves", is_dir: true, size: 0, path: "saves" },
-      { name: "resourcepacks", is_dir: true, size: 0, path: "resourcepacks" },
-      { name: "options.txt", is_dir: false, size: 2048, path: "options.txt" },
-      { name: "logs", is_dir: true, size: 0, path: "logs" }
-    ]),
+    listDir: async (_id, sub) => {
+      const tree = {
+        "": [
+          { name: "mods", is_dir: true, size: 0, path: "mods" },
+          { name: "config", is_dir: true, size: 0, path: "config" },
+          { name: "saves", is_dir: true, size: 0, path: "saves" },
+          { name: "resourcepacks", is_dir: true, size: 0, path: "resourcepacks" },
+          { name: "shaderpacks", is_dir: true, size: 0, path: "shaderpacks" },
+          { name: "options.txt", is_dir: false, size: 2048, path: "options.txt" },
+          { name: "logs", is_dir: true, size: 0, path: "logs" }
+        ],
+        resourcepacks: [
+          { name: "Stay_True_1.21.zip", is_dir: false, size: 4_204_800, path: "resourcepacks/Stay_True_1.21.zip" },
+          { name: "FreshAnimations_v1.9.zip", is_dir: false, size: 1_986_560, path: "resourcepacks/FreshAnimations_v1.9.zip" }
+        ],
+        shaderpacks: [
+          { name: "ComplementaryReimagined_r5.3.zip", is_dir: false, size: 3_112_960, path: "shaderpacks/ComplementaryReimagined_r5.3.zip" },
+          { name: "BSL_v8.2.04.zip", is_dir: false, size: 2_781_184, path: "shaderpacks/BSL_v8.2.04.zip" }
+        ],
+        saves: [
+          { name: "Мир выживания", is_dir: true, size: 0, path: "saves/Мир выживания" },
+          { name: "Тест редстоуна", is_dir: true, size: 0, path: "saves/Тест редстоуна" }
+        ]
+      };
+      return tree[sub || ""] || [];
+    },
     readFile: async () => "fov:0.0\nlang:ru_ru\nrenderDistance:12\nnarrator:0\n",
     deleteFile: async () => null,
     mods: async () => demoMods.map((m) => ({ ...m })),
@@ -661,6 +680,11 @@
       return { accounts: DEMO.accounts.map((a) => ({ ...a })), active: DEMO.active };
     },
     accountSetActive: async (uuid) => { DEMO.active = uuid; return { accounts: DEMO.accounts.map((a) => ({ ...a })), active: DEMO.active }; },
+    accountRename: async (uuid, username) => {
+      const acc = DEMO.accounts.find((a) => a.uuid === uuid);
+      if (acc) acc.username = username;
+      return { accounts: DEMO.accounts.map((a) => ({ ...a })), active: DEMO.active };
+    },
     accountRemove: async (uuid) => {
       DEMO.accounts = DEMO.accounts.filter((a) => a.uuid !== uuid);
       if (DEMO.active === uuid) DEMO.active = DEMO.accounts[0] ? DEMO.accounts[0].uuid : null;
@@ -832,6 +856,7 @@
   }
 
   function selectInstance(id) {
+    closeAccountPopover();
     state.selectedId = id;
     const meta = selected();
     renderSidebar();
@@ -840,6 +865,8 @@
     const pill = $("#loader-pill");
     pill.hidden = !meta;
     pill.textContent = meta ? loaderLabel(meta.loader) : "";
+    const menu = $("#btn-build-menu");
+    if (menu) menu.hidden = !meta;
     const pathbar = $("#build-path");
     if (pathbar) {
       pathbar.hidden = !meta;
@@ -855,6 +882,8 @@
 
   function updateStatus() {
     const meta = selected();
+    const toolbar = document.querySelector(".toolbar");
+    if (toolbar) toolbar.classList.toggle("is-idle", !meta);
     const running = meta && state.running.has(meta.id);
     $("#tb-dot").className = `dot ${running ? "on" : ""}`;
     $("#tb-status").textContent = !meta ? "сборка не выбрана" : running ? "запущена" : "остановлена";
@@ -883,11 +912,21 @@
   }
 
   /* ==================== ВКЛАДКИ ==================== */
+  /** Какие вкладки показывать: без сборки — только лента, со сборкой — всё остальное. */
+  function applyTabs(meta) {
+    $$(".tab").forEach((tab) => {
+      const id = tab.dataset.tab;
+      tab.hidden = meta ? id === "discover" : id !== "discover";
+    });
+  }
+
   function renderTab() {
     const body = $("#tab-body");
     const meta = selected();
-    // без выбранной сборки вкладки, которым нужна сборка, показывают ленту
-    if (!meta && !["discover", "modrinth", "settings"].includes(state.tab)) state.tab = "discover";
+    applyTabs(meta);
+    // без сборки показываем ленту готовых сборок, со сборкой — её вкладки
+    if (!meta) state.tab = "discover";
+    else if (state.tab === "discover") state.tab = "console";
     $$(".tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.tab));
 
     if (!meta) {
@@ -904,6 +943,7 @@
       case "files": return renderFiles();
       case "mods": return renderMods();
       case "resourcepacks": return renderAssetsList("resourcepacks", "Ресурспаки", "resourcepack");
+      case "shaders": return renderAssetsList("shaderpacks", "Шейдеры", "shader");
       case "worlds": return renderWorlds();
       case "modrinth": return renderModrinth();
       case "settings": return renderSettings();
@@ -1364,7 +1404,8 @@
     const meta = selected();
     const cfg = state.modrinth;
     const view = cfg.view || "list";
-    const types = [["mod", "Моды"], ["modpack", "Модпаки"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
+    // Внутри сборки модпаки не нужны — они ставятся только при создании сборки.
+    const types = [["mod", "Моды"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
     const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
     $("#tab-body").innerHTML = `
       <div class="modrinth-wrap">
@@ -1674,7 +1715,7 @@
     const isPack = kind === "pack" || (!kind && state.modrinth.type === "modpack");
     const openType = isPack ? "modpack" : (state.modrinth.type || "mod");
     return `<div class="card">
-      <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : "MOD"}</div>
+      <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
       <div class="card-body">
         <div class="card-title">${esc(hit.title)}</div>
         <div class="card-desc">${esc(hit.description)}</div>
@@ -1815,31 +1856,229 @@
     return list.find((item) => item.uuid === activeId) || list[0] || null;
   }
 
-  function renderAccounts() {
-    const list = $("#account-list");
-    if (!list) return;
-    const accounts = (state.accounts && state.accounts.accounts) || [];
-    const activeId = (state.accounts && state.accounts.active) || (accounts[0] && accounts[0].uuid);
-    if (!accounts.length) {
-      list.innerHTML = `<div class="account-empty">Аккаунтов нет — добавь первый</div>`;
+  /** Скин аккаунта: у лицензии голова по UUID, у офлайна — по нику. */
+  function skinUrl(account) {
+    if (!account) return "";
+    const key = account.kind === "microsoft" ? (account.uuid || account.username) : account.username;
+    if (!key) return "";
+    return `https://mc-heads.net/avatar/${encodeURIComponent(key)}/64`;
+  }
+
+  /** Аватар: буква + скин поверх. Если скин не загрузился — остаётся буква. */
+  function avatarHtml(account, extra = "") {
+    const letter = String((account && account.username) || "?").charAt(0).toUpperCase();
+    const url = skinUrl(account);
+    return `<span class="acc-avatar ${extra}">` +
+      `<span class="acc-letter">${esc(letter)}</span>` +
+      (url ? `<img src="${esc(url)}" alt="" loading="lazy" onerror="this.remove()">` : "") +
+      `</span>`;
+  }
+
+  function accountRowHtml(account, activeId) {
+    const active = account.uuid === activeId;
+    return `
+      <div class="acc-row ${active ? "is-active" : ""}" data-uuid="${esc(account.uuid)}">
+        ${avatarHtml(account)}
+        <span class="acc-main">
+          <span class="acc-name">${esc(account.username)}</span>
+          <span class="acc-sub">${esc(kindLabel(account.kind))}</span>
+        </span>
+        ${active ? '<span class="acc-dot" title="Активный"></span>' : ""}
+      </div>`;
+  }
+
+  /* ---------- чип профиля слева сверху ---------- */
+  function renderAccountChip() {
+    const account = activeAccount();
+    const avatar = $("#account-chip-avatar");
+    const name = $("#account-chip-name");
+    const kind = $("#account-chip-kind");
+    if (!avatar || !name) return;
+    if (!account) {
+      avatar.innerHTML = '<svg class="ic"><use href="#i-user"/></svg>';
+      avatar.classList.remove("has-skin");
+      name.textContent = "Нет аккаунта";
+      kind.textContent = "добавить";
       return;
     }
-    list.innerHTML = accounts.map((account) => `
-      <div class="account-row ${account.uuid === activeId ? "is-active" : ""}" data-uuid="${esc(account.uuid)}">
-        <span class="account-ava">${esc((account.username || "?").charAt(0).toUpperCase())}</span>
-        <span class="account-body">
-          <span class="account-name">${esc(account.username)}</span>
-          <span class="${kindClass(account.kind)}">${kindLabel(account.kind)}</span>
-        </span>
-        ${account.uuid === activeId ? '<span class="account-dot" title="Активный"></span>' : ""}
-      </div>`).join("");
-    $$(".account-row", list).forEach((row) => row.addEventListener("click", async () => {
-      try {
-        state.accounts = await api.accountSetActive(row.dataset.uuid);
-        renderAccounts();
-        toast("Аккаунт переключён", "ok");
-      } catch (err) { toast(String(err), "err"); }
+    avatar.outerHTML = avatarHtml(account).replace('class="acc-avatar', 'id="account-chip-avatar" class="acc-avatar has-skin');
+    name.textContent = account.username;
+    kind.textContent = kindLabel(account.kind);
+  }
+
+  /* ---------- выпадающий список аккаунтов ---------- */
+  function renderAccountPopover() {
+    const pop = $("#account-pop");
+    if (!pop) return;
+    const accounts = (state.accounts && state.accounts.accounts) || [];
+    const activeId = (state.accounts && state.accounts.active) || (accounts[0] && accounts[0].uuid);
+    const active = accounts.find((item) => item.uuid === activeId) || null;
+    pop.innerHTML = `
+      <div class="pop-head">Профиль</div>
+      ${active ? `
+        <div class="pop-active">
+          ${avatarHtml(active, "lg")}
+          <div class="pop-active-main">
+            <div class="pop-active-name">${esc(active.username)}</div>
+            <div class="pop-active-sub">${esc(kindLabel(active.kind))}</div>
+          </div>
+        </div>` : `<div class="pop-empty">Аккаунта нет</div>`}
+      ${accounts.length > 1 ? `
+        <div class="pop-label">Другие аккаунты</div>
+        <div class="pop-list">${accounts.filter((item) => item.uuid !== activeId).map((item) => accountRowHtml(item, activeId)).join("")}</div>` : ""}
+      <div class="pop-sep"></div>
+      <button class="pop-item" data-acc-act="add"><svg class="ic"><use href="#i-plus"/></svg>Добавить аккаунт</button>
+      <button class="pop-item" data-acc-act="profile"><svg class="ic"><use href="#i-user"/></svg>Профиль и аккаунты</button>
+      <button class="pop-item" data-acc-act="settings"><svg class="ic"><use href="#i-settings"/></svg>Настройки лаунчера</button>`;
+    bindAccountPopover();
+  }
+
+  function bindAccountPopover() {
+    const pop = $("#account-pop");
+    if (!pop) return;
+    $$(".acc-row", pop).forEach((row) => {
+      row.addEventListener("click", async () => {
+        try {
+          state.accounts = await api.accountSetActive(row.dataset.uuid);
+          closeAccountPopover();
+          renderAccounts();
+          toast("Аккаунт переключён", "ok");
+        } catch (err) { toast(String(err), "err"); }
+      });
+      row.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        const account = ((state.accounts && state.accounts.accounts) || []).find((item) => item.uuid === row.dataset.uuid);
+        if (account) openAccountCtx(event.clientX, event.clientY, account);
+      });
+    });
+    $$("[data-acc-act]", pop).forEach((btn) => btn.addEventListener("click", () => {
+      const act = btn.dataset.accAct;
+      closeAccountPopover();
+      if (act === "add") openAccounts();
+      if (act === "profile") openPrefs("profile");
+      if (act === "settings") openPrefs();
     }));
+  }
+
+  function openAccountPopover() {
+    const pop = $("#account-pop");
+    const chip = $("#account-chip");
+    if (!pop || !chip) return;
+    renderAccountPopover();
+    const rect = chip.getBoundingClientRect();
+    pop.hidden = false;
+    const popRect = pop.getBoundingClientRect();
+    pop.style.left = `${Math.round(rect.left)}px`;
+    pop.style.top = `${Math.round(rect.bottom + 6)}px`;
+    pop.style.minWidth = `${Math.round(Math.max(rect.width, 240))}px`;
+    if (rect.bottom + 6 + popRect.height > window.innerHeight - 8) {
+      pop.style.top = `${Math.round(Math.max(8, rect.top - popRect.height - 6))}px`;
+    }
+    chip.setAttribute("aria-expanded", "true");
+  }
+
+  function closeAccountPopover() {
+    const pop = $("#account-pop");
+    if (pop) pop.hidden = true;
+    const chip = $("#account-chip");
+    if (chip) chip.setAttribute("aria-expanded", "false");
+  }
+
+  function toggleAccountPopover() {
+    const pop = $("#account-pop");
+    if (!pop) return;
+    if (pop.hidden) openAccountPopover();
+    else closeAccountPopover();
+  }
+
+  /* ---------- ПКМ по аккаунту ---------- */
+  function openAccountCtx(x, y, account) {
+    const el = $("#ctx-menu");
+    if (!el) return;
+    const activeId = (state.accounts && state.accounts.active) || "";
+    const isActive = account.uuid === activeId;
+    const offline = account.kind !== "microsoft";
+    el.innerHTML = `
+      <div class="ctx-caption">${esc(account.username)} · ${esc(kindLabel(account.kind))}</div>
+      ${isActive ? "" : `<button class="ctx-item" data-act="pick"><svg class="ic"><use href="#i-play"/></svg>Выбрать аккаунт</button>`}
+      <button class="ctx-item" data-act="rename" ${offline ? "" : "disabled"}><svg class="ic"><use href="#i-pencil"/></svg>Изменить ник${offline ? "" : " (нельзя)"}</button>
+      <button class="ctx-item" data-act="copy"><svg class="ic"><use href="#i-copy"/></svg>Скопировать ник</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item" data-act="profile"><svg class="ic"><use href="#i-user"/></svg>Профиль и аккаунты</button>
+      <button class="ctx-item" data-act="add"><svg class="ic"><use href="#i-plus"/></svg>Добавить аккаунт</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item danger" data-act="remove"><svg class="ic"><use href="#i-trash"/></svg>Удалить аккаунт</button>`;
+    el.hidden = false;
+    const rect = el.getBoundingClientRect();
+    el.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+    el.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+    $$(".ctx-item", el).forEach((btn) => btn.addEventListener("click", () => {
+      closeCtxMenu();
+      runAccountAction(btn.dataset.act, account);
+    }));
+  }
+
+  async function runAccountAction(action, account) {
+    if (action === "pick") {
+      try {
+        state.accounts = await api.accountSetActive(account.uuid);
+        renderAccounts();
+        toast(`Аккаунт ${account.username}`, "ok");
+      } catch (err) { toast(String(err), "err"); }
+      return;
+    }
+    if (action === "rename") {
+      if (account.kind === "microsoft") return toast("Ник лицензии задаёт Mojang", "err");
+      const name = await promptModal({ title: "Изменить ник", label: "Ник (3–16 символов)", value: account.username });
+      if (name === null || !name.trim() || name.trim() === account.username) return;
+      try {
+        state.accounts = await api.accountRename(account.uuid, name.trim());
+        renderAccounts();
+        toast("Ник изменён", "ok");
+      } catch (err) { toast(String(err), "err"); }
+      return;
+    }
+    if (action === "copy") {
+      try { await navigator.clipboard.writeText(account.username); toast("Ник скопирован", "ok"); }
+      catch { toast("Не удалось скопировать", "err"); }
+      return;
+    }
+    if (action === "profile") { openPrefs("profile"); return; }
+    if (action === "add") { openAccounts(); return; }
+    if (action === "remove") {
+      if (!confirm(`Удалить аккаунт «${account.username}»?`)) return;
+      try {
+        state.accounts = await api.accountRemove(account.uuid);
+        renderAccounts();
+        toast("Аккаунт удалён", "ok");
+      } catch (err) { toast(String(err), "err"); }
+    }
+  }
+
+  /** Обновляет чип, поповер, карточку в настройках и экран профиля. */
+  function renderAccounts() {
+    renderAccountChip();
+    const pop = $("#account-pop");
+    if (pop && !pop.hidden) renderAccountPopover();
+    renderPrefsAccountCard();
+    if (prefsCategory === "profile" && !$("#modal-prefs").hidden) renderPrefs();
+  }
+
+  /** Карточка активного аккаунта в колонке настроек (как в OmniPanel). */
+  function renderPrefsAccountCard() {
+    const button = $("#prefs-account");
+    if (!button) return;
+    const account = activeAccount();
+    if (!account) {
+      button.innerHTML = `<span class="acc-avatar"><svg class="ic"><use href="#i-user"/></svg></span>
+        <span class="acc-main"><span class="acc-name">Нет аккаунта</span><span class="acc-sub">добавить</span></span>`;
+      return;
+    }
+    button.innerHTML = `${avatarHtml(account, "sm")}
+      <span class="acc-main">
+        <span class="acc-name">${esc(account.username)}</span>
+        <span class="acc-sub">${esc(kindLabel(account.kind))}</span>
+      </span>`;
   }
 
   async function loadAccounts() {
@@ -1863,16 +2102,17 @@
     const body = $("#acc-body");
     if (!body) return;
     const accounts = (state.accounts && state.accounts.accounts) || [];
+    const activeId = (state.accounts && state.accounts.active) || "";
     const list = accounts.length ? `
       <div class="account-list" style="margin-bottom:12px">
         ${accounts.map((account) => `
-          <div class="account-row ${account.uuid === ((state.accounts && state.accounts.active) || "") ? "is-active" : ""}" data-pick="${esc(account.uuid)}">
-            <span class="account-ava">${esc((account.username || "?").charAt(0).toUpperCase())}</span>
-            <span class="account-body">
-              <span class="account-name">${esc(account.username)}</span>
-              <span class="${kindClass(account.kind)}">${kindLabel(account.kind)}</span>
+          <div class="acc-row ${account.uuid === activeId ? "is-active" : ""}" data-pick="${esc(account.uuid)}">
+            ${avatarHtml(account)}
+            <span class="acc-main">
+              <span class="acc-name">${esc(account.username)}</span>
+              <span class="acc-sub">${esc(kindLabel(account.kind))}</span>
             </span>
-            ${account.uuid === ((state.accounts && state.accounts.active) || "") ? '<span class="account-dot" title="Активный"></span>' : ""}
+            ${account.uuid === activeId ? '<span class="acc-dot" title="Активный"></span>' : ""}
             <button class="icon-btn" data-del="${esc(account.uuid)}" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
           </div>`).join("")}
       </div>` : "";
@@ -1949,6 +2189,11 @@
       startMicrosoftLogin();
     }
 
+    $$("[data-pick]", body).forEach((row) => row.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      const account = ((state.accounts && state.accounts.accounts) || []).find((item) => item.uuid === row.dataset.pick);
+      if (account) openAccountCtx(event.clientX, event.clientY, account);
+    }));
     $$("[data-pick]", body).forEach((row) => row.addEventListener("click", async (event) => {
       if (event.target.closest("[data-del]")) return;
       try {
@@ -2018,6 +2263,7 @@
 
   /* ==================== НАСТРОЙКИ ЛАУНЧЕРА (по категориям) ==================== */
   const PREFS = [
+    { id: "profile", label: "Профиль" },
     { id: "look", label: "Оформление" },
     { id: "wall", label: "Фон" },
     { id: "fx", label: "Эффекты" },
@@ -2042,6 +2288,7 @@
       recent: Array.isArray(settings.wallpaper_recent) ? settings.wallpaper_recent.slice(0, 6) : []
     };
     modal.hidden = false;
+    renderPrefsAccountCard();
     renderPrefs();
   }
 
@@ -2057,6 +2304,8 @@
     }));
 
     const settings = state.settings || {};
+    renderPrefsAccountCard();
+    if (prefsCategory === "profile") body.innerHTML = prefsProfile();
     if (prefsCategory === "look") body.innerHTML = prefsLook(settings);
     if (prefsCategory === "wall") body.innerHTML = prefsWall(settings);
     if (prefsCategory === "fx") body.innerHTML = prefsFx();
@@ -2065,6 +2314,86 @@
     if (prefsCategory === "updates") body.innerHTML = prefsUpdates(settings);
     if (prefsCategory === "sound") body.innerHTML = prefsSound(settings);
     bindPrefs();
+    if (prefsCategory === "profile") bindPrefsProfile();
+  }
+
+  /** Профиль: слева активный аккаунт, справа список всех аккаунтов. */
+  function prefsProfile() {
+    const accounts = (state.accounts && state.accounts.accounts) || [];
+    const activeId = (state.accounts && state.accounts.active) || (accounts[0] && accounts[0].uuid);
+    const active = accounts.find((item) => item.uuid === activeId) || null;
+    return `
+      <div class="profile-grid">
+        <section class="prefs-section profile-active">
+          <div class="prefs-label">Аккаунт</div>
+          ${active ? `
+            <div class="profile-card">
+              ${avatarHtml(active, "lg")}
+              <div class="profile-card-main">
+                <div class="profile-card-name">${esc(active.username)}</div>
+                <div class="profile-card-sub">${esc(kindLabel(active.kind))}</div>
+              </div>
+              <div class="profile-card-actions">
+                ${active.kind === "microsoft" ? "" : `<button class="btn btn-small" data-acc="rename">Изменить ник</button>`}
+                <button class="btn btn-small" data-acc="remove">Выйти</button>
+              </div>
+            </div>
+            <div class="muted profile-note">${active.kind === "microsoft"
+              ? "Лицензия: скин и ник приходят с серверов Mojang."
+              : "Офлайн-аккаунт: подходит для серверов без проверки лицензии."}</div>`
+            : `<div class="profile-card is-empty"><span class="muted">Аккаунта пока нет</span></div>`}
+        </section>
+
+        <section class="prefs-section">
+          <div class="prefs-label-row">
+            <span class="prefs-label">Аккаунты</span>
+            <div class="spacer"></div>
+            <button class="btn btn-small" data-acc="add-offline">Пиратка</button>
+            <button class="btn btn-small btn-primary" data-acc="add-ms">Лицензия</button>
+          </div>
+          <div class="profile-list">
+            ${accounts.length ? accounts.map((account) => `
+              <div class="profile-row ${account.uuid === activeId ? "is-active" : ""}" data-uuid="${esc(account.uuid)}">
+                ${avatarHtml(account)}
+                <div class="acc-main">
+                  <div class="acc-name">${esc(account.username)}</div>
+                  <div class="acc-sub">${esc(kindLabel(account.kind))}</div>
+                </div>
+                ${account.uuid === activeId
+                  ? '<span class="tag green">активный</span>'
+                  : '<button class="btn btn-small" data-acc="pick">Выбрать</button>'}
+                <button class="icon-btn" data-acc="rename-one" title="Изменить ник"><svg class="ic"><use href="#i-pencil"/></svg></button>
+                <button class="icon-btn" data-acc="remove-one" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
+              </div>`).join("") : `<div class="muted" style="font-size:12px">Список пуст — добавь аккаунт справа сверху.</div>`}
+          </div>
+        </section>
+      </div>`;
+  }
+
+  function bindPrefsProfile() {
+    const accounts = (state.accounts && state.accounts.accounts) || [];
+    const activeId = (state.accounts && state.accounts.active) || (accounts[0] && accounts[0].uuid);
+    const active = accounts.find((item) => item.uuid === activeId) || null;
+    const byUuid = (uuid) => accounts.find((item) => item.uuid === uuid) || null;
+
+    $$("[data-acc]").forEach((el) => el.addEventListener("click", async () => {
+      const act = el.dataset.acc;
+      const row = el.closest("[data-uuid]");
+      const account = row ? byUuid(row.dataset.uuid) : active;
+      if (act === "add-offline" || act === "add-ms") {
+        openAccounts();
+        return;
+      }
+      if (!account) return;
+      if (act === "pick") return runAccountAction("pick", account);
+      if (act === "rename" || act === "rename-one") return runAccountAction("rename", account);
+      if (act === "remove" || act === "remove-one") return runAccountAction("remove", account);
+    }));
+    $$(".profile-row").forEach((row) => row.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      const account = byUuid(row.dataset.uuid);
+      if (account) openAccountCtx(event.clientX, event.clientY, account);
+    }));
   }
 
   function prefsLook(settings) {
@@ -2840,9 +3169,6 @@
                 </div>`).join("")
               : `<div class="add-empty">${cfg.loading ? "Ищем модпаки…" : "Ничего не найдено — попробуй другой запрос"}</div>`}
           </div>
-          <div class="hint" style="color:var(--muted);font-size:11.5px">
-            Ставится последняя версия модпака со всеми модами, конфигами и нужной версией загрузчика.
-          </div>
         </div>`;
       $("#add-search").addEventListener("click", () => searchAddPacks($("#add-query").value));
       $("#add-query").addEventListener("keydown", (event) => {
@@ -2883,7 +3209,7 @@
                   ${cfg.zipLoaderVersions.length ? cfg.zipLoaderVersions.map((option) => `<option value="${esc(option.version)}" ${option.version === cfg.zipLoaderVersion ? "selected" : ""}>${esc(option.version)}</option>`).join("") : `<option value="">загружаем…</option>`}
                 </select>
               </div>`}
-            <div class="settings-note" style="margin:0">В zip нет версии игры — укажи её сам, моды и конфиги перенесутся как есть.</div>`
+`
           : ""}
         </div>`;
       $("#add-path-error")?.remove();
@@ -2980,9 +3306,6 @@
           <div class="field">
             <label>Ссылка на модпак</label>
             <input class="input" id="add-url" value="${esc(cfg.url)}" placeholder="https://modrinth.com/modpack/fabulously-optimized или ссылка на .mrpack" spellcheck="false">
-          </div>
-          <div class="hint" style="color:var(--muted);font-size:11.5px">
-            Понимает ссылки на страницу модпака Modrinth и прямые ссылки на файл .mrpack.
           </div>
         </div>`;
       $("#add-url").addEventListener("input", (event) => { cfg.url = event.target.value; });
@@ -3298,9 +3621,6 @@
               ${cfg.loaderVersionsList.length ? cfg.loaderVersionsList.map((option) => `<option value="${esc(option.version)}" ${option.version === cfg.loaderVersion ? "selected" : ""}>${esc(option.version)}${option.stable ? "" : " (beta)"}</option>`).join("") : `<option value="">загружаем…</option>`}
             </select>
           </div>
-          <div class="hint" style="color:var(--muted);font-size:11.5px">
-            Сборка создаётся пустой: своя папка, свои моды и миры. Моды можно добавить на вкладке Modrinth.
-          </div>
         </div>`;
       $("#c-name").addEventListener("input", (event) => { cfg.name = event.target.value; });
       $("#c-mc").addEventListener("change", async (event) => { cfg.mc = event.target.value; await loadLoaderVersions(); renderCreateModal(); });
@@ -3418,8 +3738,28 @@
     on("#btn-import", "click", () => openAdd("modrinth"));
 
     /* аккаунты и настройки лаунчера */
-    on("#btn-add-account", "click", openAccounts);
-    on("#btn-prefs", "click", () => openPrefs());
+    on("#account-chip", "click", (event) => { event.stopPropagation(); toggleAccountPopover(); });
+    on("#account-chip", "contextmenu", (event) => {
+      event.preventDefault();
+      const account = activeAccount();
+      if (account) openAccountCtx(event.clientX, event.clientY, account);
+      else openAccounts();
+    });
+    on("#prefs-account", "click", () => { prefsCategory = "profile"; renderPrefs(); });
+    // клик мимо — закрываем выпадающий список
+    document.addEventListener("mousedown", (event) => {
+      const pop = $("#account-pop");
+      if (!pop || pop.hidden) return;
+      if (pop.contains(event.target) || (event.target.closest && event.target.closest("#account-chip"))) return;
+      closeAccountPopover();
+    });
+    window.addEventListener("resize", () => closeAccountPopover());
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      closeAccountPopover();
+      const menu = $("#ctx-menu");
+      if (menu && !menu.hidden) closeCtxMenu();
+    });
     on("#btn-launcher-settings", "click", () => openPrefs());
     on("#btn-global-settings", "click", () => openPrefs());
     on("[data-close-prefs]", "click", () => { $("#modal-prefs").hidden = true; });
@@ -3433,6 +3773,12 @@
     on("[data-close-versions]", "click", () => { $("#modal-versions").hidden = true; });
     // Версия в шапке кликабельна и ведёт на смену версии.
     on("#loader-pill", "click", () => { if (selected()) openVersionChange(); });
+    on("#btn-build-menu", "click", (event) => {
+      const meta = selected();
+      if (!meta) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      openInstanceMenu(rect.left, rect.bottom + 4, meta);
+    });
     on("#tb-version", "click", () => { if (selected()) openVersionChange(); });
     on("#mcver-apply", "click", () => applyVersionChange());
     $$("[data-close-mcver]").forEach((el) => el.addEventListener("click", () => { $("#modal-mcver").hidden = true; }));
@@ -3559,6 +3905,7 @@
     await refreshInstances();
     // ничего не выбираем автоматически: стартовый экран — готовые сборки
     if (!state.selectedId) state.tab = "discover";
+    updateStatus();
     renderTab();
     try {
       await initUpdates();

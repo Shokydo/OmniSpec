@@ -784,8 +784,8 @@ body.has-wall .discover-head { background: transparent; }
 
 /* ═══════════════════ настройки ═══════════════════ */
 .settings-wrap { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px 32px; }
-.settings-grid { display: flex; flex-direction: column; gap: 16px; max-width: 780px; }
-.settings-row { display: grid; grid-template-columns: 200px 1fr; gap: 16px; align-items: start; }
+.settings-grid { display: flex; flex-direction: column; gap: 16px; max-width: 780px; min-width: 0; }
+.settings-row { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 14px; align-items: start; }
 .settings-row > .label { padding-top: 7px; font-size: 12px; color: var(--dim); }
 .settings-row .hint { margin-top: 5px; font-size: 10.5px; line-height: 1.5; color: var(--dim-2); }
 .settings-actions { display: flex; gap: 7px; padding-top: 4px; }
@@ -1202,11 +1202,12 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 8px;
-  border-right: 1px solid var(--line-1);
-  background: var(--bg-2);
+  padding: 0;
+  background: transparent;
   overflow-y: auto;
 }
+/* колонка настроек: сверху карточка профиля, ниже категории */
+.prefs-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; padding: 10px; border-right: 1px solid var(--line); background: var(--bg-2); }
 .prefs-tab {
   height: var(--h-md);
   padding: 0 10px;
@@ -1637,3 +1638,225 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
 .settings-row .settings-actions { width: 100%; }
 .panel-head .mr-view { height: 26px; padding: 1px; align-self: center; }
 .panel-head .mr-view button { height: 24px; }
+
+/* ═════════════ ПРОФИЛЬ И АККАУНТЫ (как в OmniPanel) ═════════════ */
+
+/* аватар: скин поверх буквы-заглушки */
+.acc-avatar {
+  position: relative;
+  width: 26px; height: 26px; flex: none;
+  display: grid; place-items: center;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: var(--bg-4);
+  border: 1px solid var(--line-2);
+  color: var(--dim);
+}
+.acc-avatar .ic { width: 14px; height: 14px; }
+.acc-letter { font-size: 11px; font-weight: 650; color: var(--dim); }
+.acc-avatar img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+  display: block;
+}
+.acc-avatar.sm { width: 24px; height: 24px; }
+.acc-avatar.lg { width: 38px; height: 38px; border-radius: var(--r); }
+
+/* чип активного аккаунта слева сверху */
+.account-chip {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; height: 38px;
+  margin-bottom: var(--pad);
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-3);
+  text-align: left;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.account-chip:hover { background: var(--bg-4); border-color: var(--line-2); }
+.account-chip .acc-main { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.2; }
+.account-chip .acc-name {
+  font-size: 12px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.account-chip .acc-kind { font-size: 10px; color: var(--dim-2); text-transform: lowercase; }
+.account-chip .chev { width: 13px; height: 13px; color: var(--dim-2); }
+
+/* выпадающий список аккаунтов */
+.acc-pop {
+  position: fixed;
+  z-index: 90;
+  width: 248px;
+  padding: 6px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r);
+  background: var(--bg-3);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .55);
+}
+.pop-head {
+  padding: 4px 8px 6px;
+  font-size: 9.5px; letter-spacing: 1.3px; text-transform: uppercase;
+  color: var(--dim-2);
+}
+.pop-active {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-4);
+}
+.pop-active-main { min-width: 0; }
+.pop-active-name { font-size: 12.5px; font-weight: 600; }
+.pop-active-sub { font-size: 10.5px; color: var(--dim-2); }
+.pop-empty { padding: 8px; font-size: 12px; color: var(--dim-2); }
+.pop-label {
+  padding: 10px 8px 4px;
+  font-size: 9.5px; letter-spacing: 1.3px; text-transform: uppercase;
+  color: var(--dim-2);
+}
+.pop-list { display: grid; gap: 2px; }
+.pop-sep { height: 1px; margin: 6px 4px; background: var(--line); }
+.pop-item {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; height: 28px; padding: 0 8px;
+  border-radius: var(--r-sm);
+  font-size: 12px; color: var(--dim);
+  text-align: left;
+}
+.pop-item:hover { background: var(--bg-4); color: var(--text); }
+.pop-item .ic { width: 14px; height: 14px; color: var(--dim-2); }
+.pop-item:hover .ic { color: var(--text); }
+
+/* строка аккаунта в списках */
+.acc-row, .profile-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.acc-row:hover, .profile-row:hover { background: var(--bg-4); }
+.acc-row.is-active, .profile-row.is-active { background: var(--bg-4); border-color: var(--line-2); }
+.acc-main { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.25; }
+.acc-name { font-size: 12px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc-sub { font-size: 10.5px; color: var(--dim-2); }
+.acc-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex: none; }
+
+/* колонка настроек: карточка профиля + категории */
+.prefs-account {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 7px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+  text-align: left;
+}
+.prefs-account:hover { background: var(--bg-4); }
+.prefs-account .acc-main { min-width: 0; }
+.prefs-account .acc-name { font-size: 12px; font-weight: 600; }
+
+/* экран профиля */
+.profile-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) 1fr;
+  gap: 18px;
+  align-items: start;
+}
+.profile-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-3);
+}
+.profile-card.is-empty { justify-content: center; padding: 18px; }
+.profile-card-main { flex: 1; min-width: 0; }
+.profile-card-name { font-size: 13px; font-weight: 650; }
+.profile-card-sub { font-size: 11px; color: var(--dim-2); }
+.profile-card-actions { display: flex; gap: 6px; }
+.profile-note { margin-top: 8px; font-size: 11px; line-height: 1.5; }
+.profile-list { display: grid; gap: 3px; margin-top: 8px; }
+.profile-row .btn { height: var(--h-xs); }
+.profile-row .icon-btn { width: 24px; height: 24px; }
+
+/* ═════════════ ДИЗАЙН OMNIPANEL: МОНО-ШРИФТ И ШАПКА СБОРКИ ═════════════ */
+
+/* OmniPanel набран моноширинным шрифтом — интерфейс читается как терминал.
+   Берём только локальные шрифты: ничего не грузим из сети. */
+html, body {
+  font-family: "Cascadia Mono", "JetBrains Mono", "Consolas", "DejaVu Sans Mono",
+               "Liberation Mono", ui-monospace, monospace;
+  font-size: 12.5px;
+  letter-spacing: -.1px;
+}
+input, select, textarea, button { font-family: inherit; }
+
+/* левая часть заголовка окна — только бренд */
+.tb-logo {
+  width: 20px; height: 20px; flex: none;
+  border-radius: 5px; overflow: hidden;
+  background: var(--bg-4); border: 1px solid var(--line-2);
+}
+.tb-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.tb-brand { font-size: 11.5px; letter-spacing: .04em; color: var(--dim); }
+
+/* шапка сборки — как строка сервера в OmniPanel */
+.build-head { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }
+.build-head .tb-titles { flex-direction: column; align-items: flex-start; gap: 1px; }
+.build-head .tb-name { font-size: 13px; letter-spacing: -.2px; }
+.build-head .tb-meta { font-size: 10.5px; }
+.build-head .pill-btn { height: var(--h-sm); font-size: 10.5px; }
+.build-head .icon-btn { width: var(--h-sm); height: var(--h-sm); }
+
+/* погасшие кнопки шапки, когда сборка не выбрана */
+.toolbar.is-idle .btn-play,
+.toolbar.is-idle .btn-stop,
+.toolbar.is-idle #btn-folder,
+.toolbar.is-idle #btn-restart { opacity: .5; }
+
+/* строки списков: как таблица в OmniPanel — иконка, имя, вторичная строка */
+.item-row { border-radius: var(--r-sm); }
+.item-title { font-size: 12px; }
+.item-sub { font-size: 10.5px; letter-spacing: 0; }
+
+/* заголовки панелей — мелкие капс-подписи */
+.panel-head strong { font-size: 11.5px; letter-spacing: .02em; }
+.section-title { font-size: 9.5px; letter-spacing: 1.5px; }
+
+/* вкладки — как в OmniPanel: подпись с подчёркиванием, без «таблеток» */
+.tabs { gap: 2px; }
+.tab { font-size: 11.5px; }
+
+/* пустая шапка: сборка не выбрана — прячем управление игрой */
+.toolbar.is-idle .build-head,
+.toolbar.is-idle .btn-play,
+.toolbar.is-idle .btn-stop,
+.toolbar.is-idle #btn-folder,
+.toolbar.is-idle #btn-restart,
+.toolbar.is-idle #build-path { display: none; }
+
+/* буквенная заглушка вместо иконки проекта */
+.card-letter {
+  font-size: 40px; font-weight: 600;
+  color: var(--line-3);
+  letter-spacing: -.04em;
+}
+
+/* кнопки в карточке — одного размера во всех лентах */
+.card-actions { display: flex; gap: 6px; }
+.card-actions .btn {
+  flex: 1 1 0; min-width: 0; padding: 0 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* в ленте списком кнопки одной ширины во всех строках */
+.modrinth-results:not(.is-grid) .card-actions .btn { flex: 0 0 auto; min-width: 96px; }
+
+/* моно-шрифт шире — строки настроек не должны вылезать за панель */
+.settings-grid, .settings-row > *, .prefs-section, .prefs-body { min-width: 0; }
+.settings-row .flex-row, .settings-row .input, .settings-row .select { min-width: 0; }
+.settings-wrap { max-width: 100%; }
+.settings-row .flex-row > .btn { padding: 0 10px; }

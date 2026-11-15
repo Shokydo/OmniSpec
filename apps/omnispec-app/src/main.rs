@@ -498,6 +498,11 @@ fn list_dir(
     } else {
         safe_join(&base, &sub)?
     };
+    // Папки вроде resourcepacks/shaderpacks могут ещё не существовать — создаём,
+    // чтобы список был пустым, а не ошибкой.
+    if !dir.exists() {
+        let _ = std::fs::create_dir_all(&dir);
+    }
     let mut result = Vec::new();
     for entry in std::fs::read_dir(&dir).map_err(err)?.flatten() {
         let meta = match entry.metadata() {
@@ -1031,6 +1036,35 @@ async fn account_add_offline(
     })
 }
 
+/// Переименовать офлайн-аккаунт: ник — единственное, что у него есть.
+#[tauri::command]
+async fn account_rename(
+    state: State<'_, AppState>,
+    uuid: String,
+    username: String,
+) -> Result<AccountsInfo, String> {
+    let trimmed = username.trim();
+    if trimmed.chars().count() < 3 || trimmed.chars().count() > 16 {
+        return Err("ник — от 3 до 16 символов".into());
+    }
+    if !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err("в нике можно только латиницу, цифры и _".into());
+    }
+    let mut store = state.accounts.lock().await;
+    let Some(account) = store.find_mut(&uuid) else {
+        return Err("аккаунт не найден".into());
+    };
+    if account.kind == "microsoft" {
+        return Err("ник лицензионного аккаунта задаёт Mojang".into());
+    }
+    account.username = trimmed.to_string();
+    store.save(&state.paths).map_err(err)?;
+    Ok(AccountsInfo {
+        accounts: store.accounts.clone(),
+        active: store.active.clone(),
+    })
+}
+
 #[tauri::command]
 async fn account_set_active(
     state: State<'_, AppState>,
@@ -1263,17 +1297,33 @@ fn open_path(state: State<'_, AppState>, path: String) -> Result<(), String> {
             root.join(trimmed)
         }
     };
+
+    // Папку сборки создаём, если её ещё нет: иначе проводник Windows
+    // молча открывает «Документы» вместо нужного места.
+    if !target.exists() && target.starts_with(root) {
+        let _ = std::fs::create_dir_all(&target);
+    }
     if !target.exists() {
         return Err(format!("путь не найден: {}", target.display()));
     }
-    open_in_file_manager(&target)
+    // Если подсунули файл — открываем папку, где он лежит.
+    let folder = if target.is_dir() {
+        target
+    } else {
+        target.parent().map(|parent| parent.to_path_buf()).unwrap_or(target)
+    };
+    open_in_file_manager(&folder)
 }
 
 fn open_in_file_manager(target: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
+        // explorer.exe понимает только «настоящие» пути с обратными слэшами:
+        // на смешанных он открывает «Документы» вместо папки сборки.
+        let native = target.display().to_string().replace('/', "\\");
+        let native = native.trim_end_matches('\\').to_string();
         std::process::Command::new("explorer")
-            .arg(target)
+            .arg(&native)
             .spawn()
             .map(|_| ())
             .map_err(|error| error.to_string())
@@ -1461,6 +1511,7 @@ fn main() {
             net_check,
             accounts_info,
             account_add_offline,
+            account_rename,
             account_set_active,
             account_remove,
             ms_login_start,

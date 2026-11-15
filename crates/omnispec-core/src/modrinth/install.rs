@@ -95,34 +95,35 @@ async fn install_recursive(
         return Ok(());
     }
 
+    // Тип проекта нужен ДО поиска версии: ресурспаки и шейдеры не привязаны
+    // к загрузчику, и фильтр по fabric/forge у них ничего не находит.
+    let project = modrinth.project(project_ref).await?;
+    let project_type = if project.project_type.is_empty() {
+        "mod".to_string()
+    } else {
+        project.project_type.clone()
+    };
+    let loader_filter = match project_type.as_str() {
+        "mod" | "modpack" => Some(instance.loader.kind()),
+        _ => None,
+    };
+
     let version = match version_hint {
         Some(version_id) => modrinth.version(version_id).await?,
         None => {
             let versions = modrinth
-                .project_versions(
-                    project_ref,
-                    Some(&instance.mc_version),
-                    Some(instance.loader.kind()),
-                )
+                .project_versions(project_ref, Some(&instance.mc_version), loader_filter)
                 .await?;
             versions
                 .into_iter()
                 .next()
                 .ok_or_else(|| {
                     Error::not_found(format!(
-                        "у проекта «{project_ref}» нет версии для Minecraft {} ({})",
-                        instance.mc_version,
-                        instance.loader.label()
+                        "у проекта «{project_ref}» нет версии для Minecraft {}",
+                        instance.mc_version
                     ))
                 })?
         }
-    };
-
-    let project = modrinth.project(&version.project_id).await?;
-    let project_type = if project.project_type.is_empty() {
-        "mod".to_string()
-    } else {
-        project.project_type.clone()
     };
 
     let file = version

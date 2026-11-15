@@ -43,6 +43,10 @@
   <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M20.5 3.5C11 3.5 4.6 8.4 4.6 15.2c0 1.6.4 3.1 1.1 4.3l3.4-3.4c2-2 4.6-3.3 7.4-3.9-2.7 1-5 2.6-6.8 4.6L6.2 20c1.3.9 2.9 1.4 4.6 1.4 6.2 0 9.7-6 9.7-17.9Z"/></symbol>
   <symbol id="i-crown" viewBox="0 0 24 24"><path d="M3 7.5 7.6 11 12 5l4.4 6 4.6-3.5-1.7 10.5H4.7L3 7.5Zm3.1 12h11.8l.5-3.2H5.6l.5 3.2Z"/></symbol>
   <symbol id="i-house" viewBox="0 0 24 24"><path d="M12 3 2.5 11h2.6v9h5V15h3.8v5h5v-9h2.6L12 3Z"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 24 24"><path d="M6 10.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Zm6 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Zm6 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6.4 9.4 5.6 5.6 5.6-5.6 1.4 1.4L12 17.8 5 10.8l1.4-1.4Z"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 3v2H5v14h5v2H3V3h7Zm4.6 5.3L19.3 13l-4.7 4.7-1.4-1.4 2.3-2.3H8v-2h7.5l-2.3-2.3 1.4-1.4Z"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><path d="M12 3a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Zm0 9c4.4 0 8 2.3 8 5.2V21H4v-1.8C4 16.3 7.6 14 12 14Z"/></symbol>
   <symbol id="i-base" viewBox="0 0 24 24"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Zm0 2.2 5.6 2.8L12 10.8 6.4 8 12 5.2Z"/></symbol>
 </svg>
 
@@ -55,10 +59,20 @@
       <div class="brand-logo"><img src="assets/logo.png" alt="OmniSpec" draggable="false" /></div>
       <div class="brand-text">
         <div class="brand-name">OmniSpec</div>
-        <div class="brand-sub">ЛАУНЧЕР</div>
+        <div class="brand-sub" id="brand-sub">профиль</div>
       </div>
       <button class="icon-btn" id="btn-global-settings" title="Настройки"><svg class="ic"><use href="#i-settings"/></svg></button>
     </div>
+
+    <!-- профиль: активный аккаунт + выпадающий список всех аккаунтов -->
+    <button class="account-chip" id="account-chip" aria-haspopup="true" aria-expanded="false">
+      <span class="acc-avatar" id="account-chip-avatar"><svg class="ic"><use href="#i-user"/></svg></span>
+      <span class="acc-main">
+        <span class="acc-name" id="account-chip-name">Аккаунт</span>
+        <span class="acc-kind" id="account-chip-kind"></span>
+      </span>
+      <svg class="ic chev"><use href="#i-chev"/></svg>
+    </button>
 
     <div class="sidebar-section">
       <span class="section-title">СБОРКИ</span>
@@ -81,14 +95,6 @@
       </div>
       <button class="btn btn-ghost" id="btn-import">+ Добавить существующую</button>
 
-      <div class="acc-head">
-        <span class="section-title">АККАУНТЫ</span>
-      </div>
-      <div class="account-list" id="account-list"></div>
-      <div class="acc-actions">
-        <button class="btn btn-small btn-wide" id="btn-add-account"><svg class="ic"><use href="#i-plus"/></svg>Добавить аккаунт</button>
-        <button class="btn btn-small btn-square" id="btn-prefs" title="Настройки лаунчера"><svg class="ic"><use href="#i-settings"/></svg></button>
-      </div>
       <div class="active-row">
         <span class="muted">Запущено</span>
         <span id="active-count">0/0</span>
@@ -100,16 +106,8 @@
   <main class="main">
     <header class="titlebar" data-tauri-drag-region>
       <div class="tb-left" data-tauri-drag-region>
-        <div class="tb-icon" id="tb-icon"><img src="assets/logo.png" alt="" draggable="false" /></div>
-        <div class="tb-titles" data-tauri-drag-region>
-          <div class="tb-name" id="tb-name">OmniSpec</div>
-          <div class="tb-meta" data-tauri-drag-region>
-            <span class="dot" id="tb-dot"></span>
-            <span id="tb-status">сборка не выбрана</span>
-            <span class="sep">·</span>
-            <button id="tb-version" class="muted tb-version" title="Сменить версию">—</button>
-          </div>
-        </div>
+        <div class="tb-logo"><img src="assets/logo.png" alt="" draggable="false" /></div>
+        <span class="tb-brand">OmniSpec</span>
       </div>
       <div class="tb-center" data-tauri-drag-region id="tb-center">OmniSpec — лаунчер Minecraft</div>
       <div class="tb-right">
@@ -120,8 +118,19 @@
     </header>
 
     <div class="toolbar">
-      <div class="toolbar-left">
+      <div class="build-head">
+        <div class="tb-icon" id="tb-icon"><img src="assets/logo.png" alt="" draggable="false" /></div>
+        <div class="tb-titles">
+          <div class="tb-name" id="tb-name">OmniSpec</div>
+          <div class="tb-meta">
+            <span class="dot" id="tb-dot"></span>
+            <span id="tb-status">сборка не выбрана</span>
+            <span class="sep">·</span>
+            <button id="tb-version" class="muted tb-version" title="Сменить версию">—</button>
+          </div>
+        </div>
         <button class="pill pill-btn" id="loader-pill" title="Сменить версию" hidden></button>
+        <button class="icon-btn" id="btn-build-menu" title="Ещё" hidden><svg class="ic"><use href="#i-dots"/></svg></button>
       </div>
       <div class="toolbar-right">
         <button class="pill update-pill" id="btn-update" hidden>
@@ -146,6 +155,7 @@
       <button class="tab" data-tab="files">Файлы</button>
       <button class="tab" data-tab="mods">Моды <span class="tab-badge" id="badge-mods" hidden>0</span></button>
       <button class="tab" data-tab="resourcepacks">Ресурспаки</button>
+      <button class="tab" data-tab="shaders">Шейдеры</button>
       <button class="tab" data-tab="worlds">Миры</button>
       <button class="tab" data-tab="modrinth">Modrinth</button>
       <button class="tab" data-tab="settings">Сборка</button>
@@ -246,7 +256,10 @@
       <button class="icon-btn" data-close-prefs title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
     </header>
     <div class="prefs">
-      <nav class="prefs-nav" id="prefs-nav"></nav>
+      <div class="prefs-side">
+        <button class="prefs-account" id="prefs-account"></button>
+        <nav class="prefs-nav" id="prefs-nav"></nav>
+      </div>
       <div class="prefs-body" id="prefs-body"></div>
     </div>
   </div>
@@ -301,6 +314,8 @@
     <div class="drop-sub">.mrpack / .zip — новая сборка · .jar — в моды · .png/.jpg — иконка сборки</div>
   </div>
 </div>
+
+<div class="acc-pop" id="account-pop" hidden></div>
 
 <div class="ctx-menu" id="ctx-menu" hidden></div>
 
