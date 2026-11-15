@@ -13,6 +13,7 @@ pub mod modrinth;
 pub mod net;
 pub mod paths;
 pub mod settings;
+pub mod transfer;
 pub mod update;
 
 pub use error::{Error, Result};

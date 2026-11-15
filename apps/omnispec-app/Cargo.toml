@@ -17,6 +17,8 @@ futures = { workspace = true }
 omnispec-core = { path = "../../crates/omnispec-core" }
 # системные диалоги «проводника»: выбор файла/папки
 rfd = "0.15"
+# читаем метаданные модов внутри jar
+zip = { workspace = true }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

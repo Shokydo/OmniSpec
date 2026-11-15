@@ -595,6 +595,265 @@ fn list_mods(state: State<'_, AppState>, instance_id: String) -> Result<Vec<ModE
     Ok(result)
 }
 
+/// Иконки модов: имя файла → ссылка на картинку с Modrinth.
+///
+/// Имя мода берём из `fabric.mod.json` / `mods.toml` внутри jar, дальше ищем
+/// проект на Modrinth. Результат кэшируется в `<данные>/cache/mod-icons.json`,
+/// поэтому второй раз список открывается мгновенно.
+#[tauri::command]
+async fn mod_icons(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let mods_dir = state.paths.instance_game_dir(&instance_id).join("mods");
+    let cache_file = state.paths.cache().join("mod-icons.json");
+    let mut cache: std::collections::HashMap<String, String> = std::fs::read_to_string(&cache_file)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+
+    let mut result = std::collections::HashMap::new();
+    let mut missing: Vec<(String, String)> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&mods_dir) else {
+        return Ok(result);
+    };
+    for entry in entries.flatten() {
+        let file = entry.file_name().to_string_lossy().to_string();
+        if !file.ends_with(".jar") && !file.ends_with(".jar.disabled") {
+            continue;
+        }
+        let key = mod_key(&file);
+        if let Some(url) = cache.get(&key) {
+            if !url.is_empty() {
+                result.insert(file.clone(), url.clone());
+            }
+            continue;
+        }
+        let probe = mod_display_name(&entry.path()).unwrap_or_else(|| key.clone());
+        missing.push((file, probe));
+    }
+
+    // Не больше 6 запросов разом — Modrinth не любит шквал.
+    let http = state.http.clone();
+    let mut stream = futures::stream::iter(missing.into_iter().map(|(file, probe)| {
+        let http = http.clone();
+        async move {
+            let modrinth = omnispec_core::modrinth::Modrinth::new(http);
+            let found = modrinth
+                .search(&omnispec_core::modrinth::SearchQuery {
+                    query: probe.clone(),
+                    project_type: "mod".into(),
+                    game_version: None,
+                    loader: None,
+                    categories: Vec::new(),
+                    limit: 1,
+                    offset: 0,
+                    sort: "relevance".into(),
+                })
+                .await
+                .ok()
+                .and_then(|results| results.hits.into_iter().next())
+                .and_then(|hit| hit.icon_url);
+            (mod_key(&file), file, found)
+        }
+    }))
+    .buffer_unordered(6);
+    {
+        use futures::StreamExt;
+        while let Some((key, file, icon)) = stream.next().await {
+            match icon {
+                Some(url) => {
+                    cache.insert(key, url.clone());
+                    result.insert(file, url);
+                }
+                None => {
+                    cache.insert(key, String::new());
+                }
+            }
+        }
+    }
+    if let Some(parent) = cache_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(text) = serde_json::to_string(&cache) {
+        let _ = std::fs::write(&cache_file, text);
+    }
+    Ok(result)
+}
+
+/// Ключ кэша: имя файла без версии и загрузчика.
+fn mod_key(file: &str) -> String {
+    let stem = file
+        .trim_end_matches(".disabled")
+        .trim_end_matches(".jar")
+        .to_string();
+    let cut = stem
+        .find(|c: char| c.is_ascii_digit())
+        .filter(|index| *index > 2)
+        .unwrap_or(stem.len());
+    stem[..cut].trim_end_matches(['-', '_', '.', ' ']).to_lowercase()
+}
+
+/// Название мода из его метаданных внутри jar.
+fn mod_display_name(jar: &std::path::Path) -> Option<String> {
+    let file = std::fs::File::open(jar).ok()?;
+    let mut zip = zip::ZipArchive::new(file).ok()?;
+    for name in ["fabric.mod.json", "quilt.mod.json"] {
+        if let Ok(mut entry) = zip.by_name(name) {
+            let mut text = String::new();
+            use std::io::Read;
+            if entry.read_to_string(&mut text).is_ok() {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                    for key in ["name", "id"] {
+                        if let Some(found) = value.get(key).and_then(|v| v.as_str()) {
+                            if !found.trim().is_empty() {
+                                return Some(found.trim().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for name in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
+        if let Ok(mut entry) = zip.by_name(name) {
+            let mut text = String::new();
+            use std::io::Read;
+            if entry.read_to_string(&mut text).is_ok() {
+                for line in text.lines() {
+                    let line = line.trim();
+                    if let Some(rest) = line.strip_prefix("displayName") {
+                        let value = rest.trim_start_matches(['=', ' ']).trim().trim_matches('"');
+                        if !value.is_empty() {
+                            return Some(value.to_string());
+                        }
+                    }
+                }
+                for line in text.lines() {
+                    let line = line.trim();
+                    if let Some(rest) = line.strip_prefix("modId") {
+                        let value = rest.trim_start_matches(['=', ' ']).trim().trim_matches('"');
+                        if !value.is_empty() {
+                            return Some(value.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Найденные сборки в Prism / MultiMC / Modrinth App.
+#[tauri::command]
+async fn scan_external_launchers() -> Result<Vec<omnispec_core::transfer::ExternalProfile>, String> {
+    tauri::async_runtime::spawn_blocking(omnispec_core::transfer::scan_external)
+        .await
+        .map_err(err)
+}
+
+/// Перенести чужую сборку к себе.
+#[tauri::command]
+async fn import_external(
+    state: State<'_, AppState>,
+    path: String,
+    name: Option<String>,
+    mc_version: String,
+    loader: Option<String>,
+    loader_version: Option<String>,
+    icon: Option<String>,
+) -> Result<InstanceMeta, String> {
+    let paths = state.paths.clone();
+    let kind = loader.unwrap_or_else(|| "vanilla".into());
+    let version = loader_version.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        omnispec_core::transfer::import_external(
+            &paths,
+            &path,
+            name,
+            &mc_version,
+            &kind,
+            &version,
+            icon.as_deref(),
+        )
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+/// Экспорт сборки в `.mrpack` или `.zip`.
+#[tauri::command]
+async fn export_instance(
+    state: State<'_, AppState>,
+    instance_id: String,
+    path: String,
+    format: Option<String>,
+) -> Result<String, String> {
+    let paths = state.paths.clone();
+    let kind = format.unwrap_or_else(|| "mrpack".into());
+    let out = PathBuf::from(&path);
+    tauri::async_runtime::spawn_blocking(move || {
+        omnispec_core::transfer::export_instance(&paths, &instance_id, &out, &kind)
+    })
+    .await
+    .map_err(err)?
+    .map(|path| path.display().to_string())
+    .map_err(err)
+}
+
+#[tauri::command]
+async fn import_zip(
+    state: State<'_, AppState>,
+    path: String,
+    name: Option<String>,
+    mc_version: String,
+    loader: Option<String>,
+    loader_version: Option<String>,
+) -> Result<omnispec_core::instances::InstanceMeta, String> {
+    let paths = state.paths.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        omnispec_core::transfer::import_zip(
+            &paths,
+            &path,
+            name.as_deref(),
+            &mc_version,
+            loader.as_deref().unwrap_or("vanilla"),
+            loader_version.as_deref().unwrap_or(""),
+        )
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
+/// Системный диалог «сохранить как» — для экспорта сборки в архив.
+#[tauri::command]
+async fn pick_save_path(
+    title: Option<String>,
+    file_name: Option<String>,
+    extensions: Option<Vec<String>>,
+) -> Result<Option<String>, String> {
+    let chosen = tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(title.unwrap_or_else(|| "Сохранить файл".into()));
+        if let Some(file_name) = file_name {
+            dialog = dialog.set_file_name(file_name);
+        }
+        if let Some(extensions) = extensions {
+            let list: Vec<String> = extensions.into_iter().map(|ext| ext.to_lowercase()).collect();
+            let refs: Vec<&str> = list.iter().map(|ext| ext.as_str()).collect();
+            if !refs.is_empty() {
+                dialog = dialog.add_filter("Архив", &refs);
+            }
+        }
+        dialog.save_file().map(|path| path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(chosen)
+}
+
 #[tauri::command]
 fn toggle_mod(
     state: State<'_, AppState>,
@@ -1188,6 +1447,12 @@ fn main() {
             list_java,
             open_path,
             window_action,
+            mod_icons,
+            scan_external_launchers,
+            import_external,
+            export_instance,
+            import_zip,
+            pick_save_path,
             set_custom_wallpaper,
             custom_wallpaper,
             instance_path,

@@ -383,6 +383,13 @@
       const path = String(raw);
       const name = path.split(/[\\/]/).pop() || path;
       const lower = name.toLowerCase();
+      // Без выбранной сборки zip — это модпак: открываем импорт с уже указанным файлом.
+      if (lower.endsWith(".zip") && !selected()) {
+        openAdd("file");
+        state.add.path = path;
+        renderAdd();
+        continue;
+      }
       if (lower.endsWith(".mrpack")) { await installMrpackPath(path); continue; }
       const meta = selected();
       if (!meta) { toast("Сначала выбери сборку слева", "err"); continue; }
@@ -488,6 +495,10 @@
     readFile: (instanceId, path) => invoke("read_text_file", { instanceId, path }),
     deleteFile: (instanceId, path) => invoke("delete_file", { instanceId, path }),
     mods: (instanceId) => invoke("list_mods", { instanceId }),
+    modIcons: (instanceId) => invoke("mod_icons", { instanceId }),
+    scanExternal: () => invoke("scan_external_launchers"),
+    importExternal: (payload) => invoke("import_external", payload),
+    exportInstance: (instanceId, path, format) => invoke("export_instance", { instanceId, path, format }),
     toggleMod: (instanceId, name) => invoke("toggle_mod", { instanceId, name }),
     javas: () => invoke("list_java"),
     openPath: (path) => invoke("open_path", { path }),
@@ -604,6 +615,33 @@
     readFile: async () => "fov:0.0\nlang:ru_ru\nrenderDistance:12\nnarrator:0\n",
     deleteFile: async () => null,
     mods: async () => demoMods.map((m) => ({ ...m })),
+    // Иконки модов в демо-режиме — те же картинки, что отдал бы Modrinth.
+    modIcons: async () => {
+      const map = {};
+      demoMods.forEach((mod, index) => {
+        if (index % 4 === 3) return;
+        map[mod.name] = `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#2a2a31"/><text x="32" y="41" font-family="monospace" font-size="26" fill="#7ee787" text-anchor="middle">${(mod.name || "M").slice(0, 1).toUpperCase()}</text></svg>`)}`;
+      });
+      return map;
+    },
+    scanExternal: async () => ([
+      { launcher: "prism", name: "Fabulously Optimized", path: "C:\\Users\\Vanya\\AppData\\Roaming\\PrismLauncher\\instances\\fabulously-optimized\\.minecraft", mc_version: "1.21.4", loader: "fabric", loader_version: "0.16.9", icon: null },
+      { launcher: "prism", name: "Create: Astral", path: "C:\\Users\\Vanya\\AppData\\Roaming\\PrismLauncher\\instances\\create-astral\\.minecraft", mc_version: "1.18.2", loader: "forge", loader_version: "40.2.10", icon: null },
+      { launcher: "multimc", name: "Vanilla 1.20.1", path: "C:\\Users\\Vanya\\AppData\\Roaming\\MultiMC\\instances\\vanilla120\\.minecraft", mc_version: "1.20.1", loader: "vanilla", loader_version: "", icon: null },
+      { launcher: "modrinth", name: "Cobblemon Official", path: "C:\\Users\\Vanya\\AppData\\Roaming\\com.modrinth.theseus\\profiles\\cobblemon", mc_version: "1.21.1", loader: "fabric", loader_version: "0.16.5", icon: null }
+    ]),
+    importExternal: async (payload) => {
+      const meta = { ...DEMO.instances[0], id: "demo-" + Date.now(), name: payload.name || "Imported", mc_version: payload.mcVersion, loader: payload.loader ? { type: payload.loader, version: payload.loaderVersion } : { type: "vanilla" } };
+      DEMO.instances.unshift(meta);
+      return meta;
+    },
+    exportInstance: async (_id, path) => path,
+    installZip: async (payload) => {
+      const meta = { ...DEMO.instances[0], id: "demo-" + Date.now(), name: "Zip сборка", mc_version: payload.mcVersion, loader: { type: "vanilla" } };
+      DEMO.instances.unshift(meta);
+      return meta;
+    },
+    pickSave: async (_title, fileName) => `C:\\Users\\Vanya\\Downloads\\${fileName || "build.mrpack"}`,
     toggleMod: async (_i, name) => (name.endsWith(".disabled") ? name.slice(0, -9) : name + ".disabled"),
     javas: async () => ([
       { path: "C:\\OmniSpec\\java\\java-runtime-delta\\21.0.7\\bin\\javaw.exe", major: 21, vendor: "Mojang", source: "mojang" },
@@ -663,6 +701,10 @@
     logs: {},
     files: { path: "", entries: [], selected: null },
     mods: [],
+    modIcons: {},
+    mcver: null,
+    modsView: "list",
+    external: { list: null, loading: false, error: null },
     iconCache: {},
     modrinth: {
       query: "", type: "mod", mc: "", loader: "",
@@ -1174,6 +1216,13 @@
   }
 
   /* ---------- моды ---------- */
+  /** Иконка мода: картинка с Modrinth, иначе нейтральный значок. */
+  function modIconHtml(mod) {
+    const url = state.modIcons[mod.name];
+    if (url) return `<span class="mod-icon"><img src="${esc(url)}" alt="" loading="lazy"></span>`;
+    return `<span class="mod-icon"><svg class="ic"><use href="#i-mod"/></svg></span>`;
+  }
+
   async function renderMods() {
     const meta = selected();
     const mods = await api.mods(meta.id).catch(() => []);
@@ -1181,6 +1230,38 @@
     $("#badge-mods").hidden = !mods.length;
     $("#badge-mods").textContent = String(mods.length);
     const enabled = mods.filter((mod) => mod.enabled).length;
+    const grid = state.modsView === "grid";
+
+    // иконки подтягиваем один раз и перерисовываем, когда придут
+    if (!Object.keys(state.modIcons).length) {
+      api.modIcons(meta.id).then((map) => {
+        if (!map || !Object.keys(map).length) return;
+        state.modIcons = map;
+        if (state.tab === "mods" && state.selectedId === meta.id) renderMods();
+      }).catch(() => {});
+    }
+
+    const body = grid
+      ? `<div class="mods-grid">${mods.map((mod) => `
+          <div class="mod-card ${mod.enabled ? "" : "is-off"}">
+            ${modIconHtml(mod)}
+            <div class="mod-card-name" title="${esc(mod.name)}">${esc(mod.name)}</div>
+            <div class="mod-card-sub">${humanSize(mod.size)}</div>
+            <div class="mod-card-actions">
+              <button class="switch ${mod.enabled ? "on" : ""}" data-toggle="${esc(mod.name)}"></button>
+              <button class="icon-btn" data-delete="${esc(mod.name)}" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
+            </div>
+          </div>`).join("")}</div>`
+      : mods.map((mod) => `
+          <div class="item-row">
+            ${modIconHtml(mod)}
+            <div class="item-main">
+              <div class="item-title">${esc(mod.name)}</div>
+              <div class="item-sub">${humanSize(mod.size)} · ${mod.enabled ? "включён" : "выключен"}</div>
+            </div>
+            <button class="switch ${mod.enabled ? "on" : ""}" data-toggle="${esc(mod.name)}" title="Включить/выключить"></button>
+            <button class="icon-btn" data-delete="${esc(mod.name)}" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
+          </div>`).join("");
 
     $("#tab-body").innerHTML = `
       <div class="list-wrap">
@@ -1189,22 +1270,21 @@
             <strong>Моды сборки</strong>
             <span class="badge">${enabled} вкл. / ${mods.length}</span>
             <div class="spacer"></div>
+            <div class="mr-view" title="Вид">
+              <button class="${grid ? "" : "is-active"}" data-mods-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
+              <button class="${grid ? "is-active" : ""}" data-mods-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
+            </div>
             <button class="btn btn-small" id="mods-open">Открыть папку</button>
             <button class="btn btn-small btn-primary" id="mods-add">Добавить с Modrinth</button>
           </div>
-          ${mods.length ? mods.map((mod) => `
-            <div class="item-row">
-              <svg class="ic" style="color:#6b727a"><use href="#i-mod"/></svg>
-              <div class="item-main">
-                <div class="item-title">${esc(mod.name)}</div>
-                <div class="item-sub">${humanSize(mod.size)} · ${mod.enabled ? "включён" : "выключен"}</div>
-              </div>
-              <button class="switch ${mod.enabled ? "on" : ""}" data-toggle="${esc(mod.name)}" title="Включить/выключить"></button>
-              <button class="icon-btn" data-delete="${esc(mod.name)}" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
-            </div>`).join("") : `<div class="item-row"><div class="item-main muted">Модов нет. Добавь их на вкладке Modrinth.</div></div>`}
+          ${mods.length ? body : `<div class="item-row"><div class="item-main muted">Модов нет</div></div>`}
         </div>
       </div>`;
 
+    $$("#tab-body [data-mods-view]").forEach((btn) => btn.addEventListener("click", () => {
+      state.modsView = btn.dataset.modsView;
+      renderMods();
+    }));
     $("#mods-add").addEventListener("click", () => { state.modrinth.type = "mod"; state.tab = "modrinth"; renderTab(); });
     $("#mods-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/mods`).catch((err) => toast(String(err), "err")));
     $$("[data-toggle]").forEach((el) => el.addEventListener("click", async () => {
@@ -2451,8 +2531,18 @@
                 <div><input class="input" id="inst-notes" style="width:100%" placeholder="например: для сборки с шейдерами" value="${esc(meta.notes || "")}" spellcheck="false"></div>
               </div>
               <div class="settings-row">
-                <div class="label">Загрузчик</div>
-                <div class="muted" style="padding-top:7px">${esc(loaderLabel(meta.loader))} · профиль <span class="kbd">${esc(versionId(meta))}</span></div>
+                <div class="label">Версия игры</div>
+                <div class="flex-row">
+                  <div class="muted grow" style="padding-top:7px">MC ${esc(meta.mc_version)} · ${esc(loaderLabel(meta.loader))} <span class="kbd">${esc(versionId(meta))}</span></div>
+                  <button class="btn" id="inst-change-version">Сменить версию</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="label">Экспорт</div>
+                <div class="settings-actions" style="margin:0">
+                  <button class="btn" id="inst-export-mrpack">В .mrpack</button>
+                  <button class="btn" id="inst-export-zip">В .zip</button>
+                </div>
               </div>
               <div class="settings-actions">
                 <button class="btn btn-primary" id="inst-save">Сохранить сборку</button>
@@ -2523,6 +2613,9 @@
         toast("Сборка сохранена", "ok");
       } catch (err) { toast(String(err), "err"); }
     });
+    $("#inst-change-version").addEventListener("click", () => openVersionChange());
+    $("#inst-export-mrpack").addEventListener("click", () => exportBuild(meta, "mrpack"));
+    $("#inst-export-zip").addEventListener("click", () => exportBuild(meta, "zip"));
     $("#inst-folder").addEventListener("click", () => api.openPath(`${meta.id}/minecraft`).catch((err) => toast(String(err), "err")));
     $("#inst-delete").addEventListener("click", async () => {
       if (!confirm(`Удалить сборку «${meta.name}» вместе с модами и мирами?`)) return;
@@ -2534,6 +2627,24 @@
         toast("Сборка удалена", "ok");
       } catch (err) { toast(String(err), "err"); }
     });
+  }
+
+  /** Экспорт сборки: выбираем куда сохранить и отдаём архиву ядру. */
+  async function exportBuild(meta, format) {
+    const safeName = String(meta.name).replace(/[\\/:*?"<>|]/g, "_").trim() || "build";
+    const path = await api.pickSave(
+      format === "zip" ? "Экспорт сборки в .zip" : "Экспорт сборки в .mrpack",
+      `${safeName}.${format}`,
+      [format]
+    ).catch(() => null);
+    if (!path) return;
+    toast(`Собираем архив «${meta.name}»…`, "info");
+    try {
+      const saved = await api.exportInstance(meta.id, path, format);
+      toast(`Готово: ${saved}`, "ok");
+    } catch (err) {
+      toast(`Не удалось экспортировать: ${err}`, "err");
+    }
   }
 
   function versionId(meta) {
@@ -2690,10 +2801,15 @@
    * поиском модпака на Modrinth, локальным .mrpack или ссылкой.
    */
   function openAdd(mode = "modrinth") {
-    state.add = { mode, query: "", packs: [], selected: null, path: "", url: "", loading: false };
+    state.add = {
+      mode, query: "", packs: [], selected: null, path: "", url: "", loading: false,
+      versions: [], zipMc: "", zipLoader: "vanilla", zipLoaderVersion: "", zipLoaderVersions: [],
+      external: null, extLoading: false, extSelected: null, extGrid: false, extName: ""
+    };
     $("#modal-add").hidden = false;
     renderAdd();
     if (mode === "modrinth" && !state.add.packs.length) searchAddPacks("");
+    if (mode === "external") loadExternal();
   }
 
   function renderAdd() {
@@ -2737,27 +2853,127 @@
         renderAdd();
       }));
     } else if (cfg.mode === "file") {
+      const isZip = /\.zip$/i.test(cfg.path.trim());
       body.innerHTML = `
         <div class="form-grid">
           <div class="field">
-            <label>Путь к файлу .mrpack</label>
+            <label>Файл модпака</label>
             <div class="flex-row">
-              <input class="input grow" id="add-path" value="${esc(cfg.path)}" placeholder="C:\\Users\\Иван\\Downloads\\pack.mrpack" spellcheck="false">
+              <input class="input grow" id="add-path" value="${esc(cfg.path)}" placeholder="pack.mrpack или pack.zip" spellcheck="false">
               <button class="btn" id="add-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать файл…</button>
             </div>
           </div>
-          <div class="settings-note" style="margin:0">
-            Можно просто перетащить .mrpack в окно лаунчера — сборка появится сама.
-            Файл .mrpack открывается и двойным щелчком в проводнике (после установки через Setup).
-          </div>
+          ${isZip ? `
+            <div class="field">
+              <label>Версия Minecraft</label>
+              <select class="select" id="add-zip-mc">
+                ${cfg.versions.length ? cfg.versions.map((version) => `<option value="${esc(version.id)}" ${version.id === cfg.zipMc ? "selected" : ""}>${esc(version.id)}</option>`).join("") : `<option value="">загружаем…</option>`}
+              </select>
+            </div>
+            <div class="field">
+              <label>Загрузчик</label>
+              <div class="chips" id="add-zip-loaders">
+                ${Object.entries(LOADER_NAMES).map(([value, label]) => `<button class="chip ${cfg.zipLoader === value ? "is-active" : ""}" data-zip-loader="${value}">${label}</button>`).join("")}
+              </div>
+            </div>
+            ${cfg.zipLoader === "vanilla" || !cfg.zipLoader ? "" : `
+              <div class="field" id="add-zip-lv-field">
+                <label>Версия загрузчика</label>
+                <select class="select" id="add-zip-loader-version">
+                  ${cfg.zipLoaderVersions.length ? cfg.zipLoaderVersions.map((option) => `<option value="${esc(option.version)}" ${option.version === cfg.zipLoaderVersion ? "selected" : ""}>${esc(option.version)}</option>`).join("") : `<option value="">загружаем…</option>`}
+                </select>
+              </div>`}
+            <div class="settings-note" style="margin:0">В zip нет версии игры — укажи её сам, моды и конфиги перенесутся как есть.</div>`
+          : ""}
         </div>`;
-      $("#add-path").addEventListener("input", (event) => { cfg.path = event.target.value; });
-      $("#add-pick").addEventListener("click", async () => {
-        const picked = await api.pickFile("Выбери модпак .mrpack", ["mrpack"]).catch(() => null);
-        if (picked) { cfg.path = picked; $("#add-path").value = picked; }
+      $("#add-path-error")?.remove();
+      $("#add-path").addEventListener("input", (event) => {
+        cfg.path = event.target.value;
+        const nowZip = /\.zip$/i.test(cfg.path.trim());
+        if (nowZip !== isZip) renderAdd();
       });
-      $("#add-path").addEventListener("keydown", (event) => { if (event.key === "Enter") submitAdd(); });
+      $("#add-pick").addEventListener("click", async () => {
+        const picked = await api.pickFile("Модпак .mrpack или .zip", ["mrpack", "zip"]).catch(() => null);
+        if (!picked) return;
+        cfg.path = picked;
+        renderAdd();
+      });
+      if (isZip) {
+        if (!cfg.versions.length) {
+          api.versions(false).then((versions) => {
+            cfg.versions = versions || [];
+            if (!cfg.zipMc) cfg.zipMc = (cfg.versions[0] || {}).id || "";
+            renderAdd();
+          }).catch(() => {});
+        }
+        if ($("#add-zip-mc")) $("#add-zip-mc").addEventListener("change", (event) => {
+          cfg.zipMc = event.target.value;
+          if (cfg.zipLoader && cfg.zipLoader !== "vanilla") loadZipLoaderVersions();
+        });
+        $$("#add-zip-loaders .chip").forEach((chip) => chip.addEventListener("click", () => {
+          cfg.zipLoader = chip.dataset.zipLoader;
+          loadZipLoaderVersions();
+        }));
+        if ($("#add-zip-loader-version")) $("#add-zip-loader-version").addEventListener("change", (event) => {
+          cfg.zipLoaderVersion = event.target.value;
+        });
+      } else {
+        $("#add-path").addEventListener("keydown", (event) => { if (event.key === "Enter") submitAdd(); });
+      }
       setTimeout(() => { const el = $("#add-path"); if (el) el.focus(); }, 30);
+
+    } else if (cfg.mode === "external") {
+      const list = cfg.external || [];
+      const launcherNames = { prism: "Prism Launcher", multimc: "MultiMC", modrinth: "Modrinth App" };
+      const row = (item) => `
+        <button class="ext-row ${cfg.extSelected && cfg.extSelected.path === item.path ? "is-active" : ""}" data-ext="${esc(item.path)}">
+          <span class="ext-icon">${item.icon ? `<img src="file://${esc(item.icon)}" alt="">` : `<svg class="ic"><use href="#i-grid"/></svg>`}</span>
+          <span class="ext-main">
+            <span class="ext-name">${esc(item.name)}</span>
+            <span class="ext-sub">${esc(launcherNames[item.launcher] || item.launcher)} · MC ${esc(item.mc_version)} · ${esc(item.loader)}</span>
+          </span>
+        </button>`;
+      const card = (item) => `
+        <button class="ext-card ${cfg.extSelected && cfg.extSelected.path === item.path ? "is-active" : ""}" data-ext="${esc(item.path)}">
+          <span class="ext-cover">${item.icon ? `<img src="file://${esc(item.icon)}" alt="">` : `<svg class="ic"><use href="#i-grid"/></svg>`}</span>
+          <span class="ext-cover-name">${esc(item.name)}</span>
+          <span class="ext-cover-sub">MC ${esc(item.mc_version)} · ${esc(item.loader)}</span>
+        </button>`;
+
+      body.innerHTML = `
+        <div class="form-grid">
+          <div class="add-ext-head">
+            <strong>Найдено сборок: ${list.length}</strong>
+            <div class="spacer"></div>
+            <div class="mr-view">
+              <button class="${cfg.extGrid ? "" : "is-active"}" data-ext-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
+              <button class="${cfg.extGrid ? "is-active" : ""}" data-ext-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
+            </div>
+            <button class="btn btn-small" id="ext-rescan">Обновить</button>
+          </div>
+          ${cfg.extLoading
+            ? `<div class="add-empty">Смотрим Prism Launcher, MultiMC и Modrinth App…</div>`
+            : list.length
+              ? `<div class="${cfg.extGrid ? "ext-grid" : "ext-list"}">${list.map(cfg.extGrid ? card : row).join("")}</div>`
+              : `<div class="add-empty">Сборок в других лаунчерах не нашлось. Укажи папку вручную → вкладка «Файл».</div>`}
+          ${cfg.extSelected ? `
+            <div class="field">
+              <label>Название в OmniSpec</label>
+              <input class="input" id="ext-name" value="${esc(cfg.extName)}" spellcheck="false">
+            </div>` : ""}
+        </div>`;
+
+      $("#ext-rescan").addEventListener("click", () => loadExternal(true));
+      $$("#add-body [data-ext-view]").forEach((btn) => btn.addEventListener("click", () => {
+        cfg.extGrid = btn.dataset.extView === "grid";
+        renderAdd();
+      }));
+      $$("#add-body [data-ext]").forEach((el) => el.addEventListener("click", () => {
+        cfg.extSelected = list.find((item) => item.path === el.dataset.ext) || null;
+        cfg.extName = cfg.extSelected ? cfg.extSelected.name : "";
+        renderAdd();
+      }));
+      if ($("#ext-name")) $("#ext-name").addEventListener("input", (event) => { cfg.extName = event.target.value; });
     } else {
       body.innerHTML = `
         <div class="form-grid">
@@ -2774,10 +2990,53 @@
       setTimeout(() => { const el = $("#add-url"); if (el) el.focus(); }, 30);
     }
 
-    $("#add-hint").textContent = cfg.mode === "modrinth"
-      ? (cfg.selected ? cfg.selected.title : "выбери модпак")
-      : (cfg.mode === "file" ? "файл .mrpack" : "ссылка");
-    $("#add-submit").textContent = cfg.mode === "modrinth" ? "Установить" : "Добавить";
+    if (cfg.mode === "modrinth") {
+      $("#add-hint").textContent = cfg.selected ? cfg.selected.title : "выбери модпак";
+      $("#add-submit").textContent = "Установить";
+    } else if (cfg.mode === "file") {
+      const zip = /\.zip$/i.test(cfg.path.trim());
+      $("#add-hint").textContent = zip ? "модпак .zip" : "модпак .mrpack";
+      $("#add-submit").textContent = zip ? "Импортировать" : "Добавить";
+    } else if (cfg.mode === "external") {
+      $("#add-hint").textContent = cfg.extSelected ? cfg.extSelected.name : "выбери сборку";
+      $("#add-submit").textContent = "Импортировать";
+    } else {
+      $("#add-hint").textContent = "ссылка";
+      $("#add-submit").textContent = "Добавить";
+    }
+  }
+
+  /** Версии загрузчика для импорта zip — по выбранной версии игры. */
+  async function loadZipLoaderVersions() {
+    const cfg = state.add;
+    if (cfg.zipLoader === "vanilla") {
+      cfg.zipLoaderVersions = [];
+      cfg.zipLoaderVersion = "";
+      renderAdd();
+      return;
+    }
+    const list = await api.loaderVersions(cfg.zipLoader, cfg.zipMc).catch(() => []);
+    cfg.zipLoaderVersions = list || [];
+    const current = cfg.zipLoaderVersions.find((option) => option.stable) || cfg.zipLoaderVersions[0];
+    cfg.zipLoaderVersion = current ? current.version : "";
+    renderAdd();
+  }
+
+  /** Поиск сборок в других лаунчерах (Prism, MultiMC, Modrinth App). */
+  async function loadExternal(force = false) {
+    const cfg = state.add;
+    if (cfg.external && !force) return;
+    cfg.extLoading = true;
+    renderAdd();
+    try {
+      cfg.external = await api.scanExternal();
+    } catch (err) {
+      cfg.external = [];
+      toast(`Не удалось просканировать лаунчеры: ${err}`, "err");
+    } finally {
+      cfg.extLoading = false;
+      renderAdd();
+    }
   }
 
   async function searchAddPacks(query) {
@@ -2807,7 +3066,11 @@
       source = "";
     } else if (cfg.mode === "file") {
       source = cfg.path.trim();
-      if (!source) return toast("Укажи путь к файлу .mrpack", "err");
+      if (!source) return toast("Укажи путь к файлу модпака", "err");
+      if (/\.zip$/i.test(source) && !cfg.zipMc) return toast("Выбери версию Minecraft для этого zip", "err");
+    } else if (cfg.mode === "external") {
+      if (!cfg.extSelected) return toast("Выбери сборку из списка", "err");
+      source = cfg.extSelected.path;
     } else {
       source = cfg.url.trim();
       if (!source) return toast("Вставь ссылку", "err");
@@ -2823,7 +3086,29 @@
         if (!versions.length) throw new Error("у этого модпака нет версий");
         target = versions[0].id;
       }
-      const meta = await api.installModpack(target);
+      let meta = null;
+      if (cfg.mode === "file" && /\.zip$/i.test(target)) {
+        // Обычный zip из Prism: версию игры указываем сами.
+        meta = await api.installZip({
+          path: target,
+          name: null,
+          mcVersion: cfg.zipMc,
+          loader: cfg.zipLoader === "vanilla" ? null : cfg.zipLoader,
+          loaderVersion: cfg.zipLoaderVersion || null
+        });
+      } else if (cfg.mode === "external") {
+        const found = cfg.extSelected;
+        meta = await api.importExternal({
+          path: found.path,
+          name: (cfg.extName || "").trim() || null,
+          mcVersion: found.mc_version,
+          loader: found.loader === "vanilla" ? null : found.loader,
+          loaderVersion: found.loader_version || null,
+          icon: found.icon || null
+        });
+      } else {
+        meta = await api.installModpack(target);
+      }
       $("#modal-add").hidden = true;
       await refreshInstances();
       selectInstance(meta.id);
@@ -2833,6 +3118,142 @@
     } finally {
       submit.disabled = false;
       submit.textContent = label;
+    }
+  }
+
+  /* ==================== СМЕНА ВЕРСИИ СБОРКИ ==================== */
+  /** Два списка: слева версии Minecraft, справа загрузчик и его версии. */
+  async function openVersionChange() {
+    const meta = selected();
+    if (!meta) return;
+    const loader = meta.loader || { type: "vanilla" };
+    state.mcver = {
+      meta,
+      versions: [],
+      query: "",
+      mc: meta.mc_version,
+      loader: loader.type || "vanilla",
+      loaderVersion: loader.version || "",
+      loaderVersions: [],
+      loading: true
+    };
+    $("#modal-mcver").hidden = false;
+    renderVersionChange();
+    state.mcver.versions = await api.versions((state.settings && state.settings.show_snapshots) || false).catch(() => []);
+    state.mcver.loading = false;
+    renderVersionChange();
+    loadVersionLoaderVersions();
+  }
+
+  async function loadVersionLoaderVersions() {
+    const cfg = state.mcver;
+    if (!cfg) return;
+    if (cfg.loader === "vanilla") {
+      cfg.loaderVersions = [];
+      cfg.loaderVersion = "";
+      renderVersionChange();
+      return;
+    }
+    cfg.loaderVersions = [];
+    renderVersionChange();
+    const list = await api.loaderVersions(cfg.loader, cfg.mc).catch(() => []);
+    if (!state.mcver || state.mcver !== cfg) return;
+    cfg.loaderVersions = list || [];
+    const keep = cfg.loaderVersions.some((option) => option.version === cfg.loaderVersion);
+    if (!keep) {
+      const current = cfg.loaderVersions.find((option) => option.stable) || cfg.loaderVersions[0];
+      cfg.loaderVersion = current ? current.version : "";
+    }
+    renderVersionChange();
+  }
+
+  function renderVersionChange() {
+    const cfg = state.mcver;
+    if (!cfg) return;
+    const filter = cfg.query.toLowerCase();
+    const versions = cfg.versions.filter((version) => !filter || version.id.toLowerCase().includes(filter));
+    const loaderName = LOADER_NAMES[cfg.loader] || cfg.loader;
+
+    $("#mcver-body").innerHTML = `
+      <div class="mcver-grid">
+        <section class="mcver-col">
+          <div class="mcver-head">Minecraft</div>
+          <label class="search" style="margin:8px">
+            <svg class="ic"><use href="#i-search"/></svg>
+            <input id="mcver-search" type="text" placeholder="найти версию" value="${esc(cfg.query)}" spellcheck="false">
+          </label>
+          <div class="mcver-list" id="mcver-list">
+            ${cfg.loading ? `<div class="add-empty">Загружаем версии…</div>` : versions.length ? versions.map((version) => `
+              <button class="mcver-item ${version.id === cfg.mc ? "is-active" : ""}" data-mcver-mc="${esc(version.id)}">
+                <span>${esc(version.id)}</span>
+                ${version.type && version.type !== "release" ? `<span class="tag">${esc(version.type)}</span>` : ""}
+              </button>`).join("") : `<div class="add-empty">Ничего не найдено</div>`}
+          </div>
+        </section>
+        <section class="mcver-col">
+          <div class="mcver-head">Загрузчик</div>
+          <div class="chips" id="mcver-loaders" style="padding:8px">
+            ${Object.entries(LOADER_NAMES).map(([value, label]) => `<button class="chip ${cfg.loader === value ? "is-active" : ""}" data-mcver-loader="${value}">${label}</button>`).join("")}
+          </div>
+          <div class="mcver-list" id="mcver-loader-list">
+            ${cfg.loader === "vanilla"
+              ? `<div class="add-empty">Ваниль без загрузчика</div>`
+              : cfg.loaderVersions.length
+                ? cfg.loaderVersions.map((option) => `
+                  <button class="mcver-item ${option.version === cfg.loaderVersion ? "is-active" : ""}" data-mcver-loader-version="${esc(option.version)}">
+                    <span>${esc(option.version)}</span>
+                    ${option.stable ? "" : `<span class="tag">beta</span>`}
+                  </button>`).join("")
+                : `<div class="add-empty">Загружаем версии ${esc(loaderName)}…</div>`}
+          </div>
+        </section>
+      </div>`;
+
+    $("#mcver-search").addEventListener("input", (event) => {
+      cfg.query = event.target.value;
+      renderVersionChange();
+      const input = $("#mcver-search");
+      if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+    });
+    $$("#mcver-list [data-mcver-mc]").forEach((el) => el.addEventListener("click", () => {
+      cfg.mc = el.dataset.mcverMc;
+      renderVersionChange();
+      loadVersionLoaderVersions();
+    }));
+    $$("#mcver-loaders .chip").forEach((chip) => chip.addEventListener("click", () => {
+      cfg.loader = chip.dataset.mcverLoader;
+      cfg.loaderVersion = "";
+      renderVersionChange();
+      loadVersionLoaderVersions();
+    }));
+    $$("#mcver-loader-list [data-mcver-loader-version]").forEach((el) => el.addEventListener("click", () => {
+      cfg.loaderVersion = el.dataset.mcverLoaderVersion;
+      renderVersionChange();
+    }));
+
+    $("#mcver-hint").textContent = `MC ${cfg.mc} · ${loaderName}${cfg.loaderVersion ? " " + cfg.loaderVersion : ""}`;
+  }
+
+  async function applyVersionChange() {
+    const cfg = state.mcver;
+    if (!cfg) return;
+    const meta = cfg.meta;
+    const loader = cfg.loader === "vanilla" || !cfg.loader
+      ? { type: "vanilla" }
+      : { type: cfg.loader, version: cfg.loaderVersion };
+    if (loader.type !== "vanilla" && !loader.version) return toast("Выбери версию загрузчика", "err");
+    const button = $("#mcver-apply");
+    button.disabled = true;
+    try {
+      await api.updateInstance({ ...meta, mc_version: cfg.mc, loader, version_override: null });
+      $("#modal-mcver").hidden = true;
+      await refreshInstances();
+      selectInstance(meta.id);
+      toast(`Версия сборки — MC ${cfg.mc}`, "ok");
+    } catch (err) {
+      toast(String(err), "err");
+    } finally {
+      button.disabled = false;
     }
   }
 
@@ -3010,6 +3431,13 @@
     });
     on("[data-close-acc]", "click", () => { $("#modal-account").hidden = true; });
     on("[data-close-versions]", "click", () => { $("#modal-versions").hidden = true; });
+    // Версия в шапке кликабельна и ведёт на смену версии.
+    on("#loader-pill", "click", () => { if (selected()) openVersionChange(); });
+    on("#tb-version", "click", () => { if (selected()) openVersionChange(); });
+    on("#mcver-apply", "click", () => applyVersionChange());
+    $$("[data-close-mcver]").forEach((el) => el.addEventListener("click", () => { $("#modal-mcver").hidden = true; }));
+    const mcverModal = $("#modal-mcver");
+    if (mcverModal) mcverModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-mcver") mcverModal.hidden = true; });
     on("[data-close-prompt]", "click", () => { const modal = $("#modal-prompt"); if (modal) modal.hidden = true; });
     const verModal = $("#modal-versions");
     if (verModal) verModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-versions") verModal.hidden = true; });
@@ -3031,7 +3459,11 @@
     $$("[data-close-update]").forEach((btn) => btn.addEventListener("click", () => { $("#modal-update").hidden = true; }));
     $$("[data-close-add]").forEach((btn) => btn.addEventListener("click", () => { $("#modal-add").hidden = true; }));
     $("#add-submit").addEventListener("click", submitAdd);
-    $$("#add-tabs .mtab").forEach((tab) => tab.addEventListener("click", () => { state.add.mode = tab.dataset.amode; renderAdd(); }));
+    $$("#add-tabs .mtab").forEach((tab) => tab.addEventListener("click", () => {
+      state.add.mode = tab.dataset.amode;
+      renderAdd();
+      if (state.add.mode === "external") loadExternal();
+    }));
     $("#modal-add").addEventListener("mousedown", (event) => { if (event.target.id === "modal-add") $("#modal-add").hidden = true; });
     $("#modal-update").addEventListener("mousedown", (event) => { if (event.target.id === "modal-update") $("#modal-update").hidden = true; });
     $("#btn-update").addEventListener("click", openUpdateModal);

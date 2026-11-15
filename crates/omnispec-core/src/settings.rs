@@ -113,6 +113,19 @@ pub struct Settings {
     pub update_prerelease: bool,
 
     /* ---------- оформление ---------- */
+    /// Форма элементов: square | soft | rounded | pill (как в OmniPanel).
+    #[serde(default = "default_shape")]
+    pub shape: String,
+    /// Свой фон: имя файла в <данные>/wallpapers.
+    #[serde(default)]
+    pub custom_wallpaper: Option<String>,
+    /// Звуковые эффекты интерфейса.
+    #[serde(default = "default_true")]
+    pub sound_fx: bool,
+    /// Громкость этих звуков, 0–100.
+    #[serde(default = "default_sound_volume")]
+    pub sound_volume: u8,
+
     /// Тема интерфейса (id пресета из OmniPanel: dark, navy, light, …).
     #[serde(default = "default_theme")]
     pub theme: String,

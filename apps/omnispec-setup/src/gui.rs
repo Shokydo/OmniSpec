@@ -298,6 +298,19 @@ impl Setup {
 
     /// Кнопка в духе консоли: моноширинная, с рамкой; главная — инверсия.
     fn button(&self, ui: &mut egui::Ui, label: &str, primary: bool, enabled: bool) -> egui::Response {
+        self.button_sized(ui, label, primary, enabled, egui::vec2(152.0, 34.0))
+    }
+
+    /// Кнопка произвольного размера — для узких мест вроде строки с путём,
+    /// где крупная кнопка выделялась бы сильнее самого пути.
+    fn button_sized(
+        &self,
+        ui: &mut egui::Ui,
+        label: &str,
+        primary: bool,
+        enabled: bool,
+        size: egui::Vec2,
+    ) -> egui::Response {
         let (fill, hover, active, text_color, border) = if primary {
             (INV_BG, Color32::from_rgb(0xff, 0xff, 0xff), Color32::from_rgb(0xd8, 0xd8, 0xdc), INV_FG, INV_BG)
         } else {
@@ -311,8 +324,7 @@ impl Setup {
         visuals.active.weak_bg_fill = active;
         visuals.active.bg_stroke = visuals.hovered.bg_stroke;
         let text = RichText::new(label).font(FontId::monospace(FONT)).color(text_color);
-        // одна ширина и высота у всех кнопок — ряд больше не «пляшет»
-        let mut button = egui::Button::new(text).min_size(egui::vec2(152.0, 34.0));
+        let mut button = egui::Button::new(text).min_size(size);
         if !enabled {
             button = button.sense(egui::Sense::hover());
         }
@@ -344,7 +356,9 @@ impl Setup {
             ui.spacing_mut().item_spacing.x = 8.0;
             ui.label(mono(format!("  {:<LABEL$}", "Куда установится:")));
             ui.label(mono_color(self.dir.display().to_string(), TEXT));
-            if self.button(ui, "Выбрать папку", false, true).clicked() {
+            // Кнопка размером с подпись: путь — главное в строке, кнопка не спорит с ним.
+            let small = egui::vec2(0.0, 24.0);
+            if self.button_sized(ui, "Выбрать папку", false, true, small).clicked() {
                 self.pick_open();
             }
         });

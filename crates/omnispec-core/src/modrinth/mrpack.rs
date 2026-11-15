@@ -169,6 +169,30 @@ pub async fn install(
     Ok(meta)
 }
 
+/// Иконка внутри `.mrpack`: `icon.png`, `icon.jpg` или `overrides/icon.png`.
+fn read_icon(archive: &Path) -> Option<(String, Vec<u8>)> {
+    let file = std::fs::File::open(archive).ok()?;
+    let mut zip = zip::ZipArchive::new(file).ok()?;
+    for name in [
+        "icon.png",
+        "icon.jpg",
+        "icon.jpeg",
+        "overrides/icon.png",
+        "overrides/icon.jpg",
+    ] {
+        let Ok(mut entry) = zip.by_name(name) else {
+            continue;
+        };
+        let mut bytes = Vec::new();
+        if entry.read_to_end(&mut bytes).is_err() || bytes.is_empty() {
+            continue;
+        }
+        let extension = if name.ends_with(".png") { "png" } else { "jpg" };
+        return Some((format!("icon.{extension}"), bytes));
+    }
+    None
+}
+
 /// Скачать иконку проекта Modrinth в папку сборки и прописать её в `meta.icon`.
 ///
 /// Ошибки глотаем: сборка уже установлена, из-за картинки её ломать незачем.
@@ -256,6 +280,18 @@ pub async fn install_archive(
             id: None,
         },
     )?;
+
+    // Иконка, если она лежит внутри архива (многие сборки кладут icon.png).
+    let mut meta = meta;
+    if let Some((file_name, bytes)) = read_icon(archive) {
+        let dir = paths.instance_dir(&meta.id);
+        if std::fs::create_dir_all(&dir).is_ok()
+            && std::fs::write(dir.join(&file_name), bytes).is_ok()
+        {
+            meta.icon = Some(file_name);
+            let _ = instances::save(paths, &meta);
+        }
+    }
 
     let game_dir = paths.instance_game_dir(&meta.id);
     let mut items = Vec::new();

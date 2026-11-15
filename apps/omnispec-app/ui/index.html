@@ -107,7 +107,7 @@
             <span class="dot" id="tb-dot"></span>
             <span id="tb-status">сборка не выбрана</span>
             <span class="sep">·</span>
-            <span id="tb-version" class="muted">—</span>
+            <button id="tb-version" class="muted tb-version" title="Сменить версию">—</button>
           </div>
         </div>
       </div>
@@ -121,7 +121,7 @@
 
     <div class="toolbar">
       <div class="toolbar-left">
-        <span class="pill" id="loader-pill" hidden></span>
+        <button class="pill pill-btn" id="loader-pill" title="Сменить версию" hidden></button>
       </div>
       <div class="toolbar-right">
         <button class="pill update-pill" id="btn-update" hidden>
@@ -183,14 +183,15 @@
 
 <!-- ============ МОДАЛКА «ДОБАВИТЬ СУЩЕСТВУЮЩУЮ» ============ -->
 <div class="modal-backdrop" id="modal-add" hidden>
-  <div class="modal" style="width:min(700px,94vw)">
+  <div class="modal modal-wide">
     <header class="modal-head">
       <h2>Добавить существующую</h2>
       <button class="icon-btn" data-close-add><svg class="ic"><use href="#i-close"/></svg></button>
     </header>
     <div class="modal-tabs" id="add-tabs">
       <button class="mtab is-active" data-amode="modrinth">Из Modrinth</button>
-      <button class="mtab" data-amode="file">Файл .mrpack</button>
+      <button class="mtab" data-amode="file">Файл .mrpack / .zip</button>
+      <button class="mtab" data-amode="external">Из лаунчера</button>
       <button class="mtab" data-amode="link">Ссылка</button>
     </div>
     <div class="modal-body" id="add-body"></div>
@@ -275,11 +276,29 @@
   </div>
 </div>
 
+<!-- ============ СМЕНА ВЕРСИИ СБОРКИ ============ -->
+<div class="modal-backdrop" id="modal-mcver" hidden>
+  <div class="modal" style="width:min(760px,95vw)">
+    <header class="modal-head">
+      <h2>Версия сборки</h2>
+      <div class="spacer"></div>
+      <button class="icon-btn" data-close-mcver title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="modal-body" id="mcver-body"></div>
+    <footer class="modal-foot">
+      <span class="hint" id="mcver-hint"></span>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" data-close-mcver>Отмена</button>
+      <button class="btn btn-primary" id="mcver-apply">Применить</button>
+    </footer>
+  </div>
+</div>
+
 <div class="drop-zone" id="drop-zone" hidden>
   <div class="drop-card">
     <svg class="ic" style="width:26px;height:26px"><use href="#i-download"/></svg>
     <div class="drop-title">Отпусти файл</div>
-    <div class="drop-sub">.mrpack — новая сборка · .jar — в моды · .png/.jpg — иконка сборки</div>
+    <div class="drop-sub">.mrpack / .zip — новая сборка · .jar — в моды · .png/.jpg — иконка сборки</div>
   </div>
 </div>
 
