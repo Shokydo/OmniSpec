@@ -261,17 +261,17 @@ fn save_cache(paths: &Paths, installs: &[JavaInstall]) {
 }
 
 /// Все кандидаты-бинарники: рантаймы Mojang, системные папки и `java` из PATH.
-fn candidate_binaries(paths: &Paths) -> Vec<(PathBuf, &'static str)> {
-    let mut result: Vec<(PathBuf, &'static str)> = Vec::new();
+fn candidate_binaries(paths: &Paths) -> Vec<(PathBuf, String)> {
+    let mut result: Vec<(PathBuf, String)> = Vec::new();
     for component in std::fs::read_dir(paths.java_dir()).into_iter().flatten().flatten() {
         for version in std::fs::read_dir(component.path()).into_iter().flatten().flatten() {
-            result.push((java_binary(&version.path()), "mojang"));
+            result.push((java_binary(&version.path()), "mojang".to_string()));
         }
     }
     for candidate in system_candidates() {
-        result.push((candidate, "system"));
+        result.push((candidate, "system".to_string()));
     }
-    result.push((PathBuf::from("java"), "system"));
+    result.push((PathBuf::from("java"), "system".to_string()));
     result
 }
 
@@ -288,7 +288,7 @@ pub async fn detect_all(paths: &Paths) -> Vec<JavaInstall> {
     let known: std::collections::HashSet<PathBuf> =
         cached.iter().map(|install| install.path.clone()).collect();
 
-    let mut fresh: Vec<(PathBuf, &'static str)> = Vec::new();
+    let mut fresh: Vec<(PathBuf, String)> = Vec::new();
     for (path, source) in candidate_binaries(paths) {
         if known.contains(&path) {
             continue;
@@ -296,17 +296,21 @@ pub async fn detect_all(paths: &Paths) -> Vec<JavaInstall> {
         fresh.push((path, source));
     }
 
-    let mut probes = futures::stream::iter(fresh.into_iter().map(|(path, source)| async move {
-        let install = probe(&path).await;
-        (install, source)
-    }))
+    // Опроc вынесен в отдельную async-функцию: замыкание, возвращающее
+    // async-блок, ломает вывод типов у `buffer_unordered` (Rust тогда не может
+    // доказать Send для futures команд Tauri целиком).
+    let mut probes = futures::stream::iter(
+        fresh
+            .into_iter()
+            .map(|(path, source)| probe_candidate(path, source)),
+    )
     .buffer_unordered(8);
 
     while let Some((maybe, source)) = probes.next().await {
         if let Some(install) = maybe {
             let mut install = install;
             if install.source != "mojang" {
-                install.source = source.to_string();
+                install.source = source.clone();
             }
             seen.entry(path_key(&install.path)).or_insert(install);
         }
@@ -316,6 +320,11 @@ pub async fn detect_all(paths: &Paths) -> Vec<JavaInstall> {
     result.sort_by_key(|install| (install.major, install.path.clone()));
     save_cache(paths, &result);
     result
+}
+
+/// Один кандидат: запустить `java -version` и запомнить, откуда он взялся.
+async fn probe_candidate(path: PathBuf, source: String) -> (Option<JavaInstall>, String) {
+    (probe(&path).await, source)
 }
 
 /// Выбрать Java под требуемую мажорную версию.
