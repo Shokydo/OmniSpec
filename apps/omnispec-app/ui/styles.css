@@ -2552,3 +2552,17 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 
 /* --- чипы вариантов звука --- */
 #sound-style-chips .chip { min-width: 104px; }
+
+/* ==================== ЭТАП 16 ==================== */
+
+/* маленькие кнопки в заголовке категории — видны при наведении */
+.cat-head .cat-act {
+  width: 18px; height: 18px; flex: none;
+  padding: 0; border-radius: var(--r-xs);
+  opacity: .45; transition: opacity .12s, background .12s;
+}
+.cat-head .cat-act .ic { width: 12px; height: 12px; }
+.cat:hover > .cat-head .cat-act,
+.cat-head:hover .cat-act { opacity: .85; }
+.cat-head .cat-act:hover { opacity: 1; background: var(--bg-5); color: var(--text); }
+.cat-head .spacer { flex: 1 1 auto; }

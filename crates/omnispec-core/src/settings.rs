@@ -30,6 +30,10 @@ fn default_theme() -> String {
     "dark".to_string()
 }
 
+fn default_update_auto() -> bool {
+    true
+}
+
 fn default_ui_scale() -> u32 {
     100
 }
@@ -119,6 +123,9 @@ pub struct Settings {
     pub update_repo: Option<String>,
     /// Проверять обновления при запуске лаунчера.
     pub update_enabled: bool,
+    /// Ставить найденное обновление при запуске сразу, без лишних кликов.
+    #[serde(default = "default_update_auto")]
+    pub update_auto: bool,
     /// Токен GitHub — нужен только для приватного репозитория.
     pub update_token: Option<String>,
     /// Учитывать бета-версии (prerelease).
@@ -224,6 +231,7 @@ impl Default for Settings {
             wallpaper_recent: Vec::new(),
             update_repo: default_update_repo(),
             update_enabled: true,
+            update_auto: true,
             update_token: None,
             update_prerelease: false,
             shape: default_shape(),

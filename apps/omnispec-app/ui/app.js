@@ -875,10 +875,11 @@
   }
 
   /* ==================== ФАЙЛЫ: ПЕРЕТАСКИВАНИЕ И .MRPACK ==================== */
-  async function installMrpackPath(path) {
+  async function installMrpackPath(path, categoryId = null) {
     try {
       toast("Разворачиваем модпак…");
       const meta = await api.installModpack(path);
+      if (categoryId) await moveInstanceToCategory(meta.id, categoryId);
       await refreshInstances();
       selectInstance(meta.id);
       toast(`Сборка «${meta.name}» установлена`, "ok");
@@ -1528,6 +1529,9 @@
         <svg class="ic cat-chev"><use href="#i-chev"/></svg>
         <span class="cat-name">${esc(name)}</span>
         <span class="cat-count">${items.length}</span>
+        ${!id || id === "__running" ? "" : `<div class="spacer"></div>
+        <button class="icon-btn cat-act" data-cat-new="${esc(id || "")}" title="Создать сборку в этой категории"><svg class="ic"><use href="#i-plus"/></svg></button>
+        <button class="icon-btn cat-act" data-cat-import="${esc(id || "")}" title="Загрузить сборку сюда"><svg class="ic"><use href="#i-download"/></svg></button>`}
       </div>
       <div class="cat-items">${items.map((item) => instanceRowHtml(item, { dups: Boolean(running) })).join("")}</div>
     </div>`;
@@ -1613,6 +1617,17 @@
       });
       el.addEventListener("mousedown", (event) => beginInstanceDrag(event, el));
     });
+
+    // кнопки в заголовке категории: создать / загрузить сборку сразу в эту папку
+    $$(".cat-act", list).forEach((btn) => btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const catId = btn.dataset.catNew || btn.dataset.catImport || "";
+      if (btn.dataset.catNew !== undefined) {
+        openCreate({ category: catId || null });
+        return;
+      }
+      await importFromExplorer(catId || null);
+    }));
 
     $$(".instance-dup", list).forEach((el) => {
       el.addEventListener("click", () => {
@@ -1829,10 +1844,10 @@
   }
 
   /** Загрузка готовой сборки из проводника (.mrpack / .zip). */
-  async function importFromExplorer() {
+  async function importFromExplorer(categoryId = null) {
     const path = await api.pickFile("Загрузить сборку", ["mrpack", "zip"]).catch(() => null);
     if (!path) return;
-    await installMrpackPath(path);
+    await installMrpackPath(path, categoryId);
   }
 
   function selectInstance(id) {
@@ -3212,7 +3227,6 @@
       return;
     }
     $("#ver-body").innerHTML = `
-      <div class="settings-note" style="margin-top:0">${kind === "pack" ? "Версия модпака создаст новую сборку." : "Версия будет установлена в текущую сборку."}</div>
       <div class="ver-list">
         ${versions.slice(0, 60).map((version) => `
           <div class="ver-row">
@@ -3730,7 +3744,6 @@
     { id: "fx", label: "Эффекты" },
     { id: "sound", label: "Звуки" },
     { id: "game", label: "Игра и Java" },
-    { id: "net", label: "Сеть" },
     { id: "updates", label: "Обновления" }
   ];
   let prefsCategory = "look";
@@ -3776,7 +3789,6 @@
     if (prefsCategory === "wall") body.innerHTML = prefsWall(settings);
     if (prefsCategory === "fx") body.innerHTML = prefsFx();
     if (prefsCategory === "game") body.innerHTML = prefsGame(settings);
-    if (prefsCategory === "net") body.innerHTML = prefsNet(settings);
     if (prefsCategory === "updates") body.innerHTML = prefsUpdates(settings);
     if (prefsCategory === "sound") body.innerHTML = prefsSound(settings);
     bindPrefs();
@@ -3797,8 +3809,7 @@
           <div class="prefs-label-row">
             <span class="prefs-label">Аккаунты</span>
             <div class="spacer"></div>
-            <button class="btn btn-small" data-acc="add-offline">Пиратка</button>
-            <button class="btn btn-small btn-primary" data-acc="add-ms">Лицензия</button>
+            <button class="btn btn-small" data-acc="add-any"><svg class="ic"><use href="#i-plus"/></svg>Добавить аккаунт</button>
           </div>
           <div class="profile-list">
             ${accounts.map((account) => `
@@ -3814,13 +3825,6 @@
                 ${account.kind === "microsoft" ? "" : `<button class="icon-btn" data-acc="rename-one" title="Изменить ник"><svg class="ic"><use href="#i-pencil"/></svg></button>`}
                 <button class="icon-btn" data-acc="remove-one" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
               </div>`).join("")}
-            <button class="profile-row profile-row-add" data-acc="add-any">
-              <span class="acc-avatar"><svg class="ic"><use href="#i-plus"/></svg></span>
-              <span class="acc-main">
-                <span class="acc-name">Добавить аккаунт</span>
-                <span class="acc-sub">лицензия или офлайн-ник</span>
-              </span>
-            </button>
           </div>
         </section>
 
@@ -3838,9 +3842,7 @@
                 <button class="btn btn-small" data-acc="remove">Выйти</button>
               </div>
             </div>
-            <div class="muted profile-note">${active.kind === "microsoft"
-              ? "Лицензия: скин и ник приходят с серверов Mojang."
-              : "Офлайн-аккаунт: подходит для серверов без проверки лицензии."}</div>`
+            <div class="muted profile-note">${active.kind === "microsoft" ? "Лицензия" : "Офлайн-аккаунт"}</div>`
             : `<div class="profile-card is-empty"><span class="muted">Аккаунта пока нет</span></div>`}
         </section>
       </div>
@@ -3916,7 +3918,6 @@
         ${colorRow({ id: "theme-bg", label: "Фон", value: own.bg })}
         ${colorRow({ id: "theme-accent", label: "Акцент", value: own.accent })}
         ${colorRow({ id: "theme-text", label: "Текст", value: own.text })}
-        <div class="settings-note">Остальные поверхности, рамки и приглушённый текст выводятся из этих трёх цветов.</div>
       </div>` : ""}
       <div class="prefs-section">
         <div class="prefs-row-head">
@@ -3927,7 +3928,6 @@
         <div class="chips" id="ui-scale-chips">
           ${UI_SCALES.map((scale) => `<button class="chip ${(Number(state.uiScale) || 100) === scale ? "is-active" : ""}" data-ui-scale="${scale}">${scale}%</button>`).join("")}
         </div>
-        <div class="settings-note">Как «размер интерфейса» в Minecraft: 100% — обычный, 125% — крупнее, 80% — компактнее.</div>
       </div>
       <div class="prefs-section">
         <div class="prefs-label">Форма элементов</div>
@@ -4019,7 +4019,6 @@
         <div class="chips" id="ambient-chips">
           ${Object.entries(AMBIENT_STYLES).filter(([id]) => id !== "off").map(([id, label]) => `<button class="chip ${(state.ambient || "stars") === id ? "is-active" : ""}" data-ambient="${id}">${label}</button>`).join("")}
         </div>
-        <div class="settings-note">Падающие звёздочки, пыль и палочки поверх окна — как в главном меню игры. Выключается переключателем или сохраняется в настройках.</div>
       </div>`;
   }
 
@@ -4046,7 +4045,6 @@
         <div class="chips" id="sound-style-chips">
           ${Object.entries(SOUND_STYLES).map(([id, label]) => `<button class="chip ${(state.sound.style || "soft") === id ? "is-active" : ""}" data-sound-style="${id}">${label}</button>`).join("")}
         </div>
-        <div class="settings-note">«Мягкий» — приглушённые синусоиды, «Стекло» — высокие и тонкие, «Дерево» и «Глубокий» — низкие.</div>
       </div>
       <div class="prefs-section">
         <div class="prefs-label">Проверка</div>
@@ -4098,34 +4096,6 @@
       </div>`;
   }
 
-  function prefsNet(settings) {
-    return `
-      <div class="prefs-section">
-        <div class="prefs-label">Прокси</div>
-        <div class="settings-row">
-          <div class="label">Адрес</div>
-          <div>
-            <input class="input" style="width:100%" id="set-proxy" placeholder="http://127.0.0.1:8080 или socks5://…" value="${esc(settings.proxy || "")}" spellcheck="false">
-            <div class="hint">Применяется после перезапуска лаунчера. Пусто — напрямую.</div>
-          </div>
-        </div>
-        <div class="settings-actions">
-          <button class="btn" id="net-check">Проверить связь с Modrinth</button>
-          <span class="muted" id="net-check-result" style="font-size:11px;align-self:center;max-width:520px"></span>
-        </div>
-      </div>
-      <div class="prefs-section">
-        <div class="prefs-label">Вход через Microsoft</div>
-        <div class="settings-row">
-          <div class="label">Свой client id</div>
-          <div>
-            <input class="input" style="width:100%" id="set-ms-client" placeholder="00000000402b5328 (публичный ID лаунчера)" value="${esc(settings.ms_client_id || "")}" spellcheck="false">
-            <div class="hint">Оставь пустым — вход работает на публичном client id официального лаунчера. Свой ID требует одобрения Mojang.</div>
-          </div>
-        </div>
-      </div>`;
-  }
-
   function prefsUpdates(settings) {
     return `
       <div class="prefs-section">
@@ -4140,12 +4110,16 @@
             <div><input class="input" style="width:100%" id="set-upd-token" value="${esc(settings.update_token || "")}" placeholder="необязательно" spellcheck="false"></div>
           </div>
           <div class="settings-row">
-            <div class="label">Проверять при запуске</div>
-            <div><div class="switch-row"><button class="switch ${settings.update_enabled ? "on" : ""}" id="set-upd-enabled"></button><span class="muted">спрашивать GitHub о новом релизе</span></div></div>
+            <div class="label">Проверять обновления</div>
+            <div><div class="switch-row"><button class="switch ${settings.update_enabled !== false ? "on" : ""}" id="set-upd-enabled"></button></div></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Авто-обновление при запуске</div>
+            <div><div class="switch-row"><button class="switch ${settings.update_auto !== false ? "on" : ""}" id="set-upd-auto"></button></div></div>
           </div>
           <div class="settings-row">
             <div class="label">Бета-версии</div>
-            <div><div class="switch-row"><button class="switch ${settings.update_prerelease ? "on" : ""}" id="set-upd-pre"></button><span class="muted">учитывать prerelease</span></div></div>
+            <div><div class="switch-row"><button class="switch ${settings.update_prerelease ? "on" : ""}" id="set-upd-pre"></button></div></div>
           </div>
         </div>
         <div class="settings-actions">
@@ -4284,18 +4258,19 @@
     const autoJava = $("#set-auto-java");
     if (autoJava) autoJava.addEventListener("click", () => autoJava.classList.toggle("on"));
     const updEnabled = $("#set-upd-enabled");
-    if (updEnabled) updEnabled.addEventListener("click", () => updEnabled.classList.toggle("on"));
+    const updAuto = $("#set-upd-auto");
+    // «авто-обновление» невозможно без проверки, а выключение проверки гасит и его
+    if (updEnabled) updEnabled.addEventListener("click", () => {
+      updEnabled.classList.toggle("on");
+      if (!updEnabled.classList.contains("on") && updAuto) updAuto.classList.remove("on");
+    });
     const updPre = $("#set-upd-pre");
     if (updPre) updPre.addEventListener("click", () => updPre.classList.toggle("on"));
-
-    const netCheck = $("#net-check");
-    if (netCheck) netCheck.addEventListener("click", async () => {
-      const box = $("#net-check-result");
-      box.className = "muted";
-      box.textContent = "Проверяем…";
-      try { box.textContent = await api.netCheck(); }
-      catch (err) { box.textContent = String(err); box.className = "settings-note warn"; }
+    if (updAuto) updAuto.addEventListener("click", () => {
+      updAuto.classList.toggle("on");
+      if (updAuto.classList.contains("on") && updEnabled) updEnabled.classList.add("on");
     });
+
     const checkNow = $("#upd-check-now");
     if (checkNow) checkNow.addEventListener("click", async () => {
       const info = await checkUpdates(false);
@@ -4372,6 +4347,7 @@
       update_repo: value("#set-upd-repo") !== undefined ? (value("#set-upd-repo").trim() || null) : settings.update_repo,
       update_token: value("#set-upd-token") !== undefined ? (value("#set-upd-token").trim() || null) : settings.update_token,
       update_enabled: flag("#set-upd-enabled", settings.update_enabled),
+      update_auto: flag("#set-upd-auto", settings.update_auto),
       update_prerelease: flag("#set-upd-pre", settings.update_prerelease),
       theme: state.theme,
       theme_bg: state.customTheme.bg,
@@ -4616,7 +4592,7 @@
                     <span>${esc(preset.name)}</span>
                     <span class="preset-del" data-del-preset="${esc(preset.id)}" title="Удалить пресет">×</span>
                   </button>`).join("")
-                : `<div class="skin-note">Пресетов пока нет. Загрузи скин и нажми «Сохранить пресет» — не придётся каждый раз искать файл.</div>`}
+                : `<div class="skin-note">Пресетов пока нет.</div>`}
             </div>
             <div class="skin-row">
               <button class="btn" id="skin-upload">Загрузить скин…</button>
@@ -5052,7 +5028,15 @@
       state.update.repo = info.repo;
       state.update.enabled = info.enabled;
     }
-    if (info && info.enabled && info.repo) checkUpdates(true);
+    if (!(info && info.enabled && info.repo)) return;
+    if (state.settings && state.settings.update_enabled === false) return;
+    const found = await checkUpdates(true);
+    // авто-обновление: в приложении новая версия ставится и применяется сразу
+    const auto = state.settings ? state.settings.update_auto !== false : true;
+    if (found && auto && IS_APP) {
+      $("#modal-update").hidden = false;
+      await installUpdate();
+    }
   }
 
   async function checkUpdates(silent) {
@@ -5331,8 +5315,8 @@
   }
 
   /* ==================== МОДАЛКА СОЗДАНИЯ ==================== */
-  async function openCreate() {
-    state.create = { mode: "manual", name: "", mc: "", loader: "fabric", loaderVersion: "", versions: [], loaderVersionsList: [], packQuery: "", packs: [], selectedPack: null };
+  async function openCreate(options = {}) {
+    state.create = { mode: "manual", name: "", mc: "", loader: "fabric", loaderVersion: "", versions: [], loaderVersionsList: [], packQuery: "", packs: [], selectedPack: null, category: options.category || null };
     $("#modal-create").hidden = false;
     state.create.versions = await api.versions((state.settings && state.settings.show_snapshots) || false).catch(() => []);
     state.create.mc = (state.create.versions[0] || {}).id || "1.21.4";
@@ -5440,6 +5424,7 @@
         const loader = cfg.loader === "vanilla" ? { type: "vanilla" } : { type: cfg.loader, version: cfg.loaderVersion };
         const meta = await api.createInstance({ name: cfg.name || `Сборка ${cfg.mc}`, mc_version: cfg.mc, loader });
         $("#modal-create").hidden = true;
+        if (cfg.category) await moveInstanceToCategory(meta.id, cfg.category);
         await refreshInstances();
         selectInstance(meta.id);
         toast(`Сборка «${meta.name}» создана`, "ok");
@@ -5449,6 +5434,7 @@
         if (!versions.length) throw new Error("у модпака нет версий");
         const meta = await api.installModpack(versions[0].id);
         $("#modal-create").hidden = true;
+        if (cfg.category) await moveInstanceToCategory(meta.id, cfg.category);
         await refreshInstances();
         selectInstance(meta.id);
         toast(`Модпак «${meta.name}» установлен`, "ok");
