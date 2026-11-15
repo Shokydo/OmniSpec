@@ -348,16 +348,16 @@
         return { ...base, r: rand(3.2, 7.5) * scale, vy: rand(9, 24), drift: rand(-9, 9), spin: rand(-0.9, 0.9), rot: rand(0, Math.PI), sway: rand(0.3, 1.1), kind: "flake" };
       }
       if (style === "dust") {
-        return { ...base, y: anywhere ? rand(0, height) : height + rand(2, 30), r: rand(0.6, 1.7), vy: -rand(6, 22), drift: rand(-6, 6), kind: "dot" };
+        return { ...base, y: anywhere ? rand(0, height) : height + rand(2, 30), r: rand(0.6, 1.7) * scale, vy: -rand(6, 22), drift: rand(-6, 6), kind: "dot" };
       }
       if (style === "sticks") {
-        return { ...base, r: rand(0.6, 1.1), h: rand(7, 16), vy: rand(14, 34), spin: rand(-1.4, 1.4), rot: rand(0, Math.PI), drift: rand(-8, 8), kind: "stick" };
+        return { ...base, r: rand(0.6, 1.1) * scale, h: rand(7, 16) * scale, vy: rand(14, 34), spin: rand(-1.4, 1.4), rot: rand(0, Math.PI), drift: rand(-8, 8), kind: "stick" };
       }
       if (style === "snow") {
-        return { ...base, r: rand(0.9, 2.3), vy: rand(7, 20), drift: rand(-10, 10), sway: rand(0.4, 1.4), kind: "dot" };
+        return { ...base, r: rand(0.9, 2.3) * scale, vy: rand(7, 20), drift: rand(-10, 10), sway: rand(0.4, 1.4), kind: "dot" };
       }
       // звёзды: часть — четырёхлучевые искры, остальные — точки
-      return { ...base, r: rand(0.6, 1.9), vy: rand(5, 18), drift: rand(-6, 6), spark: Math.random() < 0.12, kind: "star" };
+      return { ...base, r: rand(0.6, 1.9) * scale, vy: rand(5, 18), drift: rand(-6, 6), spark: Math.random() < 0.12, kind: "star" };
     }
 
     function build() {
@@ -481,16 +481,16 @@
     };
 
     return {
-      /** Размер частиц в процентах: 60–220. */
+      /** Размер частиц в процентах: 10–220. */
       size: (percent) => {
-        const clean = Math.max(40, Math.min(220, Number(percent) || 100));
+        const clean = Math.max(10, Math.min(220, Number(percent) || 100));
         scale = clean / 100;
         if (style !== "off" && raf) build();
         return clean;
       },
-      /** Плотность частиц в процентах: 30–200. */
+      /** Плотность частиц в процентах: 10–200. */
       density: (percent) => {
-        const clean = Math.max(20, Math.min(300, Number(percent) || 100));
+        const clean = Math.max(10, Math.min(300, Number(percent) || 100));
         density = clean / 100;
         if (style !== "off" && raf) build();
         return clean;
@@ -717,15 +717,15 @@
         style = TRAIL_STYLES[name] ? name : "line";
         return style;
       },
-      /** Толщина кисти в процентах: 40–300. */
+      /** Толщина кисти в процентах: 10–300. */
       size: (percent) => {
-        const clean = Math.max(40, Math.min(300, Number(percent) || 100));
+        const clean = Math.max(10, Math.min(300, Number(percent) || 100));
         scale = clean / 100;
         return clean;
       },
-      /** Длина следа в процентах: 40–300. */
+      /** Длина следа в процентах: 10–300. */
       length: (percent) => {
-        const clean = Math.max(40, Math.min(300, Number(percent) || 100));
+        const clean = Math.max(10, Math.min(300, Number(percent) || 100));
         length = clean / 100;
         return clean;
       },
@@ -4937,7 +4937,7 @@
               <span class="mono" id="trail-size-value">${Number(state.trailSize) || 100}%</span>
             </div>
             <div class="range">
-              <input type="range" id="set-trail-size" min="40" max="300" step="10" value="${Number(state.trailSize) || 100}" ${trailOn ? "" : "disabled"}>
+              <input type="range" id="set-trail-size" min="10" max="300" step="10" value="${Number(state.trailSize) || 100}" ${trailOn ? "" : "disabled"}>
               <span class="muted" style="font-size:11px">тонкий</span>
               <div class="spacer"></div>
               <span class="muted" style="font-size:11px">широкий</span>
@@ -4950,7 +4950,7 @@
               <span class="mono" id="trail-length-value">${Number(state.trailLength) || 100}%</span>
             </div>
             <div class="range">
-              <input type="range" id="set-trail-length" min="40" max="300" step="10" value="${Number(state.trailLength) || 100}" ${trailOn ? "" : "disabled"}>
+              <input type="range" id="set-trail-length" min="10" max="300" step="10" value="${Number(state.trailLength) || 100}" ${trailOn ? "" : "disabled"}>
               <span class="muted" style="font-size:11px">короткий</span>
               <div class="spacer"></div>
               <span class="muted" style="font-size:11px">длинный</span>
@@ -4997,7 +4997,7 @@
               <span class="mono" id="fx-size-value">${Number(state.effectSize) || 100}%</span>
             </div>
             <div class="range">
-              <input type="range" id="set-fx-size" min="60" max="220" step="10" value="${Number(state.effectSize) || 100}">
+              <input type="range" id="set-fx-size" min="10" max="220" step="10" value="${Number(state.effectSize) || 100}">
               <span class="muted" style="font-size:11px">маленькие</span>
               <div class="spacer"></div>
               <span class="muted" style="font-size:11px">крупные</span>
@@ -5010,7 +5010,7 @@
               <span class="mono" id="dens-value">${Number(state.ambientDensity) || 100}%</span>
             </div>
             <div class="range">
-              <input type="range" id="set-density" min="30" max="200" step="10" value="${Number(state.ambientDensity) || 100}">
+              <input type="range" id="set-density" min="10" max="200" step="10" value="${Number(state.ambientDensity) || 100}">
               <span class="muted" style="font-size:11px">редко</span>
               <div class="spacer"></div>
               <span class="muted" style="font-size:11px">густо</span>
@@ -5058,6 +5058,112 @@
     const clean = ambient.density(percent);
     state.ambientDensity = clean;
     return clean;
+  }
+
+  function prefsSound(settings) {
+    return `
+      <div class="prefs-section">
+        <div class="prefs-label">Звуковые эффекты</div>
+        <div class="prefs-rows">
+          <div class="settings-row">
+            <div class="label">Звуки интерфейса</div>
+            <div><div class="switch-row"><button class="switch ${state.sound.on ? "on" : ""}" id="set-sound"></button><span class="muted">щелчки и переключатели</span></div></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Громкость</div>
+            <div class="range">
+              <input type="range" id="set-sound-volume" min="0" max="100" step="5" value="${state.sound.volume}">
+              <span class="tag" id="set-sound-volume-value">${state.sound.volume}%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="prefs-section">
+        <div class="prefs-label">Вариант звука</div>
+        <div class="chips" id="sound-style-chips">
+          ${Object.entries(SOUND_STYLES).map(([id, label]) => `<button class="chip ${(state.sound.style || "soft") === id ? "is-active" : ""}" data-sound-style="${id}">${label}</button>`).join("")}
+        </div>
+      </div>
+      <div class="prefs-section">
+        <div class="prefs-label">Проверка</div>
+        <div class="settings-actions">
+          <button class="btn" id="sound-test">Прослушать все</button>
+        </div>
+      </div>`;
+  }
+
+  function prefsGame(settings) {
+    return `
+      <div class="prefs-section">
+        <div class="prefs-label">Память и Java</div>
+        <div class="prefs-rows">
+          <div class="settings-row">
+            <div class="label">Память по умолчанию, МБ</div>
+            <div class="range">
+              <input type="range" id="set-memory" min="1024" max="16384" step="512" value="${settings.memory_mb || 4096}">
+              <span class="tag" id="set-memory-value">${settings.memory_mb || 4096} МБ</span>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Java (новая)</div>
+            <div class="flex-row">
+              <input class="input grow" id="set-java" placeholder="автоматически" value="${esc(settings.java_path || "")}" spellcheck="false">
+              <button class="btn" id="set-java-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать…</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Java 8 (для версий до 1.17)</div>
+            <div class="flex-row">
+              <input class="input grow" id="set-java-legacy" placeholder="автоматически" value="${esc(settings.java_path_legacy || "")}" spellcheck="false">
+              <button class="btn" id="set-java-legacy-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать…</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Найденные Java</div>
+            <div class="java-list" id="java-found"><span class="muted">поиск…</span></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">JVM-аргументы</div>
+            <div><input class="input" style="width:100%" id="set-jvm" value="${esc(settings.jvm_args || "")}" spellcheck="false"></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Автоскачивание Java</div>
+            <div><div class="switch-row"><button class="switch ${settings.auto_java ? "on" : ""}" id="set-auto-java"></button><span class="muted">если подходящей Java нет</span></div></div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function prefsUpdates(settings) {
+    return `
+      <div class="prefs-section">
+        <div class="prefs-label">Откуда обновляться</div>
+        <div class="prefs-rows">
+          <div class="settings-row">
+            <div class="label">Репозиторий GitHub</div>
+            <div><input class="input" style="width:100%" id="set-upd-repo" value="${esc(settings.update_repo || "")}" placeholder="владелец/репозиторий" spellcheck="false"></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Токен (если репозиторий приватный)</div>
+            <div><input class="input" style="width:100%" id="set-upd-token" value="${esc(settings.update_token || "")}" placeholder="необязательно" spellcheck="false"></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Проверять обновления</div>
+            <div><div class="switch-row"><button class="switch ${settings.update_enabled !== false ? "on" : ""}" id="set-upd-enabled"></button></div></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Авто-обновление при запуске</div>
+            <div><div class="switch-row"><button class="switch ${settings.update_auto !== false ? "on" : ""}" id="set-upd-auto"></button></div></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Бета-версии</div>
+            <div><div class="switch-row"><button class="switch ${settings.update_prerelease ? "on" : ""}" id="set-upd-pre"></button></div></div>
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button class="btn" id="upd-check-now">Проверить сейчас</button>
+        </div>
+      </div>`;
   }
 
   /* обработчики для всех категорий сразу — их немного */
@@ -5292,7 +5398,10 @@
       state.sound.volume = Number(event.target.value);
       $("#set-sound-volume-value").textContent = `${state.sound.volume}%`;
     });
-    if (soundVolume) soundVolume.addEventListener("change", () => sfx.click());
+    if (soundVolume) soundVolume.addEventListener("change", () => {
+      sfx.click();
+      commit({ sound_volume: state.sound.volume });
+    });
     const soundTest = $("#sound-test");
     if (soundTest) soundTest.addEventListener("click", () => { sfx.demo(); });
     $$("#sound-style-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
@@ -5380,6 +5489,46 @@
         }));
       }).catch(() => { javaFound.innerHTML = ""; });
     }
+
+    // точечное сохранение: правки в полях не теряются при переключении вкладок
+    const commit = (patch) => {
+      state.settings = { ...(state.settings || {}), ...patch };
+      api.saveSettings(state.settings).catch(() => {});
+    };
+    const bindField = (selector, key, { number = false, trim = false } = {}) => {
+      const el = $(selector);
+      if (!el) return;
+      let last = null;
+      const apply = () => {
+        let value = el.value;
+        if (trim) value = value.trim() || null;
+        if (number) value = Number(value);
+        if (value === last) return;
+        last = value;
+        commit({ [key]: value });
+      };
+      el.addEventListener("change", apply);
+      el.addEventListener("blur", apply);
+    };
+    bindField("#set-memory", "memory_mb", { number: true });
+    bindField("#set-jvm", "jvm_args");
+    bindField("#set-java", "java_path", { trim: true });
+    bindField("#set-java-legacy", "java_path_legacy", { trim: true });
+    bindField("#set-upd-repo", "update_repo", { trim: true });
+    bindField("#set-upd-token", "update_token", { trim: true });
+    // тумблеры: слушаем после их собственных обработчиков, чтобы взять новое состояние
+    const autoJavaToggle = $("#set-auto-java");
+    if (autoJavaToggle) autoJavaToggle.addEventListener("click", () => commit({ auto_java: autoJavaToggle.classList.contains("on") }));
+    [$("#set-upd-enabled"), $("#set-upd-auto"), $("#set-upd-pre")].forEach((el) => {
+      if (!el) return;
+      el.addEventListener("click", () => commit({
+        update_enabled: $("#set-upd-enabled") ? $("#set-upd-enabled").classList.contains("on") : true,
+        update_auto: $("#set-upd-auto") ? $("#set-upd-auto").classList.contains("on") : true,
+        update_prerelease: $("#set-upd-pre") ? $("#set-upd-pre").classList.contains("on") : false
+      }));
+    });
+    const soundToggle = $("#set-sound");
+    if (soundToggle) soundToggle.addEventListener("click", () => commit({ sound_fx: soundToggle.classList.contains("on") }));
 
     // сохранение общих настроек
     const save = $("#prefs-save");
