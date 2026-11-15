@@ -251,6 +251,9 @@ async fn launch_instance(
         let id = instance_id.clone();
         let child = child.clone();
         let running = state.running.clone();
+        let paths = state.paths.clone();
+        // время использования: считаем от запуска до выхода из игры
+        let started = std::time::Instant::now();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(700)).await;
@@ -260,6 +263,8 @@ async fn launch_instance(
                 };
                 if let Some(status) = status {
                     let code = status.code().unwrap_or(-1);
+                    // накопленное время игры в часах показываем в списке сборок
+                    instances::add_playtime(&paths, &id, started.elapsed().as_secs());
                     running.lock().await.remove(&id);
                     let _ = app.emit(
                         "game-exit",

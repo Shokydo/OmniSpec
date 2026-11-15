@@ -416,11 +416,21 @@
       const path = String(raw);
       const name = path.split(/[\\/]/).pop() || path;
       const lower = name.toLowerCase();
-      // Без выбранной сборки zip — это модпак: открываем импорт с уже указанным файлом.
+      // Без выбранной сборки zip — это модпак: показываем его в панели импорта.
       if (lower.endsWith(".zip") && !selected()) {
-        openAdd("file");
-        state.add.path = path;
-        renderAdd();
+        state.home.zipPath = path;
+        state.home.versions = [];
+        state.home.zipMc = "";
+        state.home.zipLoader = "vanilla";
+        state.home.zipLoaderVersion = "";
+        state.home.zipLoaderVersions = [];
+        if (state.tab !== "discover") { state.tab = "discover"; renderTab(); }
+        else renderDiscover();
+        api.versions(false).then((versions) => {
+          state.home.versions = versions || [];
+          if (!state.home.zipMc) state.home.zipMc = (state.home.versions[0] || {}).id || "";
+          if (state.tab === "discover") renderDiscover();
+        }).catch(() => {});
         continue;
       }
       if (lower.endsWith(".mrpack")) { await installMrpackPath(path); continue; }
@@ -792,7 +802,11 @@
     shape: "soft",
     customWall: null,
     sound: { on: true, volume: 60 },
-    add: { mode: "modrinth", query: "", packs: [], selected: null, path: "", url: "", loading: false },
+    home: {
+      extOpen: false, external: null, extLoading: false, extSelected: new Set(),
+      zipPath: "", versions: [], zipMc: "", zipLoader: "vanilla",
+      zipLoaderVersion: "", zipLoaderVersions: [], url: "", busy: false, status: ""
+    },
     create: { mode: "manual", name: "", mc: "", loader: "fabric", loaderVersion: "", versions: [], loaderVersionsList: [], packQuery: "", packs: [], selectedPack: null }
   };
 
@@ -887,6 +901,7 @@
           <div class="instance-name">${esc(item.name)}</div>
           <div class="instance-sub">MC ${esc(item.mc_version)} · ${esc(loaderLabel(item.loader))}</div>
         </div>
+        <span class="instance-time" title="Время игры">${esc(playtimeLabel(item.playtime_secs))}</span>
         ${running ? '<div class="instance-running" title="Запущена"></div>' : ""}
       </div>`;
     }).join("");
@@ -1516,6 +1531,27 @@
    * пока пользователь сам не нажмёт «Установить», ничего не происходит.
    */
   /** Главная страница: свои сборки + создание/импорт + лента готовых сборок. */
+  /** Когда сборку запускали в последний раз — короткой фразой. */
+  function relativeWhen(unix) {
+    const diff = Math.max(0, Math.floor(Date.now() / 1000) - Number(unix || 0));
+    if (diff < 3600) return "только что";
+    if (diff < 86400) return `${Math.floor(diff / 3600)} ч назад`;
+    const days = Math.floor(diff / 86400);
+    if (days === 1) return "вчера";
+    if (days < 30) return `${days} ${days < 5 ? "дня" : "дней"} назад`;
+    return `${Math.floor(days / 30)} мес. назад`;
+  }
+
+  /** Время игры в часах: «0 мин», «45 мин», «3 ч», «12,5 ч». */
+  function playtimeLabel(secs) {
+    const total = Math.max(0, Math.round(Number(secs) || 0));
+    if (total < 60) return "0 мин";
+    if (total < 3600) return `${Math.round(total / 60)} мин`;
+    const hours = total / 3600;
+    const text = hours >= 10 ? String(Math.round(hours)) : String(Math.round(hours * 10) / 10);
+    return `${text.replace(".", ",")} ч`;
+  }
+
   function homeInstanceHtml(meta) {
     const running = state.running.has(meta.id);
     const icon = instanceIconHtml(meta);
@@ -1526,28 +1562,119 @@
         <span class="home-card-name">${esc(meta.name)}</span>
         <span class="home-card-sub">MC ${esc(meta.mc_version)} · ${esc(loaderLabel(meta.loader))}</span>
       </span>
+      <span class="home-card-time" title="Время игры">${esc(playtimeLabel(meta.playtime_secs))}</span>
       ${running ? '<span class="home-card-dot" title="Запущена"></span>' : ""}
     </button>`;
+  }
+
+  /** Панель импорта на главной: файл .mrpack/.zip, лаунчеры (с галочками), ссылка. */
+  function homeImportHtml() {
+    const cfg = state.home;
+    const parts = [];
+    parts.push(`<div class="imp-row">
+      <button class="btn" id="imp-file"><svg class="ic"><use href="#i-download"/></svg>Файл .mrpack / .zip…</button>
+      <button class="btn ${cfg.extOpen ? "is-pressed" : ""}" id="imp-ext"><svg class="ic"><use href="#i-grid"/></svg>Из лаунчера</button>
+      <div class="imp-url">
+        <input class="input grow" id="imp-url-input" placeholder="Ссылка на модпак Modrinth или .mrpack" spellcheck="false" value="${esc(cfg.url)}">
+        <button class="btn" id="imp-url-go">Добавить</button>
+      </div>
+    </div>`);
+
+    if (cfg.zipPath) {
+      const zip = /\.zip$/i.test(cfg.zipPath);
+      parts.push(`<div class="imp-block">
+        <div class="imp-block-head">
+          <span class="mono imp-path">${esc(cfg.zipPath)}</span>
+          <div class="spacer"></div>
+          <button class="btn btn-small" id="imp-cancel">Отмена</button>
+        </div>
+        ${zip ? `<div class="imp-fields">
+          <div class="field">
+            <label>Версия Minecraft</label>
+            <select class="select" id="imp-zip-mc">
+              ${cfg.versions.length ? cfg.versions.map((version) => `<option value="${esc(version.id)}" ${version.id === cfg.zipMc ? "selected" : ""}>${esc(version.id)}</option>`).join("") : `<option value="">загружаем…</option>`}
+            </select>
+          </div>
+          <div class="field">
+            <label>Загрузчик</label>
+            <div class="chips" id="imp-zip-loaders">
+              ${Object.entries(LOADER_NAMES).map(([value, label]) => `<button class="chip ${cfg.zipLoader === value ? "is-active" : ""}" data-zip-loader="${value}">${label}</button>`).join("")}
+            </div>
+          </div>
+          ${cfg.zipLoader && cfg.zipLoader !== "vanilla" ? `<div class="field">
+            <label>Версия загрузчика</label>
+            <select class="select" id="imp-zip-loader-version">
+              ${cfg.zipLoaderVersions.length ? cfg.zipLoaderVersions.map((option) => `<option value="${esc(option.version)}" ${option.version === cfg.zipLoaderVersion ? "selected" : ""}>${esc(option.version)}</option>`).join("") : `<option value="">загружаем…</option>`}
+            </select>
+          </div>` : ""}
+        </div>` : `<div class="imp-note">Архив .mrpack — версия и загрузчик возьмутся из него.</div>`}
+        <div class="imp-actions">
+          <button class="btn btn-primary" id="imp-zip-go" ${zip && !cfg.zipMc ? "disabled" : ""}>Импортировать</button>
+        </div>
+      </div>`);
+    }
+
+    if (cfg.extOpen) {
+      const list = cfg.external || [];
+      const picked = cfg.extSelected;
+      const launchers = { prism: "Prism", multimc: "MultiMC", modrinth: "Modrinth App" };
+      parts.push(`<div class="imp-block">
+        <div class="imp-block-head">
+          <strong>Найдено сборок: ${list.length}</strong>
+          <div class="spacer"></div>
+          <button class="btn btn-small" id="imp-ext-all">Выбрать все</button>
+          <button class="btn btn-small" id="imp-ext-rescan">Обновить</button>
+          <button class="btn btn-small" id="imp-ext-close">Свернуть</button>
+        </div>
+        ${cfg.extLoading
+          ? `<div class="add-empty">Смотрим Prism Launcher, MultiMC и Modrinth App…</div>`
+          : list.length
+            ? `<div class="imp-list">${list.map((item) => `
+                <label class="imp-item ${picked.has(item.path) ? "is-picked" : ""}">
+                  <input type="checkbox" class="imp-check" data-ext="${esc(item.path)}" ${picked.has(item.path) ? "checked" : ""}>
+                  <span class="ext-icon">${item.icon ? `<img src="file://${esc(item.icon)}" alt="">` : `<svg class="ic"><use href="#i-grid"/></svg>`}</span>
+                  <span class="ext-main">
+                    <span class="ext-name">${esc(item.name)}</span>
+                    <span class="ext-sub">${esc(launchers[item.launcher] || item.launcher)} · MC ${esc(item.mc_version)} · ${esc(item.loader)}</span>
+                  </span>
+                </label>`).join("")}</div>`
+            : `<div class="add-empty">Сборок в других лаунчерах не нашлось.</div>`}
+        <div class="imp-actions">
+          <span class="imp-count">${picked.size ? `выбрано: ${picked.size}` : "отметь сборки галочками"}</span>
+          <div class="spacer"></div>
+          <button class="btn btn-primary" id="imp-ext-go" ${picked.size ? "" : "disabled"}>Импортировать${picked.size ? ` (${picked.size})` : ""}</button>
+        </div>
+      </div>`);
+    }
+
+    return `<section class="home-import ${cfg.busy ? "is-busy" : ""}">
+      <div class="imp-head">
+        <span class="home-title">Добавить сборку</span>
+        <span class="home-sub">${esc(cfg.status || "файл модпака, другой лаунчер или ссылка")}</span>
+      </div>
+      ${parts.join("")}
+    </section>`;
   }
 
   function renderDiscover() {
     const cfg = state.discover;
     const view = cfg.view || "grid";
-    const instances = state.instances || [];
+    // «Недавнее» — сборки по времени последнего запуска
+    const instances = (state.instances || []).slice().sort((a, b) => (b.last_played || b.created || 0) - (a.last_played || a.created || 0));
     $("#tab-body").innerHTML = `
       <div class="home">
         <div class="home-head">
           <div class="home-titles">
             <div class="home-title">Сборки</div>
-            <div class="home-sub">${instances.length ? `${instances.length} ${instances.length === 1 ? "сборка" : instances.length < 5 ? "сборки" : "сборок"} — своя папка, моды, миры` : "Пока пусто: создай сборку или добавь уже готовую"}</div>
+            <div class="home-sub">${instances.length ? `${instances.length} ${instances.length === 1 ? "сборка" : instances.length < 5 ? "сборки" : "сборок"} — своя папка, моды, миры` : "Пока пусто: создай сборку или добавь готовую"}</div>
           </div>
           <div class="home-actions">
-            <button class="btn" id="home-import"><svg class="ic"><use href="#i-folder"/></svg>Добавить существующую</button>
             <button class="btn btn-primary" id="home-create"><svg class="ic"><use href="#i-plus"/></svg>Создать сборку</button>
           </div>
         </div>
         <div class="home-scroll" id="home-scroll">
-          ${instances.length ? `<div class="home-grid">${instances.map(homeInstanceHtml).join("")}</div>` : ""}
+          ${instances.length ? `<div class="home-section-title">Недавнее</div><div class="home-grid">${instances.map(homeInstanceHtml).join("")}</div>` : ""}
+          ${homeImportHtml()}
           <div class="home-feed-head">
             <div class="home-title">Готовые сборки</div>
             <div class="home-tools">
@@ -1571,17 +1698,227 @@
       renderTab();
     }));
     $("#home-create").addEventListener("click", openCreate);
-    $("#home-import").addEventListener("click", () => openAdd("modrinth"));
     $("#dv-query").addEventListener("keydown", (event) => { if (event.key === "Enter") dvReset(); });
     $$("#tab-body [data-dv-view]").forEach((btn) => btn.addEventListener("click", () => {
       state.discover.view = btn.dataset.dvView;
       renderDiscover();
     }));
+    bindHomeImport();
     const retry = $("#dv-retry");
     if (retry) retry.addEventListener("click", () => dvReset());
     bindResultEvents();
     dvWatch();
     if (!cfg.tried && !cfg.loading && !cfg.error) dvReset();
+  }
+
+  /* ---------- импорт на главной ---------- */
+  function bindHomeImport() {
+    const cfg = state.home;
+    const file = $("#imp-file");
+    if (file) file.addEventListener("click", async () => {
+      const picked = await api.pickFile("Модпак .mrpack или .zip", ["mrpack", "zip"]).catch(() => null);
+      if (!picked) return;
+      cfg.zipPath = picked;
+      cfg.status = "";
+      if (/\.zip$/i.test(picked)) {
+        cfg.versions = [];
+        cfg.zipMc = "";
+        cfg.zipLoader = "vanilla";
+        cfg.zipLoaderVersion = "";
+        cfg.zipLoaderVersions = [];
+        renderDiscover();
+        api.versions(false).then((versions) => {
+          cfg.versions = versions || [];
+          if (!cfg.zipMc) cfg.zipMc = (cfg.versions[0] || {}).id || "";
+          renderDiscover();
+        }).catch(() => {});
+      } else {
+        renderDiscover();
+      }
+    });
+
+    const ext = $("#imp-ext");
+    if (ext) ext.addEventListener("click", () => {
+      cfg.extOpen = !cfg.extOpen;
+      renderDiscover();
+      if (cfg.extOpen && !cfg.external) loadHomeExternal();
+    });
+    const rescan = $("#imp-ext-rescan");
+    if (rescan) rescan.addEventListener("click", () => loadHomeExternal(true));
+    const close = $("#imp-ext-close");
+    if (close) close.addEventListener("click", () => { cfg.extOpen = false; renderDiscover(); });
+    const all = $("#imp-ext-all");
+    if (all) all.addEventListener("click", () => {
+      const list = cfg.external || [];
+      const every = list.every((item) => cfg.extSelected.has(item.path));
+      cfg.extSelected = new Set(every ? [] : list.map((item) => item.path));
+      renderDiscover();
+    });
+    $$("#tab-body .imp-check").forEach((box) => box.addEventListener("change", () => {
+      if (box.checked) cfg.extSelected.add(box.dataset.ext);
+      else cfg.extSelected.delete(box.dataset.ext);
+      const row = box.closest(".imp-item");
+      if (row) row.classList.toggle("is-picked", box.checked);
+      const go = $("#imp-ext-go");
+      if (go) {
+        go.disabled = !cfg.extSelected.size;
+        go.textContent = cfg.extSelected.size ? `Импортировать (${cfg.extSelected.size})` : "Импортировать";
+      }
+      const count = $(".imp-count");
+      if (count) count.textContent = cfg.extSelected.size ? `выбрано: ${cfg.extSelected.size}` : "отметь сборки галочками";
+    }));
+    const extGo = $("#imp-ext-go");
+    if (extGo) extGo.addEventListener("click", importSelectedExternal);
+
+    const urlInput = $("#imp-url-input");
+    if (urlInput) urlInput.addEventListener("input", (event) => { cfg.url = event.target.value; });
+    const urlGo = $("#imp-url-go");
+    if (urlGo) urlGo.addEventListener("click", async () => {
+      const url = (cfg.url || "").trim();
+      if (!url) return toast("Вставь ссылку на модпак", "err");
+      cfg.busy = true;
+      cfg.status = "качаем модпак…";
+      renderDiscover();
+      try {
+        const meta = await api.installModpack(url);
+        cfg.url = "";
+        cfg.status = "";
+        await refreshInstances();
+        selectInstance(meta.id);
+        state.tab = "console";
+        renderTab();
+        toast(`Сборка «${meta.name}» добавлена`, "ok");
+      } catch (err) {
+        toast(`Не удалось добавить: ${err}`, "err");
+        cfg.status = "";
+      } finally {
+        cfg.busy = false;
+      }
+      if (state.tab === "discover") renderDiscover();
+    });
+
+    const cancel = $("#imp-cancel");
+    if (cancel) cancel.addEventListener("click", () => { cfg.zipPath = ""; cfg.status = ""; renderDiscover(); });
+    const mc = $("#imp-zip-mc");
+    if (mc) mc.addEventListener("change", async (event) => {
+      cfg.zipMc = event.target.value;
+      if (cfg.zipLoader && cfg.zipLoader !== "vanilla") await loadHomeZipLoaderVersions();
+      else renderDiscover();
+    });
+    $$("#tab-body [data-zip-loader]").forEach((chip) => chip.addEventListener("click", async () => {
+      cfg.zipLoader = chip.dataset.zipLoader;
+      await loadHomeZipLoaderVersions();
+    }));
+    const lv = $("#imp-zip-loader-version");
+    if (lv) lv.addEventListener("change", (event) => { cfg.zipLoaderVersion = event.target.value; });
+    const go = $("#imp-zip-go");
+    if (go) go.addEventListener("click", importHomeZip);
+  }
+
+  async function loadHomeZipLoaderVersions() {
+    const cfg = state.home;
+    if (cfg.zipLoader === "vanilla") {
+      cfg.zipLoaderVersions = [];
+      cfg.zipLoaderVersion = "";
+      renderDiscover();
+      return;
+    }
+    const list = await api.loaderVersions(cfg.zipLoader, cfg.zipMc).catch(() => []);
+    cfg.zipLoaderVersions = list || [];
+    const current = cfg.zipLoaderVersions.find((option) => option.stable) || cfg.zipLoaderVersions[0];
+    cfg.zipLoaderVersion = current ? current.version : "";
+    renderDiscover();
+  }
+
+  async function importHomeZip() {
+    const cfg = state.home;
+    const path = cfg.zipPath;
+    if (!path) return;
+    const zip = /\.zip$/i.test(path);
+    if (zip && !cfg.zipMc) return toast("Выбери версию Minecraft", "err");
+    cfg.busy = true;
+    cfg.status = "распаковываем…";
+    renderDiscover();
+    try {
+      const meta = zip
+        ? await api.installZip({
+            path,
+            name: null,
+            mcVersion: cfg.zipMc,
+            loader: cfg.zipLoader === "vanilla" ? null : cfg.zipLoader,
+            loaderVersion: cfg.zipLoaderVersion || null
+          })
+        : await api.installModpack(path);
+      cfg.zipPath = "";
+      cfg.status = "";
+      await refreshInstances();
+      selectInstance(meta.id);
+      state.tab = "console";
+      renderTab();
+      toast(`Сборка «${meta.name}» добавлена`, "ok");
+    } catch (err) {
+      toast(`Не удалось импортировать: ${err}`, "err");
+      cfg.status = "";
+    } finally {
+      cfg.busy = false;
+      if (state.tab === "discover") renderDiscover();
+    }
+  }
+
+  async function loadHomeExternal(force = false) {
+    const cfg = state.home;
+    if (cfg.external && !force) return;
+    cfg.extLoading = true;
+    renderDiscover();
+    try {
+      cfg.external = await api.scanExternal();
+    } catch (err) {
+      cfg.external = [];
+      toast(String(err), "err");
+    }
+    cfg.extLoading = false;
+    if (state.tab === "discover") renderDiscover();
+  }
+
+  /** Импорт отмеченных сборок из других лаунчеров — по одной, с прогрессом. */
+  async function importSelectedExternal() {
+    const cfg = state.home;
+    const list = (cfg.external || []).filter((item) => cfg.extSelected.has(item.path));
+    if (!list.length) return;
+    cfg.busy = true;
+    let done = 0;
+    let last = null;
+    const failed = [];
+    for (const item of list) {
+      cfg.status = `импортируем ${done + 1} из ${list.length}: ${item.name}`;
+      renderDiscover();
+      try {
+        last = await api.importExternal({
+          path: item.path,
+          name: item.name,
+          mcVersion: item.mc_version,
+          loader: item.loader === "vanilla" ? null : item.loader,
+          loaderVersion: item.loader_version || null,
+          icon: item.icon || null
+        });
+        cfg.extSelected.delete(item.path);
+        done += 1;
+      } catch (err) {
+        failed.push(`${item.name}: ${err}`);
+      }
+    }
+    cfg.busy = false;
+    cfg.status = "";
+    await refreshInstances();
+    if (failed.length) toast(`Импортировано ${done} из ${list.length}. Не удалось: ${failed.join("; ")}`, "err");
+    else toast(`Импортировано сборок: ${done}`, "ok");
+    if (done === 1 && last) {
+      selectInstance(last.id);
+      state.tab = "console";
+      renderTab();
+      return;
+    }
+    if (state.tab === "discover") renderDiscover();
   }
 
   function dvResultsHtml() {
@@ -3015,6 +3352,10 @@
                 </div>
               </div>
               <div class="settings-row">
+                <div class="label">Наиграно</div>
+                <div class="muted" style="padding-top:7px">${esc(playtimeLabel(meta.playtime_secs))}${meta.last_played ? ` · последний запуск ${esc(relativeWhen(meta.last_played))}` : ""}</div>
+              </div>
+              <div class="settings-row">
                 <div class="label">Экспорт</div>
                 <div class="settings-actions" style="margin:0">
                   <button class="btn" id="inst-export-mrpack">В .mrpack</button>
@@ -3278,321 +3619,6 @@
    * Сюда переехала кнопка Modrinth: добавить готовую сборку можно тремя путями —
    * поиском модпака на Modrinth, локальным .mrpack или ссылкой.
    */
-  function openAdd(mode = "modrinth") {
-    state.add = {
-      mode, query: "", packs: [], selected: null, path: "", url: "", loading: false,
-      versions: [], zipMc: "", zipLoader: "vanilla", zipLoaderVersion: "", zipLoaderVersions: [],
-      external: null, extLoading: false, extSelected: null, extGrid: false, extName: ""
-    };
-    $("#modal-add").hidden = false;
-    renderAdd();
-    if (mode === "modrinth" && !state.add.packs.length) searchAddPacks("");
-    if (mode === "external") loadExternal();
-  }
-
-  function renderAdd() {
-    const cfg = state.add;
-    $$("#add-tabs .mtab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.amode === cfg.mode));
-    const body = $("#add-body");
-
-    if (cfg.mode === "modrinth") {
-      body.innerHTML = `
-        <div class="form-grid">
-          <div class="field">
-            <label>Поиск модпака на Modrinth</label>
-            <div style="display:flex;gap:8px">
-              <input class="input grow" id="add-query" value="${esc(cfg.query)}" placeholder="fabulously optimized, cobblemon, all the mods…" spellcheck="false">
-              <button class="btn" id="add-search">Найти</button>
-            </div>
-          </div>
-          <div class="add-list">
-            ${cfg.packs.length
-              ? cfg.packs.map((pack) => `
-                <div class="pack-row ${cfg.selected && cfg.selected.project_id === pack.project_id ? "is-active" : ""}" data-pack="${esc(pack.project_id)}">
-                  <div class="card-icon" style="width:34px;height:34px;border-radius:7px">${pack.icon_url ? `<img src="${esc(pack.icon_url)}" alt="">` : "P"}</div>
-                  <div style="flex:1;min-width:0">
-                    <div class="item-title">${esc(pack.title)}</div>
-                    <div class="item-sub">${esc((pack.description || "").slice(0, 92))}</div>
-                  </div>
-                  <span class="tag">${(pack.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
-                </div>`).join("")
-              : `<div class="add-empty">${cfg.loading ? "Ищем модпаки…" : "Ничего не найдено — попробуй другой запрос"}</div>`}
-          </div>
-        </div>`;
-      $("#add-search").addEventListener("click", () => searchAddPacks($("#add-query").value));
-      $("#add-query").addEventListener("keydown", (event) => {
-        if (event.key === "Enter") searchAddPacks(event.target.value);
-      });
-      $$("[data-pack]", body).forEach((row) => row.addEventListener("click", () => {
-        cfg.selected = cfg.packs.find((pack) => pack.project_id === row.dataset.pack) || null;
-        renderAdd();
-      }));
-    } else if (cfg.mode === "file") {
-      const isZip = /\.zip$/i.test(cfg.path.trim());
-      body.innerHTML = `
-        <div class="form-grid">
-          <div class="field">
-            <label>Файл модпака</label>
-            <div class="flex-row">
-              <input class="input grow" id="add-path" value="${esc(cfg.path)}" placeholder="pack.mrpack или pack.zip" spellcheck="false">
-              <button class="btn" id="add-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать файл…</button>
-            </div>
-          </div>
-          ${isZip ? `
-            <div class="field">
-              <label>Версия Minecraft</label>
-              <select class="select" id="add-zip-mc">
-                ${cfg.versions.length ? cfg.versions.map((version) => `<option value="${esc(version.id)}" ${version.id === cfg.zipMc ? "selected" : ""}>${esc(version.id)}</option>`).join("") : `<option value="">загружаем…</option>`}
-              </select>
-            </div>
-            <div class="field">
-              <label>Загрузчик</label>
-              <div class="chips" id="add-zip-loaders">
-                ${Object.entries(LOADER_NAMES).map(([value, label]) => `<button class="chip ${cfg.zipLoader === value ? "is-active" : ""}" data-zip-loader="${value}">${label}</button>`).join("")}
-              </div>
-            </div>
-            ${cfg.zipLoader === "vanilla" || !cfg.zipLoader ? "" : `
-              <div class="field" id="add-zip-lv-field">
-                <label>Версия загрузчика</label>
-                <select class="select" id="add-zip-loader-version">
-                  ${cfg.zipLoaderVersions.length ? cfg.zipLoaderVersions.map((option) => `<option value="${esc(option.version)}" ${option.version === cfg.zipLoaderVersion ? "selected" : ""}>${esc(option.version)}</option>`).join("") : `<option value="">загружаем…</option>`}
-                </select>
-              </div>`}
-`
-          : ""}
-        </div>`;
-      $("#add-path-error")?.remove();
-      $("#add-path").addEventListener("input", (event) => {
-        cfg.path = event.target.value;
-        const nowZip = /\.zip$/i.test(cfg.path.trim());
-        if (nowZip !== isZip) renderAdd();
-      });
-      $("#add-pick").addEventListener("click", async () => {
-        const picked = await api.pickFile("Модпак .mrpack или .zip", ["mrpack", "zip"]).catch(() => null);
-        if (!picked) return;
-        cfg.path = picked;
-        renderAdd();
-      });
-      if (isZip) {
-        if (!cfg.versions.length) {
-          api.versions(false).then((versions) => {
-            cfg.versions = versions || [];
-            if (!cfg.zipMc) cfg.zipMc = (cfg.versions[0] || {}).id || "";
-            renderAdd();
-          }).catch(() => {});
-        }
-        if ($("#add-zip-mc")) $("#add-zip-mc").addEventListener("change", (event) => {
-          cfg.zipMc = event.target.value;
-          if (cfg.zipLoader && cfg.zipLoader !== "vanilla") loadZipLoaderVersions();
-        });
-        $$("#add-zip-loaders .chip").forEach((chip) => chip.addEventListener("click", () => {
-          cfg.zipLoader = chip.dataset.zipLoader;
-          loadZipLoaderVersions();
-        }));
-        if ($("#add-zip-loader-version")) $("#add-zip-loader-version").addEventListener("change", (event) => {
-          cfg.zipLoaderVersion = event.target.value;
-        });
-      } else {
-        $("#add-path").addEventListener("keydown", (event) => { if (event.key === "Enter") submitAdd(); });
-      }
-      setTimeout(() => { const el = $("#add-path"); if (el) el.focus(); }, 30);
-
-    } else if (cfg.mode === "external") {
-      const list = cfg.external || [];
-      const launcherNames = { prism: "Prism Launcher", multimc: "MultiMC", modrinth: "Modrinth App" };
-      const row = (item) => `
-        <button class="ext-row ${cfg.extSelected && cfg.extSelected.path === item.path ? "is-active" : ""}" data-ext="${esc(item.path)}">
-          <span class="ext-icon">${item.icon ? `<img src="file://${esc(item.icon)}" alt="">` : `<svg class="ic"><use href="#i-grid"/></svg>`}</span>
-          <span class="ext-main">
-            <span class="ext-name">${esc(item.name)}</span>
-            <span class="ext-sub">${esc(launcherNames[item.launcher] || item.launcher)} · MC ${esc(item.mc_version)} · ${esc(item.loader)}</span>
-          </span>
-        </button>`;
-      const card = (item) => `
-        <button class="ext-card ${cfg.extSelected && cfg.extSelected.path === item.path ? "is-active" : ""}" data-ext="${esc(item.path)}">
-          <span class="ext-cover">${item.icon ? `<img src="file://${esc(item.icon)}" alt="">` : `<svg class="ic"><use href="#i-grid"/></svg>`}</span>
-          <span class="ext-cover-name">${esc(item.name)}</span>
-          <span class="ext-cover-sub">MC ${esc(item.mc_version)} · ${esc(item.loader)}</span>
-        </button>`;
-
-      body.innerHTML = `
-        <div class="form-grid">
-          <div class="add-ext-head">
-            <strong>Найдено сборок: ${list.length}</strong>
-            <div class="spacer"></div>
-            <div class="mr-view">
-              <button class="${cfg.extGrid ? "" : "is-active"}" data-ext-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
-              <button class="${cfg.extGrid ? "is-active" : ""}" data-ext-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
-            </div>
-            <button class="btn btn-small" id="ext-rescan">Обновить</button>
-          </div>
-          ${cfg.extLoading
-            ? `<div class="add-empty">Смотрим Prism Launcher, MultiMC и Modrinth App…</div>`
-            : list.length
-              ? `<div class="${cfg.extGrid ? "ext-grid" : "ext-list"}">${list.map(cfg.extGrid ? card : row).join("")}</div>`
-              : `<div class="add-empty">Сборок в других лаунчерах не нашлось. Укажи папку вручную → вкладка «Файл».</div>`}
-          ${cfg.extSelected ? `
-            <div class="field">
-              <label>Название в OmniSpec</label>
-              <input class="input" id="ext-name" value="${esc(cfg.extName)}" spellcheck="false">
-            </div>` : ""}
-        </div>`;
-
-      $("#ext-rescan").addEventListener("click", () => loadExternal(true));
-      $$("#add-body [data-ext-view]").forEach((btn) => btn.addEventListener("click", () => {
-        cfg.extGrid = btn.dataset.extView === "grid";
-        renderAdd();
-      }));
-      $$("#add-body [data-ext]").forEach((el) => el.addEventListener("click", () => {
-        cfg.extSelected = list.find((item) => item.path === el.dataset.ext) || null;
-        cfg.extName = cfg.extSelected ? cfg.extSelected.name : "";
-        renderAdd();
-      }));
-      if ($("#ext-name")) $("#ext-name").addEventListener("input", (event) => { cfg.extName = event.target.value; });
-    } else {
-      body.innerHTML = `
-        <div class="form-grid">
-          <div class="field">
-            <label>Ссылка на модпак</label>
-            <input class="input" id="add-url" value="${esc(cfg.url)}" placeholder="https://modrinth.com/modpack/fabulously-optimized или ссылка на .mrpack" spellcheck="false">
-          </div>
-        </div>`;
-      $("#add-url").addEventListener("input", (event) => { cfg.url = event.target.value; });
-      $("#add-url").addEventListener("keydown", (event) => { if (event.key === "Enter") submitAdd(); });
-      setTimeout(() => { const el = $("#add-url"); if (el) el.focus(); }, 30);
-    }
-
-    if (cfg.mode === "modrinth") {
-      $("#add-hint").textContent = cfg.selected ? cfg.selected.title : "выбери модпак";
-      $("#add-submit").textContent = "Установить";
-    } else if (cfg.mode === "file") {
-      const zip = /\.zip$/i.test(cfg.path.trim());
-      $("#add-hint").textContent = zip ? "модпак .zip" : "модпак .mrpack";
-      $("#add-submit").textContent = zip ? "Импортировать" : "Добавить";
-    } else if (cfg.mode === "external") {
-      $("#add-hint").textContent = cfg.extSelected ? cfg.extSelected.name : "выбери сборку";
-      $("#add-submit").textContent = "Импортировать";
-    } else {
-      $("#add-hint").textContent = "ссылка";
-      $("#add-submit").textContent = "Добавить";
-    }
-  }
-
-  /** Версии загрузчика для импорта zip — по выбранной версии игры. */
-  async function loadZipLoaderVersions() {
-    const cfg = state.add;
-    if (cfg.zipLoader === "vanilla") {
-      cfg.zipLoaderVersions = [];
-      cfg.zipLoaderVersion = "";
-      renderAdd();
-      return;
-    }
-    const list = await api.loaderVersions(cfg.zipLoader, cfg.zipMc).catch(() => []);
-    cfg.zipLoaderVersions = list || [];
-    const current = cfg.zipLoaderVersions.find((option) => option.stable) || cfg.zipLoaderVersions[0];
-    cfg.zipLoaderVersion = current ? current.version : "";
-    renderAdd();
-  }
-
-  /** Поиск сборок в других лаунчерах (Prism, MultiMC, Modrinth App). */
-  async function loadExternal(force = false) {
-    const cfg = state.add;
-    if (cfg.external && !force) return;
-    cfg.extLoading = true;
-    renderAdd();
-    try {
-      cfg.external = await api.scanExternal();
-    } catch (err) {
-      cfg.external = [];
-      toast(`Не удалось просканировать лаунчеры: ${err}`, "err");
-    } finally {
-      cfg.extLoading = false;
-      renderAdd();
-    }
-  }
-
-  async function searchAddPacks(query) {
-    const cfg = state.add;
-    cfg.query = query || "";
-    cfg.loading = true;
-    renderAdd();
-    try {
-      const result = await api.search({ query: cfg.query, projectType: "modpack", mcVersion: null, loader: null, offset: 0 });
-      cfg.packs = result.hits || [];
-      if (cfg.selected) cfg.selected = cfg.packs.find((pack) => pack.project_id === cfg.selected.project_id) || null;
-    } catch (err) {
-      cfg.packs = [];
-      toast(`Modrinth недоступен: ${err}`, "err");
-    } finally {
-      cfg.loading = false;
-      renderAdd();
-    }
-  }
-
-  async function submitAdd() {
-    const cfg = state.add;
-    const submit = $("#add-submit");
-    let source = "";
-    if (cfg.mode === "modrinth") {
-      if (!cfg.selected) return toast("Выбери модпак", "err");
-      source = "";
-    } else if (cfg.mode === "file") {
-      source = cfg.path.trim();
-      if (!source) return toast("Укажи путь к файлу модпака", "err");
-      if (/\.zip$/i.test(source) && !cfg.zipMc) return toast("Выбери версию Minecraft для этого zip", "err");
-    } else if (cfg.mode === "external") {
-      if (!cfg.extSelected) return toast("Выбери сборку из списка", "err");
-      source = cfg.extSelected.path;
-    } else {
-      source = cfg.url.trim();
-      if (!source) return toast("Вставь ссылку", "err");
-    }
-
-    submit.disabled = true;
-    const label = submit.textContent;
-    submit.textContent = "Устанавливаем…";
-    try {
-      let target = source;
-      if (cfg.mode === "modrinth") {
-        const versions = await api.modrinthVersions(cfg.selected.project_id, null, null);
-        if (!versions.length) throw new Error("у этого модпака нет версий");
-        target = versions[0].id;
-      }
-      let meta = null;
-      if (cfg.mode === "file" && /\.zip$/i.test(target)) {
-        // Обычный zip из Prism: версию игры указываем сами.
-        meta = await api.installZip({
-          path: target,
-          name: null,
-          mcVersion: cfg.zipMc,
-          loader: cfg.zipLoader === "vanilla" ? null : cfg.zipLoader,
-          loaderVersion: cfg.zipLoaderVersion || null
-        });
-      } else if (cfg.mode === "external") {
-        const found = cfg.extSelected;
-        meta = await api.importExternal({
-          path: found.path,
-          name: (cfg.extName || "").trim() || null,
-          mcVersion: found.mc_version,
-          loader: found.loader === "vanilla" ? null : found.loader,
-          loaderVersion: found.loader_version || null,
-          icon: found.icon || null
-        });
-      } else {
-        meta = await api.installModpack(target);
-      }
-      $("#modal-add").hidden = true;
-      await refreshInstances();
-      selectInstance(meta.id);
-      toast(`Сборка «${meta.name}» добавлена`, "ok");
-    } catch (err) {
-      toast(`Не удалось добавить: ${err}`, "err");
-    } finally {
-      submit.disabled = false;
-      submit.textContent = label;
-    }
-  }
-
   /* ==================== СМЕНА ВЕРСИИ СБОРКИ ==================== */
   /** Два списка: слева версии Minecraft, справа загрузчик и его версии. */
   async function openVersionChange() {
@@ -3885,7 +3911,6 @@
     on("#btn-restart", "click", async () => { await stopGame(); setTimeout(play, 800); });
     on("#btn-home", "click", () => selectInstance(null));
     on("#btn-create", "click", openCreate);
-    on("#btn-import", "click", () => openAdd("modrinth"));
 
     /* аккаунты и настройки лаунчера */
     on("#account-chip", "click", (event) => { event.stopPropagation(); toggleAccountPopover(); });
@@ -3953,14 +3978,6 @@
     $$("[data-win]").forEach((btn) => btn.addEventListener("click", () => api.window(btn.dataset.win).catch(() => {})));
     $$("[data-close-modal]").forEach((btn) => btn.addEventListener("click", () => { $("#modal-create").hidden = true; }));
     $$("[data-close-update]").forEach((btn) => btn.addEventListener("click", () => { $("#modal-update").hidden = true; }));
-    $$("[data-close-add]").forEach((btn) => btn.addEventListener("click", () => { $("#modal-add").hidden = true; }));
-    $("#add-submit").addEventListener("click", submitAdd);
-    $$("#add-tabs .mtab").forEach((tab) => tab.addEventListener("click", () => {
-      state.add.mode = tab.dataset.amode;
-      renderAdd();
-      if (state.add.mode === "external") loadExternal();
-    }));
-    $("#modal-add").addEventListener("mousedown", (event) => { if (event.target.id === "modal-add") $("#modal-add").hidden = true; });
     $("#modal-update").addEventListener("mousedown", (event) => { if (event.target.id === "modal-update") $("#modal-update").hidden = true; });
     $("#btn-update").addEventListener("click", openUpdateModal);
     $("#upd-install").addEventListener("click", installUpdate);
@@ -3984,7 +4001,6 @@
       if (event.ctrlKey && event.key.toLowerCase() === "l") { event.preventDefault(); state.logs[state.selectedId] = []; renderLogs(state.selectedId); }
       if (event.key === "Escape") {
         $("#modal-create").hidden = true;
-        $("#modal-add").hidden = true;
         const prefs = $("#modal-prefs");
         if (prefs) prefs.hidden = true;
         const acc = $("#modal-account");
@@ -4021,9 +4037,12 @@
     await api.onLog((payload) => {
       pushLog(payload.instance, payload.line, classify(payload.line));
     });
-    await api.onExit((payload) => {
+    await api.onExit(async (payload) => {
       state.running.delete(payload.instance);
       pushLog(payload.instance, `[omnispec] Игра завершилась с кодом ${payload.code}`, payload.code === 0 ? "ok" : "err");
+      // время игры пишется в мету сборки на стороне ядра — подтягиваем его
+      await refreshInstances();
+      if (state.tab === "discover") renderDiscover();
       renderSidebar();
       updateStatus();
       if (payload.code !== 0) toast(`Игра закрылась с ошибкой (код ${payload.code})`, "err");

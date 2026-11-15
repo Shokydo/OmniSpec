@@ -2043,3 +2043,94 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
   font-variant-numeric: tabular-nums;
 }
 .color-field .btn { flex: 0 0 auto; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ЭТАП 10: «Недавнее», время игры, импорт прямо на главной
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* время игры на карточке */
+.home-card-time {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--dim-2);
+  font-variant-numeric: tabular-nums;
+  padding-left: 4px;
+}
+.home-card { min-height: 56px; }
+.home-card-body { gap: 3px; }
+
+.home-section-title {
+  padding: var(--pad) var(--pad) 0;
+  font-size: 10px; letter-spacing: 1.1px; text-transform: uppercase;
+  color: var(--dim-2);
+}
+
+/* ---------- панель импорта на главной ---------- */
+.home-import {
+  margin: var(--pad);
+  padding: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+.home-import.is-busy { opacity: .75; pointer-events: none; }
+body.has-wall .home-import { background: var(--bg-1a); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.imp-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.imp-head .home-sub { font-size: 11px; color: var(--dim-2); }
+
+.imp-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.imp-row .btn { min-width: 190px; justify-content: center; }
+.imp-row .btn.is-pressed { border-color: var(--line-3); background: var(--bg-4); color: var(--text); }
+.imp-url { display: flex; align-items: center; gap: 6px; flex: 1 1 100%; min-width: 240px; }
+.imp-url .input { height: var(--h); }
+.imp-url .btn { min-width: 120px; }
+
+.imp-block {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+}
+.imp-block-head { display: flex; align-items: center; gap: 6px; }
+.imp-block-head strong { font-size: 12px; }
+.imp-path { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-note { font-size: 11px; color: var(--dim-2); }
+.imp-fields { display: flex; gap: 10px; flex-wrap: wrap; }
+.imp-fields .field { min-width: 180px; }
+.imp-fields .chips { display: flex; flex-wrap: nowrap; gap: 5px; }
+.imp-fields .chips .chip { flex: 1 1 0; min-width: 0; height: var(--h-sm); justify-content: center; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-actions { display: flex; align-items: center; gap: 8px; }
+.imp-count { font-size: 11px; color: var(--dim-2); }
+
+/* список сборок из других лаунчеров с галочками */
+.imp-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
+.imp-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.imp-item:hover { background: var(--bg-4); }
+.imp-item.is-picked { background: var(--bg-4); border-color: var(--line-2); }
+.imp-check {
+  width: 14px; height: 14px; flex: none;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.imp-item .ext-main { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.25; }
+.imp-item .ext-name { font-size: 12px; font-weight: 550; }
+.imp-item .ext-sub { font-size: 10.5px; color: var(--dim-2); }
+
+/* время игры в строке сайдбара */
+.instance-time {
+  flex: none;
+  font-size: 10px;
+  color: var(--dim-2);
+  font-variant-numeric: tabular-nums;
+  padding-left: 6px;
+}
+.instance { align-items: flex-start; }
+.instance .instance-icon { margin-top: 1px; }
