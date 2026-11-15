@@ -37,8 +37,8 @@ const server = http.createServer((req, res) => {
         if (command === 'save_settings') { Object.assign(settings, JSON.parse(JSON.stringify(args.settings))); return null; }
         if (command === 'list_instances') return instances.map((item) => ({ ...item }));
         if (command === 'accounts_info') return { accounts: [], active: null };
-        if (command === 'app_info') return { home: '/test', version: '0.52.0', demo: false };
-        if (command === 'version_info') return { version: '0.52.0', enabled: false };
+        if (command === 'app_info') return { home: '/test', version: '0.52.1', demo: false };
+        if (command === 'version_info') return { version: '0.52.1', enabled: false };
         if (command === 'system_memory') return { total_mb: 8192 };
         if (command === 'list_java') return [];
         if (command === 'running_instances' || command === 'running_sessions') return [];
