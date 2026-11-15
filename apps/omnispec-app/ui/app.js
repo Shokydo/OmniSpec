@@ -2362,7 +2362,7 @@
                 ${account.uuid === activeId
                   ? '<span class="tag green">активный</span>'
                   : '<button class="btn btn-small" data-acc="pick">Выбрать</button>'}
-                <button class="icon-btn" data-acc="rename-one" title="Изменить ник"><svg class="ic"><use href="#i-pencil"/></svg></button>
+                ${account.kind === "microsoft" ? "" : `<button class="icon-btn" data-acc="rename-one" title="Изменить ник"><svg class="ic"><use href="#i-pencil"/></svg></button>`}
                 <button class="icon-btn" data-acc="remove-one" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
               </div>`).join("") : `<div class="muted" style="font-size:12px">Список пуст — добавь аккаунт справа сверху.</div>`}
           </div>
