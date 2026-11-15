@@ -123,6 +123,10 @@ fn default_shape() -> String {
     "soft".to_string()
 }
 
+fn default_ui_preset() -> String {
+    "omnispec".to_string()
+}
+
 fn default_sound_volume() -> u8 {
     60
 }
@@ -167,10 +171,51 @@ impl LauncherIcon {
     }
 }
 
+/// Настройка одного семантического элемента визуального конструктора.
+///
+/// Значения ограничиваются UI-конструктором. Пользовательские координаты
+/// применяются как безопасный CSS-слой и не требуют выполнения JavaScript.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiElement {
+    pub id: String,
+    pub visible: bool,
+    /// flow — обычная адаптивная раскладка, free — свободное смещение.
+    pub mode: String,
+    pub x: i16,
+    pub y: i16,
+    pub width: Option<u16>,
+    pub height: Option<u16>,
+    pub margin: u8,
+    pub padding: u8,
+    pub radius: u8,
+    /// Вариант отображения элемента: default | compact | prominent | ghost.
+    pub variant: String,
+}
+
+impl Default for UiElement {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            visible: true,
+            mode: "flow".to_string(),
+            x: 0,
+            y: 0,
+            width: None,
+            height: None,
+            margin: 0,
+            padding: 0,
+            radius: 0,
+            variant: "default".to_string(),
+        }
+    }
+}
+
 /// Пользовательская компоновка интерфейса лаунчера.
 ///
-/// Храним именно семантические настройки, а не координаты пикселей: так
-/// раскладка остаётся устойчивой к разным размерам окна и обновлениям UI.
+/// Помимо крупных областей сохраняем семантические параметры отдельных
+/// элементов: визуальный редактор может менять их размер, отступы, вариант
+/// отображения и свободную позицию без пользовательского JavaScript.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiLayout {
@@ -188,6 +233,12 @@ pub struct UiLayout {
     pub main_gap: u8,
     /// Плотность карточек: compact | comfortable | airy.
     pub density: String,
+    /// Пресет визуального стиля: omnispec | prism | modrinth | custom.
+    #[serde(default = "default_ui_preset")]
+    pub preset: String,
+    /// Параметры отдельных элементов визуального редактора.
+    #[serde(default)]
+    pub elements: Vec<UiElement>,
 }
 
 impl Default for UiLayout {
@@ -200,6 +251,8 @@ impl Default for UiLayout {
             main_padding: 0,
             main_gap: 0,
             density: "comfortable".to_string(),
+            preset: default_ui_preset(),
+            elements: Vec::new(),
         }
     }
 }
@@ -432,14 +485,36 @@ impl Default for CustomSound {
     fn default() -> Self { Self { path: String::new(), file: None, volume: 100 } }
 }
 
-/// Категория сборок: обычная «папка» в списке слева.
+/// Условия динамической категории сборок.
+///
+/// Пустой список означает «любой». Несколько значений внутри одного поля
+/// объединяются через OR, а разные поля — через AND.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct CategoryRules {
+    pub mc_versions: Vec<String>,
+    pub loaders: Vec<String>,
+    /// any | server | client.
+    pub kind: String,
+    pub sources: Vec<String>,
+    pub name_contains: String,
+    pub notes_contains: String,
+    /// any | with_icon | without_icon.
+    pub icon: String,
+}
+
+/// Категория сборок: обычная «папка» или динамическое представление.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Category {
     pub id: String,
     pub name: String,
     /// Свёрнута ли папка в списке.
-    #[serde(default)]
     pub collapsed: bool,
+    /// Динамическая категория не меняет `instance.category`, а вычисляет
+    /// содержимое по `rules` при каждом обновлении списка.
+    pub dynamic: bool,
+    pub rules: CategoryRules,
 }
 
 /// Запись библиотеки; формат совпадает со старыми пользовательскими пресетами.
@@ -648,17 +723,37 @@ mod discord_tests {
         assert!(legacy.custom_css.is_empty());
         assert_eq!(legacy.ui_layout.sidebar_width, 264);
         assert_eq!(legacy.ui_layout.sidebar_side, "left");
+        assert_eq!(legacy.ui_layout.preset, "omnispec");
+        assert!(legacy.ui_layout.elements.is_empty());
 
         let mut changed = legacy.clone();
         changed.custom_css = "[data-os=sidebar]{width:300px}".into();
         changed.ui_layout.sidebar_width = 300;
         changed.ui_layout.sidebar_side = "right".into();
         changed.ui_layout.main_order = vec!["tabs".into(), "content".into(), "toolbar".into()];
+        changed.ui_layout.preset = "prism".into();
+        changed.ui_layout.elements.push(UiElement {
+            id: "toolbar".into(),
+            mode: "free".into(),
+            x: 12,
+            width: Some(640),
+            padding: 8,
+            variant: "prominent".into(),
+            ..UiElement::default()
+        });
+        let mut category = Category { id: "servers".into(), name: "Серверы".into(), dynamic: true, ..Category::default() };
+        category.rules.kind = "server".into();
+        category.rules.mc_versions = vec!["1.21.1".into(), "1.21.4".into()];
+        changed.categories.push(category);
         let restored: Settings = serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
         assert_eq!(restored.custom_css, changed.custom_css);
         assert_eq!(restored.ui_layout.sidebar_width, 300);
         assert_eq!(restored.ui_layout.sidebar_side, "right");
         assert_eq!(restored.ui_layout.main_order, changed.ui_layout.main_order);
+        assert_eq!(restored.ui_layout.preset, "prism");
+        assert_eq!(restored.ui_layout.elements[0].x, 12);
+        assert_eq!(restored.categories[0].rules.kind, "server");
+        assert_eq!(restored.categories[0].rules.mc_versions.len(), 2);
     }
 
     #[test]

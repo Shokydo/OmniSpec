@@ -561,6 +561,38 @@
   </div>
 </div>
 
+<!-- Условия вычисляемой категории сборок. Все фильтры сохраняются в settings.json. -->
+<div class="modal-backdrop" id="modal-category-editor" hidden>
+  <div class="modal category-editor-box" role="dialog" aria-modal="true" aria-labelledby="category-editor-title">
+    <header class="modal-head">
+      <div>
+        <div class="eyebrow"><svg class="ic"><use href="#i-bolt"/></svg>ДИНАМИЧЕСКАЯ КАТЕГОРИЯ</div>
+        <h2 id="category-editor-title">Новая категория</h2>
+      </div>
+      <div class="spacer"></div>
+      <button class="icon-btn" data-close-category-editor title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="modal-body category-editor-body">
+      <div class="field"><label for="category-editor-name">Название</label><input class="input" id="category-editor-name" spellcheck="false" placeholder="Например, Серверы 1.21"></div>
+      <div class="category-editor-grid">
+        <div class="field"><label for="category-editor-versions">Версии Minecraft</label><input class="input" id="category-editor-versions" spellcheck="false" placeholder="1.21.1, 1.21.4"><small>Несколько значений через запятую. Пусто — любая версия.</small></div>
+        <div class="field"><label for="category-editor-loaders">Ядро / loader</label><input class="input" id="category-editor-loaders" spellcheck="false" placeholder="fabric, neoforge, paper"><small>Для серверов используются Paper, Fabric, Vanilla и другие ядра.</small></div>
+        <label class="field"><span>Тип сборки</span><select class="select" id="category-editor-kind"><option value="any">Любая</option><option value="server">Только серверные</option><option value="client">Только клиентские</option></select></label>
+        <label class="field"><span>Иконка</span><select class="select" id="category-editor-icon"><option value="any">Любая</option><option value="with_icon">Только с иконкой</option><option value="without_icon">Без иконки</option></select></label>
+        <div class="field"><label for="category-editor-sources">Источник</label><input class="input" id="category-editor-sources" spellcheck="false" placeholder="manual, modrinth, import"><small>Метаданные источника сборки.</small></div>
+        <div class="field"><label for="category-editor-name-filter">Фильтр названия</label><input class="input" id="category-editor-name-filter" spellcheck="false" placeholder="например, vanilla"><small>Часть названия без учёта регистра.</small></div>
+      </div>
+      <div class="field"><label for="category-editor-notes">Фильтр заметки</label><input class="input" id="category-editor-notes" spellcheck="false" placeholder="например, шейдеры"><small>Можно использовать любые заметки сборок как дополнительный признак.</small></div>
+      <div class="category-editor-preview" id="category-editor-preview"></div>
+    </div>
+    <footer class="modal-foot">
+      <button class="btn btn-ghost" data-close-category-editor>Отмена</button>
+      <div class="spacer"></div>
+      <button class="btn btn-primary" id="category-editor-save">Сохранить категорию</button>
+    </footer>
+  </div>
+</div>
+
 <script src="i18n-data.js"></script>
 <script src="i18n.js"></script>
 <script src="diagnostics.js"></script>

@@ -1506,6 +1506,8 @@ async fn server_search_addons(
     project_type: String,
     mc_version: Option<String>,
     loader: Option<String>,
+    offset: Option<u32>,
+    limit: Option<u32>,
 ) -> Result<omnispec_core::modrinth::SearchResults, String> {
     let project_type = if project_type == "plugin" || project_type == "mod" { project_type } else { "plugin".into() };
     state.modrinth.search(&SearchQuery {
@@ -1514,8 +1516,8 @@ async fn server_search_addons(
         game_version: mc_version,
         loader,
         categories: Vec::new(),
-        limit: 24,
-        offset: 0,
+        limit: limit.unwrap_or(24).min(100),
+        offset: offset.unwrap_or(0),
         sort: "downloads".into(),
     }).await.map_err(err)
 }

@@ -3340,7 +3340,7 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 .home-catalog-sidebar {
   position: sticky; z-index: 2; top: 6px; flex: 0 0 220px; min-width: 0;
   max-height: calc(88vh / var(--ui-zoom, 1)); overflow: visible;
-  padding: 14px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--bg-2);
+  padding: 14px; border: 1px solid var(--line-2); border-radius: var(--r-lg); background: var(--bg-2);
   box-shadow: 0 10px 24px rgba(0,0,0,.18);
 }
 .home-catalog-sidebar.is-collapsed { flex-basis: 40px; padding: 7px; }
@@ -3368,7 +3368,7 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 .home-category-list { display: flex; flex-direction: column; gap: 3px; margin-top: 9px; max-height: calc(62vh / var(--ui-zoom, 1)); overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
 .home-category {
   display: flex; align-items: center; gap: 9px; width: 100%; min-height: 30px; padding: 5px 8px;
-  border: 1px solid transparent; border-radius: 8px; color: var(--dim); text-align: left; font-size: 12px;
+  border: 1px solid transparent; border-radius: var(--r-sm); color: var(--dim); text-align: left; font-size: 12px;
 }
 .home-category .ic { width: 15px; height: 15px; flex: none; color: var(--dim); }
 .home-category:hover { background: var(--bg-3); color: var(--text); }
@@ -3741,7 +3741,7 @@ body.has-wall .home .home-feed-head { background: var(--bg-2); }
 .download-catalog-sidebar {
   position: relative; z-index: 4; flex: 0 0 214px; min-width: 0;
   min-height: 0; padding: 12px;
-  border: 1px solid var(--line-2); border-radius: 14px;
+  border: 1px solid var(--line-2); border-radius: var(--r-lg);
   background: var(--bg-2); box-shadow: 0 10px 24px rgba(0,0,0,.18);
 }
 body.has-wall .download-catalog-sidebar { background: var(--bg-2); }
@@ -3829,4 +3829,47 @@ body.has-wall .download-catalog-sidebar { background: var(--bg-2); }
 }
 @media (max-width: 460px) {
   .download-filter-fields { grid-template-columns: 1fr; }
+}
+
+/* ==================== 0.52: иконки настроек и динамические категории ==================== */
+.prefs-tab { display: flex; align-items: center; gap: 8px; }
+.prefs-tab-icon { width: 20px; height: 20px; flex: 0 0 20px; display: grid; place-items: center; }
+.prefs-tab-icon .ic { width: 15px; height: 15px; color: var(--dim-2); }
+.prefs-tab:hover .prefs-tab-icon .ic, .prefs-tab.is-active .prefs-tab-icon .ic { color: var(--accent); }
+.cat-dynamic-icon { width: 11px; height: 11px; flex: none; color: var(--accent); }
+.cat-dynamic > .cat-head { border-style: solid; border-color: color-mix(in srgb, var(--accent) 26%, transparent); }
+.cat-dynamic > .cat-head .cat-count { color: var(--accent); }
+
+/* «Запущенные» — единый закреплённый блок со скруглением со всех сторон. */
+.instance-list > .cat.cat-running {
+  border: 1px solid color-mix(in srgb, var(--green) 35%, var(--line-2));
+  border-radius: var(--r);
+  overflow: hidden;
+  padding: 2px 3px 4px;
+  background: var(--bg-2);
+  box-shadow: 0 8px 16px -12px rgba(0, 0, 0, .95);
+}
+.instance-list > .cat.cat-running > .cat-head { border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.instance-list > .cat.cat-running > .cat-items { padding: 0 1px 1px 1px; border-radius: 0 0 var(--r-sm) var(--r-sm); }
+
+/* редактор условий динамической категории */
+.category-editor-box { width: min(720px, 94vw); max-height: min(720px, 92vh); }
+.category-editor-body { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.category-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.category-editor-body .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.category-editor-body .field > label, .category-editor-body .field > span { color: var(--dim); font-size: 11px; }
+.category-editor-body .field small { color: var(--dim-2); font-size: 10px; line-height: 1.35; }
+.category-editor-preview { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 8px 10px; border: 1px dashed var(--line-2); border-radius: var(--r-sm); color: var(--dim); font-size: 10.5px; line-height: 1.4; }
+.category-editor-preview .ic { width: 16px; height: 16px; flex: none; color: var(--accent); }
+.category-editor-preview strong { color: var(--text); }
+
+/* автоподгрузка серверного каталога */
+.server-download-sentinel { grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 8px; color: var(--muted, var(--dim-2)); font-size: 11px; text-align: center; }
+.server-download-sentinel.is-error { flex-wrap: wrap; color: var(--red, #ef7777); }
+.server-download-error { display: flex; flex-direction: column; align-items: center; gap: 10px; grid-column: 1 / -1; }
+.mr-more-spinner { width: 13px; height: 13px; border: 2px solid color-mix(in srgb, var(--accent) 28%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: os-spin .8s linear infinite; }
+@keyframes os-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 620px) {
+  .category-editor-grid { grid-template-columns: 1fr; }
 }

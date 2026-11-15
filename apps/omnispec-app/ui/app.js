@@ -2294,7 +2294,7 @@
     serverAddons: (instanceId) => invoke("server_addons", { instanceId }),
     serverToggleAddon: (instanceId, path) => invoke("server_toggle_addon", { instanceId, path }),
     serverDeleteAddon: (instanceId, path) => invoke("server_delete_addon", { instanceId, path }),
-    serverSearchAddons: (query, projectType, mcVersion, loader) => invoke("server_search_addons", { query, projectType, mcVersion, loader }),
+    serverSearchAddons: (query, projectType, mcVersion, loader, offset = 0, limit = 24) => invoke("server_search_addons", { query, projectType, mcVersion, loader, offset, limit }),
     serverAddonVersions: (projectId, mcVersion, loader) => invoke("server_addon_versions", { projectId, mcVersion, loader }),
     serverInstallCatalogAddon: (instanceId, req) => invoke("server_install_catalog_addon", { instanceId, req }),
     serverInstallAddon: (instanceId, url, kind = null) => invoke("server_install_addon", { instanceId, url, kind }),
@@ -2650,7 +2650,14 @@
     serverAddons: async () => [],
     serverToggleAddon: async () => null,
     serverDeleteAddon: async () => null,
-    serverSearchAddons: async () => ({ hits: [] }),
+    serverSearchAddons: async (query, _projectType, mcVersion, _loader, offset = 0, limit = 24) => {
+      const names = ["LuckPerms", "ViaVersion", "EssentialsX", "WorldEdit", "Geyser", "WorldGuard", "CoreProtect", "Chunky", "spark", "PlaceholderAPI", "Vault", "Citizens", "BlueMap", "Dynmap", "TAB", "ProtocolLib", "GriefPrevention", "Plan", "LiteBans", "DiscordSRV", "SkinsRestorer", "MythicMobs", "Jobs Reborn", "Quests"];
+      const needle = String(query || "").toLocaleLowerCase();
+      const all = names.filter((name) => !needle || name.toLocaleLowerCase().includes(needle)).map((name, index) => ({
+        project_id: `demo-plugin-${index}`, title: name, description: `${name} для серверов Minecraft ${mcVersion || ""}`.trim(), downloads: 100000 - index * 2111
+      }));
+      return { hits: all.slice(offset, offset + limit), offset, limit, total_hits: all.length };
+    },
     serverAddonVersions: async () => [],
     serverInstallCatalogAddon: async () => null,
     serverInstallAddon: async () => null,
@@ -3537,14 +3544,75 @@
     state.runningRevision += 1;
   }
 
-  /** Категории сборок: из настроек + динамическая «Запущенные». */
+  /** Категории сборок: обычные папки и вычисляемые представления. */
+  const CATEGORY_RULES_DEFAULT = {
+    mc_versions: [], loaders: [], kind: "any", sources: [],
+    name_contains: "", notes_contains: "", icon: "any"
+  };
+
+  function normalizeCategoryRules(value) {
+    const source = value && typeof value === "object" ? value : {};
+    const list = (key) => Array.isArray(source[key])
+      ? [...new Set(source[key].map((item) => String(item || "").trim()).filter(Boolean))]
+      : String(source[key] || "").split(/[\n,;]+/).map((item) => item.trim()).filter(Boolean);
+    return {
+      mc_versions: list("mc_versions"),
+      loaders: list("loaders").map((item) => item.toLowerCase()),
+      kind: ["server", "client"].includes(source.kind) ? source.kind : "any",
+      sources: list("sources").map((item) => item.toLowerCase()),
+      name_contains: String(source.name_contains || "").trim(),
+      notes_contains: String(source.notes_contains || "").trim(),
+      icon: ["with_icon", "without_icon"].includes(source.icon) ? source.icon : "any"
+    };
+  }
+
+  function normalizeCategory(item) {
+    if (!item || !item.id) return null;
+    return {
+      id: String(item.id),
+      name: String(item.name || "Без названия"),
+      collapsed: Boolean(item.collapsed),
+      dynamic: Boolean(item.dynamic),
+      rules: normalizeCategoryRules(item.rules || item.filters)
+    };
+  }
+
   function categoriesOf() {
     const list = (state.settings && Array.isArray(state.settings.categories)) ? state.settings.categories : [];
-    return list.filter((item) => item && item.id);
+    return list.map(normalizeCategory).filter(Boolean);
+  }
+
+  function categoryIsServer(item) {
+    return isServer(item) || String(item?.kind || "").toLowerCase() === "server";
+  }
+
+  function categoryMatches(item, category) {
+    if (!category?.dynamic) return item.category === category?.id;
+    const rules = normalizeCategoryRules(category.rules);
+    const mcVersion = String(categoryIsServer(item) ? (item.server?.mc_version || item.mc_version || "") : (item.mc_version || ""));
+    const loader = String(categoryIsServer(item) ? (item.server?.kernel || item.loader?.type || item.loader || "") : (item.loader?.type || item.loader || "")).toLowerCase();
+    const source = String(item.source || "manual").toLowerCase();
+    const name = String(item.name || "").toLocaleLowerCase();
+    const notes = String(item.notes || "").toLocaleLowerCase();
+    if (rules.mc_versions.length && !rules.mc_versions.includes(mcVersion)) return false;
+    if (rules.loaders.length && !rules.loaders.includes(loader)) return false;
+    if (rules.kind === "server" && !categoryIsServer(item)) return false;
+    if (rules.kind === "client" && categoryIsServer(item)) return false;
+    if (rules.sources.length && !rules.sources.includes(source)) return false;
+    if (rules.name_contains && !name.includes(rules.name_contains.toLocaleLowerCase())) return false;
+    if (rules.notes_contains && !notes.includes(rules.notes_contains.toLocaleLowerCase())) return false;
+    if (rules.icon === "with_icon" && !item.icon) return false;
+    if (rules.icon === "without_icon" && item.icon) return false;
+    return true;
+  }
+
+  function categoryItems(items, category) {
+    return items.filter((item) => categoryMatches(item, category));
   }
 
   async function saveCategories(next) {
-    state.settings = { ...(state.settings || {}), categories: next };
+    const normalized = next.map(normalizeCategory).filter(Boolean);
+    state.settings = { ...(state.settings || {}), categories: normalized };
     try { await api.saveSettings(state.settings); } catch (error) { /* не критично */ }
   }
 
@@ -3576,15 +3644,19 @@
   }
 
 
-  function catGroupHtml({ id, name, items, open, running }) {
-    return `<div class="cat ${open ? "is-open" : ""} ${running ? "cat-running" : ""}" data-cat="${esc(id || "")}">
-      <div class="cat-head ${running ? "cat-run" : ""}" data-cat-head="${esc(id || "")}">
+  function catGroupHtml({ id, name, items, open, running, category }) {
+    const dynamic = Boolean(category?.dynamic);
+    const canDrop = Boolean(id && id !== "__running" && !dynamic);
+    return `<div class="cat ${open ? "is-open" : ""} ${running ? "cat-running" : ""} ${dynamic ? "cat-dynamic" : ""}" data-cat="${esc(id || "")}" ${canDrop ? `data-drop-cat="${esc(id)}"` : ""}>
+      <div class="cat-head ${running ? "cat-run" : ""}" data-cat-head="${esc(id || "")}" title="${dynamic ? "Динамическая категория: содержимое определяется условиями" : ""}">
         <svg class="ic cat-chev"><use href="#i-chev"/></svg>
+        ${dynamic ? '<svg class="ic cat-dynamic-icon"><use href="#i-bolt"/></svg>' : ""}
         <span class="cat-name" ${id && id !== "__running" ? 'translate="no"' : ""}>${esc(name)}</span>
         <span class="cat-count">${items.length}</span>
         ${!id || id === "__running" ? "" : `<div class="spacer"></div>
-        <button class="icon-btn cat-act" data-cat-new="${esc(id || "")}" title="Создать сборку в этой категории"><svg class="ic"><use href="#i-plus"/></svg></button>
-        <button class="icon-btn cat-act" data-cat-import="${esc(id || "")}" title="Загрузить сборку сюда"><svg class="ic"><use href="#i-download"/></svg></button>`}
+        ${dynamic ? "" : `<button class="icon-btn cat-act" data-cat-new="${esc(id || "")}" title="Создать сборку в этой категории"><svg class="ic"><use href="#i-plus"/></svg></button>`}
+        ${dynamic ? `<button class="icon-btn cat-act" data-cat-rules="${esc(id)}" title="Настроить условия"><svg class="ic"><use href="#i-sliders"/></svg></button>` : ""}
+        ${canDrop ? `<button class="icon-btn cat-act" data-cat-import="${esc(id || "")}" title="Загрузить сборку сюда"><svg class="ic"><use href="#i-download"/></svg></button>` : ""}`}
       </div>
       <div class="cat-items">${items.map((item) => instanceRowHtml(item, { dups: Boolean(running) })).join("")}</div>
     </div>`;
@@ -3629,13 +3701,16 @@
     }
     const used = new Set();
     categories.forEach((category) => {
-      const own = items.filter((item) => item.category === category.id);
+      const own = categoryItems(items, category);
+      // Динамическая категория может пересекаться с другой категорией, но
+      // сборка не должна одновременно попадать в «Без категории».
       own.forEach((item) => used.add(item.id));
       blocks.push(catGroupHtml({
         id: category.id,
         name: category.name,
         items: own,
-        open: !category.collapsed
+        open: !category.collapsed,
+        category
       }));
     });
     const loose = items.filter((item) => !used.has(item.id));
@@ -3683,8 +3758,15 @@
     // кнопки в заголовке категории: создать / загрузить сборку сразу в эту папку
     $$(".cat-act", list).forEach((btn) => btn.addEventListener("click", async (event) => {
       event.stopPropagation();
-      const catId = btn.dataset.catNew || btn.dataset.catImport || "";
+      const catId = btn.dataset.catNew || btn.dataset.catImport || btn.dataset.catRules || "";
+      if (btn.dataset.catRules !== undefined) {
+        const category = categoriesOf().find((item) => item.id === catId);
+        if (category) openCategoryEditor(category);
+        return;
+      }
       if (btn.dataset.catNew !== undefined) {
+        const category = categoriesOf().find((item) => item.id === catId);
+        if (category?.dynamic) { openCategoryEditor(category); return; }
         openCreate({ category: catId || null });
         return;
       }
@@ -3966,11 +4048,83 @@
       <button class="ctx-item" data-act="create"><svg class="ic"><use href="#i-plus"/></svg>Создать</button>
       <button class="ctx-item" data-act="import"><svg class="ic"><use href="#i-download"/></svg>Загрузить сборку</button>
       <div class="ctx-sep"></div>
-      <button class="ctx-item" data-act="category"><svg class="ic"><use href="#i-folder"/></svg>Создать категорию</button>`, (act) => {
+      <button class="ctx-item" data-act="category"><svg class="ic"><use href="#i-folder"/></svg>Создать категорию</button>
+      <button class="ctx-item" data-act="dynamic-category"><svg class="ic"><use href="#i-bolt"/></svg>Создать динамическую категорию</button>`, (act) => {
       if (act === "create") openCreate();
       if (act === "import") importFromExplorer();
       if (act === "category") createCategoryPrompt();
+      if (act === "dynamic-category") openCategoryEditor(null, true);
     });
+  }
+
+  let categoryEditorId = null;
+
+  function splitCategoryEditorValues(value) {
+    return String(value || "").split(/[\\n,;]+/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  function updateCategoryEditorPreview() {
+    const preview = $("#category-editor-preview");
+    if (!preview) return;
+    const rules = normalizeCategoryRules({
+      mc_versions: splitCategoryEditorValues($("#category-editor-versions")?.value),
+      loaders: splitCategoryEditorValues($("#category-editor-loaders")?.value),
+      kind: $("#category-editor-kind")?.value,
+      icon: $("#category-editor-icon")?.value,
+      sources: splitCategoryEditorValues($("#category-editor-sources")?.value),
+      name_contains: $("#category-editor-name-filter")?.value,
+      notes_contains: $("#category-editor-notes")?.value
+    });
+    const count = state.instances.filter((item) => categoryMatches(item, { dynamic: true, rules })).length;
+    preview.innerHTML = `<svg class="ic"><use href="#i-bolt"/></svg><span>Сейчас подходит сборок: <strong>${count}</strong>. Список обновится автоматически после запуска, импорта и изменения метаданных.</span>`;
+  }
+
+  function openCategoryEditor(category = null, forceNew = false) {
+    const modal = $("#modal-category-editor");
+    if (!modal) return;
+    const current = category && !forceNew ? normalizeCategory(category) : null;
+    categoryEditorId = current?.id || null;
+    const rules = normalizeCategoryRules(current?.rules);
+    $("#category-editor-title").textContent = current ? "Условия категории" : "Новая динамическая категория";
+    $("#category-editor-name").value = current?.name || "";
+    $("#category-editor-versions").value = rules.mc_versions.join(", ");
+    $("#category-editor-loaders").value = rules.loaders.join(", ");
+    $("#category-editor-kind").value = rules.kind;
+    $("#category-editor-icon").value = rules.icon;
+    $("#category-editor-sources").value = rules.sources.join(", ");
+    $("#category-editor-name-filter").value = rules.name_contains;
+    $("#category-editor-notes").value = rules.notes_contains;
+    modal.hidden = false;
+    updateCategoryEditorPreview();
+    $("#category-editor-name")?.focus();
+  }
+
+  async function saveCategoryEditor() {
+    const name = $("#category-editor-name")?.value.trim();
+    if (!name) { toast("Укажи название категории", "err"); return; }
+    const category = {
+      id: categoryEditorId || `cat-dyn-${Date.now().toString(36)}`,
+      name,
+      collapsed: categoryEditorId ? Boolean(categoriesOf().find((item) => item.id === categoryEditorId)?.collapsed) : false,
+      dynamic: true,
+      rules: normalizeCategoryRules({
+        mc_versions: splitCategoryEditorValues($("#category-editor-versions")?.value),
+        loaders: splitCategoryEditorValues($("#category-editor-loaders")?.value),
+        kind: $("#category-editor-kind")?.value,
+        icon: $("#category-editor-icon")?.value,
+        sources: splitCategoryEditorValues($("#category-editor-sources")?.value),
+        name_contains: $("#category-editor-name-filter")?.value,
+        notes_contains: $("#category-editor-notes")?.value
+      })
+    };
+    const categories = categoriesOf();
+    const index = categories.findIndex((item) => item.id === category.id);
+    if (index >= 0) categories[index] = category;
+    else categories.push(category);
+    await saveCategories(categories);
+    $("#modal-category-editor").hidden = true;
+    renderSidebar();
+    toast(index >= 0 ? "Условия категории обновлены" : `Категория «${name}» создана`, "ok");
   }
 
   /** ПКМ по названию категории. */
@@ -3980,6 +4134,7 @@
     fillCtxMenu(x, y, `
       <div class="ctx-caption" translate="no">${esc(category.name)}</div>
       <button class="ctx-item" data-act="rename"><svg class="ic"><use href="#i-pencil"/></svg>Переименовать</button>
+      ${category.dynamic ? '<button class="ctx-item" data-act="rules"><svg class="ic"><use href="#i-sliders"/></svg>Настроить условия</button>' : ""}
       <button class="ctx-item" data-act="collapse"><svg class="ic"><use href="#i-chev"/></svg>${category.collapsed ? "Раскрыть" : "Свернуть"}</button>
       <div class="ctx-sep"></div>
       <button class="ctx-item danger" data-act="delete"><svg class="ic"><use href="#i-trash"/></svg>Удалить категорию</button>`, async (act) => {
@@ -3989,6 +4144,7 @@
         await saveCategories(categoriesOf().map((item) => item.id === id ? { ...item, name } : item));
         renderSidebar();
       }
+      if (act === "rules") openCategoryEditor(category);
       if (act === "collapse") await toggleCategory(id);
       if (act === "delete") {
         const okCategory = await askConfirm({
@@ -3997,12 +4153,14 @@
           ok: "Удалить"
         });
         if (!okCategory) return;
-        const own = state.instances.filter((item) => item.category === id);
-        for (const item of own) {
-          try {
-            await api.updateInstance({ ...item, category: null });
-            item.category = null;
-          } catch (error) { /* пропускаем */ }
+        if (!category.dynamic) {
+          const own = state.instances.filter((item) => item.category === id);
+          for (const item of own) {
+            try {
+              await api.updateInstance({ ...item, category: null });
+              item.category = null;
+            } catch (error) { /* пропускаем */ }
+          }
         }
         await saveCategories(categoriesOf().filter((item) => item.id !== id));
         renderSidebar();
@@ -4015,7 +4173,7 @@
     const name = await promptModal({ title: "Новая категория", label: "Название", value: "" });
     if (!name) return;
     const id = `cat-${Date.now().toString(36)}`;
-    await saveCategories([...categoriesOf(), { id, name, collapsed: false }]);
+    await saveCategories([...categoriesOf(), { id, name, collapsed: false, dynamic: false, rules: CATEGORY_RULES_DEFAULT }]);
     renderSidebar();
     toast(`Категория «${name}» создана`, "ok");
   }
@@ -4866,25 +5024,119 @@
     if (!meta) return;
     const mcVersion = meta.server?.mc_version || meta.mc_version || "";
     const body = $("#tab-body");
-    body.innerHTML = `<section class="server-view server-download-view"><div class="server-download-head"><div><div class="eyebrow"><svg class="ic"><use href="#i-modrinth"/></svg>MODRINTH</div><h1>Загрузить</h1><p class="muted">Плагины для ${esc(meta.name)} · Minecraft ${esc(mcVersion || "версия не указана")}. Скачивание проходит через проверку проекта, версии, размера и SHA-1.</p></div><button class="btn" id="server-download-back">Сервер</button></div><div class="server-download-search"><svg class="ic"><use href="#i-search"/></svg><input class="input grow" id="server-download-query" placeholder="Найти плагин на Modrinth" spellcheck="false"><button class="btn btn-primary" id="server-download-search"><svg class="ic"><use href="#i-search"/></svg>Найти плагины</button></div><div class="server-download-hint">Ищутся только проекты типа <strong>plugin</strong>, совместимые с версией этого сервера.</div><div id="server-download-results" class="server-addon-card-grid"><div class="empty-state">Введи название плагина и нажми «Найти плагины».</div></div></section>`;
+    body.innerHTML = `<section class="server-view server-download-view"><div class="server-download-head"><div><div class="eyebrow"><svg class="ic"><use href="#i-modrinth"/></svg>MODRINTH</div><h1>Загрузить</h1><p class="muted">Плагины для ${esc(meta.name)} · Minecraft ${esc(mcVersion || "версия не указана")}. Скачивание проходит через проверку проекта, версии, размера и SHA-1.</p></div><button class="btn" id="server-download-back">Сервер</button></div><div class="server-download-search"><svg class="ic"><use href="#i-search"/></svg><input class="input grow" id="server-download-query" placeholder="Найти плагин на Modrinth" spellcheck="false"><button class="btn btn-primary" id="server-download-search"><svg class="ic"><use href="#i-search"/></svg>Найти плагины</button></div><div class="server-download-hint">Ищутся только проекты типа <strong>plugin</strong>, совместимые с версией этого сервера.</div><div id="server-download-results" class="server-addon-card-grid" aria-live="polite"><div class="empty-state">Введи название плагина и нажми «Найти плагины».</div></div></section>`;
     const input = $("#server-download-query");
     const results = $("#server-download-results");
-    const search = async () => {
-      const query = input?.value.trim();
-      if (!query) { toast("Введи название плагина", "err"); input?.focus(); return; }
-      results.innerHTML = `<div class="loading-line">Ищем плагины на Modrinth…</div>`;
+    const pageSize = 24;
+    let query = "";
+    let hits = [];
+    let total = 0;
+    let loading = false;
+    let loadingMore = false;
+    let error = "";
+    let moreError = "";
+    let generation = 0;
+    let observer = null;
+
+    const cardHtml = (item) => `<article class="server-addon-card server-download-card" data-server-download-project="${esc(item.project_id)}"><div class="server-download-card-title"><strong>${esc(item.title)}</strong><span class="server-source-badge">Modrinth</span></div><span>${esc(item.description || "Описание не указано")}</span><small>${Number(item.downloads || 0).toLocaleString()} загрузок · ${esc(item.project_id)}</small><button class="btn btn-small" data-server-download-load>Показать версии</button><div class="server-download-versions" data-server-download-versions hidden></div></article>`;
+    const sentinelHtml = () => {
+      if (loadingMore) return `<div class="server-download-sentinel is-loading"><span class="mr-more-spinner"></span>Загружаем ещё плагины…</div>`;
+      if (moreError) return `<div class="server-download-sentinel is-error"><span>${esc(moreError)}</span><button class="btn btn-small" data-server-download-retry>Повторить</button></div>`;
+      if (hits.length >= total) return `<div class="server-download-sentinel">Показано всё: ${hits.length}</div>`;
+      return `<div class="server-download-sentinel">Прокрути вниз — ещё ${Math.max(0, total - hits.length)}</div>`;
+    };
+    const renderResults = () => {
+      if (loading && !hits.length) {
+        results.innerHTML = `<div class="loading-line">Ищем плагины на Modrinth…</div>`;
+        return;
+      }
+      if (error && !hits.length) {
+        results.innerHTML = `<div class="empty-state server-download-error"><span>${esc(error)}</span><button class="btn" data-server-download-retry>Повторить</button></div>`;
+        return;
+      }
+      if (!hits.length) {
+        results.innerHTML = `<div class="empty-state">Плагины не найдены.</div>`;
+        return;
+      }
+      results.innerHTML = `${hits.map(cardHtml).join("")}${sentinelHtml()}`;
+      watchMore();
+    };
+    const updateSentinel = () => {
+      const sentinel = $(".server-download-sentinel", results);
+      if (sentinel) sentinel.outerHTML = sentinelHtml();
+      if (hits.length >= total && observer) { observer.disconnect(); observer = null; }
+    };
+    const watchMore = () => {
+      if (observer) { observer.disconnect(); observer = null; }
+      const sentinel = $(".server-download-sentinel", results);
+      if (!sentinel || hits.length >= total || !query) return;
+      observer = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadMore();
+      }, { rootMargin: "320px" });
+      observer.observe(sentinel);
+    };
+    const loadMore = async () => {
+      if (loading || loadingMore || error || !query || hits.length >= total) return;
+      loadingMore = true;
+      moreError = "";
+      updateSentinel();
+      const currentGeneration = generation;
       try {
-        const response = await api.serverSearchAddons(query, "plugin", mcVersion, null);
-        const hits = (response?.hits || []).slice(0, 12);
-        results.innerHTML = hits.length ? hits.map((item) => `<article class="server-addon-card server-download-card" data-server-download-project="${esc(item.project_id)}"><div class="server-download-card-title"><strong>${esc(item.title)}</strong><span class="server-source-badge">Modrinth</span></div><span>${esc(item.description || "Описание не указано")}</span><small>${Number(item.downloads || 0).toLocaleString()} загрузок · ${esc(item.project_id)}</small><button class="btn btn-small" data-server-download-load>Показать версии</button><div class="server-download-versions" data-server-download-versions hidden></div></article>`).join("") : `<div class="empty-state">Плагины не найдены.</div>`;
-      } catch (error) {
-        results.innerHTML = `<div class="error-text">${esc(String(error))}</div>`;
+        const response = await api.serverSearchAddons(query, "plugin", mcVersion, null, hits.length, pageSize);
+        if (currentGeneration !== generation) return;
+        const known = new Set(hits.map((item) => item.project_id));
+        const fresh = (response?.hits || []).filter((item) => !known.has(item.project_id));
+        hits = hits.concat(fresh);
+        total = Number(response?.total_hits ?? total);
+        if (!fresh.length) total = hits.length;
+        if (fresh.length) {
+          const sentinel = $(".server-download-sentinel", results);
+          if (sentinel) sentinel.insertAdjacentHTML("beforebegin", fresh.map(cardHtml).join(""));
+          else results.insertAdjacentHTML("beforeend", fresh.map(cardHtml).join(""));
+        }
+      } catch (loadError) {
+        if (currentGeneration !== generation) return;
+        moreError = String(loadError);
+      } finally {
+        if (currentGeneration !== generation) return;
+        loadingMore = false;
+        updateSentinel();
+        watchMore();
+      }
+    };
+    const search = async () => {
+      const nextQuery = input?.value.trim() || "";
+      if (!nextQuery) { toast("Введи название плагина", "err"); input?.focus(); return; }
+      query = nextQuery;
+      generation += 1;
+      const currentGeneration = generation;
+      hits = [];
+      total = 0;
+      error = "";
+      moreError = "";
+      loading = true;
+      if (observer) { observer.disconnect(); observer = null; }
+      renderResults();
+      try {
+        const response = await api.serverSearchAddons(query, "plugin", mcVersion, null, 0, pageSize);
+        if (currentGeneration !== generation) return;
+        hits = response?.hits || [];
+        total = Number(response?.total_hits ?? hits.length);
+      } catch (searchError) {
+        if (currentGeneration !== generation) return;
+        error = String(searchError);
+      } finally {
+        if (currentGeneration !== generation) return;
+        loading = false;
+        renderResults();
       }
     };
     $("#server-download-search")?.addEventListener("click", search);
     input?.addEventListener("keydown", (event) => { if (event.key === "Enter") search(); });
-    $("#server-download-back")?.addEventListener("click", () => { state.tab = "server"; renderTab(); });
+    $("#server-download-back")?.addEventListener("click", () => { if (observer) observer.disconnect(); state.tab = "server"; renderTab(); });
     results.addEventListener("click", async (event) => {
+      const retry = event.target.closest("[data-server-download-retry]");
+      if (retry) { if (hits.length) { moreError = ""; loadingMore = false; watchMore(); loadMore(); } else search(); return; }
       const loadButton = event.target.closest("[data-server-download-load]");
       if (loadButton) {
         const card = loadButton.closest(".server-download-card");
@@ -4896,9 +5148,9 @@
           card._serverDownloadVersions = compatible;
           box.hidden = false;
           box.innerHTML = compatible.length ? `<select class="input" data-server-download-version>${compatible.map((version, index) => `<option value="${index}">${esc(version.name || version.version_number || version.id)} · ${esc(version.files?.find((file) => file.primary && file.filename?.toLowerCase().endsWith(".jar"))?.filename || version.files?.[0]?.filename || "JAR")}</option>`).join("")}</select><button class="btn btn-small btn-primary" data-server-download-install><svg class="ic"><use href="#i-download"/></svg>Установить</button>` : `<span class="muted">Нет проверенного JAR для Minecraft ${esc(mcVersion)}.</span>`;
-        } catch (error) {
+        } catch (versionError) {
           box.hidden = false;
-          box.innerHTML = `<span class="error-text">${esc(String(error))}</span>`;
+          box.innerHTML = `<span class="error-text">${esc(String(versionError))}</span>`;
         } finally {
           loadButton.disabled = false;
         }
@@ -4917,9 +5169,9 @@
         await api.serverInstallCatalogAddon(meta.id, { source: "modrinth", project_id: card.dataset.serverDownloadProject, version_id: version.id, project_type: "plugin", mc_version: mcVersion, loader: null, url: file.url, filename: file.filename, size: file.size, sha1: file.hashes.sha1 });
         installButton.textContent = "Установлено";
         toast(`${$("strong", card)?.textContent || "Плагин"} установлен`, "ok");
-      } catch (error) {
+      } catch (installError) {
         installButton.disabled = false;
-        toast(String(error), "err");
+        toast(String(installError), "err");
       }
     });
   }
@@ -10323,15 +10575,16 @@
 
   /* ==================== НАСТРОЙКИ ЛАУНЧЕРА (по категориям) ==================== */
   const PREFS = [
-    { id: "profile", label: "Профиль" },
-    { id: "avatar", label: "Аватар" },
-    { id: "look", label: "Оформление" },
-    { id: "wall", label: "Фон" },
-    { id: "fx", label: "Эффекты" },
-    { id: "sound", label: "Звуки" },
-    { id: "game", label: "Игра и Java" },
-    { id: "updates", label: "Обновления" },
-    { id: "discord", label: "Discord" }
+    { id: "profile", label: "Профиль", icon: "i-user" },
+    { id: "avatar", label: "Аватар", icon: "i-crown" },
+    { id: "interface", label: "Интерфейс", icon: "i-sliders" },
+    { id: "look", label: "Оформление", icon: "i-eyedrop" },
+    { id: "wall", label: "Фон", icon: "i-image" },
+    { id: "fx", label: "Эффекты", icon: "i-star" },
+    { id: "sound", label: "Звуки", icon: "i-bolt" },
+    { id: "game", label: "Игра и Java", icon: "i-cube" },
+    { id: "updates", label: "Обновления", icon: "i-refresh" },
+    { id: "discord", label: "Discord", icon: "i-heart" }
   ];
   let prefsCategory = "look";
   // Списки аватара переживают перерисовку и переход в другие категории.
@@ -10378,7 +10631,7 @@
     if (!nav || !body) return;
     if (!nav.querySelector("[data-pref]")) {
       nav.innerHTML = PREFS.map((item) => `
-        <button class="prefs-tab" data-pref="${item.id}">${item.label}</button>`).join("");
+        <button class="prefs-tab" data-pref="${item.id}"><span class="prefs-tab-icon"><svg class="ic"><use href="#${item.icon}"/></svg></span><span>${item.label}</span></button>`).join("");
       $$(".prefs-tab[data-pref]", nav).forEach((tab) => tab.addEventListener("click", () => {
         prefsCategory = tab.dataset.pref;
         renderPrefs();
@@ -10414,6 +10667,10 @@
     renderPrefsAccountCard();
     if (prefsCategory === "profile") body.innerHTML = prefsProfile();
     if (prefsCategory === "avatar") body.innerHTML = prefsAvatar();
+    if (prefsCategory === "interface") {
+      if (window.omnispecCustomizer?.renderInline) window.omnispecCustomizer.renderInline(body);
+      else body.innerHTML = `<div class="empty-state">Загружаю визуальный редактор…</div>`;
+    }
     if (prefsCategory === "look") body.innerHTML = prefsLook(settings);
     if (prefsCategory === "wall") body.innerHTML = prefsWall(settings);
     if (prefsCategory === "fx") body.innerHTML = prefsFx();
@@ -14228,6 +14485,14 @@
     const mcverModal = $("#modal-mcver");
     if (mcverModal) mcverModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-mcver") mcverModal.hidden = true; });
     on("[data-close-prompt]", "click", () => { const modal = $("#modal-prompt"); if (modal) modal.hidden = true; });
+    on("#category-editor-save", "click", saveCategoryEditor);
+    $$("[data-close-category-editor]").forEach((el) => el.addEventListener("click", () => { $("#modal-category-editor").hidden = true; }));
+    const categoryEditorModal = $("#modal-category-editor");
+    if (categoryEditorModal) {
+      categoryEditorModal.addEventListener("mousedown", (event) => { if (event.target === categoryEditorModal) categoryEditorModal.hidden = true; });
+      categoryEditorModal.addEventListener("input", updateCategoryEditorPreview);
+      categoryEditorModal.addEventListener("change", updateCategoryEditorPreview);
+    }
     const verModal = $("#modal-versions");
     if (verModal) verModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-versions") verModal.hidden = true; });
     const prefsModal = $("#modal-prefs");
@@ -14307,6 +14572,8 @@
         $("#modal-create").hidden = true;
         const prefs = $("#modal-prefs");
         if (prefs) prefs.hidden = true;
+        const categoryEditor = $("#modal-category-editor");
+        if (categoryEditor && !categoryEditor.hidden) { categoryEditor.hidden = true; return; }
         const acc = $("#modal-account");
         if (acc) acc.hidden = true;
         const ver = $("#modal-versions");
