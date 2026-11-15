@@ -278,6 +278,7 @@ pub async fn install_archive(
             source: Some("modrinth".into()),
             source_url,
             id: None,
+            category: None,
         },
     )?;
 

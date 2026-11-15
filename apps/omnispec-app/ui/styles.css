@@ -2134,3 +2134,181 @@ body.has-wall .home-import { background: var(--bg-1a); -webkit-backdrop-filter: 
 }
 .instance { align-items: flex-start; }
 .instance .instance-icon { margin-top: 1px; }
+
+/* ═══════════════════════════════ ЭТАП 11 ═══════════════════════════════ */
+
+/* каркас: шапка на всю ширину, ниже — сайдбар и рабочая область */
+.app { display: flex; flex-direction: column; grid-template-columns: none; }
+.app-body { flex: 1; min-height: 0; display: flex; }
+.app-body > .sidebar { width: 264px; flex: none; }
+.app-body > .main { flex: 1; min-width: 0; }
+
+/* шапка окна: логотип-кнопка + название по центру */
+.titlebar { padding-left: 8px; }
+.tb-brand {
+  display: flex; align-items: center; gap: 9px;
+  height: 30px; padding: 0 8px 0 4px; flex: none;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  color: var(--text);
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.tb-brand:hover { background: var(--bg-3); border-color: var(--line); }
+.tb-brand:active { background: var(--bg-4); }
+.tb-logo {
+  width: 22px; height: 22px; flex: none;
+  display: grid; place-items: center;
+  border-radius: 6px; overflow: hidden;
+  background: var(--bg-4); border: 1px solid var(--line-2);
+}
+.tb-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.tb-word { font-size: 12.5px; font-weight: 650; letter-spacing: -.1px; }
+.tb-center { font-size: 11px; color: var(--dim-2); }
+
+/* кнопки сайдбара на всю ширину */
+.sidebar .sidebar-new, .sidebar .sidebar-quick {
+  flex: none; width: 100%; height: var(--h); margin-bottom: 8px;
+  justify-content: flex-start; gap: 7px;
+  background: var(--bg-3); border-color: var(--line); color: var(--dim);
+}
+.sidebar .sidebar-new:hover, .sidebar .sidebar-quick:hover { background: var(--bg-4); border-color: var(--line-2); color: var(--text); }
+/* старое правило прятало все кнопки в подвале — возвращаем именно быстрые настройки */
+.sidebar-foot .sidebar-quick { display: inline-flex; margin: 0; flex: none; }
+
+.sidebar-foot { padding-top: 8px; margin-top: 8px; }
+
+/* ── категории сборок ── */
+.cat { display: flex; flex-direction: column; gap: 2px; }
+.cat-head {
+  display: flex; align-items: center; gap: 6px;
+  height: var(--h-sm); padding: 0 6px;
+  border-radius: var(--r-sm);
+  color: var(--dim-2);
+  font-size: 10.5px; letter-spacing: .8px; font-weight: 600;
+  cursor: pointer; user-select: none;
+  border: 1px dashed transparent;
+}
+.cat-head:hover { background: var(--bg-3); color: var(--text); }
+.cat-head.is-drop { border-color: var(--accent); background: var(--bg-4); color: var(--text); }
+.cat-head .cat-chev { width: 12px; height: 12px; flex: none; transition: transform var(--t-fast); transform: rotate(-90deg); }
+.cat.is-open > .cat-head .cat-chev { transform: rotate(0deg); }
+.cat-head .cat-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-head .cat-count {
+  font-size: 10px; color: var(--dim-2); font-variant-numeric: tabular-nums;
+}
+.cat-head.cat-run { color: var(--green); }
+.cat-head.cat-run .cat-count { color: var(--green); }
+.cat-items { display: flex; flex-direction: column; gap: 2px; padding-left: 4px; }
+.cat:not(.is-open) > .cat-items { display: none; }
+.cat-items .instance { min-height: 38px; }
+
+.instance.is-drag { opacity: .45; }
+.instance-list.is-empty { justify-content: center; }
+.list-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 26px 10px; text-align: center;
+  font-size: 12px; color: var(--dim-2);
+}
+.list-empty .muted { font-size: 10.5px; color: var(--dim-3, var(--dim-2)); opacity: .8; }
+
+/* ── окно настроек крупнее, «Сбросить всё» в левом низу ── */
+.prefs-box { width: min(1080px, 97vw); height: min(760px, 92vh); }
+.prefs-side { justify-content: flex-start; }
+.prefs-nav { flex: 1; min-height: 0; overflow-y: auto; }
+.prefs-side-foot { padding-top: 8px; border-top: 1px solid var(--line); }
+.prefs-side-foot .btn { width: 100%; height: var(--h); justify-content: center; color: var(--red); }
+.prefs-side-foot .btn:hover { border-color: var(--line-2); color: var(--red); background: var(--bg-4); }
+
+/* ── скин ── */
+.skin-grid { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.skin-stage {
+  position: relative;
+  display: grid; place-items: center;
+  min-height: 300px; padding: 10px;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r);
+}
+.skin-stage canvas { display: block; width: 100%; height: auto; image-rendering: auto; }
+.skin-stage-empty { font-size: 11px; color: var(--dim-2); text-align: center; padding: 20px; }
+.skin-ctrl { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.skin-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+.skin-preset {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 8px 6px; border-radius: var(--r);
+  background: var(--bg-2); border: 1px solid var(--line);
+  color: var(--dim); font-size: 10.5px; text-align: center;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+.skin-preset:hover { background: var(--bg-3); border-color: var(--line-2); color: var(--text); }
+.skin-preset.is-active { border-color: var(--accent); background: var(--bg-4); color: var(--text); }
+.skin-preset canvas { width: 44px; height: 44px; border-radius: var(--r-sm); image-rendering: pixelated; }
+.skin-row { display: flex; align-items: center; gap: 8px; }
+.skin-row .chips { flex: 1; }
+.skin-angle { display: flex; align-items: center; gap: 10px; }
+.skin-angle input[type="range"] { flex: 1; }
+.skin-angle .val { width: 42px; text-align: right; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.skin-note { font-size: 10.5px; line-height: 1.55; color: var(--dim-2); }
+.skin-note.warn { color: var(--yellow, #e3b341); }
+
+/* ── окно сведений о проекте Modrinth ── */
+.proj-box { width: min(880px, 96vw); height: min(660px, 90vh); }
+.proj-body { display: flex; flex-direction: column; gap: 12px; }
+.proj-top { display: flex; align-items: center; gap: 12px; }
+.proj-icon { width: 48px; height: 48px; flex: none; border-radius: var(--r); overflow: hidden; background: var(--bg-3); border: 1px solid var(--line-2); }
+.proj-icon img { width: 100%; height: 100%; object-fit: cover; }
+.proj-head { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.proj-title { font-size: 14px; font-weight: 650; }
+.proj-sub { font-size: 11px; color: var(--dim-2); }
+.proj-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.proj-tags .tag { font-size: 10px; }
+.proj-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.proj-shot {
+  position: relative; aspect-ratio: 16 / 9;
+  border-radius: var(--r); overflow: hidden;
+  background: var(--bg-3); border: 1px solid var(--line);
+}
+.proj-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.proj-desc { font-size: 12px; line-height: 1.65; color: var(--dim); white-space: pre-wrap; word-break: break-word; }
+.proj-desc strong { color: var(--text); }
+.proj-empty { font-size: 11.5px; color: var(--dim-2); }
+.modal-foot #proj-site, .modal-foot #proj-versions, .modal-foot #proj-install {
+  flex: 0 0 auto; min-width: 176px; justify-content: center;
+}
+
+/* ── запуск дубликата ── */
+.dup-list { display: flex; flex-direction: column; gap: 6px; }
+.dup-row {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 8px 10px;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r);
+  color: var(--dim); text-align: left;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+.dup-row:hover { background: var(--bg-3); border-color: var(--line-2); color: var(--text); }
+.dup-row.is-active { border-color: var(--accent); background: var(--bg-4); color: var(--text); }
+.dup-row .acc-main { flex: 1; min-width: 0; }
+.dup-row .acc-name { font-size: 12px; font-weight: 600; }
+.dup-row .acc-kind { font-size: 10px; color: var(--dim-2); }
+
+/* карточки Modrinth кликабельны целиком */
+.mr-card, .dv-card, .modrinth-results .card { cursor: pointer; }
+
+/* «Добавить сборку» — раскрывающийся список */
+.home-import .imp-head.imp-toggle {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; height: auto; padding: 0;
+  background: none; border: 0; text-align: left;
+  color: var(--text); cursor: pointer;
+}
+.home-import .imp-head.imp-toggle:hover .home-title { color: var(--accent); }
+.imp-chev { width: 13px; height: 13px; flex: none; color: var(--dim-2); transition: transform var(--t-fast); transform: rotate(-90deg); }
+.home-import.is-open .imp-chev { transform: rotate(0deg); }
+.home-import .imp-body { display: none; margin-top: 10px; }
+.home-import.is-open .imp-body { display: block; }
+
+/* окно настроек шире — контент использует всю ширину */
+.prefs-body .settings-grid { max-width: none; }
+
+/* компактный список сборок (кнопка «Вид» слева над списком) */
+.instance-list.is-compact .instance { min-height: 30px; padding: 3px 7px; }
+.instance-list.is-compact .instance-sub { display: none; }
+.instance-list.is-compact .instance-icon { width: 22px; height: 22px; }

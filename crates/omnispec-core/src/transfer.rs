@@ -363,6 +363,7 @@ pub fn import_external(
             source: Some("import".into()),
             source_url: None,
             id: None,
+            category: None,
         },
     )?;
 
@@ -457,6 +458,7 @@ pub fn import_zip(
             source: Some("import".into()),
             source_url: None,
             id: None,
+            category: None,
         },
     )?;
 

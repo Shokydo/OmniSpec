@@ -191,17 +191,34 @@ async fn launch_instance(
     app: AppHandle,
     state: State<'_, AppState>,
     instance_id: String,
+    account_uuid: Option<String>,
 ) -> Result<Value, String> {
-    {
+    // Ключ запуска — «id#номер»: так одна сборка может работать сразу в нескольких окнах.
+    let run_id = {
         let running = state.running.lock().await;
-        if running.contains_key(&instance_id) {
+        let mut taken: Vec<u32> = running
+            .keys()
+            .filter_map(|key| match key.split_once('#') {
+                Some((id, num)) if id == instance_id => num.parse().ok(),
+                _ => None,
+            })
+            .collect();
+        if !taken.is_empty() && account_uuid.is_none() {
             return Err("эта сборка уже запущена".into());
         }
-    }
+        taken.sort_unstable();
+        let mut next = 1u32;
+        for num in taken {
+            if num == next {
+                next += 1;
+            }
+        }
+        format!("{instance_id}#{next}")
+    };
 
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let settings = state.settings.lock().await.clone();
-    let account = current_account(&state, &settings).await?;
+    let account = account_for(&state, &settings, account_uuid.as_deref()).await?;
     let reporter = reporter_for(&app, &instance_id);
 
     let plan = game::launch::prepare(
@@ -225,7 +242,7 @@ async fn launch_instance(
         .running
         .lock()
         .await
-        .insert(instance_id.clone(), child.clone());
+        .insert(run_id.clone(), child.clone());
 
     emit_game_log(
         &app,
@@ -249,6 +266,7 @@ async fn launch_instance(
     {
         let app = app.clone();
         let id = instance_id.clone();
+        let session = run_id.clone();
         let child = child.clone();
         let running = state.running.clone();
         let paths = state.paths.clone();
@@ -265,10 +283,10 @@ async fn launch_instance(
                     let code = status.code().unwrap_or(-1);
                     // накопленное время игры в часах показываем в списке сборок
                     instances::add_playtime(&paths, &id, started.elapsed().as_secs());
-                    running.lock().await.remove(&id);
+                    running.lock().await.remove(&session);
                     let _ = app.emit(
                         "game-exit",
-                        json!({"instance": id, "code": code}),
+                        json!({"instance": id, "code": code, "run_id": session}),
                     );
                     break;
                 }
@@ -276,7 +294,13 @@ async fn launch_instance(
         });
     }
 
-    Ok(launch_summary(&plan))
+    let mut summary = launch_summary(&plan);
+    if let Some(map) = summary.as_object_mut() {
+        map.insert("run_id".into(), json!(run_id));
+        map.insert("account".into(), json!(account.username));
+        map.insert("account_uuid".into(), json!(account.uuid));
+    }
+    Ok(summary)
 }
 
 fn launch_summary(plan: &LaunchPlan) -> Value {
@@ -309,20 +333,35 @@ where
 
 #[tauri::command]
 async fn stop_instance(state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
-    let handle = state.running.lock().await.get(&instance_id).cloned();
-    match handle {
-        Some(child) => {
-            let mut guard = child.lock().await;
-            guard.start_kill().map_err(err)?;
-            Ok(())
-        }
-        None => Err("сборка не запущена".into()),
+    let handles: Vec<ChildHandle> = {
+        let running = state.running.lock().await;
+        running
+            .iter()
+            .filter(|(key, _)| key.split_once('#').map(|(id, _)| id) == Some(instance_id.as_str()))
+            .map(|(_, handle)| handle.clone())
+            .collect()
+    };
+    if handles.is_empty() {
+        return Err("сборка не запущена".into());
     }
+    for child in handles {
+        let mut guard = child.lock().await;
+        guard.start_kill().map_err(err)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
 async fn running_instances(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    Ok(state.running.lock().await.keys().cloned().collect())
+    let running = state.running.lock().await;
+    let mut result: Vec<String> = Vec::new();
+    for key in running.keys() {
+        let id = key.split_once('#').map(|(id, _)| id).unwrap_or(key.as_str()).to_string();
+        if !result.contains(&id) {
+            result.push(id);
+        }
+    }
+    Ok(result)
 }
 
 /* ==================== MODRINTH ==================== */
@@ -368,6 +407,14 @@ async fn modrinth_versions(
         .project_versions(&project_id, mc_version.as_deref(), loader.as_deref())
         .await
         .map_err(err)
+}
+
+#[tauri::command]
+async fn modrinth_project(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<omnispec_core::modrinth::Project, String> {
+    state.modrinth.project(&project_id).await.map_err(err)
 }
 
 #[tauri::command]
@@ -1016,6 +1063,189 @@ async fn current_account(state: &AppState, settings: &Settings) -> Result<Accoun
     Ok(account)
 }
 
+/// Аккаунт для запуска: конкретный (дубликат сборки) или выбранный в лаунчере.
+async fn account_for(
+    state: &AppState,
+    settings: &Settings,
+    uuid: Option<&str>,
+) -> Result<Account, String> {
+    let Some(uuid) = uuid else {
+        return current_account(state, settings).await;
+    };
+    let mut store = state.accounts.lock().await;
+    let account = store
+        .accounts
+        .iter()
+        .find(|account| account.uuid == uuid || account.username.eq_ignore_ascii_case(uuid))
+        .cloned()
+        .ok_or_else(|| "аккаунт не найден".to_string())?;
+    if account.needs_refresh() && !account.refresh_token.is_empty() {
+        let client_id = settings.ms_client_id.clone().unwrap_or_default();
+        match microsoft::refresh(&state.http, &client_id, &account.refresh_token).await {
+            Ok(session) => {
+                let fresh = Account::from_session(session);
+                store.upsert(fresh.clone());
+                let _ = store.save(&state.paths);
+                Ok(fresh)
+            }
+            Err(error) => Err(format!(
+                "не удалось обновить вход в Microsoft ({error}) — зайди в аккаунт заново"
+            )),
+        }
+    } else {
+        Ok(account)
+    }
+}
+
+/// Текущий скин лицензионного аккаунта: вариант (classic/slim) и PNG в data-URL.
+#[tauri::command]
+async fn account_skin(state: State<'_, AppState>) -> Result<Value, String> {
+    let settings = state.settings.lock().await.clone();
+    let account = current_account(&state, &settings).await?;
+    if account.kind != "microsoft" || account.access_token.is_empty() {
+        return Ok(json!({"licensed": false, "variant": "classic", "data_url": Value::Null}));
+    }
+    let profile: Value = state
+        .http
+        .inner()
+        .get("https://api.minecraftservices.com/minecraft/profile")
+        .header("Authorization", format!("Bearer {}", account.access_token))
+        .send()
+        .await
+        .map_err(|error| format!("не удалось получить профиль скина: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("не удалось прочитать профиль скина: {error}"))?;
+
+    let skins = profile
+        .get("skins")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let active = skins
+        .iter()
+        .find(|skin| skin.get("state").and_then(|value| value.as_str()) == Some("ACTIVE"))
+        .or_else(|| skins.first());
+    let variant = active
+        .and_then(|skin| skin.get("variant"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("CLASSIC")
+        .to_lowercase();
+    let url = active
+        .and_then(|skin| skin.get("url"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string());
+
+    let mut data_url = Value::Null;
+    if let Some(url) = url {
+        if let Ok(response) = state.http.inner().get(&url).send().await {
+            if let Ok(bytes) = response.bytes().await {
+                data_url = json!(format!(
+                    "data:image/png;base64,{}",
+                    base64_encode(&bytes)
+                ));
+            }
+        }
+    }
+    Ok(json!({"licensed": true, "variant": variant, "data_url": data_url}))
+}
+
+/// Смена скина пресетом: загружаем PNG в Mojang (только лицензия).
+#[tauri::command]
+async fn apply_skin(
+    state: State<'_, AppState>,
+    path: String,
+    variant: String,
+) -> Result<Value, String> {
+    let settings = state.settings.lock().await.clone();
+    let account = current_account(&state, &settings).await?;
+    if account.kind != "microsoft" || account.access_token.is_empty() {
+        return Err("скин можно менять только у лицензионного аккаунта".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|error| format!("не удалось открыть файл: {error}"))?;
+    let variant = match variant.to_lowercase().as_str() {
+        "slim" => "slim",
+        _ => "classic",
+    };
+    let boundary = "----OmniSpecSkinBoundary";
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"variant\"\r\n\r\n{variant}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"skin.png\"\r\nContent-Type: image/png\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(&bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let response = state
+        .http
+        .inner()
+        .post("https://api.minecraftservices.com/minecraft/profile/skins")
+        .header("Authorization", format!("Bearer {}", account.access_token))
+        .header(
+            "Content-Type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(body)
+        .send()
+        .await
+        .map_err(|error| format!("не удалось отправить скин: {error}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        let short: String = text.chars().take(220).collect();
+        return Err(format!("Mojang не принял скин ({status}): {short}"));
+    }
+    Ok(json!({"ok": true, "variant": variant, "account": account.username}))
+}
+
+/// Готовый скин из пресета: фронтенд рисует PNG, мы сохраняем его на диск.
+#[tauri::command]
+fn save_skin_png(state: State<'_, AppState>, data_url: String, name: String) -> Result<String, String> {
+    let payload = data_url
+        .split_once("base64,")
+        .map(|(_, tail)| tail.to_string())
+        .ok_or_else(|| "ожидался PNG в data-URL".to_string())?;
+    let bytes = base64_decode(&payload).ok_or_else(|| "не удалось прочитать картинку".to_string())?;
+    if bytes.len() < 64 {
+        return Err("картинка пустая".into());
+    }
+    let safe: String = name
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' })
+        .collect();
+    let dir = state.paths.meta().join("skins");
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let file_name = if safe.is_empty() { "skin".to_string() } else { safe };
+    let file = dir.join(format!("{file_name}.png"));
+    std::fs::write(&file, bytes).map_err(err)?;
+    Ok(file.to_string_lossy().to_string())
+}
+
+/// Картинка по пути в виде data-URL (для превью своего скина в webview).
+#[tauri::command]
+fn image_data_url(path: String) -> Result<String, String> {
+    let bytes = std::fs::read(&path).map_err(|error| format!("не удалось открыть файл: {error}"))?;
+    if bytes.len() > 16 * 1024 * 1024 {
+        return Err("файл слишком большой".into());
+    }
+    let mime = match PathBuf::from(&path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("png")
+        .to_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        _ => "image/png",
+    };
+    Ok(format!("data:{mime};base64,{}", base64_encode(&bytes)))
+}
+
 #[tauri::command]
 async fn accounts_info(state: State<'_, AppState>) -> Result<AccountsInfo, String> {
     let store = state.accounts.lock().await;
@@ -1255,6 +1485,34 @@ fn startup_file(state: State<'_, AppState>) -> Option<String> {
 }
 
 /// Простейший base64 — чтобы не тянуть отдельный крейт ради иконок.
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let mut table = [255u8; 256];
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (index, ch) in ALPHABET.iter().enumerate() {
+        table[*ch as usize] = index as u8;
+    }
+    let mut out = Vec::new();
+    let mut buffer = 0u32;
+    let mut bits = 0u32;
+    for byte in text.bytes() {
+        if byte == b'=' || byte.is_ascii_whitespace() {
+            continue;
+        }
+        let value = table[byte as usize];
+        if value == 255 {
+            return None;
+        }
+        buffer = (buffer << 6) | value as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+            buffer &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
 fn base64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
@@ -1491,6 +1749,11 @@ fn main() {
             running_instances,
             search_modrinth,
             modrinth_versions,
+            modrinth_project,
+            account_skin,
+            apply_skin,
+            save_skin_png,
+            image_data_url,
             install_mod,
             install_mod_version,
             install_modpack,

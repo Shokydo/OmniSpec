@@ -101,6 +101,9 @@ pub struct InstanceMeta {
     /// Ссылка на страницу модпака (если импортирована с Modrinth).
     #[serde(default)]
     pub source_url: Option<String>,
+    /// Категория (папка) в списке слева.
+    #[serde(default)]
+    pub category: Option<String>,
 }
 
 impl InstanceMeta {
@@ -145,6 +148,9 @@ pub struct CreateInstanceRequest {
     /// Готовое имя папки (при импорте модпака), иначе генерируется из названия.
     #[serde(default)]
     pub id: Option<String>,
+    /// Категория, в которую положить сборку.
+    #[serde(default)]
+    pub category: Option<String>,
 }
 
 /// Все сборки, отсортированные по времени последнего запуска.
@@ -231,6 +237,7 @@ pub fn create(paths: &Paths, request: CreateInstanceRequest) -> Result<InstanceM
         notes: request.notes,
         source: request.source.unwrap_or_else(|| "manual".into()),
         source_url: request.source_url,
+        category: request.category,
     };
 
     let dir = paths.instance_dir(&id);
@@ -339,8 +346,37 @@ mod tests {
             notes: String::new(),
             source: "manual".into(),
             source_url: None,
+            category: None,
         };
         assert_eq!(meta.version_id(), "fabric-loader-0.16.9-1.21.4");
+    }
+
+    /// Категория сборки переживает запись и чтение instance.json.
+    #[test]
+    fn instance_category_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!("omnispec-cat-test-{}", std::process::id()));
+        let paths = Paths::new(tmp).unwrap();
+        let mut meta = create(
+            &paths,
+            CreateInstanceRequest {
+                name: "С категорией".into(),
+                mc_version: "1.21.4".into(),
+                loader: Loader::Vanilla,
+                icon: None,
+                notes: String::new(),
+                source: None,
+                source_url: None,
+                id: None,
+                category: Some("cat-perf".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(meta.category.as_deref(), Some("cat-perf"));
+        meta.category = None;
+        save(&paths, &meta).unwrap();
+        assert!(load(&paths, &meta.id).unwrap().category.is_none());
+        delete(&paths, &meta.id).unwrap();
+        std::fs::remove_dir_all(&paths.root).ok();
     }
 
     #[test]
@@ -358,6 +394,7 @@ mod tests {
                 source: None,
                 source_url: None,
                 id: None,
+                category: None,
             },
         )
         .unwrap();

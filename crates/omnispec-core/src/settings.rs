@@ -126,6 +126,10 @@ pub struct Settings {
     #[serde(default = "default_sound_volume")]
     pub sound_volume: u8,
 
+    /// Категории (папки) сборок в списке слева.
+    #[serde(default)]
+    pub categories: Vec<Category>,
+
     /// Тема интерфейса (id пресета из OmniPanel: dark, navy, light, … + custom).
     #[serde(default = "default_theme")]
     pub theme: String,
@@ -141,6 +145,16 @@ pub struct Settings {
     /// Эффект от клика: wave | dot | ring | cross | off.
     #[serde(default = "default_click_fx")]
     pub click_fx: String,
+}
+
+/// Категория сборок: обычная «папка» в списке слева.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Category {
+    pub id: String,
+    pub name: String,
+    /// Свёрнута ли папка в списке.
+    #[serde(default)]
+    pub collapsed: bool,
 }
 
 impl Default for Settings {
@@ -175,6 +189,7 @@ impl Default for Settings {
             custom_wallpaper: None,
             sound_fx: true,
             sound_volume: default_sound_volume(),
+            categories: Vec::new(),
             theme: default_theme(),
             theme_bg: None,
             theme_accent: None,

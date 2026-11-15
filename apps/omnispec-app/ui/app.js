@@ -271,6 +271,21 @@
     if (el) el.hidden = true;
   }
 
+  /** Общее контекстное меню: html + обработчик по data-act. */
+  function fillCtxMenu(x, y, html, handler) {
+    const el = $("#ctx-menu");
+    if (!el) return;
+    el.innerHTML = html;
+    el.hidden = false;
+    const rect = el.getBoundingClientRect();
+    el.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+    el.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+    $$(".ctx-item", el).forEach((btn) => btn.addEventListener("click", () => {
+      closeCtxMenu();
+      handler(btn.dataset.act);
+    }));
+  }
+
   function openInstanceMenu(x, y, meta) {
     const el = $("#ctx-menu");
     if (!el) return;
@@ -278,6 +293,7 @@
     el.innerHTML = `
       <div class="ctx-caption">${esc(meta.name)} · MC ${esc(meta.mc_version)}</div>
       <button class="ctx-item" data-act="play"><svg class="ic"><use href="#${running ? "i-stop" : "i-play"}"/></svg>${running ? "Остановить" : "Играть"}</button>
+      <button class="ctx-item" data-act="dup"><svg class="ic"><use href="#i-copy"/></svg>Запустить дубликат…</button>
       <button class="ctx-item" data-act="settings"><svg class="ic"><use href="#i-sliders"/></svg>Настройки сборки</button>
       <div class="ctx-sep"></div>
       <button class="ctx-item" data-act="icon"><svg class="ic"><use href="#i-image"/></svg>Иконка из картинки…</button>
@@ -305,6 +321,10 @@
       renderSidebar();
       if (state.running.has(fresh.id)) await stopGame();
       else play();
+      return;
+    }
+    if (action === "dup") {
+      openDupLaunch(fresh);
       return;
     }
     if (action === "settings") {
@@ -358,6 +378,49 @@
         renderTab();
         toast("Сборка удалена", "ok");
       } catch (err) { toast(String(err), "err"); }
+    }
+  }
+
+  /** Дубликат запущенной сборки: второе окно игры с другим аккаунтом. */
+  function openDupLaunch(meta) {
+    const modal = $("#modal-dup");
+    if (!modal) return;
+    const accounts = (state.accounts && state.accounts.accounts) || [];
+    const activeId = (state.accounts && state.accounts.active) || null;
+    $("#dup-title").textContent = `Дубликат «${meta.name}»`;
+    const body = $("#dup-body");
+    if (!accounts.length) {
+      body.innerHTML = `<div class="proj-empty">Нет аккаунтов — добавь второй аккаунт, чтобы запустить дубликат.</div>`;
+    } else {
+      body.innerHTML = `<div class="dup-list">${accounts.map((account) => `
+        <button class="dup-row ${account.uuid === activeId ? "is-active" : ""}" data-uuid="${esc(account.uuid)}">
+          ${avatarHtml(account)}
+          <span class="acc-main">
+            <span class="acc-name">${esc(account.username)}</span>
+            <span class="acc-kind">${account.kind === "microsoft" ? "лицензия" : account.kind === "elyby" ? "Ely.by" : "пиратка"}${account.uuid === activeId ? " · выбран сейчас" : ""}</span>
+          </span>
+          <svg class="ic"><use href="#i-play"/></svg>
+        </button>`).join("")}</div>`;
+      $$(".dup-row", body).forEach((row) => row.addEventListener("click", async () => {
+        modal.hidden = true;
+        await launchDuplicate(meta, row.dataset.uuid);
+      }));
+    }
+    modal.hidden = false;
+    $$("[data-close-dup]").forEach((el) => { el.onclick = () => { modal.hidden = true; }; });
+  }
+
+  async function launchDuplicate(meta, accountUuid) {
+    try {
+      const plan = await api.launch(meta.id, accountUuid);
+      addSession(meta.id, plan && plan.run_id);
+      renderSidebar();
+      updateStatus();
+      const who = (plan && plan.account) ? ` · ${plan.account}` : "";
+      toast(`Дубликат запущен${who}`, "ok");
+      pushLog(meta.id, `[omnispec] дубликат запущен${who}`, "dim");
+    } catch (err) {
+      toast(`Не удалось запустить дубликат: ${err}`, "err");
     }
   }
 
@@ -488,19 +551,55 @@
 
   /* ==================== ДЕМО-ДАННЫЕ ==================== */
   const now = Math.floor(Date.now() / 1000);
+  /** Демо-сведения о проекте: скриншоты — плоские SVG-заглушки. */
+  function demoProject(projectId) {
+    const shot = (caption, color) => ({
+      url: `data:image/svg+xml;utf8,${encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180"><rect width="320" height="180" fill="${color}"/><rect x="0" y="120" width="320" height="60" fill="#000000" opacity="0.35"/><text x="18" y="150" font-family="monospace" font-size="15" fill="#ffffff">${caption}</text></svg>`
+      )}`,
+      featured: true,
+      title: caption
+    });
+    const titles = {
+      pack: ["Готовые сборки", "All the Mods 10", "Fabulously Optimized"],
+      mod: ["Моды", "Sodium", "Iris Shaders"],
+      shader: ["Шейдеры", "BSL Shaders", "Complementary"],
+      resourcepack: ["Ресурспаки", "Stay True", "Fresh Animations"]
+    };
+    const colors = ["#1f3b57", "#2f5d3a", "#5b3a5c"];
+    return {
+      id: projectId,
+      slug: String(projectId).replace(/^demo-\d+-/, ""),
+      title: "Проект с Modrinth",
+      description: "Сборка для демонстрации окна сведений",
+      body: "## Что внутри\n\n- оптимизация рендера и загрузки чанков\n- набор шейдеров и ресурспаков\n- готовые настройки графики\n\n![скриншот](demo.png)\n\nПодходит для слабых и средних ПК: FPS растёт, картинка не страдает.",
+      project_type: "modpack",
+      categories: ["optimization", "adventure", "fabric"],
+      downloads: 1245321,
+      icon_url: null,
+      gallery: [
+        shot(titles.pack[1], colors[0]),
+        shot(titles.pack[2], colors[1]),
+        shot(titles.pack[0], colors[2])
+      ],
+      license: { id: "mit", name: "MIT License" },
+      source_url: null
+    };
+  }
+
   const DEMO = {
     instances: [
-      { id: "fabulously-optimized", name: "Fabulously Optimized", mc_version: "1.21.4", loader: { type: "fabric", version: "0.16.9" }, icon: null, created: now - 86400 * 9, last_played: now - 3600, playtime_secs: 7200, memory_mb: null, java_path: null, jvm_args: null, notes: "", source: "modrinth", source_url: null, version_override: null },
-      { id: "atm10", name: "All the Mods 10", mc_version: "1.21.1", loader: { type: "neoforge", version: "21.1.72" }, icon: null, created: now - 86400 * 20, last_played: now - 86400 * 2, playtime_secs: 32000, memory_mb: 8192, java_path: null, jvm_args: null, notes: "", source: "modrinth", source_url: null, version_override: null },
+      { id: "fabulously-optimized", name: "Fabulously Optimized", category: "cat-perf", mc_version: "1.21.4", loader: { type: "fabric", version: "0.16.9" }, icon: null, created: now - 86400 * 9, last_played: now - 3600, playtime_secs: 7200, memory_mb: null, java_path: null, jvm_args: null, notes: "", source: "modrinth", source_url: null, version_override: null },
+      { id: "atm10", name: "All the Mods 10", category: "cat-mods", mc_version: "1.21.1", loader: { type: "neoforge", version: "21.1.72" }, icon: null, created: now - 86400 * 20, last_played: now - 86400 * 2, playtime_secs: 32000, memory_mb: 8192, java_path: null, jvm_args: null, notes: "", source: "modrinth", source_url: null, version_override: null },
       { id: "vanya-vanilla", name: "Ванилла 1.20.1", mc_version: "1.20.1", loader: { type: "vanilla" }, icon: null, created: now - 86400 * 3, last_played: null, playtime_secs: 0, memory_mb: null, java_path: null, jvm_args: null, notes: "", source: "manual", source_url: null, version_override: null },
-      { id: "cobblemon", name: "Cobblemon", mc_version: "1.21.1", loader: { type: "fabric", version: "0.16.5" }, icon: null, created: now - 86400 * 40, last_played: now - 86400 * 5, playtime_secs: 5400, memory_mb: null, java_path: null, jvm_args: null, notes: "", source: "modrinth", source_url: null, version_override: null }
+      { id: "cobblemon", name: "Cobblemon", category: "cat-mods", mc_version: "1.21.1", loader: { type: "fabric", version: "0.16.5" }, icon: null, created: now - 86400 * 40, last_played: now - 86400 * 5, playtime_secs: 5400, memory_mb: null, java_path: null, jvm_args: null, notes: "", source: "modrinth", source_url: null, version_override: null }
     ],
     accounts: [
       { username: "Steve", uuid: "069a79f4-44e9-4726-a5be-fca90e38aaf5", kind: "microsoft", access_token: "demo", expires_at: 0 },
       { username: "Vanya_2012", uuid: "5627dd98-1f5e-3f4e-9c1a-2b3c4d5e6f70", kind: "offline", access_token: "" }
     ],
     active: "069a79f4-44e9-4726-a5be-fca90e38aaf5",
-    settings: { username: "Player", java_path: null, memory_mb: 4096, jvm_args: "-XX:+UseG1GC", game_args: "", auto_java: true, show_snapshots: false, verify_hashes: false, language: "ru", keep_console_open: false, enable_modrinth: true, hide_on_launch: false, last_instance: null, update_repo: "Shokydo/OmniSpec", update_enabled: true, update_token: null, update_prerelease: false, theme: "dark", click_fx: "wave" },
+    settings: { categories: [{ id: "cat-mods", name: "Моды", collapsed: false }, { id: "cat-perf", name: "Производительность", collapsed: false }], username: "Player", java_path: null, memory_mb: 4096, jvm_args: "-XX:+UseG1GC", game_args: "", auto_java: true, show_snapshots: false, verify_hashes: false, language: "ru", keep_console_open: false, enable_modrinth: true, hide_on_launch: false, last_instance: null, update_repo: "Shokydo/OmniSpec", update_enabled: true, update_token: null, update_prerelease: false, theme: "dark", click_fx: "wave" },
     versions: ["1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21", "1.20.6", "1.20.4", "1.20.1", "1.19.4", "1.18.2", "1.16.5", "1.12.2", "1.8.9"].map((id) => ({ id, type: "release", url: "", release_time: null })),
     demoLogs: [
       "[12:01:14] [main/INFO]: OmniSpec 0.1.0 — лаунчер готов к работе",
@@ -526,7 +625,7 @@
     versions: (snapshots) => invoke("minecraft_versions", { snapshots }),
     loaderVersions: (kind, mc) => invoke("loader_versions", { kind, mcVersion: mc }),
     installInstance: (id) => invoke("install_instance", { instanceId: id }),
-    launch: (id) => invoke("launch_instance", { instanceId: id }),
+    launch: (id, accountUuid = null) => invoke("launch_instance", { instanceId: id, accountUuid }),
     stop: (id) => invoke("stop_instance", { instanceId: id }),
     running: () => invoke("running_instances"),
     search: (q) => invoke("search_modrinth", q),
@@ -569,6 +668,11 @@
     startupFile: () => invoke("startup_file"),
     setCustomWallpaper: (path) => invoke("set_custom_wallpaper", { path }),
     customWallpaper: () => invoke("custom_wallpaper"),
+    modrinthProject: (projectId) => invoke("modrinth_project", { projectId }),
+    accountSkin: () => invoke("account_skin"),
+    applySkin: (path, variant) => invoke("apply_skin", { path, variant }),
+    saveSkinPng: (dataUrl, name) => invoke("save_skin_png", { dataUrl, name }),
+    imageDataUrl: (path) => invoke("image_data_url", { path }),
     instancePath: (instanceId) => invoke("instance_path", { instanceId }),
     openUrl: (url) => invoke("open_url", { url })
   };
@@ -620,6 +724,14 @@
     },
     deleteInstance: async (id) => { DEMO.instances = DEMO.instances.filter((i) => i.id !== id); return null; },
     updateInstance: async (meta) => { const i = DEMO.instances.findIndex((x) => x.id === meta.id); if (i >= 0) DEMO.instances[i] = meta; return null; },
+    modrinthProject: async (projectId) => demoProject(projectId),
+    accountSkin: async () => {
+      const active = DEMO.accounts.find((a) => a.uuid === DEMO.active);
+      return { licensed: Boolean(active && active.kind === "microsoft"), variant: "classic", data_url: null };
+    },
+    applySkin: async () => ({ ok: true }),
+    saveSkinPng: async () => "demo/skins/preset.png",
+    imageDataUrl: async () => null,
     versions: async () => DEMO.versions,
     loaderVersions: async (kind) => (kind === "vanilla" ? [] : [{ version: "0.16.9", stable: true }, { version: "0.16.5", stable: true }, { version: "0.15.11", stable: false }]),
     installInstance: async () => null,
@@ -777,6 +889,8 @@
     accounts: { accounts: [], active: null },
     tab: "console",
     running: new Set(),
+    sessions: new Map(),
+    compact: false,
     logs: {},
     files: { path: "", entries: [], selected: null },
     mods: [],
@@ -805,7 +919,7 @@
     home: {
       extOpen: false, external: null, extLoading: false, extSelected: new Set(),
       zipPath: "", versions: [], zipMc: "", zipLoader: "vanilla",
-      zipLoaderVersion: "", zipLoaderVersions: [], url: "", busy: false, status: ""
+      zipLoaderVersion: "", zipLoaderVersions: [], url: "", busy: false, status: "", open: false
     },
     create: { mode: "manual", name: "", mc: "", loader: "fabric", loaderVersion: "", versions: [], loaderVersionsList: [], packQuery: "", packs: [], selectedPack: null }
   };
@@ -881,30 +995,128 @@
   }
 
   /* ==================== САЙДБАР ==================== */
+  /** Сессии запуска: у сборки может работать несколько окон (дубликаты). */
+  function addSession(instanceId, runId) {
+    if (!state.sessions) state.sessions = new Map();
+    if (!state.sessions.has(instanceId)) state.sessions.set(instanceId, new Set());
+    state.sessions.get(instanceId).add(runId || `local-${Date.now()}`);
+    state.running.add(instanceId);
+  }
+
+  function dropSession(instanceId, runId) {
+    if (!state.sessions) state.sessions = new Map();
+    const set = state.sessions.get(instanceId);
+    if (set) {
+      if (runId) set.delete(runId);
+      else set.clear();
+      if (!set.size) state.sessions.delete(instanceId);
+    }
+    if (!state.sessions.has(instanceId)) state.running.delete(instanceId);
+  }
+
+  /** Категории сборок: из настроек + динамическая «Запущенные». */
+  function categoriesOf() {
+    const list = (state.settings && Array.isArray(state.settings.categories)) ? state.settings.categories : [];
+    return list.filter((item) => item && item.id);
+  }
+
+  async function saveCategories(next) {
+    state.settings = { ...(state.settings || {}), categories: next };
+    try { await api.saveSettings(state.settings); } catch (error) { /* не критично */ }
+  }
+
+  function instanceRowHtml(item) {
+    const running = state.running.has(item.id);
+    return `<div class="instance ${item.id === state.selectedId ? "is-active" : ""}" data-id="${esc(item.id)}" draggable="true">
+      <div class="instance-icon">${instanceIconHtml(item)}</div>
+      <div class="instance-body">
+        <div class="instance-name">${esc(item.name)}</div>
+        <div class="instance-sub">MC ${esc(item.mc_version)} · ${esc(loaderLabel(item.loader))}</div>
+      </div>
+      <span class="instance-time" title="Время игры">${esc(playtimeLabel(item.playtime_secs))}</span>
+      ${running ? '<div class="instance-running" title="Запущена"></div>' : ""}
+    </div>`;
+  }
+
+  function catGroupHtml({ id, name, items, open, running }) {
+    return `<div class="cat ${open ? "is-open" : ""}" data-cat="${esc(id || "")}">
+      <div class="cat-head ${running ? "cat-run" : ""}" data-cat-head="${esc(id || "")}">
+        <svg class="ic cat-chev"><use href="#i-chev"/></svg>
+        <span class="cat-name">${esc(name)}</span>
+        <span class="cat-count">${items.length}</span>
+      </div>
+      <div class="cat-items">${items.map(instanceRowHtml).join("")}</div>
+    </div>`;
+  }
+
   function renderSidebar() {
     const list = $("#instance-list");
     const filter = ($("#instance-search").value || "").toLowerCase();
     const items = state.instances.filter((item) => item.name.toLowerCase().includes(filter));
-    $("#instances-count").textContent = String(state.instances.length);
-    $("#active-count").textContent = `${state.running.size}/${state.instances.length}`;
+    const count = $("#instances-count");
+    if (count) count.textContent = String(state.instances.length);
+    const activeCount = $("#active-count");
+    if (activeCount) activeCount.textContent = `${state.running.size}/${state.instances.length}`;
 
     if (!items.length) {
-      list.innerHTML = `<div class="empty-state" style="font-size:12px;padding:24px 8px">Сборок нет.<br>Создай первую →</div>`;
+      list.classList.add("is-empty");
+      list.innerHTML = `<div class="list-empty">
+        <div>${state.instances.length ? "Ничего не найдено" : "Сборок пока нет"}</div>
+        <div class="muted">ПКМ по списку → создать или загрузить</div>
+      </div>`;
+      bindSidebarEvents();
       return;
     }
+    list.classList.remove("is-empty");
 
-    list.innerHTML = items.map((item) => {
-      const running = state.running.has(item.id);
-      return `<div class="instance ${item.id === state.selectedId ? "is-active" : ""}" data-id="${esc(item.id)}">
-        <div class="instance-icon">${instanceIconHtml(item)}</div>
-        <div class="instance-body">
-          <div class="instance-name">${esc(item.name)}</div>
-          <div class="instance-sub">MC ${esc(item.mc_version)} · ${esc(loaderLabel(item.loader))}</div>
-        </div>
-        <span class="instance-time" title="Время игры">${esc(playtimeLabel(item.playtime_secs))}</span>
-        ${running ? '<div class="instance-running" title="Запущена"></div>' : ""}
-      </div>`;
-    }).join("");
+    const categories = categoriesOf();
+    const runningItems = items.filter((item) => state.running.has(item.id));
+    const blocks = [];
+    // динамическая категория сверху — только пока что-то запущено
+    if (runningItems.length) {
+      blocks.push(catGroupHtml({
+        id: "__running",
+        name: "ЗАПУЩЕННЫЕ",
+        items: runningItems,
+        open: true,
+        running: true
+      }));
+    }
+    const used = new Set();
+    categories.forEach((category) => {
+      const own = items.filter((item) => item.category === category.id);
+      own.forEach((item) => used.add(item.id));
+      blocks.push(catGroupHtml({
+        id: category.id,
+        name: category.name,
+        items: own,
+        open: !category.collapsed
+      }));
+    });
+    const loose = items.filter((item) => !used.has(item.id));
+    if (loose.length) {
+      blocks.push(catGroupHtml({
+        id: "",
+        name: categories.length ? "БЕЗ КАТЕГОРИИ" : "ВСЕ СБОРКИ",
+        items: loose,
+        open: true
+      }));
+    }
+    list.innerHTML = blocks.join("");
+    bindSidebarEvents();
+  }
+
+  function bindSidebarEvents() {
+    const list = $("#instance-list");
+    // пустое место списка: создать / загрузить сборку / создать категорию
+    list.oncontextmenu = (event) => {
+      const row = event.target.closest(".instance");
+      if (row) return; // по строке работает своё меню
+      event.preventDefault();
+      const head = event.target.closest(".cat-head");
+      if (head && head.dataset.catHead) openCategoryMenu(event.clientX, event.clientY, head.dataset.catHead);
+      else openListMenu(event.clientX, event.clientY);
+    };
 
     $$(".instance", list).forEach((el) => {
       el.addEventListener("click", () => selectInstance(el.dataset.id));
@@ -913,7 +1125,121 @@
         const meta = state.instances.find((item) => item.id === el.dataset.id);
         if (meta) openInstanceMenu(event.clientX, event.clientY, meta);
       });
+      el.addEventListener("dragstart", (event) => {
+        event.dataTransfer.setData("text/omnispec-instance", el.dataset.id);
+        event.dataTransfer.effectAllowed = "move";
+        el.classList.add("is-drag");
+        list.classList.add("is-dragging");
+      });
+      el.addEventListener("dragend", () => {
+        el.classList.remove("is-drag");
+        list.classList.remove("is-dragging");
+        $$(".cat-head", list).forEach((head) => head.classList.remove("is-drop"));
+      });
     });
+
+    // папки-категории как цели перетаскивания
+    $$(".cat", list).forEach((group) => {
+      const id = group.dataset.cat;
+      const head = group.querySelector(".cat-head");
+      if (!head || id === "__running") return;
+      if (id) head.addEventListener("click", () => toggleCategory(id));
+      head.addEventListener("dragover", (event) => {
+        if (!event.dataTransfer.types.includes("text/omnispec-instance")) return;
+        event.preventDefault();
+        head.classList.add("is-drop");
+      });
+      head.addEventListener("dragleave", () => head.classList.remove("is-drop"));
+      head.addEventListener("drop", (event) => {
+        event.preventDefault();
+        head.classList.remove("is-drop");
+        const instanceId = event.dataTransfer.getData("text/omnispec-instance");
+        if (instanceId) moveInstanceToCategory(instanceId, id || null);
+      });
+    });
+  }
+
+  async function toggleCategory(id) {
+    const categories = categoriesOf().map((category) =>
+      category.id === id ? { ...category, collapsed: !category.collapsed } : category);
+    renderSidebar();
+    await saveCategories(categories);
+  }
+
+  async function moveInstanceToCategory(instanceId, categoryId) {
+    const meta = state.instances.find((item) => item.id === instanceId);
+    if (!meta) return;
+    if ((meta.category || null) === (categoryId || null)) return;
+    try {
+      await api.updateInstance({ ...meta, category: categoryId || null });
+      meta.category = categoryId || null;
+      renderSidebar();
+      const name = categoryId ? (categoriesOf().find((c) => c.id === categoryId) || {}).name : "";
+      toast(categoryId ? `Перенесено в «${name}»` : "Убрано из категории", "ok");
+    } catch (err) { toast(String(err), "err"); }
+  }
+
+  /** ПКМ по пустому месту списка сборок. */
+  function openListMenu(x, y) {
+    fillCtxMenu(x, y, `
+      <div class="ctx-caption">Сборки</div>
+      <button class="ctx-item" data-act="create"><svg class="ic"><use href="#i-plus"/></svg>Создать сборку</button>
+      <button class="ctx-item" data-act="import"><svg class="ic"><use href="#i-download"/></svg>Загрузить сборку</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item" data-act="category"><svg class="ic"><use href="#i-folder"/></svg>Создать категорию</button>`, (act) => {
+      if (act === "create") openCreate();
+      if (act === "import") importFromExplorer();
+      if (act === "category") createCategoryPrompt();
+    });
+  }
+
+  /** ПКМ по названию категории. */
+  function openCategoryMenu(x, y, id) {
+    const category = categoriesOf().find((item) => item.id === id);
+    if (!category) return openListMenu(x, y);
+    fillCtxMenu(x, y, `
+      <div class="ctx-caption">${esc(category.name)}</div>
+      <button class="ctx-item" data-act="rename"><svg class="ic"><use href="#i-pencil"/></svg>Переименовать</button>
+      <button class="ctx-item" data-act="collapse"><svg class="ic"><use href="#i-chev"/></svg>${category.collapsed ? "Раскрыть" : "Свернуть"}</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item danger" data-act="delete"><svg class="ic"><use href="#i-trash"/></svg>Удалить категорию</button>`, async (act) => {
+      if (act === "rename") {
+        const name = await promptModal({ title: "Категория", label: "Название", value: category.name });
+        if (!name) return;
+        await saveCategories(categoriesOf().map((item) => item.id === id ? { ...item, name } : item));
+        renderSidebar();
+      }
+      if (act === "collapse") await toggleCategory(id);
+      if (act === "delete") {
+        if (!confirm(`Удалить категорию «${category.name}»? Сборки останутся в списке.`)) return;
+        const own = state.instances.filter((item) => item.category === id);
+        for (const item of own) {
+          try {
+            await api.updateInstance({ ...item, category: null });
+            item.category = null;
+          } catch (error) { /* пропускаем */ }
+        }
+        await saveCategories(categoriesOf().filter((item) => item.id !== id));
+        renderSidebar();
+        toast("Категория удалена", "ok");
+      }
+    });
+  }
+
+  async function createCategoryPrompt() {
+    const name = await promptModal({ title: "Новая категория", label: "Название", value: "" });
+    if (!name) return;
+    const id = `cat-${Date.now().toString(36)}`;
+    await saveCategories([...categoriesOf(), { id, name, collapsed: false }]);
+    renderSidebar();
+    toast(`Категория «${name}» создана`, "ok");
+  }
+
+  /** Загрузка готовой сборки из проводника (.mrpack / .zip). */
+  async function importFromExplorer() {
+    const path = await api.pickFile("Загрузить сборку", ["mrpack", "zip"]).catch(() => null);
+    if (!path) return;
+    await installMrpackPath(path);
   }
 
   function selectInstance(id) {
@@ -1647,12 +1973,14 @@
       </div>`);
     }
 
-    return `<section class="home-import ${cfg.busy ? "is-busy" : ""}">
-      <div class="imp-head">
+    const open = Boolean(cfg.open) || Boolean(cfg.zipPath) || Boolean(cfg.extOpen);
+    return `<section class="home-import ${cfg.busy ? "is-busy" : ""} ${open ? "is-open" : ""}">
+      <button class="imp-head imp-toggle" id="imp-toggle" aria-expanded="${open ? "true" : "false"}">
+        <svg class="ic imp-chev"><use href="#i-chev"/></svg>
         <span class="home-title">Добавить сборку</span>
         <span class="home-sub">${esc(cfg.status || "файл модпака, другой лаунчер или ссылка")}</span>
-      </div>
-      ${parts.join("")}
+      </button>
+      <div class="imp-body">${parts.join("")}</div>
     </section>`;
   }
 
@@ -1714,6 +2042,11 @@
   /* ---------- импорт на главной ---------- */
   function bindHomeImport() {
     const cfg = state.home;
+    const toggle = $("#imp-toggle");
+    if (toggle) toggle.addEventListener("click", () => {
+      cfg.open = !cfg.open;
+      renderDiscover();
+    });
     const file = $("#imp-file");
     if (file) file.addEventListener("click", async () => {
       const picked = await api.pickFile("Модпак .mrpack или .zip", ["mrpack", "zip"]).catch(() => null);
@@ -2111,6 +2444,15 @@
   }
 
   function bindResultEvents() {
+    // клик по всей ячейке проекта открывает окно сведений (кнопки внутри — свои действия)
+    $$(".card[data-project]").forEach((card) => {
+      if (card.dataset.cardBound) return;
+      card.dataset.cardBound = "1";
+      card.addEventListener("click", (event) => {
+        if (event.target.closest("button")) return;
+        openProjectModal(card.dataset.project, card.dataset.kind, card.dataset.slug, card.dataset.title);
+      });
+    });
     $$("[data-install]").forEach((btn) => {
       if (btn.dataset.bound) return;
       btn.dataset.bound = "1";
@@ -2135,7 +2477,7 @@
   function cardHtml(hit, kind) {
     const isPack = kind === "pack" || (!kind && state.modrinth.type === "modpack");
     const openType = isPack ? "modpack" : (state.modrinth.type || "mod");
-    return `<div class="card">
+    return `<div class="card" data-project="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}" data-slug="${esc(hit.slug || hit.project_id)}" data-title="${esc(hit.title)}">
       <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
       <div class="card-body">
         <div class="card-title">${esc(hit.title)}</div>
@@ -2156,6 +2498,76 @@
   }
 
   /* ---------- выбор версии мода / модпака ---------- */
+  /** Простое превращение описания Modrinth в читаемый текст. */
+  function plainDescription(text) {
+    if (!text) return "";
+    let body = String(text);
+    body = body.replace(/!\[[^\]]*\]\([^)]*\)/g, "");          // картинки
+    body = body.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");        // ссылки
+    body = body.replace(/^#{1,6}\s*/gm, "");                       // заголовки
+    body = body.replace(/[*_`>]{1,3}/g, "");                        // акценты
+    body = body.replace(/<[^>]+>/g, "");                            // html
+    body = body.replace(/\n{3,}/g, "\n\n").trim();
+    return body.length > 4000 ? `${body.slice(0, 4000)}…` : body;
+  }
+
+  async function openProjectModal(projectId, kind, slug, title) {
+    const modal = $("#modal-project");
+    if (!modal) return;
+    const isPack = kind === "pack";
+    $("#proj-title").textContent = title || "Проект";
+    const body = $("#proj-body");
+    body.innerHTML = `<div class="empty-state">Загружаем сведения с Modrinth…</div>`;
+    modal.hidden = false;
+
+    let project = null;
+    try {
+      project = await api.modrinthProject(projectId);
+    } catch (err) {
+      body.innerHTML = `<div class="proj-empty" style="color:var(--red)">Не удалось получить сведения: ${esc(String(err))}</div>`;
+    }
+
+    const projectType = (project && project.project_type) || (isPack ? "modpack" : "mod");
+    const slugOrId = (project && (project.slug || project.id)) || slug || projectId;
+    const siteUrl = `https://modrinth.com/${projectType === "modpack" ? "modpack" : projectType}/${slugOrId}`;
+
+    if (project) {
+      const shots = (project.gallery || [])
+        .map((shot) => (typeof shot === "string" ? shot : shot && shot.url))
+        .filter(Boolean);
+      const tags = (project.categories || []).slice(0, 8);
+      const loads = (project.downloads || 0).toLocaleString("ru-RU");
+      const desc = plainDescription(project.body) || project.description || "";
+      body.innerHTML = `
+        <div class="proj-top">
+          <div class="proj-icon">${project.icon_url
+            ? `<img src="${esc(project.icon_url)}" alt="" />`
+            : `<span class="card-letter">${esc(String(project.title || title || "?").charAt(0).toUpperCase())}</span>`}</div>
+          <div class="proj-head">
+            <div class="proj-title">${esc(project.title || title || "")}</div>
+            <div class="proj-sub">${esc(project.description || "")}</div>
+            <div class="proj-sub">${loads} загрузок${project.license && project.license.name ? ` · ${esc(project.license.name)}` : ""}</div>
+          </div>
+        </div>
+        ${tags.length ? `<div class="proj-tags">${tags.map((tag) => `<span class="tag">${esc(tag)}</span>`).join("")}</div>` : ""}
+        ${shots.length ? `<div class="proj-gallery">${shots.slice(0, 6).map((url) => `
+          <div class="proj-shot"><img src="${esc(url)}" alt="" loading="lazy" /></div>`).join("")}</div>` : ""}
+        ${desc ? `<div class="proj-desc">${esc(desc)}</div>` : `<div class="proj-empty">Описание пустое — смотри страницу проекта.</div>`}`;
+    }
+
+    $("#proj-site").onclick = () => api.openUrl(siteUrl).catch((error) => toast(String(error), "err"));
+    $("#proj-versions").onclick = () => {
+      modal.hidden = true;
+      openVersions(projectId, isPack ? "pack" : "mod", title || (project && project.title) || "Версии");
+    };
+    const installBtn = $("#proj-install");
+    installBtn.disabled = !project;
+    installBtn.onclick = () => {
+      modal.hidden = true;
+      installFromModrinth(projectId, isPack ? "pack" : "mod");
+    };
+  }
+
   async function openVersions(projectId, kind, title) {
     const modal = $("#modal-versions");
     if (!modal) return;
@@ -2685,6 +3097,7 @@
   /* ==================== НАСТРОЙКИ ЛАУНЧЕРА (по категориям) ==================== */
   const PREFS = [
     { id: "profile", label: "Профиль" },
+    { id: "skin", label: "Скин" },
     { id: "look", label: "Оформление" },
     { id: "wall", label: "Фон" },
     { id: "fx", label: "Эффекты" },
@@ -2708,6 +3121,10 @@
       // история: сохранённая + то, что выбрали в этом сеансе
       recent: Array.isArray(settings.wallpaper_recent) ? settings.wallpaper_recent.slice(0, 6) : []
     };
+    state.skin = state.skin || { preset: SKIN_PRESETS[0].id, variant: "classic", angle: -18 };
+    if (state.skin.licensed === undefined) refreshAccountSkin().then(() => {
+      if (!$("#modal-prefs").hidden && prefsCategory === "skin") renderPrefs();
+    });
     modal.hidden = false;
     renderPrefsAccountCard();
     renderPrefs();
@@ -2727,6 +3144,7 @@
     const settings = state.settings || {};
     renderPrefsAccountCard();
     if (prefsCategory === "profile") body.innerHTML = prefsProfile();
+    if (prefsCategory === "skin") body.innerHTML = prefsSkin();
     if (prefsCategory === "look") body.innerHTML = prefsLook(settings);
     if (prefsCategory === "wall") body.innerHTML = prefsWall(settings);
     if (prefsCategory === "fx") body.innerHTML = prefsFx();
@@ -2736,6 +3154,7 @@
     if (prefsCategory === "sound") body.innerHTML = prefsSound(settings);
     bindPrefs();
     if (prefsCategory === "profile") bindPrefsProfile();
+    if (prefsCategory === "skin") bindSkin();
   }
 
   /** Профиль: слева список аккаунтов, справа — активный. */
@@ -3144,16 +3563,17 @@
     const soundTest = $("#sound-test");
     if (soundTest) soundTest.addEventListener("click", () => { sfx.open(); setTimeout(() => sfx.toggle(true), 120); });
 
-    $$("#prefs-body [data-wall]").forEach((chip) => chip.addEventListener("click", () => {
+    $$("#prefs-body [data-wall]").forEach((chip) => chip.addEventListener("click", async () => {
       const picked = chip.dataset.wall || null;
       state.wall.wallpaper = picked;
       state.wall.recent = rememberWallpaper(state.wall.recent, picked);
       $$("#prefs-body [data-wall]").forEach((el) => el.classList.toggle("is-active", el === chip));
       applyWallpaper(state.wall);
+      await persistWallpaper();
       renderPrefs();
     }));
     const fit = $("#wall-fit");
-    if (fit) fit.addEventListener("change", (event) => { state.wall.fit = event.target.value; applyWallpaper(state.wall); });
+    if (fit) fit.addEventListener("change", (event) => { state.wall.fit = event.target.value; applyWallpaper(state.wall); persistWallpaper(); });
     const blur = $("#wall-blur");
     if (blur) blur.addEventListener("input", (event) => {
       state.wall.blur = Number(event.target.value);
@@ -3233,6 +3653,7 @@
       state.wall = { wallpaper: null, fit: "cover", blur: 0, dim: 40, recent: [] };
       state.sound = { on: true, volume: 60 };
       applyWallpaper(state.wall);
+      persistWallpaper();
       renderPrefs();
     });
   }
@@ -3276,11 +3697,452 @@
     } catch (err) { toast(String(err), "err"); }
   }
 
+  /** Фон запоминается сразу: после перезапуска он должен быть тем же. */
+  async function persistWallpaper() {
+    const settings = state.settings || {};
+    const next = {
+      ...settings,
+      wallpaper: state.wall.wallpaper,
+      wallpaper_fit: state.wall.fit,
+      wallpaper_blur: state.wall.blur,
+      wallpaper_dim: state.wall.dim,
+      wallpaper_recent: state.wall.recent || []
+    };
+    state.settings = next;
+    try { await api.saveSettings(next); } catch (error) { /* не критично */ }
+  }
+
   /** История обоев: свежие впереди, без повторов, не длиннее шести. */
   function rememberWallpaper(recent, current) {
     const list = Array.isArray(recent) ? recent.slice() : [];
     if (!current) return list.filter((id) => id !== current);
     return [current, ...list.filter((id) => id !== current)].slice(0, 6);
+  }
+
+  /* ==================== СКИН: ПРЕСЕТЫ И РЕНДЕР ==================== */
+
+  /** Пресеты: цвет кожи, волос, одежды + акцент. Из них собирается PNG 64×64. */
+  const SKIN_PRESETS = [
+    { id: "classic", name: "Стив", skin: "#c49a76", hair: "#3b2a1c", shirt: "#2f8faf", pants: "#3a3f8f", shoe: "#3b3b44", accent: "#8fd6e8" },
+    { id: "shadow", name: "Тень", skin: "#7d6b5d", hair: "#181a1f", shirt: "#22252c", pants: "#191b21", shoe: "#111318", accent: "#79c0ff" },
+    { id: "neon", name: "Неон", skin: "#d8d3c8", hair: "#2a1f3d", shirt: "#1a1030", pants: "#101a2e", shoe: "#0b0d14", accent: "#7ee787" },
+    { id: "forest", name: "Лес", skin: "#c9a077", hair: "#2f2418", shirt: "#2f5d3a", pants: "#3b4a2f", shoe: "#2a2a22", accent: "#9ad36b" },
+    { id: "sand", name: "Пустыня", skin: "#d9b489", hair: "#5b4227", shirt: "#c8a25c", pants: "#8d6b3f", shoe: "#4a3a26", accent: "#f2d98c" },
+    { id: "ice", name: "Лёд", skin: "#e0d6cc", hair: "#9ec8e0", shirt: "#4f7fa8", pants: "#2f4a63", shoe: "#24303d", accent: "#bfe6ff" },
+    { id: "ember", name: "Уголь", skin: "#bf9670", hair: "#241a14", shirt: "#8f2f2f", pants: "#3a2a26", shoe: "#22201e", accent: "#ff7b72" },
+    { id: "mono", name: "Монохром", skin: "#cfcfcf", hair: "#4a4a4a", shirt: "#e8e8e8", pants: "#6a6a6a", shoe: "#3a3a3a", accent: "#ffffff" }
+  ];
+
+  /** UV-разметка частей скина 64×64 (как в ванильном формате). */
+  function skinBoxes(variant) {
+    const aw = variant === "slim" ? 3 : 4;
+    return [
+      {
+        name: "head", x0: -4, x1: 4, y0: 24, y1: 32, z0: -4, z1: 4,
+        base: { front: [8, 8, 8, 8], back: [24, 8, 8, 8], left: [16, 8, 8, 8], right: [0, 8, 8, 8], top: [8, 0, 8, 8], bottom: [16, 0, 8, 8] },
+        over: { front: [40, 8, 8, 8], back: [56, 8, 8, 8], left: [48, 8, 8, 8], right: [32, 8, 8, 8], top: [40, 0, 8, 8], bottom: [48, 0, 8, 8] }
+      },
+      {
+        name: "body", x0: -4, x1: 4, y0: 12, y1: 24, z0: -2, z1: 2,
+        base: { front: [20, 20, 8, 12], back: [32, 20, 8, 12], left: [28, 20, 4, 12], right: [16, 20, 4, 12], top: [20, 16, 8, 4], bottom: [28, 16, 8, 4] },
+        over: { front: [20, 36, 8, 12], back: [32, 36, 8, 12], left: [28, 36, 4, 12], right: [16, 36, 4, 12], top: [20, 32, 8, 4], bottom: [28, 32, 8, 4] }
+      },
+      {
+        name: "armR", x0: -4 - aw, x1: -4, y0: 12, y1: 24, z0: -2, z1: 2,
+        base: { front: [44, 20, aw, 12], back: [52, 20, aw, 12], left: [48, 20, aw, 12], right: [40, 20, aw, 12], top: [44, 16, aw, 4], bottom: [48, 16, aw, 4] },
+        over: { front: [44, 36, aw, 12], back: [52, 36, aw, 12], left: [48, 36, aw, 12], right: [40, 36, aw, 12], top: [44, 32, aw, 4], bottom: [48, 32, aw, 4] }
+      },
+      {
+        name: "armL", x0: 4, x1: 4 + aw, y0: 12, y1: 24, z0: -2, z1: 2,
+        base: { front: [36, 52, aw, 12], back: [44, 52, aw, 12], left: [40, 52, aw, 12], right: [32, 52, aw, 12], top: [36, 48, aw, 4], bottom: [40, 48, aw, 4] },
+        over: { front: [52, 52, aw, 12], back: [60, 52, aw, 12], left: [56, 52, aw, 12], right: [48, 52, aw, 12], top: [52, 48, aw, 4], bottom: [56, 48, aw, 4] }
+      },
+      {
+        name: "legR", x0: -4, x1: 0, y0: 0, y1: 12, z0: -2, z1: 2,
+        base: { front: [4, 20, 4, 12], back: [12, 20, 4, 12], left: [8, 20, 4, 12], right: [0, 20, 4, 12], top: [4, 16, 4, 4], bottom: [8, 16, 4, 4] },
+        over: { front: [4, 36, 4, 12], back: [12, 36, 4, 12], left: [8, 36, 4, 12], right: [0, 36, 4, 12], top: [4, 32, 4, 4], bottom: [8, 32, 4, 4] }
+      },
+      {
+        name: "legL", x0: 0, x1: 4, y0: 0, y1: 12, z0: -2, z1: 2,
+        base: { front: [20, 52, 4, 12], back: [28, 52, 4, 12], left: [24, 52, 4, 12], right: [16, 52, 4, 12], top: [20, 48, 4, 4], bottom: [24, 48, 4, 4] },
+        over: { front: [4, 52, 4, 12], back: [12, 52, 4, 12], left: [8, 52, 4, 12], right: [0, 52, 4, 12], top: [4, 48, 4, 4], bottom: [8, 48, 4, 4] }
+      }
+    ];
+  }
+
+  /** Затемнение/осветление цвета для объёма. */
+  function shadeColor(hex, amount) {
+    const value = parseInt(String(hex).replace("#", ""), 16);
+    const mix = (channel) => {
+      const next = amount < 0
+        ? channel * (1 + amount)
+        : channel + (255 - channel) * amount;
+      return Math.max(0, Math.min(255, Math.round(next)));
+    };
+    const r = mix((value >> 16) & 255);
+    const g = mix((value >> 8) & 255);
+    const b = mix(value & 255);
+    return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+  }
+
+  /** Текстура 64×64 из пресета: грани с разным светом + второй слой. */
+  function buildSkinTexture(preset) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d");
+    const fill = (x, y, w, h, color) => { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); };
+    const faces = (uv, front, side, back, top, bottom) => {
+      fill(uv.front[0], uv.front[1], uv.front[2], uv.front[3], front);
+      fill(uv.left[0], uv.left[1], uv.left[2], uv.left[3], side);
+      fill(uv.right[0], uv.right[1], uv.right[2], uv.right[3], shadeColor(side, -0.08));
+      fill(uv.back[0], uv.back[1], uv.back[2], uv.back[3], back);
+      fill(uv.top[0], uv.top[1], uv.top[2], uv.top[3], top);
+      fill(uv.bottom[0], uv.bottom[1], uv.bottom[2], uv.bottom[3], bottom);
+    };
+
+    const boxes = skinBoxes("classic");
+    const byName = {};
+    boxes.forEach((box) => { byName[box.name] = box; });
+
+    // ── база: голова ──
+    const head = byName.head;
+    faces(head.base, preset.skin, shadeColor(preset.skin, -0.16), preset.hair, preset.hair, shadeColor(preset.skin, -0.34));
+    fill(8, 8, 8, 2, preset.hair);                       // чёлка
+    fill(8, 10, 1, 2, preset.hair);
+    fill(15, 10, 1, 2, preset.hair);
+    fill(9, 12, 1, 1, "#1b1b1f");                        // глаза
+    fill(14, 12, 1, 1, "#1b1b1f");
+    fill(9, 11, 1, 1, "#ffffff");                        // блики
+    fill(14, 11, 1, 1, "#ffffff");
+    fill(11, 14, 2, 1, shadeColor(preset.skin, -0.34));  // рот
+
+    // ── база: тело ──
+    const body = byName.body;
+    faces(body.base,
+      preset.shirt,
+      shadeColor(preset.shirt, -0.14),
+      shadeColor(preset.shirt, -0.24),
+      shadeColor(preset.shirt, 0.10),
+      shadeColor(preset.shirt, -0.34));
+    fill(20, 20, 8, 1, preset.accent);                   // воротник
+    fill(20, 21, 1, 8, preset.accent);                   // молния
+    fill(27, 21, 1, 8, shadeColor(preset.accent, -0.2));
+    fill(20, 30, 8, 2, preset.pants);                    // ремень
+    fill(23, 30, 2, 2, preset.accent);                   // пряжка
+
+    // ── база: руки ──
+    ["armR", "armL"].forEach((name) => {
+      faces(byName[name].base,
+        preset.shirt,
+        shadeColor(preset.shirt, -0.14),
+        shadeColor(preset.shirt, -0.24),
+        shadeColor(preset.shirt, 0.10),
+        shadeColor(preset.shirt, -0.3));
+    });
+    // кисти: нижние 3 пикселя рукавов
+    [[44, 29], [40, 29], [48, 29], [52, 29]].forEach(([x, y]) => fill(x, y, 4, 3, preset.skin));
+    [[36, 61], [32, 61], [40, 61], [44, 61]].forEach(([x, y]) => fill(x, y, 4, 3, preset.skin));
+    fill(48, 16, 4, 4, preset.skin);
+    fill(40, 48, 4, 4, preset.skin);
+
+    // ── база: ноги ──
+    ["legR", "legL"].forEach((name) => {
+      faces(byName[name].base,
+        preset.pants,
+        shadeColor(preset.pants, -0.14),
+        shadeColor(preset.pants, -0.24),
+        shadeColor(preset.pants, 0.10),
+        preset.shoe);
+    });
+    // обувь: нижние 4 пикселя
+    fill(4, 28, 4, 4, preset.shoe);
+    fill(0, 28, 4, 4, shadeColor(preset.shoe, -0.14));
+    fill(8, 28, 4, 4, shadeColor(preset.shoe, -0.2));
+    fill(12, 28, 4, 4, shadeColor(preset.shoe, -0.24));
+    fill(20, 60, 4, 4, preset.shoe);
+    fill(16, 60, 4, 4, shadeColor(preset.shoe, -0.14));
+    fill(24, 60, 4, 4, shadeColor(preset.shoe, -0.2));
+    fill(28, 60, 4, 4, shadeColor(preset.shoe, -0.24));
+
+    // ── второй слой: кепка ──
+    fill(40, 0, 8, 8, preset.accent);
+    fill(32, 8, 8, 8, shadeColor(preset.accent, -0.14));
+    fill(48, 8, 8, 8, shadeColor(preset.accent, -0.22));
+    fill(56, 8, 8, 8, shadeColor(preset.accent, -0.3));
+    fill(40, 8, 8, 2, shadeColor(preset.accent, 0.08));  // козырёк
+
+    // ── второй слой: жилет по бокам ──
+    fill(20, 36, 2, 10, preset.accent);
+    fill(26, 36, 2, 10, preset.accent);
+    fill(32, 36, 2, 10, shadeColor(preset.accent, -0.24));
+    fill(38, 36, 2, 10, shadeColor(preset.accent, -0.24));
+    fill(16, 36, 4, 10, shadeColor(preset.accent, -0.14));
+    fill(28, 36, 4, 10, shadeColor(preset.accent, -0.2));
+    return canvas;
+  }
+
+  /** Трёхмерный предпросмотр: обрезка повёрнута на угол, второй слой сверху. */
+  function drawSkinPreview(canvas, texture, variant, angleDeg) {
+    const ctx = canvas.getContext("2d");
+    const W = canvas.width;
+    const H = canvas.height;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    if (!texture) return;
+
+    const th = (angleDeg * Math.PI) / 180;
+    const pitch = 0.14;
+    const cosT = Math.cos(th);
+    const sinT = Math.sin(th);
+    const cosP = Math.cos(pitch);
+    const sinP = Math.sin(pitch);
+
+    // точка → экранные координаты (ось Y вверх, камера смотрит вдоль +Z)
+    const project = (x, y, z) => {
+      const x1 = x * cosT + z * sinT;
+      const z1 = -x * sinT + z * cosT;
+      const y2 = y * cosP - z1 * sinP;
+      const z2 = y * sinP + z1 * cosP;
+      return [x1, -y2, z2];
+    };
+
+    const faces = [];
+    const pushFace = (box, uvs, scale) => {
+      const cx = (box.x0 + box.x1) / 2;
+      const cy = (box.y0 + box.y1) / 2;
+      const cz = (box.z0 + box.z1) / 2;
+      const grow = (value, center) => center + (value - center) * scale;
+      const x0 = grow(box.x0, cx), x1 = grow(box.x1, cx);
+      const y0 = grow(box.y0, cy), y1 = grow(box.y1, cy);
+      const z0 = grow(box.z0, cz), z1 = grow(box.z1, cz);
+      const quads = [
+        { uv: uvs.front, n: [0, 0, 1], p: [[x0, y1, z1], [x1, y1, z1], [x1, y0, z1], [x0, y0, z1]] },
+        { uv: uvs.back, n: [0, 0, -1], p: [[x1, y1, z0], [x0, y1, z0], [x0, y0, z0], [x1, y0, z0]] },
+        { uv: uvs.left, n: [-1, 0, 0], p: [[x0, y1, z0], [x0, y1, z1], [x0, y0, z1], [x0, y0, z0]] },
+        { uv: uvs.right, n: [1, 0, 0], p: [[x1, y1, z1], [x1, y1, z0], [x1, y0, z0], [x1, y0, z1]] },
+        { uv: uvs.top, n: [0, 1, 0], p: [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]] },
+        { uv: uvs.bottom, n: [0, -1, 0], p: [[x0, y0, z1], [x1, y0, z1], [x1, y0, z0], [x0, y0, z0]] }
+      ];
+      quads.forEach((quad) => {
+        const [nx1, nz1] = [quad.n[0] * cosT + quad.n[2] * sinT, -quad.n[0] * sinT + quad.n[2] * cosT];
+        const nz2 = quad.n[1] * sinP + nz1 * cosP;
+        if (nz2 <= 0.001) return; // отвёрнуто от камеры
+        const pts = quad.p.map(([x, y, z]) => project(x, y, z));
+        const depth = pts.reduce((sum, point) => sum + point[2], 0) / 4;
+        faces.push({ uv: quad.uv, pts, depth });
+      });
+    };
+
+    skinBoxes(variant).forEach((box) => {
+      pushFace(box, box.base, 1);
+      pushFace(box, box.over, 1.06); // второй слой чуть сверху
+    });
+
+    // масштаб и центрирование по всем вершинам
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    faces.forEach((face) => face.pts.forEach(([x, y]) => {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }));
+    if (!Number.isFinite(minX)) return;
+    const pad = 12;
+    const unit = Math.min((W - pad * 2) / Math.max(1, maxX - minX), (H - pad * 2) / Math.max(1, maxY - minY));
+    const offsetX = (W - (maxX - minX) * unit) / 2 - minX * unit;
+    const offsetY = (H - (maxY - minY) * unit) / 2 - minY * unit;
+
+    faces.sort((a, b) => a.depth - b.depth);
+    ctx.imageSmoothingEnabled = false;
+    faces.forEach((face) => {
+      const [u0, v0, uw, vh] = face.uv;
+      const [p0, p1, , p3] = face.pts.map(([x, y]) => [x * unit + offsetX, y * unit + offsetY]);
+      // путь-квад в экранных координатах
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(p0[0], p0[1]);
+      face.pts.forEach(([x, y]) => ctx.lineTo(x * unit + offsetX, y * unit + offsetY));
+      ctx.closePath();
+      ctx.clip();
+      if (uw > 0 && vh > 0) {
+        const a = (p1[0] - p0[0]) / uw;
+        const b = (p1[1] - p0[1]) / uw;
+        const c = (p3[0] - p0[0]) / vh;
+        const d = (p3[1] - p0[1]) / vh;
+        const e = p0[0] - a * u0 - c * v0;
+        const f = p0[1] - b * u0 - d * v0;
+        ctx.setTransform(a, b, c, d, e, f);
+        ctx.drawImage(texture, 0, 0);
+      }
+      ctx.restore();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    });
+  }
+
+  function prefsSkin() {
+    const skin = state.skin || {};
+    const licensed = skin.licensed;
+    const variant = skin.variant || "classic";
+    return `
+      <div class="skin-grid">
+        <div class="skin-stage">
+          <canvas id="skin-canvas" width="640" height="900"></canvas>
+        </div>
+        <div class="skin-ctrl">
+          <section class="prefs-section">
+            <div class="prefs-label-row">
+              <span class="prefs-label">Модель скина</span>
+              <div class="spacer"></div>
+              <button class="btn btn-small" id="skin-custom">Свой PNG…</button>
+            </div>
+            <div class="chips" id="skin-variant">
+              <button class="chip ${variant === "classic" ? "is-active" : ""}" data-variant="classic">Wide (4 px)</button>
+              <button class="chip ${variant === "slim" ? "is-active" : ""}" data-variant="slim">Slim (3 px)</button>
+            </div>
+            <div class="skin-angle" style="margin-top:12px">
+              <span class="prefs-label" style="margin:0">Поворот</span>
+              <input type="range" id="skin-angle" min="-35" max="35" step="1" value="${Number(skin.angle ?? -18)}" />
+              <span class="val" id="skin-angle-value">${Number(skin.angle ?? -18)}°</span>
+            </div>
+            <div class="skin-note">Второй слой (кепка и жилет) виден при повороте фигуры.</div>
+          </section>
+          <section class="prefs-section">
+            <div class="prefs-label-row"><span class="prefs-label">Пресеты</span></div>
+            <div class="skin-presets" id="skin-presets">
+              ${SKIN_PRESETS.map((preset) => `
+                <button class="skin-preset ${preset.id === skin.preset ? "is-active" : ""}" data-preset="${preset.id}">
+                  <canvas data-preset-thumb="${preset.id}" width="64" height="64"></canvas>
+                  <span>${esc(preset.name)}</span>
+                </button>`).join("")}
+            </div>
+          </section>
+          <div class="skin-row">
+            <button class="btn btn-primary btn-wide" id="skin-apply" ${licensed ? "" : "disabled"}>Применить к аккаунту</button>
+          </div>
+          <div class="skin-note ${licensed ? "" : "warn"}" id="skin-status">${licensed
+            ? "Скин загрузится в лицензионный аккаунт — его увидят на серверах."
+            : "Смена скина доступна только для лицензионного аккаунта. Пресеты можно посмотреть."}</div>
+        </div>
+      </div>`;
+  }
+
+  function currentSkinTexture() {
+    const skin = state.skin || {};
+    if (skin.mode === "account" && skin.accountTex) return skin.accountTex;
+    const preset = SKIN_PRESETS.find((item) => item.id === skin.preset) || SKIN_PRESETS[0];
+    if (!skin.textures) skin.textures = {};
+    const key = `${preset.id}-${skin.variant || "classic"}`;
+    if (!skin.textures[key]) skin.textures[key] = buildSkinTexture(preset);
+    return skin.textures[key];
+  }
+
+  function redrawSkinPreview() {
+    const canvas = $("#skin-canvas");
+    if (!canvas) return;
+    drawSkinPreview(canvas, currentSkinTexture(), (state.skin && state.skin.variant) || "classic", Number((state.skin && state.skin.angle) ?? -18));
+  }
+
+  function bindSkin() {
+    const stage = $("#skin-canvas");
+    if (stage) redrawSkinPreview();
+    // миниатюры пресетов: голова в фас
+    $$("[data-preset-thumb]").forEach((thumb) => {
+      const preset = SKIN_PRESETS.find((item) => item.id === thumb.dataset.presetThumb);
+      if (!preset) return;
+      const ctx = thumb.getContext("2d");
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(buildSkinTexture(preset), 8, 8, 8, 8, 0, 0, 64, 64);
+    });
+    $$("#skin-presets .skin-preset").forEach((btn) => btn.addEventListener("click", () => {
+      state.skin.preset = btn.dataset.preset;
+      state.skin.mode = "preset";
+      $$("#skin-presets .skin-preset").forEach((el) => el.classList.toggle("is-active", el === btn));
+      redrawSkinPreview();
+    }));
+    $$("#skin-variant .chip").forEach((chip) => chip.addEventListener("click", () => {
+      state.skin.variant = chip.dataset.variant;
+      $$("#skin-variant .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+      redrawSkinPreview();
+    }));
+    const angle = $("#skin-angle");
+    if (angle) angle.addEventListener("input", () => {
+      state.skin.angle = Number(angle.value);
+      const label = $("#skin-angle-value");
+      if (label) label.textContent = `${angle.value}°`;
+      redrawSkinPreview();
+    });
+    const apply = $("#skin-apply");
+    if (apply) apply.addEventListener("click", applySkinPreset);
+    const custom = $("#skin-custom");
+    if (custom) custom.addEventListener("click", applyCustomSkin);
+  }
+
+  async function applySkinPreset() {
+    const skin = state.skin || {};
+    if (!skin.licensed) return toast("Смена скина только для лицензии", "err");
+    const preset = SKIN_PRESETS.find((item) => item.id === skin.preset) || SKIN_PRESETS[0];
+    const texture = buildSkinTexture(preset);
+    const button = $("#skin-apply");
+    if (button) button.disabled = true;
+    try {
+      const path = await api.saveSkinPng(texture.toDataURL("image/png"), `preset-${preset.id}`);
+      await api.applySkin(path, skin.variant || "classic");
+      const status = $("#skin-status");
+      if (status) status.textContent = `Скин «${preset.name}» загружен в аккаунт.`;
+      toast(`Скин «${preset.name}» обновлён`, "ok");
+      await refreshAccountSkin();
+      redrawSkinPreview();
+    } catch (err) {
+      toast(String(err), "err");
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  async function applyCustomSkin() {
+    const skin = state.skin || {};
+    const path = await api.pickFile("Скин 64×64 PNG", ["png"]).catch(() => null);
+    if (!path) return;
+    if (!skin.licensed) return toast("Смена скина только для лицензии", "err");
+    try {
+      await api.applySkin(path, skin.variant || "classic");
+      toast("Скин загружен", "ok");
+      const dataUrl = await api.imageDataUrl(path).catch(() => null);
+      if (dataUrl) await useSkinImage(dataUrl);
+      redrawSkinPreview();
+    } catch (err) { toast(String(err), "err"); }
+  }
+
+  /** Картинка-скин → offscreen-канвас (для предпросмотра реального скина). */
+  function useSkinImage(dataUrl) {
+    return new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 64;
+        canvas.height = 64;
+        canvas.getContext("2d").drawImage(image, 0, 0, 64, 64);
+        state.skin.accountTex = canvas;
+        state.skin.mode = "account";
+        resolve(true);
+      };
+      image.onerror = () => resolve(false);
+      image.src = dataUrl;
+    });
+  }
+
+  async function refreshAccountSkin() {
+    const info = await api.accountSkin().catch(() => null);
+    state.skin = state.skin || { preset: SKIN_PRESETS[0].id, variant: "classic", angle: -18 };
+    if (!info) return;
+    state.skin.licensed = Boolean(info.licensed);
+    if (info.variant && !state.skin.touchedVariant) state.skin.variant = info.variant === "slim" ? "slim" : "classic";
+    if (info.data_url) {
+      await useSkinImage(info.data_url);
+    } else if (!state.skin.preset) {
+      state.skin.preset = SKIN_PRESETS[0].id;
+    }
   }
 
   /* ==================== НАСТРОЙКИ СБОРКИ (свои у каждой) ==================== */
@@ -3584,6 +4446,7 @@
     try {
       const plan = await api.launch(meta.id);
       setProgress(null);
+      addSession(meta.id, plan && plan.run_id);
       pushLog(meta.id, `[omnispec] Java ${plan.java_major}: ${plan.java}`, "dim");
       pushLog(meta.id, `[omnispec] Память ${plan.memory_mb} МБ, артефактов в classpath: ${plan.classpath_entries}`, "dim");
       state.running.add(meta.id);
@@ -3602,7 +4465,14 @@
   async function stopGame() {
     const meta = selected();
     if (!meta) return;
-    try { await api.stop(meta.id); toast("Игра остановлена"); }
+    try {
+      await api.stop(meta.id);
+      if (state.sessions) state.sessions.delete(meta.id);
+      state.running.delete(meta.id);
+      renderSidebar();
+      updateStatus();
+      toast("Игра остановлена");
+    }
     catch (err) { toast(String(err), "err"); }
   }
 
@@ -3936,6 +4806,14 @@
       if (menu && !menu.hidden) closeCtxMenu();
     });
     on("#btn-launcher-settings", "click", () => openPrefs());
+    on("#btn-quick-settings", "click", () => openPrefs());
+    on("#btn-new-build", "click", openCreate);
+    $$("[data-close-project]").forEach((el) => el.addEventListener("click", () => { $("#modal-project").hidden = true; }));
+    const projectModal = $("#modal-project");
+    if (projectModal) projectModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-project") projectModal.hidden = true; });
+    $$("[data-close-dup]").forEach((el) => el.addEventListener("click", () => { $("#modal-dup").hidden = true; }));
+    const dupModal = $("#modal-dup");
+    if (dupModal) dupModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-dup") dupModal.hidden = true; });
     on("#btn-global-settings", "click", () => openPrefs());
     on("[data-close-prefs]", "click", () => { $("#modal-prefs").hidden = true; });
     on("#build-path-copy", "click", async () => {
@@ -3968,7 +4846,12 @@
     if (accModal) accModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-account") accModal.hidden = true; });
 
     on("#btn-folder", "click", () => { const meta = selected(); if (meta) api.openPath(`/instances/${meta.id}/minecraft`).catch(() => {}); });
-    on("#btn-grid", "click", () => toast("Сетка появится в следующей версии"));
+    on("#btn-grid", "click", () => {
+      state.compact = !state.compact;
+      const list = $("#instance-list");
+      if (list) list.classList.toggle("is-compact", state.compact);
+      toast(state.compact ? "Компактный список" : "Обычный список");
+    });
     on("#btn-sort", "click", () => {
       state.instances.sort((a, b) => a.name.localeCompare(b.name));
       renderSidebar();
@@ -4038,7 +4921,7 @@
       pushLog(payload.instance, payload.line, classify(payload.line));
     });
     await api.onExit(async (payload) => {
-      state.running.delete(payload.instance);
+      dropSession(payload.instance, payload.run_id);
       pushLog(payload.instance, `[omnispec] Игра завершилась с кодом ${payload.code}`, payload.code === 0 ? "ok" : "err");
       // время игры пишется в мету сборки на стороне ядра — подтягиваем его
       await refreshInstances();
@@ -4070,9 +4953,17 @@
       on: state.settings && state.settings.sound_fx !== false,
       volume: Number((state.settings && state.settings.sound_volume) ?? 60)
     };
-    if (state.settings && state.settings.wallpaper === "custom") {
-      state.customWall = await api.customWallpaper().catch(() => null);
-    }
+    // обои: тот же выбор, что был в прошлый раз (иначе каждый старт — «свой фон»)
+    state.wall = {
+      wallpaper: (state.settings && state.settings.wallpaper) || null,
+      fit: (state.settings && state.settings.wallpaper_fit) || "cover",
+      blur: Number((state.settings && state.settings.wallpaper_blur) ?? 0),
+      dim: Number((state.settings && state.settings.wallpaper_dim) ?? 40),
+      recent: (state.settings && Array.isArray(state.settings.wallpaper_recent))
+        ? state.settings.wallpaper_recent.slice(0, 6)
+        : []
+    };
+    state.customWall = await api.customWallpaper().catch(() => null);
     applyWallpaper();
     await loadAccounts();
     bindFileDrop();

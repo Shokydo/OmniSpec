@@ -204,6 +204,7 @@ async fn run(command: &str, args: Args) -> omnispec_core::Result<()> {
                     source: None,
                     source_url: None,
                     id: None,
+                    category: None,
                 },
             )?;
             println!(
