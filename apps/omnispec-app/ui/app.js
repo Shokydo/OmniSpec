@@ -493,9 +493,12 @@
     };
   })();
 
-  /** Трейс за курсором: гаснущая цепочка точек поверх всего интерфейса. */
+  /** Трейс за курсором: непрерывная кисть, которая сужается и гаснет к концу. */
   const trailFx = (() => {
     const canvas = () => $("#trail");
+    // сколько живёт «хвост» и насколько он длинный в точках
+    const LIFE = 0.85;
+    const MAX_POINTS = 120;
     let ctx = null;
     let width = 0;
     let height = 0;
@@ -519,27 +522,47 @@
       ink = getComputedStyle(document.body).getPropertyValue("--text").trim() || "#e8e8ee";
     }
 
+    /** Ширина кисти у основания: 18 px при 100 %. */
+    const baseWidth = () => 18 * scale;
+
     function step(now) {
       const el = canvas();
       if (!ctx || !el) { raf = 0; return; }
       const dt = Math.min(0.05, (now - (last || now)) / 1000);
       last = now;
       ctx.clearRect(0, 0, width, height);
-      const alive = [];
-      for (const point of points) {
-        point.life -= dt * 1.6;
-        if (point.life <= 0) continue;
-        point.x += point.vx * dt;
-        point.y += point.vy * dt;
-        ctx.globalAlpha = Math.max(0, point.life) * 0.55;
-        ctx.fillStyle = ink;
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, point.size * (0.4 + point.life) * scale, 0, Math.PI * 2);
-        ctx.fill();
-        alive.push(point);
+
+      // точки стареют по времени: когда мышь стоит, хвост сам втягивается
+      for (const point of points) point.life -= dt / LIFE;
+      points = points.filter((point) => point.life > 0);
+
+      if (points.length > 1) {
+        const max = baseWidth();
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = ink;
+        for (let i = 1; i < points.length; i += 1) {
+          const prev = points[i - 1];
+          const cur = points[i];
+          // k: 0 — самый старый кончик, 1 — самая свежая точка у курсора
+          const k = i / (points.length - 1);
+          const life = Math.min(prev.life, cur.life);
+          ctx.globalAlpha = Math.max(0, Math.min(0.75, life * (0.25 + 0.75 * k)));
+          ctx.lineWidth = Math.max(0.6, max * Math.pow(k, 1.35) * (0.35 + 0.65 * life));
+          ctx.beginPath();
+          ctx.moveTo(prev.x, prev.y);
+          // сглаживание: ведём кривую через середины отрезков
+          if (i < points.length - 1) {
+            const next = points[i + 1];
+            ctx.quadraticCurveTo(cur.x, cur.y, (cur.x + next.x) / 2, (cur.y + next.y) / 2);
+          } else {
+            ctx.lineTo(cur.x, cur.y);
+          }
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
       }
-      ctx.globalAlpha = 1;
-      points = alive;
+
       if (!points.length) { el.hidden = true; raf = 0; return; }
       raf = requestAnimationFrame(step);
     }
@@ -561,20 +584,22 @@
       if (el) el.hidden = true;
     }
 
-    window.addEventListener("mousemove", (event) => {
+    function push(event) {
       if (!enabled) return;
-      points.push({
-        x: event.clientX,
-        y: event.clientY,
-        vx: (Math.random() - 0.5) * 12,
-        vy: (Math.random() - 0.5) * 12 - 6,
-        life: 1,
-        size: 2.2 + Math.random() * 1.6
-      });
-      if (points.length > 90) points.splice(0, points.length - 90);
+      const previous = points[points.length - 1];
+      // соседние пиксели не нужны: линия рисуется отрезками, а не точками
+      if (previous) {
+        const dx = event.clientX - previous.x;
+        const dy = event.clientY - previous.y;
+        if (dx * dx + dy * dy < 4) { previous.life = 1; return; }
+      }
+      points.push({ x: event.clientX, y: event.clientY, life: 1 });
+      if (points.length > MAX_POINTS) points.splice(0, points.length - MAX_POINTS);
       start();
-    }, { passive: true });
+    }
 
+    window.addEventListener("mousemove", push, { passive: true });
+    window.addEventListener("pointermove", push, { passive: true });
     window.addEventListener("resize", () => { if (enabled && canvas()) resize(); });
 
     return {
@@ -585,8 +610,11 @@
         return enabled;
       },
       isOn: () => enabled,
+      /** Размер кисти в процентах: 40–300, своя настройка. */
       size: (percent) => {
-        scale = Math.max(0.4, Math.min(2.2, (Number(percent) || 100) / 100));
+        const clean = Math.max(40, Math.min(300, Number(percent) || 100));
+        scale = clean / 100;
+        return clean;
       },
       refreshInk: () => {
         ink = getComputedStyle(document.body).getPropertyValue("--text").trim() || "#e8e8ee";
@@ -600,11 +628,17 @@
     return state.ambient;
   }
 
-  /** Размер эффектов в процентах — общий для фона и трейса. */
+  /** Размер частиц фона в процентах. */
   function applyEffectSize(percent) {
     const clean = ambient.size(percent);
-    trailFx.size(clean);
     state.effectSize = clean;
+    return clean;
+  }
+
+  /** Размер кисти трейса в процентах — своя настройка, отдельно от эффектов. */
+  function applyTrailSize(percent) {
+    const clean = trailFx.size(percent);
+    state.trailSize = clean;
     return clean;
   }
 
@@ -4710,6 +4744,7 @@
 
   function prefsFx() {
     const ambientOn = (state.ambient || "stars") !== "off";
+    const trailOn = state.trail !== false;
     return `
       <div class="prefs-section">
         <div class="prefs-label">Эффект от клика</div>
@@ -4745,6 +4780,19 @@
           <span class="muted" style="font-size:11px">маленькие</span>
           <div class="spacer"></div>
           <span class="muted" style="font-size:11px">крупные</span>
+        </div>
+      </div>
+      <div class="prefs-section">
+        <div class="prefs-row-head">
+          <span class="prefs-label">Размер трейса</span>
+          <div class="spacer"></div>
+          <span class="mono" id="trail-size-value">${Number(state.trailSize) || 100}%</span>
+        </div>
+        <div class="range">
+          <input type="range" id="set-trail-size" min="40" max="300" step="10" value="${Number(state.trailSize) || 100}" ${trailOn ? "" : "disabled"}>
+          <span class="muted" style="font-size:11px">тонкая кисть</span>
+          <div class="spacer"></div>
+          <span class="muted" style="font-size:11px">широкая</span>
         </div>
       </div>`;
   }
@@ -4921,6 +4969,8 @@
       const on = !(state.trail !== false);
       applyTrail(on);
       trailSwitch.classList.toggle("on", on);
+      const slider = $("#set-trail-size");
+      if (slider) slider.disabled = !on;
       state.settings = { ...(state.settings || {}), trail: on };
       api.saveSettings(state.settings).catch(() => {});
     });
@@ -4933,6 +4983,18 @@
       });
       fxSize.addEventListener("change", () => {
         state.settings = { ...(state.settings || {}), effect_size: applyEffectSize(fxSize.value) };
+        api.saveSettings(state.settings).catch(() => {});
+      });
+    }
+    const trailSize = $("#set-trail-size");
+    if (trailSize) {
+      trailSize.addEventListener("input", () => {
+        const size = applyTrailSize(trailSize.value);
+        const label = $("#trail-size-value");
+        if (label) label.textContent = `${size}%`;
+      });
+      trailSize.addEventListener("change", () => {
+        state.settings = { ...(state.settings || {}), trail_size: applyTrailSize(trailSize.value) };
         api.saveSettings(state.settings).catch(() => {});
       });
     }
@@ -5137,6 +5199,7 @@
       click_fx: state.fx,
       ambient: state.ambient || "stars",
       effect_size: Number(state.effectSize) || 100,
+      trail_size: Number(state.trailSize) || 100,
       trail: state.trail !== false,
       feed_grid: feedGridLevel(),
       wallpaper: state.wall.wallpaper,
@@ -6507,6 +6570,7 @@
     applyClickFx(state.fx);
     applyAmbient((state.settings && state.settings.ambient) || "stars");
     applyEffectSize((state.settings && state.settings.effect_size) || 100);
+    applyTrailSize((state.settings && state.settings.trail_size) || 100);
     applyTrail(!state.settings || state.settings.trail !== false);
     applyShape((state.settings && state.settings.shape) || "soft");
     applyUiScale((state.settings && state.settings.ui_scale) || 100);

@@ -51,6 +51,11 @@ fn default_true_trail() -> bool {
     true
 }
 
+/// Размер кисти трейса в процентах.
+fn default_trail_size() -> u8 {
+    100
+}
+
 fn default_ambient() -> String {
     "stars".to_string()
 }
@@ -199,6 +204,9 @@ pub struct Settings {
     /// Трейс за курсором.
     #[serde(default = "default_true_trail")]
     pub trail: bool,
+    /// Размер кисти трейса в процентах: 40–300.
+    #[serde(default = "default_trail_size")]
+    pub trail_size: u8,
 }
 
 /// Категория сборок: обычная «папка» в списке слева.
@@ -273,6 +281,7 @@ impl Default for Settings {
             feed_grid: default_feed_grid(),
             effect_size: default_effect_size(),
             trail: default_true_trail(),
+            trail_size: default_trail_size(),
         }
     }
 }
