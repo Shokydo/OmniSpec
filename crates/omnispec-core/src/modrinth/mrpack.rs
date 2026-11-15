@@ -279,6 +279,9 @@ pub async fn install_archive(
             source_url,
             id: None,
             category: None,
+            memory_mb: None,
+            java_path: None,
+            game_dir: None,
         },
     )?;
 
@@ -294,7 +297,7 @@ pub async fn install_archive(
         }
     }
 
-    let game_dir = paths.instance_game_dir(&meta.id);
+    let game_dir = crate::instances::game_dir_for(paths, &meta);
     let mut items = Vec::new();
     for entry in &index.files {
         if entry

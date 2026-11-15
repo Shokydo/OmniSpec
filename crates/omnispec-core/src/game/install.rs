@@ -46,6 +46,17 @@ pub async fn ensure_installed(
     reporter: &Reporter,
 ) -> Result<InstallReport> {
     let resolved = super::resolve(http, paths, version_id).await?;
+    ensure_installed_resolved(http, paths, &resolved, reporter).await
+}
+
+/// То же, но профиль уже разобран вызывающим — не разбираем его дважды.
+/// Запуск игры идёт именно этим путём: `resolve` вызывается один раз.
+pub async fn ensure_installed_resolved(
+    http: &Http,
+    paths: &Paths,
+    resolved: &ResolvedVersion,
+    reporter: &Reporter,
+) -> Result<InstallReport> {
     let features = version::default_features();
 
     // 1. Клиентский jar
@@ -130,14 +141,25 @@ pub async fn ensure_installed(
         downloads.len() as u64,
         format!("библиотек: {}", downloads.len()),
     );
-    download_parallel(http, downloads, 12, reporter, "libraries").await?;
+    // Больше параллельных запросов — быстрее первая установка (клиент, библиотеки).
+    download_parallel(http, downloads, 24, reporter, "libraries").await?;
 
-    for (jar, excludes) in native_jars {
-        if jar.exists() {
-            if let Err(err) = extract_natives(&jar, &natives_dir, &excludes) {
-                eprintln!("[omnispec] не удалось распаковать {}: {err}", jar.display());
+    // Распаковка нативных библиотек — только если набор jar'ов изменился.
+    // Раньше файлы перезаписывались на каждом запуске.
+    let footprint = natives_footprint(&native_jars);
+    let stamp = natives_dir.join(".omnispec-natives");
+    let stamp_ok = std::fs::read_to_string(&stamp)
+        .map(|text| text.trim() == footprint)
+        .unwrap_or(false);
+    if !stamp_ok {
+        for (jar, excludes) in &native_jars {
+            if jar.exists() {
+                if let Err(err) = extract_natives(jar, &natives_dir, excludes) {
+                    eprintln!("[omnispec] не удалось распаковать {}: {err}", jar.display());
+                }
             }
         }
+        let _ = std::fs::write(&stamp, format!("{footprint}\n"));
     }
     reporter.emit("libraries", 1, 3, "библиотеки готовы");
 
@@ -155,6 +177,15 @@ pub async fn ensure_installed(
         )
         .await?;
 
+        // Быстрый путь: индекс не менялся с прошлой полной проверки — файлы
+        // ресурсов уже на месте, пересчитывать тысячи объектов не нужно.
+        let stamp_file = paths.asset_indexes().join(format!("{}.ready", index_ref.id));
+        let index_stamp = file_fingerprint(&index_file);
+        let stamp_ok = !index_stamp.is_empty()
+            && std::fs::read_to_string(&stamp_file)
+                .map(|text| text.trim() == index_stamp)
+                .unwrap_or(false);
+    if !stamp_ok {
         let text = std::fs::read_to_string(&index_file)?;
         let index: AssetIndex = serde_json::from_str(&text)?;
         let mut items = Vec::new();
@@ -184,7 +215,11 @@ pub async fn ensure_installed(
             items.len() as u64,
             format!("ресурсов к загрузке: {}", items.len()),
         );
-        download_parallel(http, items, 16, reporter, "assets").await?;
+        download_parallel(http, items, 32, reporter, "assets").await?;
+        let _ = std::fs::write(&stamp_file, format!("{index_stamp}\n"));
+    } else {
+        reporter.emit("assets", 1, 1, "ресурсы уже проверены");
+    }
     }
     reporter.emit("assets", 1, 1, "ресурсы готовы");
 
@@ -247,6 +282,36 @@ fn write_log_config(paths: &Paths) -> Result<PathBuf> {
         std::fs::write(&file, TEMPLATE)?;
     }
     Ok(file)
+}
+
+/// Отпечаток файла «время изменения|размер» — по нему понимаем, менялся ли он.
+fn file_fingerprint(path: &std::path::Path) -> String {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return String::new();
+    };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|age| age.as_secs())
+        .unwrap_or(0);
+    format!("{mtime}|{}", meta.len())
+}
+
+/// Отпечаток набора нативных jar'ов: имена + время изменения + размер.
+fn natives_footprint(jars: &[(PathBuf, Vec<String>)]) -> String {
+    let mut parts = Vec::with_capacity(jars.len());
+    for (jar, _) in jars {
+        parts.push(format!(
+            "{}#{}",
+            jar.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            file_fingerprint(jar)
+        ));
+    }
+    parts.sort();
+    parts.join(",")
 }
 
 /// `group:artifact:version` → относительный maven-путь для библиотек без `downloads`.

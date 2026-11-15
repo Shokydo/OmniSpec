@@ -118,7 +118,7 @@ pub fn remember(paths: &Paths, instance: &InstanceMeta, record: ContentRecord) {
 }
 
 fn dir_of(paths: &Paths, instance: &InstanceMeta, kind: &str) -> PathBuf {
-    paths.instance_game_dir(&instance.id).join(folder(kind))
+    crate::instances::game_dir_for(paths, instance).join(folder(kind))
 }
 
 /// Все файлы нужного вида в сборке.

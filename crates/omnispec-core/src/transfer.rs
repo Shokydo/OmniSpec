@@ -364,10 +364,13 @@ pub fn import_external(
             source_url: None,
             id: None,
             category: None,
+            memory_mb: None,
+            java_path: None,
+            game_dir: None,
         },
     )?;
 
-    let target = paths.instance_game_dir(&meta.id);
+    let target = instances::game_dir_for(paths, &meta);
     std::fs::create_dir_all(&target)?;
     copy_tree(&source, &target, 0)?;
 
@@ -459,10 +462,13 @@ pub fn import_zip(
             source_url: None,
             id: None,
             category: None,
+            memory_mb: None,
+            java_path: None,
+            game_dir: None,
         },
     )?;
 
-    let target = paths.instance_game_dir(&meta.id);
+    let target = instances::game_dir_for(paths, &meta);
     std::fs::create_dir_all(&target)?;
 
     let mut icon: Option<(String, Vec<u8>)> = None;
@@ -623,7 +629,7 @@ struct Index {
 /// Экспорт сборки: `format` = `mrpack` | `zip`.
 pub fn export_instance(paths: &Paths, id: &str, out: &Path, format: &str) -> Result<PathBuf> {
     let meta = instances::load(paths, id)?;
-    let game = paths.instance_game_dir(id);
+    let game = instances::game_dir_for(paths, &meta);
     if !game.is_dir() {
         return Err(Error::Other("у сборки нет игровой папки".into()));
     }

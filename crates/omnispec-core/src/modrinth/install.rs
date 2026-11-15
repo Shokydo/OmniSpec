@@ -21,7 +21,7 @@ pub struct InstallOutcome {
 
 /// Папка сборки под тип проекта.
 pub fn target_dir(paths: &Paths, instance: &InstanceMeta, project_type: &str) -> PathBuf {
-    let base = paths.instance_game_dir(&instance.id);
+    let base = crate::instances::game_dir_for(paths, instance);
     match project_type {
         "resourcepack" => base.join("resourcepacks"),
         "shader" => base.join("shaderpacks"),
@@ -290,8 +290,7 @@ pub fn remove_mod(paths: &Paths, instance: &InstanceMeta, filename: &str) -> Res
         return Err(Error::Other("недопустимое имя файла".into()));
     }
     for sub in ["mods", "resourcepacks", "shaderpacks"] {
-        let path = paths
-            .instance_game_dir(&instance.id)
+        let path = crate::instances::game_dir_for(paths, instance)
             .join(sub)
             .join(filename);
         if path.exists() {
@@ -304,7 +303,7 @@ pub fn remove_mod(paths: &Paths, instance: &InstanceMeta, filename: &str) -> Res
 
 /// Включить/выключить мод переименованием в `.disabled`.
 pub fn toggle_mod(paths: &Paths, instance: &InstanceMeta, filename: &str) -> Result<String> {
-    let dir = paths.instance_game_dir(&instance.id).join("mods");
+    let dir = crate::instances::game_dir_for(paths, instance).join("mods");
     let active = dir.join(filename);
     if active.exists() {
         let disabled = dir.join(format!("{filename}.disabled"));

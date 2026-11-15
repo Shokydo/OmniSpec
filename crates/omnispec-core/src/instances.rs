@@ -104,6 +104,9 @@ pub struct InstanceMeta {
     /// Категория (папка) в списке слева.
     #[serde(default)]
     pub category: Option<String>,
+    /// Своя папка игры (место установки). Пусто — папка лаунчера.
+    #[serde(default)]
+    pub game_dir: Option<String>,
 }
 
 impl InstanceMeta {
@@ -151,6 +154,15 @@ pub struct CreateInstanceRequest {
     /// Категория, в которую положить сборку.
     #[serde(default)]
     pub category: Option<String>,
+    /// Сколько ОЗУ выделить этой сборке (МБ).
+    #[serde(default)]
+    pub memory_mb: Option<u32>,
+    /// Своя Java для этой сборки (`None` — автоматически).
+    #[serde(default)]
+    pub java_path: Option<String>,
+    /// Место установки: своя папка игры (`None` — папка лаунчера).
+    #[serde(default)]
+    pub game_dir: Option<String>,
 }
 
 /// Все сборки, отсортированные по времени последнего запуска.
@@ -242,8 +254,12 @@ pub fn create(paths: &Paths, request: CreateInstanceRequest) -> Result<InstanceM
         created: now_unix(),
         last_played: None,
         playtime_secs: 0,
-        memory_mb: None,
-        java_path: None,
+        memory_mb: request.memory_mb,
+        java_path: request
+            .java_path
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
         jvm_args: None,
         icon: request.icon,
         version_override: None,
@@ -251,21 +267,29 @@ pub fn create(paths: &Paths, request: CreateInstanceRequest) -> Result<InstanceM
         source: request.source.unwrap_or_else(|| "manual".into()),
         source_url: request.source_url,
         category: request.category,
+        game_dir: request
+            .game_dir
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
     };
 
     let dir = paths.instance_dir(&id);
     std::fs::create_dir_all(&dir)?;
+    // Папки внутри игровой папки: по умолчанию в папке лаунчера, но если
+    // выбрали своё место установки — там.
+    let game_root = game_dir_for(paths, &meta);
+    std::fs::create_dir_all(&game_root)?;
     for sub in [
-        "minecraft",
-        "minecraft/mods",
-        "minecraft/resourcepacks",
-        "minecraft/shaderpacks",
-        "minecraft/saves",
-        "minecraft/config",
-        "minecraft/logs",
-        "minecraft/screenshots",
+        "mods",
+        "resourcepacks",
+        "shaderpacks",
+        "saves",
+        "config",
+        "logs",
+        "screenshots",
     ] {
-        std::fs::create_dir_all(dir.join(sub))?;
+        std::fs::create_dir_all(game_root.join(sub))?;
     }
     save(paths, &meta)?;
     Ok(meta)
@@ -308,8 +332,21 @@ pub fn add_playtime(paths: &Paths, id: &str, secs: u64) {
     }
 }
 
+/// Папка игры конкретной сборки: своя (место установки), иначе папка лаунчера.
+pub fn game_dir_for(paths: &Paths, meta: &InstanceMeta) -> PathBuf {
+    meta.game_dir
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| paths.instance_game_dir(&meta.id))
+}
+
 pub fn game_dir(paths: &Paths, id: &str) -> PathBuf {
-    paths.instance_game_dir(id)
+    match load(paths, id) {
+        Ok(meta) => game_dir_for(paths, &meta),
+        Err(_) => paths.instance_game_dir(id),
+    }
 }
 
 pub fn now_unix() -> u64 {
@@ -361,6 +398,7 @@ mod tests {
             source: "manual".into(),
             source_url: None,
             category: None,
+            game_dir: None,
         };
         save(&paths, &meta).unwrap();
         add_playtime(&paths, "pt", 600);
@@ -396,6 +434,7 @@ mod tests {
             source: "manual".into(),
             source_url: None,
             category: None,
+            game_dir: None,
         };
         assert_eq!(meta.version_id(), "fabric-loader-0.16.9-1.21.4");
     }
@@ -417,6 +456,9 @@ mod tests {
                 source_url: None,
                 id: None,
                 category: Some("cat-perf".into()),
+                memory_mb: None,
+                java_path: None,
+                game_dir: None,
             },
         )
         .unwrap();
@@ -444,6 +486,9 @@ mod tests {
                 source_url: None,
                 id: None,
                 category: None,
+                memory_mb: None,
+                java_path: None,
+                game_dir: None,
             },
         )
         .unwrap();
@@ -453,5 +498,39 @@ mod tests {
         delete(&paths, &meta.id).unwrap();
         assert!(list(&paths).unwrap().is_empty());
         std::fs::remove_dir_all(&paths.root).ok();
+    }
+
+    /// Своё место установки: папки сборки живут там, а не в папке лаунчера.
+    #[test]
+    fn custom_install_dir() {
+        let root = std::env::temp_dir().join(format!("omnispec-custom-{}", std::process::id()));
+        let custom = std::env::temp_dir().join(format!("omnispec-custom-game-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&custom);
+        let paths = Paths::new(&root).unwrap();
+        let meta = create(
+            &paths,
+            CreateInstanceRequest {
+                name: "Своя папка".into(),
+                mc_version: "1.21.4".into(),
+                loader: Loader::Vanilla,
+                icon: Some("i-gem".into()),
+                notes: String::new(),
+                source: None,
+                source_url: None,
+                id: None,
+                category: None,
+                memory_mb: Some(6144),
+                java_path: None,
+                game_dir: Some(custom.display().to_string()),
+            },
+        )
+        .unwrap();
+        assert_eq!(meta.memory_mb, Some(6144));
+        assert_eq!(game_dir_for(&paths, &meta), custom);
+        assert!(custom.join("mods").exists());
+        assert_eq!(game_dir(&paths, &meta.id), custom);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&custom);
     }
 }

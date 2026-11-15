@@ -1982,7 +1982,7 @@
       zipPath: "", versions: [], zipMc: "", zipLoader: "vanilla",
       zipLoaderVersion: "", zipLoaderVersions: [], url: "", busy: false, status: "", open: false
     },
-    create: { mode: "manual", name: "", mc: "", loader: "fabric", loaderVersion: "", versions: [], loaderVersionsList: [], packQuery: "", packs: [], selectedPack: null }
+    create: null
   };
 
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -6641,91 +6641,213 @@
 
   /* ==================== МОДАЛКА СОЗДАНИЯ ==================== */
   async function openCreate(options = {}) {
-    state.create = { mode: "manual", name: "", mc: "", loader: "fabric", loaderVersion: "", versions: [], loaderVersionsList: [], packQuery: "", packs: [], selectedPack: null, category: options.category || null };
+    const settings = state.settings || {};
+    state.create = {
+      name: "",
+      mc: "",
+      loader: "fabric",
+      loaderVersion: "",
+      versions: [],
+      loaderVersionsList: [],
+      // иконка: "" — первая буква названия, "i-cube" — встроенная, путь — своя картинка
+      icon: "",
+      iconFile: "",
+      iconPreview: "",
+      memory: Math.max(512, Math.round(((settings.memory_mb || 4096)) / 512) * 512),
+      installMode: "default",
+      customDir: "",
+      javaPath: "",
+      javas: [],
+      category: options.category || null
+    };
     $("#modal-create").hidden = false;
-    state.create.versions = await api.versions((state.settings && state.settings.show_snapshots) || false).catch(() => []);
+    renderCreateModal();
+    state.create.versions = await api.versions((settings.show_snapshots) || false).catch(() => []);
     state.create.mc = (state.create.versions[0] || {}).id || "1.21.4";
     state.create.name = `Сборка ${state.create.mc}`;
     renderCreateModal();
     await loadLoaderVersions();
+    // список Java — из кеша ядра, не блокирует окно
+    api.javas().then((list) => {
+      state.create.javas = Array.isArray(list) ? list : [];
+      if (!$("#modal-create").hidden) renderCreateModal();
+    }).catch(() => {});
+    if (!state.appHome) {
+      api.appInfo().then((info) => {
+        state.appHome = (info && info.home) || "";
+        if (!$("#modal-create").hidden) renderCreateModal();
+      }).catch(() => {});
+    }
+  }
+
+  /** Папка лаунчера, куда сборка ставится по умолчанию. */
+  function defaultInstallDir() {
+    const home = state.appHome || "";
+    const sep = home.includes("\\") ? "\\" : "/";
+    return home ? `${home}${sep}instances` : "папка лаунчера/instances";
+  }
+
+  /** Превью иконки: буква, встроенная иконка или своя картинка. */
+  function createIconHtml(cfg) {
+    if (cfg.iconFile && cfg.iconPreview) return `<img src="${esc(cfg.iconPreview)}" alt="">`;
+    if (cfg.icon) return `<svg class="ic"><use href="#${esc(cfg.icon)}"/></svg>`;
+    return esc(String(cfg.name || "?").trim().charAt(0).toUpperCase() || "?");
   }
 
   function renderCreateModal() {
     const cfg = state.create;
-    $$("#create-tabs .mtab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.mode === cfg.mode));
     const body = $("#create-body");
+    const dir = cfg.installMode === "custom" && cfg.customDir ? cfg.customDir : defaultInstallDir();
+    body.innerHTML = `
+      <div class="create-grid">
+        <div class="field">
+          <label>Название</label>
+          <input class="input" id="c-name" value="${esc(cfg.name)}" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Версия</label>
+          <select class="select" id="c-mc">
+            ${cfg.versions.map((version) => `<option value="${esc(version.id)}" ${version.id === cfg.mc ? "selected" : ""}>${esc(version.id)}${version.type && version.type !== "release" ? ` (${esc(version.type)})` : ""}</option>`).join("") || `<option value="${esc(cfg.mc)}">${esc(cfg.mc)}</option>`}
+          </select>
+        </div>
 
-    if (cfg.mode === "manual") {
-      body.innerHTML = `
-        <div class="form-grid">
-          <div class="field">
-            <label>Название сборки</label>
-            <input class="input" id="c-name" value="${esc(cfg.name)}" spellcheck="false">
+        <div class="field is-wide">
+          <label>Иконка</label>
+          <div class="icon-grid create-icons" id="c-icons">
+            <button class="icon-chip letter ${!cfg.icon && !cfg.iconFile ? "is-active" : ""}" data-icon="" title="Первая буква">${esc(String(cfg.name || "?").trim().charAt(0).toUpperCase() || "?")}</button>
+            ${cfg.iconFile ? `<button class="icon-chip img is-active" data-icon-file="1" title="Своя картинка">${createIconHtml(cfg)}</button>` : ""}
+            ${INSTANCE_ICONS.map((icon) => `<button class="icon-chip ${!cfg.iconFile && cfg.icon === icon ? "is-active" : ""}" data-icon="${icon}" title="${icon.replace("i-", "")}"><svg class="ic"><use href="#${icon}"/></svg></button>`).join("")}
           </div>
-          <div class="field">
-            <label>Версия Minecraft</label>
-            <select class="select" id="c-mc">
-              ${cfg.versions.map((version) => `<option value="${esc(version.id)}" ${version.id === cfg.mc ? "selected" : ""}>${esc(version.id)}${version.type && version.type !== "release" ? ` (${esc(version.type)})` : ""}</option>`).join("")}
-            </select>
+          <div class="settings-actions">
+            <button class="btn" id="c-icon-file"><svg class="ic"><use href="#i-image"/></svg>Иконка из картинки…</button>
           </div>
-          <div class="field">
-            <label>Загрузчик модов</label>
-            <div class="chips" id="c-loaders">
-              ${Object.entries(LOADER_NAMES).map(([value, label]) => `<button class="chip ${cfg.loader === value ? "is-active" : ""}" data-loader="${value}">${label}</button>`).join("")}
-            </div>
+        </div>
+
+        <div class="field is-wide">
+          <label>Загрузчик</label>
+          <div class="chips" id="c-loaders">
+            ${Object.entries(LOADER_NAMES).map(([value, label]) => `<button class="chip ${cfg.loader === value ? "is-active" : ""}" data-loader="${value}">${label}</button>`).join("")}
           </div>
-          <div class="field" id="c-loader-version-field" ${cfg.loader === "vanilla" ? "hidden" : ""}>
-            <label>Версия загрузчика</label>
-            <select class="select" id="c-loader-version">
-              ${cfg.loaderVersionsList.length ? cfg.loaderVersionsList.map((option) => `<option value="${esc(option.version)}" ${option.version === cfg.loaderVersion ? "selected" : ""}>${esc(option.version)}${option.stable ? "" : " (beta)"}</option>`).join("") : `<option value="">загружаем…</option>`}
-            </select>
+        </div>
+        <div class="field" id="c-loader-version-field" ${cfg.loader === "vanilla" ? "hidden" : ""}>
+          <label>Версия загрузчика</label>
+          <select class="select" id="c-loader-version">
+            ${cfg.loaderVersionsList.length ? cfg.loaderVersionsList.map((option) => `<option value="${esc(option.version)}" ${option.version === cfg.loaderVersion ? "selected" : ""}>${esc(option.version)}${option.stable ? "" : " (beta)"}</option>`).join("") : `<option value="">загружаем…</option>`}
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Java</label>
+          <select class="select" id="c-java">
+            <option value="" ${!cfg.javaPath ? "selected" : ""}>по умолчанию — подобрать автоматически</option>
+            ${cfg.javas.map((item) => `<option value="${esc(item.path)}" ${cfg.javaPath === item.path ? "selected" : ""}>Java ${esc(String(item.major))} — ${esc(item.vendor || "Java")} (${esc(item.path)})</option>`).join("")}
+            ${cfg.javaPath && !cfg.javas.some((item) => item.path === cfg.javaPath) ? `<option value="${esc(cfg.javaPath)}" selected>${esc(cfg.javaPath)}</option>` : ""}
+          </select>
+        </div>
+
+        <div class="field is-wide">
+          <label>Выделение ОЗУ</label>
+          <div class="range">
+            <input type="range" id="c-memory" min="512" max="32768" step="512" value="${cfg.memory}">
+            <span class="tag" id="c-memory-value">${cfg.memory} МБ</span>
           </div>
-        </div>`;
-      $("#c-name").addEventListener("input", (event) => { cfg.name = event.target.value; });
-      $("#c-mc").addEventListener("change", async (event) => { cfg.mc = event.target.value; await loadLoaderVersions(); renderCreateModal(); });
-      $$("#c-loaders .chip").forEach((chip) => chip.addEventListener("click", async () => {
-        cfg.loader = chip.dataset.loader;
-        renderCreateModal();
-        await loadLoaderVersions();
-      }));
-      if ($("#c-loader-version")) $("#c-loader-version").addEventListener("change", (event) => { cfg.loaderVersion = event.target.value; });
-      $("#create-submit").textContent = "Создать";
-      $("#create-hint").textContent = cfg.loader === "vanilla" ? "чистая ваниль" : `${LOADER_NAMES[cfg.loader]} ${cfg.loaderVersion || "—"}`;
-    } else {
-      body.innerHTML = `
-        <div class="form-grid">
-          <div class="field">
-            <label>Поиск модпака на Modrinth</label>
-            <div style="display:flex;gap:8px">
-              <input class="input grow" id="c-pack-query" value="${esc(cfg.packQuery)}" placeholder="fabulously optimized, cobblemon, all the mods…" spellcheck="false">
-              <button class="btn" id="c-pack-search">Найти</button>
-            </div>
+        </div>
+
+        <div class="field is-wide">
+          <label>Место установки</label>
+          <div class="chips" id="c-install-mode">
+            <button class="chip ${cfg.installMode !== "custom" ? "is-active" : ""}" data-install-mode="default">По умолчанию</button>
+            <button class="chip ${cfg.installMode === "custom" ? "is-active" : ""}" data-install-mode="custom">Своя папка</button>
           </div>
-          <div style="display:grid;gap:6px;max-height:300px;overflow-y:auto">
-            ${cfg.packs.length ? cfg.packs.map((pack) => `
-              <div class="pack-row ${cfg.selectedPack && cfg.selectedPack.project_id === pack.project_id ? "is-active" : ""}" data-pack="${esc(pack.project_id)}">
-                <div class="card-icon" style="width:34px;height:34px;border-radius:7px">${pack.icon_url ? `<img src="${esc(pack.icon_url)}" alt="">` : "P"}</div>
-                <div style="flex:1;min-width:0">
-                  <div class="item-title">${esc(pack.title)}</div>
-                  <div class="item-sub">${esc((pack.description || "").slice(0, 90))}</div>
-                </div>
-                <span class="tag">${(pack.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
-              </div>`).join("") : `<div class="muted" style="font-size:12px">Найди модпак и выбери его из списка</div>`}
+          <div class="flex-row" style="margin-top:8px">
+            <input class="input grow" id="c-dir" value="${esc(dir)}" spellcheck="false" ${cfg.installMode === "custom" ? "" : "readonly"}>
+            <button class="btn" id="c-dir-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать папку…</button>
           </div>
-        </div>`;
-      $("#c-pack-search").addEventListener("click", searchPacks);
-      $("#c-pack-query").addEventListener("keydown", (event) => { if (event.key === "Enter") searchPacks(); });
-      $$("[data-pack]").forEach((row) => row.addEventListener("click", () => {
-        cfg.selectedPack = cfg.packs.find((pack) => pack.project_id === row.dataset.pack);
-        renderCreateModal();
-      }));
-      $("#create-submit").textContent = "Установить";
-      $("#create-hint").textContent = cfg.selectedPack ? cfg.selectedPack.title : "выбери модпак";
-    }
+          <div class="hint">${cfg.installMode === "custom" ? "игра, моды и миры будут в этой папке" : "по умолчанию — в папке лаунчера, рядом с остальными сборками"}</div>
+        </div>
+      </div>`;
+
+    // --- привязки ---
+    $("#c-name").addEventListener("input", (event) => {
+      cfg.name = event.target.value;
+      const chips = $("#c-icons");
+      if (chips && chips.firstElementChild) chips.firstElementChild.textContent = String(cfg.name || "?").trim().charAt(0).toUpperCase() || "?";
+      updateCreateHint();
+    });
+    $("#c-mc").addEventListener("change", async (event) => {
+      cfg.mc = event.target.value;
+      if (!cfg.name || /^Сборка /.test(cfg.name)) cfg.name = `Сборка ${cfg.mc}`;
+      await loadLoaderVersions();
+      renderCreateModal();
+    });
+    $$("#c-icons .icon-chip").forEach((chip) => chip.addEventListener("click", () => {
+      if (chip.dataset.iconFile) return;
+      cfg.icon = chip.dataset.icon || "";
+      cfg.iconFile = "";
+      cfg.iconPreview = "";
+      renderCreateModal();
+    }));
+    $("#c-icon-file").addEventListener("click", async () => {
+      const path = await api.pickFile("Иконка сборки", ["png", "jpg", "jpeg", "webp"]).catch(() => null);
+      if (!path) return;
+      cfg.iconFile = path;
+      cfg.icon = "";
+      cfg.iconPreview = await readImagePreview(path).catch(() => "");
+      renderCreateModal();
+    });
+    $$("#c-loaders .chip").forEach((chip) => chip.addEventListener("click", async () => {
+      cfg.loader = chip.dataset.loader;
+      renderCreateModal();
+      await loadLoaderVersions();
+    }));
+    const loaderVersion = $("#c-loader-version");
+    if (loaderVersion) loaderVersion.addEventListener("change", (event) => {
+      cfg.loaderVersion = event.target.value;
+      updateCreateHint();
+    });
+    const memory = $("#c-memory");
+    memory.addEventListener("input", () => {
+      cfg.memory = Number(memory.value);
+      $("#c-memory-value").textContent = `${cfg.memory} МБ`;
+    });
+    $$("#c-install-mode .chip").forEach((chip) => chip.addEventListener("click", () => {
+      cfg.installMode = chip.dataset.installMode === "custom" ? "custom" : "default";
+      renderCreateModal();
+    }));
+    $("#c-dir").addEventListener("input", (event) => {
+      if (cfg.installMode !== "custom") return;
+      cfg.customDir = event.target.value;
+      updateCreateHint();
+    });
+    $("#c-dir-pick").addEventListener("click", async () => {
+      const picked = await api.pickDir("Куда ставить сборку").catch(() => null);
+      if (!picked) return;
+      cfg.installMode = "custom";
+      cfg.customDir = picked;
+      renderCreateModal();
+    });
+    $("#c-java").addEventListener("change", (event) => { cfg.javaPath = event.target.value; });
+    updateCreateHint();
+  }
+
+  function updateCreateHint() {
+    const cfg = state.create;
+    const hint = $("#create-hint");
+    if (!hint || !cfg) return;
+    const loader = cfg.loader === "vanilla" ? "ваниль" : `${LOADER_NAMES[cfg.loader] || cfg.loader} ${cfg.loaderVersion || "—"}`;
+    const where = cfg.installMode === "custom" && cfg.customDir ? cfg.customDir : "папка лаунчера";
+    hint.textContent = `MC ${cfg.mc || "—"} · ${loader} · ${cfg.memory} МБ · ${where}`;
+  }
+
+  /** Превью картинки-иконки до создания сборки. */
+  async function readImagePreview(path) {
+    const data = await api.imageDataUrl(path).catch(() => null);
+    return typeof data === "string" ? data : "";
   }
 
   async function loadLoaderVersions() {
     const cfg = state.create;
+    if (!cfg) return;
     if (cfg.loader === "vanilla") { cfg.loaderVersionsList = []; cfg.loaderVersion = ""; return; }
     cfg.loaderVersionsList = await api.loaderVersions(cfg.loader, cfg.mc).catch(() => []);
     const current = cfg.loaderVersionsList.find((option) => option.stable) || cfg.loaderVersionsList[0];
@@ -6733,37 +6855,29 @@
     renderCreateModal();
   }
 
-  async function searchPacks() {
-    state.create.packQuery = $("#c-pack-query").value;
-    const result = await api.search({ query: state.create.packQuery, projectType: "modpack", mcVersion: null, loader: null, offset: 0 }).catch(() => ({ hits: [] }));
-    state.create.packs = result.hits || [];
-    renderCreateModal();
-  }
-
   async function submitCreate() {
     const cfg = state.create;
+    if (!cfg) return;
     const submit = $("#create-submit");
     submit.disabled = true;
     try {
-      if (cfg.mode === "manual") {
-        const loader = cfg.loader === "vanilla" ? { type: "vanilla" } : { type: cfg.loader, version: cfg.loaderVersion };
-        const meta = await api.createInstance({ name: cfg.name || `Сборка ${cfg.mc}`, mc_version: cfg.mc, loader });
-        $("#modal-create").hidden = true;
-        if (cfg.category) await moveInstanceToCategory(meta.id, cfg.category);
-        await refreshInstances();
-        selectInstance(meta.id);
-        toast(`Сборка «${meta.name}» создана`, "ok");
-      } else {
-        if (!cfg.selectedPack) { toast("Выбери модпак", "err"); return; }
-        const versions = await api.modrinthVersions(cfg.selectedPack.project_id, null, null);
-        if (!versions.length) throw new Error("у модпака нет версий");
-        const meta = await api.installModpack(versions[0].id);
-        $("#modal-create").hidden = true;
-        if (cfg.category) await moveInstanceToCategory(meta.id, cfg.category);
-        await refreshInstances();
-        selectInstance(meta.id);
-        toast(`Модпак «${meta.name}» установлен`, "ok");
-      }
+      const loader = cfg.loader === "vanilla" ? { type: "vanilla" } : { type: cfg.loader, version: cfg.loaderVersion };
+      const customDir = cfg.installMode === "custom" ? (cfg.customDir || "").trim() : "";
+      const meta = await api.createInstance({
+        name: cfg.name || `Сборка ${cfg.mc}`,
+        mc_version: cfg.mc,
+        loader,
+        icon: cfg.iconFile ? null : (cfg.icon || null),
+        memory_mb: cfg.memory,
+        java_path: cfg.javaPath || null,
+        game_dir: customDir || null
+      });
+      $("#modal-create").hidden = true;
+      if (cfg.iconFile) await api.setInstanceIconFile(meta.id, cfg.iconFile).catch(() => {});
+      if (cfg.category) await moveInstanceToCategory(meta.id, cfg.category);
+      await refreshInstances();
+      selectInstance(meta.id);
+      toast(`Сборка «${meta.name}» создана`, "ok");
     } catch (err) {
       toast(String(err), "err");
     } finally {
@@ -6880,7 +6994,6 @@
     });
     $("#modal-create").addEventListener("mousedown", (event) => { if (event.target.id === "modal-create") $("#modal-create").hidden = true; });
     $("#create-submit").addEventListener("click", submitCreate);
-    $$("#create-tabs .mtab").forEach((tab) => tab.addEventListener("click", () => { state.create.mode = tab.dataset.mode; renderCreateModal(); }));
 
     // контекстное меню закрывается кликом мимо, прокруткой и Escape
     document.addEventListener("mousedown", (event) => {

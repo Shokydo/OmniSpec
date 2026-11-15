@@ -205,6 +205,9 @@ async fn run(command: &str, args: Args) -> omnispec_core::Result<()> {
                     source_url: None,
                     id: None,
                     category: None,
+                    memory_mb: None,
+                    java_path: None,
+                    game_dir: None,
                 },
             )?;
             println!(

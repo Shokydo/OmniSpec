@@ -115,8 +115,47 @@ pub fn read_version_json(file: &Path) -> Result<VersionJson> {
     Ok(serde_json::from_str(&text)?)
 }
 
+/// Развернуть цепочку `inheritsFrom` из локальных файлов, без сети и манифеста.
+/// Возвращает `None`, если хотя бы одного json не хватает на диске.
+pub fn resolve_local(paths: &Paths, id: &str) -> Option<ResolvedVersion> {
+    let mut chain = Vec::new();
+    let mut current = id.to_string();
+    for _ in 0..8 {
+        let file = paths.version_file(&current);
+        if !file.exists() {
+            return None;
+        }
+        let json = read_version_json(&file).ok()?;
+        let parent = json.inherits_from.clone();
+        chain.push(json);
+        match parent {
+            Some(parent) if !parent.is_empty() && parent != current => current = parent,
+            _ => break,
+        }
+    }
+    if chain.is_empty() {
+        return None;
+    }
+    let mut resolved = version::merge_chain(chain);
+    resolved.id = id.to_string();
+    if resolved.jar_id.is_empty() {
+        resolved.jar_id = id.to_string();
+    }
+    if resolved.main_class.is_empty() {
+        return None;
+    }
+    Some(resolved)
+}
+
 /// Развернуть цепочку `inheritsFrom` в единый профиль.
+///
+/// Быстрый путь (обычный запуск уже установленной сборки): все json лежат в
+/// `meta/versions`, поэтому ни манифест, ни сеть не нужны вовсе — раньше на
+/// каждый запуск парсился 400-килобайтный манифест Mojang.
 pub async fn resolve(http: &Http, paths: &Paths, id: &str) -> Result<ResolvedVersion> {
+    if let Some(resolved) = resolve_local(paths, id) {
+        return Ok(resolved);
+    }
     let manifest = fetch_manifest(http, paths, Duration::from_secs(3600)).await?;
     let mut chain = Vec::new();
     let mut current = id.to_string();
@@ -171,4 +210,61 @@ pub fn filter_versions(manifest: &VersionManifest, include_snapshots: bool) -> V
         .filter(|entry| include_snapshots || entry.kind == "release")
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+
+    /// Без локальных json быстрый путь молчит — тогда работает сеть/манифест.
+    #[test]
+    fn local_resolve_needs_files() {
+        let root = std::env::temp_dir().join(format!("omnispec-resolve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::new(&root).unwrap();
+        assert!(resolve_local(&paths, "1.21.4").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Установленный профиль собирается из локальных файлов, без манифеста.
+    #[test]
+    fn local_resolve_merges_chain() {
+        let root = std::env::temp_dir().join(format!("omnispec-resolve2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::new(&root).unwrap();
+        let write = |id: &str, json: serde_json::Value| {
+            let dir = paths.version_dir(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(format!("{id}.json")), json.to_string()).unwrap();
+        };
+        write(
+            "1.21.4",
+            serde_json::json!({
+                "id": "1.21.4",
+                "type": "release",
+                "mainClass": "net.minecraft.client.main.Main",
+                "assets": "17",
+                "assetIndex": { "id": "17", "sha1": "00", "size": 1, "totalSize": 1, "url": "http://127.0.0.1/index.json" },
+                "javaVersion": { "majorVersion": 21 },
+                "downloads": { "client": { "sha1": "00", "size": 1, "url": "http://127.0.0.1/client.jar" } },
+                "libraries": []
+            }),
+        );
+        write(
+            "fabric-loader-0.16.9-1.21.4",
+            serde_json::json!({
+                "id": "fabric-loader-0.16.9-1.21.4",
+                "inheritsFrom": "1.21.4",
+                "mainClass": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+                "libraries": []
+            }),
+        );
+        let resolved = resolve_local(&paths, "fabric-loader-0.16.9-1.21.4").expect("профиль должен собраться");
+        assert_eq!(resolved.main_class, "net.fabricmc.loader.impl.launch.knot.KnotClient");
+        // jar берётся из родительской ванили
+        assert_eq!(resolved.jar_id, "1.21.4");
+        assert_eq!(resolved.java_major, 21);
+        assert_eq!(resolved.assets.as_deref(), Some("17"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

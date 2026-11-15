@@ -28,6 +28,9 @@ pub struct LaunchPlan {
     pub game_dir: String,
     pub natives_dir: String,
     pub classpath_entries: usize,
+    /// Сколько заняла подготовка запуска, мс (для лога и профилирования).
+    #[serde(default)]
+    pub prepare_ms: u64,
 }
 
 impl LaunchPlan {
@@ -62,14 +65,18 @@ pub async fn prepare(
     account: &Account,
     reporter: &Reporter,
 ) -> Result<LaunchPlan> {
+    // Тайминги этапов: в консоли видно, сколько заняла подготовка.
+    let started = std::time::Instant::now();
     reporter.emit("launch", 0, 5, "проверяем профиль версии");
 
     let version_id = instance.version_id();
     crate::loaders::ensure_profile(http, paths, instance, reporter).await?;
 
     reporter.emit("launch", 1, 5, "проверяем файлы игры");
-    let report = install::ensure_installed(http, paths, &version_id, reporter).await?;
+    // Профиль разбираем один раз и передаём в установку: раньше его разбирали
+    // дважды (манифест Mojang — 400 КБ json на каждый запуск).
     let resolved = super::resolve(http, paths, &version_id).await?;
+    let report = install::ensure_installed_resolved(http, paths, &resolved, reporter).await?;
     let features = version::default_features();
 
     reporter.emit("launch", 3, 5, "ищем Java");
@@ -101,7 +108,7 @@ pub async fn prepare(
     .await?;
 
     let memory_mb = instance.memory_or(settings.memory_clamped());
-    let game_dir = paths.instance_game_dir(&instance.id);
+    let game_dir = crate::instances::game_dir_for(paths, instance);
     std::fs::create_dir_all(&game_dir)?;
 
     let classpath: Vec<String> = report
@@ -237,7 +244,13 @@ pub async fn prepare(
     args.push(resolved.main_class.clone());
     args.append(&mut game_args);
 
-    reporter.emit("launch", 5, 5, "готово к запуску");
+    let prepare_ms = started.elapsed().as_millis() as u64;
+    reporter.emit(
+        "launch",
+        5,
+        5,
+        format!("готово к запуску за {} мс", prepare_ms),
+    );
 
     Ok(LaunchPlan {
         version_id: resolved.id.clone(),
@@ -249,6 +262,7 @@ pub async fn prepare(
         game_dir: game_dir.display().to_string(),
         natives_dir: report.natives_dir.display().to_string(),
         classpath_entries: classpath.len(),
+        prepare_ms,
     })
 }
 

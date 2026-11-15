@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use futures::StreamExt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -173,40 +174,147 @@ pub fn system_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-/// Найти все Java в системе (без дублей).
-pub async fn detect_all(paths: &Paths) -> Vec<JavaInstall> {
-    // Ключ — реальный путь к бинарнику: `/usr/bin/java` и `/usr/lib/jvm/.../bin/java`
-    // ведут к одной и той же Java, дублировать их в списке не нужно.
-    fn key(path: &Path) -> PathBuf {
-        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+/// Ключ — реальный путь к бинарнику: `/usr/bin/java` и `/usr/lib/jvm/.../bin/java`
+/// ведут к одной и той же Java, дублировать их в списке не нужно.
+fn path_key(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Отпечаток бинарника «время изменения|размер»: если Java обновили, отпечаток
+/// изменится и мы опросим её заново.
+fn binary_fingerprint(path: &Path) -> String {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return String::new();
+    };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|age| age.as_secs())
+        .unwrap_or(0);
+    format!("{mtime}|{}", meta.len())
+}
+
+/// Запись кеша найденных Java.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedJava {
+    path: String,
+    major: u32,
+    vendor: String,
+    source: String,
+    stamp: String,
+}
+
+fn java_cache_file(paths: &Paths) -> PathBuf {
+    paths.cache().join("java-detected.json")
+}
+
+/// Прочитать кеш и отбросить записи, у которых бинарник пропал или изменился.
+/// Именно это убирает запуск `java -version` на каждый старт игры: раньше
+/// подходящая Java искалась опросом процессов (на Windows это 1–3 секунды).
+pub fn cached_installs(paths: &Paths) -> Vec<JavaInstall> {
+    let Ok(text) = std::fs::read_to_string(java_cache_file(paths)) else {
+        return Vec::new();
+    };
+    let Ok(entries) = serde_json::from_str::<Vec<CachedJava>>(&text) else {
+        return Vec::new();
+    };
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let path = PathBuf::from(&entry.path);
+            let stamp = binary_fingerprint(&path);
+            if stamp.is_empty() || stamp != entry.stamp {
+                return None;
+            }
+            Some(JavaInstall {
+                path,
+                major: entry.major,
+                vendor: entry.vendor,
+                source: entry.source,
+            })
+        })
+        .collect()
+}
+
+fn save_cache(paths: &Paths, installs: &[JavaInstall]) {
+    let entries: Vec<CachedJava> = installs
+        .iter()
+        .filter_map(|install| {
+            let stamp = binary_fingerprint(&install.path);
+            if stamp.is_empty() {
+                return None;
+            }
+            Some(CachedJava {
+                path: install.path.display().to_string(),
+                major: install.major,
+                vendor: install.vendor.clone(),
+                source: install.source.clone(),
+                stamp,
+            })
+        })
+        .collect();
+    if let Ok(text) = serde_json::to_string_pretty(&entries) {
+        let _ = std::fs::create_dir_all(paths.cache());
+        let _ = std::fs::write(java_cache_file(paths), text);
     }
+}
 
-    let mut seen: HashMap<PathBuf, JavaInstall> = HashMap::new();
-
-    // Скачанные нами рантаймы Mojang
+/// Все кандидаты-бинарники: рантаймы Mojang, системные папки и `java` из PATH.
+fn candidate_binaries(paths: &Paths) -> Vec<(PathBuf, &'static str)> {
+    let mut result: Vec<(PathBuf, &'static str)> = Vec::new();
     for component in std::fs::read_dir(paths.java_dir()).into_iter().flatten().flatten() {
         for version in std::fs::read_dir(component.path()).into_iter().flatten().flatten() {
-            let binary = java_binary(&version.path());
-            if let Some(mut install) = probe(&binary).await {
-                install.source = "mojang".into();
-                seen.insert(key(&install.path), install);
-            }
+            result.push((java_binary(&version.path()), "mojang"));
         }
     }
-
     for candidate in system_candidates() {
-        if let Some(install) = probe(&candidate).await {
-            seen.entry(key(&install.path)).or_insert(install);
+        result.push((candidate, "system"));
+    }
+    result.push((PathBuf::from("java"), "system"));
+    result
+}
+
+/// Найти все Java в системе (без дублей).
+///
+/// Уже известные Java берутся из кеша (без запуска процессов), опрашиваются
+/// только новые кандидаты — и параллельно, а не по одной.
+pub async fn detect_all(paths: &Paths) -> Vec<JavaInstall> {
+    let cached = cached_installs(paths);
+    let mut seen: HashMap<PathBuf, JavaInstall> = HashMap::new();
+    for install in &cached {
+        seen.insert(path_key(&install.path), install.clone());
+    }
+    let known: std::collections::HashSet<PathBuf> =
+        cached.iter().map(|install| install.path.clone()).collect();
+
+    let mut fresh: Vec<(PathBuf, &'static str)> = Vec::new();
+    for (path, source) in candidate_binaries(paths) {
+        if known.contains(&path) {
+            continue;
         }
+        fresh.push((path, source));
     }
 
-    // "java" из PATH
-    if let Some(install) = probe(Path::new("java")).await {
-        seen.entry(key(&install.path)).or_insert(install);
+    let mut probes = futures::stream::iter(fresh.into_iter().map(|(path, source)| async move {
+        let install = probe(&path).await;
+        (install, source)
+    }))
+    .buffer_unordered(8);
+
+    while let Some((maybe, source)) = probes.next().await {
+        if let Some(install) = maybe {
+            let mut install = install;
+            if install.source != "mojang" {
+                install.source = source.to_string();
+            }
+            seen.entry(path_key(&install.path)).or_insert(install);
+        }
     }
 
     let mut result: Vec<JavaInstall> = seen.into_values().collect();
     result.sort_by_key(|install| (install.major, install.path.clone()));
+    save_cache(paths, &result);
     result
 }
 
@@ -244,6 +352,12 @@ pub async fn find_java(
         return Err(Error::Java(format!(
             "указанный в настройках путь к Java не работает: {custom}"
         )));
+    }
+
+    // Сначала кеш: подходящая Java уже известна — ни одного лишнего процесса.
+    let cached = pick_best(cached_installs(paths), required_major);
+    if let Some(install) = cached {
+        return Ok(install);
     }
 
     let detected = detect_all(paths).await;

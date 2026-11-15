@@ -242,10 +242,11 @@ async fn launch_instance(
         &app,
         &instance_id,
         format!(
-            "[omnispec] запуск: {} (аргументов {}, файлов в classpath {})",
+            "[omnispec] запуск: {} (аргументов {}, файлов в classpath {}, подготовка {} мс)",
             plan.java,
             plan.args.len(),
-            plan.classpath_entries
+            plan.classpath_entries,
+            plan.prepare_ms
         ),
     );
 
@@ -314,6 +315,7 @@ fn launch_summary(plan: &LaunchPlan) -> Value {
         "memory_mb": plan.memory_mb,
         "classpath_entries": plan.classpath_entries,
         "game_dir": plan.game_dir,
+        "prepare_ms": plan.prepare_ms,
     })
 }
 
@@ -561,7 +563,7 @@ fn list_dir(
     instance_id: String,
     sub: String,
 ) -> Result<Vec<FileEntry>, String> {
-    let base = state.paths.instance_game_dir(&instance_id);
+    let base = instances::game_dir(&state.paths, &instance_id);
     let dir = if sub.trim().is_empty() {
         base
     } else {
@@ -607,7 +609,7 @@ fn read_text_file(
     instance_id: String,
     path: String,
 ) -> Result<String, String> {
-    let base = state.paths.instance_game_dir(&instance_id);
+    let base = instances::game_dir(&state.paths, &instance_id);
     let file = safe_join(&base, &path)?;
     let meta = std::fs::metadata(&file).map_err(err)?;
     const LIMIT: u64 = 512 * 1024;
@@ -631,7 +633,7 @@ fn delete_file(
     instance_id: String,
     path: String,
 ) -> Result<(), String> {
-    let base = state.paths.instance_game_dir(&instance_id);
+    let base = instances::game_dir(&state.paths, &instance_id);
     let target = safe_join(&base, &path)?;
     if target.is_dir() {
         std::fs::remove_dir_all(&target).map_err(err)
@@ -649,7 +651,7 @@ struct ModEntry {
 
 #[tauri::command]
 fn list_mods(state: State<'_, AppState>, instance_id: String) -> Result<Vec<ModEntry>, String> {
-    let dir = state.paths.instance_game_dir(&instance_id).join("mods");
+    let dir = instances::game_dir(&state.paths, &instance_id).join("mods");
     let mut result = Vec::new();
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Ok(result);
@@ -680,7 +682,7 @@ async fn mod_icons(
     state: State<'_, AppState>,
     instance_id: String,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    let mods_dir = state.paths.instance_game_dir(&instance_id).join("mods");
+    let mods_dir = instances::game_dir(&state.paths, &instance_id).join("mods");
     let cache_file = state.paths.cache().join("mod-icons.json");
     let mut cache: std::collections::HashMap<String, String> = std::fs::read_to_string(&cache_file)
         .ok()
@@ -1858,12 +1860,33 @@ async fn list_java(state: State<'_, AppState>) -> Result<Vec<JavaInstall>, Strin
     Ok(game::java::detect_all(&state.paths).await)
 }
 
+/// Служебный путь интерфейса (`<id>/minecraft/mods`, `/instances/<id>/minecraft`)
+/// → настоящая папка игры. Уважает своё «место установки» сборки.
+fn resolve_game_path(paths: &omnispec_core::paths::Paths, raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim().trim_start_matches('/');
+    let rest = trimmed.strip_prefix("instances/").unwrap_or(trimmed);
+    let mut parts = rest.splitn(2, '/');
+    let id = parts.next()?;
+    if id.is_empty() {
+        return None;
+    }
+    let tail = parts.next().unwrap_or("");
+    let meta = instances::load(paths, id).ok()?;
+    // без «minecraft» в интерфейсе — путь и так указывает на игровую папку
+    let tail = tail.strip_prefix("minecraft").unwrap_or(tail);
+    let tail = tail.trim_start_matches('/');
+    let base = instances::game_dir_for(paths, &meta);
+    Some(if tail.is_empty() { base } else { base.join(tail) })
+}
+
 #[tauri::command]
 fn open_path(state: State<'_, AppState>, path: String) -> Result<(), String> {
     let root = &state.paths.root;
     let trimmed = path.trim();
     let target = if trimmed.is_empty() {
         root.clone()
+    } else if let Some(game_path) = resolve_game_path(&state.paths, trimmed) {
+        game_path
     } else if let Some(rest) = trimmed.strip_prefix('/') {
         root.join(rest)
     } else {
@@ -1877,7 +1900,7 @@ fn open_path(state: State<'_, AppState>, path: String) -> Result<(), String> {
 
     // Папку сборки создаём, если её ещё нет: иначе проводник Windows
     // молча открывает «Документы» вместо нужного места.
-    if !target.exists() && target.starts_with(root) {
+    if !target.exists() && (target.starts_with(root) || target.is_absolute()) {
         let _ = std::fs::create_dir_all(&target);
     }
     if !target.exists() {
@@ -2057,6 +2080,14 @@ fn main() {
         .manage(state)
         .setup(|app| {
             let _ = app.get_webview_window("main");
+            // Прогрев кешей в фоне: поиск Java и манифест версий уже готовы к
+            // первому запуску игры, поэтому «Играть» нажимается без ожидания.
+            let paths = app.state::<AppState>().paths.clone();
+            let http = app.state::<AppState>().http.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = game::java::detect_all(&paths).await;
+                let _ = game::fetch_manifest(&http, &paths, Duration::from_secs(3600)).await;
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
