@@ -171,7 +171,10 @@ pub fn list(paths: &Paths) -> Result<Vec<InstanceMeta>> {
         }
         match read_meta(&file) {
             Ok(meta) => result.push(meta),
-            Err(err) => eprintln!("[omnispec] сборка {} пропущена: {err}", entry.path().display()),
+            Err(err) => eprintln!(
+                "[omnispec] сборка {} пропущена: {err}",
+                entry.path().display()
+            ),
         }
     }
     result.sort_by(|a, b| {
@@ -201,7 +204,17 @@ pub fn save(paths: &Paths, meta: &InstanceMeta) -> Result<()> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(file, serde_json::to_string_pretty(meta)?)?;
+    // Время игры и дату последнего запуска только накапливаем: любая запись
+    // настроек со старым снимком меты не должна откатывать статистику.
+    let mut meta = meta.clone();
+    if let Ok(disk) = load(paths, &meta.id) {
+        meta.playtime_secs = meta.playtime_secs.max(disk.playtime_secs);
+        meta.last_played = match (meta.last_played, disk.last_played) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+    }
+    std::fs::write(file, serde_json::to_string_pretty(&meta)?)?;
     Ok(())
 }
 
@@ -325,6 +338,42 @@ pub fn human_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playtime_never_goes_back() {
+        let root = std::env::temp_dir().join(format!("omnispec-playtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::new(&root).unwrap();
+        let mut meta = InstanceMeta {
+            id: "pt".into(),
+            name: "Playtime".into(),
+            mc_version: "1.21.4".into(),
+            loader: Loader::Vanilla,
+            created: 0,
+            last_played: Some(100),
+            playtime_secs: 3600,
+            memory_mb: None,
+            java_path: None,
+            jvm_args: None,
+            icon: None,
+            version_override: None,
+            notes: String::new(),
+            source: "manual".into(),
+            source_url: None,
+            category: None,
+        };
+        save(&paths, &meta).unwrap();
+        add_playtime(&paths, "pt", 600);
+        assert_eq!(load(&paths, "pt").unwrap().playtime_secs, 4200);
+        // устаревший снимок из интерфейса не должен откатывать статистику
+        meta.playtime_secs = 0;
+        meta.last_played = None;
+        save(&paths, &meta).unwrap();
+        let disk = load(&paths, "pt").unwrap();
+        assert_eq!(disk.playtime_secs, 4200);
+        assert_eq!(disk.last_played, Some(100));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn loader_version_ids() {

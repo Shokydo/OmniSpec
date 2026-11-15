@@ -114,15 +114,12 @@ async fn install_recursive(
             let versions = modrinth
                 .project_versions(project_ref, Some(&instance.mc_version), loader_filter)
                 .await?;
-            versions
-                .into_iter()
-                .next()
-                .ok_or_else(|| {
-                    Error::not_found(format!(
-                        "у проекта «{project_ref}» нет версии для Minecraft {}",
-                        instance.mc_version
-                    ))
-                })?
+            versions.into_iter().next().ok_or_else(|| {
+                Error::not_found(format!(
+                    "у проекта «{project_ref}» нет версии для Minecraft {}",
+                    instance.mc_version
+                ))
+            })?
         }
     };
 
@@ -144,6 +141,24 @@ async fn install_recursive(
             .download(&file.url, &dest, Some(file.size), None, true)
             .await?;
         outcome.installed.push(file.filename.clone());
+        // картотека: по ней потом ищутся обновления и зависимости
+        crate::content::remember(
+            paths,
+            instance,
+            crate::content::ContentRecord {
+                filename: file.filename.clone(),
+                project_id: Some(version.project_id.clone()),
+                version_id: Some(version.id.clone()),
+                version_number: version.version_number.clone(),
+                title: if project.title.is_empty() {
+                    version.name.clone()
+                } else {
+                    project.title.clone()
+                },
+                kind: content_kind(&project_type).to_string(),
+                sha1: file.hashes.get("sha1").cloned().unwrap_or_default(),
+            },
+        );
     }
 
     // Обязательные зависимости.
@@ -190,6 +205,84 @@ async fn install_recursive(
     Ok(())
 }
 
+/// Вид содержимого по типу проекта Modrinth.
+fn content_kind(project_type: &str) -> &'static str {
+    match project_type {
+        "resourcepack" => "resourcepack",
+        "shader" => "shader",
+        _ => "mod",
+    }
+}
+
+/// Докачать обязательные зависимости для уже установленных модов.
+///
+/// Версии берутся из картотеки `content.json`, поэтому лишний раз проекты
+/// не перезапрашиваются, а уже лежащие файлы пропускаются.
+pub async fn ensure_dependencies(
+    modrinth: &Modrinth,
+    paths: &Paths,
+    instance: &InstanceMeta,
+    reporter: &Reporter,
+) -> Result<InstallOutcome> {
+    let mut outcome = InstallOutcome::default();
+    let mut visited: HashSet<String> = HashSet::new();
+    let targets = crate::content::installed_projects(paths, instance, "mod");
+    if targets.is_empty() {
+        return Ok(outcome);
+    }
+    reporter.emit("mods", 0, 0, "проверяем зависимости модов");
+    for (project_id, version_id) in targets {
+        let Some(version_id) = version_id else {
+            continue;
+        };
+        let Ok(version) = modrinth.version(&version_id).await else {
+            continue;
+        };
+        for dependency in version.dependencies.iter() {
+            if dependency.dependency_type != "required" {
+                continue;
+            }
+            if let Some(dep_version) = &dependency.version_id {
+                let project_ref = dependency
+                    .project_id
+                    .clone()
+                    .unwrap_or_else(|| project_id.clone());
+                Box::pin(install_recursive(
+                    modrinth,
+                    paths,
+                    instance,
+                    &project_ref,
+                    Some(dep_version),
+                    &mut visited,
+                    reporter,
+                    &mut outcome,
+                ))
+                .await?;
+            } else if let Some(dep_project) = &dependency.project_id {
+                Box::pin(install_recursive(
+                    modrinth,
+                    paths,
+                    instance,
+                    dep_project,
+                    None,
+                    &mut visited,
+                    reporter,
+                    &mut outcome,
+                ))
+                .await?;
+            }
+        }
+    }
+    let total = outcome.installed.len() as u64;
+    let detail = if outcome.installed.is_empty() {
+        "все зависимости на месте".to_string()
+    } else {
+        format!("докачано: {}", outcome.installed.join(", "))
+    };
+    reporter.emit("mods", total, total, detail);
+    Ok(outcome)
+}
+
 /// Удалить мод из сборки по имени файла.
 pub fn remove_mod(paths: &Paths, instance: &InstanceMeta, filename: &str) -> Result<()> {
     let file = PathBuf::from(filename);
@@ -197,7 +290,10 @@ pub fn remove_mod(paths: &Paths, instance: &InstanceMeta, filename: &str) -> Res
         return Err(Error::Other("недопустимое имя файла".into()));
     }
     for sub in ["mods", "resourcepacks", "shaderpacks"] {
-        let path = paths.instance_game_dir(&instance.id).join(sub).join(filename);
+        let path = paths
+            .instance_game_dir(&instance.id)
+            .join(sub)
+            .join(filename);
         if path.exists() {
             std::fs::remove_file(path)?;
             return Ok(());

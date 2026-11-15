@@ -115,9 +115,7 @@ async fn create_instance(
     let reporter = reporter_for(&app, &meta.id);
     reporter.emit("loader", 0, 1, "готовим профиль версии");
     // Сразу готовим профиль загрузчика, чтобы сборка была готова к запуску.
-    if let Err(error) =
-        loaders::ensure_profile(&state.http, &state.paths, &meta, &reporter).await
-    {
+    if let Err(error) = loaders::ensure_profile(&state.http, &state.paths, &meta, &reporter).await {
         eprintln!("[omnispec] профиль загрузчика не установлен: {error}");
     }
     reporter.emit("loader", 1, 1, "готово");
@@ -171,14 +169,10 @@ async fn install_instance(
     loaders::ensure_profile(&state.http, &state.paths, &meta, &reporter)
         .await
         .map_err(err)?;
-    let report = game::install::ensure_installed(
-        &state.http,
-        &state.paths,
-        &meta.version_id(),
-        &reporter,
-    )
-    .await
-    .map_err(err)?;
+    let report =
+        game::install::ensure_installed(&state.http, &state.paths, &meta.version_id(), &reporter)
+            .await
+            .map_err(err)?;
     Ok(json!({
         "version": report.version_id,
         "classpath": report.classpath.len(),
@@ -273,8 +267,16 @@ async fn launch_instance(
         // время использования: считаем от запуска до выхода из игры
         let started = std::time::Instant::now();
         tokio::spawn(async move {
+            // раз в минуту дописываем время на диск: если лаунчер закроют или
+            // он обновится, статистика не потеряется
+            let mut flushed: u64 = 0;
             loop {
                 tokio::time::sleep(Duration::from_millis(700)).await;
+                let elapsed = started.elapsed().as_secs();
+                if elapsed >= flushed + 60 {
+                    instances::add_playtime(&paths, &id, elapsed - flushed);
+                    flushed = elapsed;
+                }
                 let status = {
                     let mut guard = child.lock().await;
                     guard.try_wait().ok().flatten()
@@ -282,7 +284,7 @@ async fn launch_instance(
                 if let Some(status) = status {
                     let code = status.code().unwrap_or(-1);
                     // накопленное время игры в часах показываем в списке сборок
-                    instances::add_playtime(&paths, &id, started.elapsed().as_secs());
+                    instances::add_playtime(&paths, &id, elapsed.saturating_sub(flushed));
                     running.lock().await.remove(&session);
                     let _ = app.emit(
                         "game-exit",
@@ -365,7 +367,11 @@ async fn running_instances(state: State<'_, AppState>) -> Result<Vec<String>, St
     let running = state.running.lock().await;
     let mut result: Vec<String> = Vec::new();
     for key in running.keys() {
-        let id = key.split_once('#').map(|(id, _)| id).unwrap_or(key.as_str()).to_string();
+        let id = key
+            .split_once('#')
+            .map(|(id, _)| id)
+            .unwrap_or(key.as_str())
+            .to_string();
         if !result.contains(&id) {
             result.push(id);
         }
@@ -483,7 +489,9 @@ async fn install_modpack(
                 .skip_while(|part| !part.contains("modrinth.com"))
                 .nth(2)
                 .map(|slug| slug.split(['?', '#']).next().unwrap_or(slug).to_string())
-                .ok_or_else(|| "не понял ссылку — нужна вида modrinth.com/modpack/<название>".to_string())?;
+                .ok_or_else(|| {
+                    "не понял ссылку — нужна вида modrinth.com/modpack/<название>".to_string()
+                })?;
             let versions = state.modrinth.modpack_versions(&slug).await.map_err(err)?;
             let version = versions
                 .into_iter()
@@ -757,7 +765,9 @@ fn mod_key(file: &str) -> String {
         .find(|c: char| c.is_ascii_digit())
         .filter(|index| *index > 2)
         .unwrap_or(stem.len());
-    stem[..cut].trim_end_matches(['-', '_', '.', ' ']).to_lowercase()
+    stem[..cut]
+        .trim_end_matches(['-', '_', '.', ' '])
+        .to_lowercase()
 }
 
 /// Название мода из его метаданных внутри jar.
@@ -812,7 +822,8 @@ fn mod_display_name(jar: &std::path::Path) -> Option<String> {
 
 /// Найденные сборки в Prism / MultiMC / Modrinth App.
 #[tauri::command]
-async fn scan_external_launchers() -> Result<Vec<omnispec_core::transfer::ExternalProfile>, String> {
+async fn scan_external_launchers() -> Result<Vec<omnispec_core::transfer::ExternalProfile>, String>
+{
     tauri::async_runtime::spawn_blocking(omnispec_core::transfer::scan_external)
         .await
         .map_err(err)
@@ -901,23 +912,116 @@ async fn pick_save_path(
     extensions: Option<Vec<String>>,
 ) -> Result<Option<String>, String> {
     let chosen = tauri::async_runtime::spawn_blocking(move || {
-        let mut dialog = rfd::FileDialog::new()
-            .set_title(title.unwrap_or_else(|| "Сохранить файл".into()));
+        let mut dialog =
+            rfd::FileDialog::new().set_title(title.unwrap_or_else(|| "Сохранить файл".into()));
         if let Some(file_name) = file_name {
             dialog = dialog.set_file_name(file_name);
         }
         if let Some(extensions) = extensions {
-            let list: Vec<String> = extensions.into_iter().map(|ext| ext.to_lowercase()).collect();
+            let list: Vec<String> = extensions
+                .into_iter()
+                .map(|ext| ext.to_lowercase())
+                .collect();
             let refs: Vec<&str> = list.iter().map(|ext| ext.as_str()).collect();
             if !refs.is_empty() {
                 dialog = dialog.add_filter("Архив", &refs);
             }
         }
-        dialog.save_file().map(|path| path.to_string_lossy().to_string())
+        dialog
+            .save_file()
+            .map(|path| path.to_string_lossy().to_string())
     })
     .await
     .map_err(|error| error.to_string())?;
     Ok(chosen)
+}
+
+/* ==================== СОДЕРЖИМОЕ СБОРКИ ==================== */
+
+/// Файлы сборки нужного вида: моды, шейдеры или ресурспаки.
+#[tauri::command]
+fn content_list(
+    state: State<'_, AppState>,
+    instance_id: String,
+    kind: String,
+) -> Result<Value, String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let entries = omnispec_core::content::list(&state.paths, &meta, &kind);
+    Ok(json!(entries))
+}
+
+/// Включить/выключить файл (переименование в `.disabled`).
+#[tauri::command]
+fn content_toggle(
+    state: State<'_, AppState>,
+    instance_id: String,
+    kind: String,
+    name: String,
+) -> Result<String, String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    omnispec_core::content::toggle(&state.paths, &meta, &kind, &name).map_err(err)
+}
+
+/// Удалить файл из сборки.
+#[tauri::command]
+fn content_delete(
+    state: State<'_, AppState>,
+    instance_id: String,
+    kind: String,
+    name: String,
+) -> Result<(), String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    omnispec_core::content::remove(&state.paths, &meta, &kind, &name).map_err(err)
+}
+
+/// Проверить обновления под эту версию игры и загрузчик.
+#[tauri::command]
+async fn content_updates(
+    state: State<'_, AppState>,
+    instance_id: String,
+    kind: String,
+) -> Result<Value, String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let updates =
+        omnispec_core::content::check_updates(&state.modrinth, &state.paths, &meta, &kind)
+            .await
+            .map_err(err)?;
+    Ok(json!(updates))
+}
+
+/// Поставить обновление одного файла.
+#[tauri::command]
+async fn content_update(
+    state: State<'_, AppState>,
+    instance_id: String,
+    kind: String,
+    name: String,
+) -> Result<Value, String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let update =
+        omnispec_core::content::apply_update(&state.modrinth, &state.paths, &meta, &kind, &name)
+            .await
+            .map_err(err)?;
+    Ok(json!(update))
+}
+
+/// Догрузить обязательные зависимости уже установленных модов.
+#[tauri::command]
+async fn mods_ensure_dependencies(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<Value, String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let reporter = reporter_for(&app, &meta.id);
+    let outcome =
+        modrinth_install::ensure_dependencies(&state.modrinth, &state.paths, &meta, &reporter)
+            .await
+            .map_err(err)?;
+    Ok(json!({
+        "installed": outcome.installed,
+        "skipped": outcome.skipped
+    }))
 }
 
 #[tauri::command]
@@ -1028,7 +1132,6 @@ fn open_url(url: String) -> Result<(), String> {
     result.map(|_| ()).map_err(err)
 }
 
-
 /* ==================== АККАУНТЫ ==================== */
 
 #[derive(Serialize)]
@@ -1040,17 +1143,16 @@ struct AccountsInfo {
 /// Выбранный аккаунт; если его нет — офлайн-аккаунт из настроек.
 async fn current_account(state: &AppState, settings: &Settings) -> Result<Account, String> {
     let mut store = state.accounts.lock().await;
-    let account = store
-        .current()
-        .cloned()
-        .unwrap_or_else(|| Account::offline(&settings.username).unwrap_or_else(|_| Account {
+    let account = store.current().cloned().unwrap_or_else(|| {
+        Account::offline(&settings.username).unwrap_or_else(|_| Account {
             username: "Player".into(),
             uuid: omnispec_core::auth::offline_uuid("Player"),
             kind: "offline".into(),
             access_token: String::new(),
             refresh_token: String::new(),
             expires_at: 0,
-        }));
+        })
+    });
 
     // Лицензионный токен живёт час — обновляем заранее, иначе игра не пустит на сервер.
     if account.needs_refresh() && !account.refresh_token.is_empty() {
@@ -1149,10 +1251,7 @@ async fn account_skin(state: State<'_, AppState>) -> Result<Value, String> {
     if let Some(url) = url {
         if let Ok(response) = state.http.inner().get(&url).send().await {
             if let Ok(bytes) = response.bytes().await {
-                data_url = json!(format!(
-                    "data:image/png;base64,{}",
-                    base64_encode(&bytes)
-                ));
+                data_url = json!(format!("data:image/png;base64,{}", base64_encode(&bytes)));
             }
         }
     }
@@ -1209,10 +1308,7 @@ async fn account_capes(state: State<'_, AppState>) -> Result<Value, String> {
         if let Some(url) = url {
             if let Ok(response) = state.http.inner().get(&url).send().await {
                 if let Ok(bytes) = response.bytes().await {
-                    data_url = json!(format!(
-                        "data:image/png;base64,{}",
-                        base64_encode(&bytes)
-                    ));
+                    data_url = json!(format!("data:image/png;base64,{}", base64_encode(&bytes)));
                 }
             }
         }
@@ -1279,7 +1375,8 @@ async fn apply_skin(
     if account.kind != "microsoft" || account.access_token.is_empty() {
         return Err("скин можно менять только у лицензионного аккаунта".into());
     }
-    let bytes = std::fs::read(&path).map_err(|error| format!("не удалось открыть файл: {error}"))?;
+    let bytes =
+        std::fs::read(&path).map_err(|error| format!("не удалось открыть файл: {error}"))?;
     let variant = match variant.to_lowercase().as_str() {
         "slim" => "slim",
         _ => "classic",
@@ -1320,22 +1417,37 @@ async fn apply_skin(
 
 /// Готовый скин из пресета: фронтенд рисует PNG, мы сохраняем его на диск.
 #[tauri::command]
-fn save_skin_png(state: State<'_, AppState>, data_url: String, name: String) -> Result<String, String> {
+fn save_skin_png(
+    state: State<'_, AppState>,
+    data_url: String,
+    name: String,
+) -> Result<String, String> {
     let payload = data_url
         .split_once("base64,")
         .map(|(_, tail)| tail.to_string())
         .ok_or_else(|| "ожидался PNG в data-URL".to_string())?;
-    let bytes = base64_decode(&payload).ok_or_else(|| "не удалось прочитать картинку".to_string())?;
+    let bytes =
+        base64_decode(&payload).ok_or_else(|| "не удалось прочитать картинку".to_string())?;
     if bytes.len() < 64 {
         return Err("картинка пустая".into());
     }
     let safe: String = name
         .chars()
-        .map(|ch| if ch.is_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' })
+        .map(|ch| {
+            if ch.is_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
         .collect();
     let dir = state.paths.meta().join("skins");
     std::fs::create_dir_all(&dir).map_err(err)?;
-    let file_name = if safe.is_empty() { "skin".to_string() } else { safe };
+    let file_name = if safe.is_empty() {
+        "skin".to_string()
+    } else {
+        safe
+    };
     let file = dir.join(format!("{file_name}.png"));
     std::fs::write(&file, bytes).map_err(err)?;
     Ok(file.to_string_lossy().to_string())
@@ -1345,7 +1457,8 @@ fn save_skin_png(state: State<'_, AppState>, data_url: String, name: String) -> 
 #[tauri::command]
 fn import_skin(state: State<'_, AppState>, path: String) -> Result<Value, String> {
     let source = PathBuf::from(&path);
-    let bytes = std::fs::read(&source).map_err(|error| format!("не удалось открыть файл: {error}"))?;
+    let bytes =
+        std::fs::read(&source).map_err(|error| format!("не удалось открыть файл: {error}"))?;
     if bytes.len() < 64 {
         return Err("файл пустой или это не PNG".into());
     }
@@ -1356,7 +1469,9 @@ fn import_skin(state: State<'_, AppState>, path: String) -> Result<Value, String
     let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
     let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
     if width != 64 || (height != 64 && height != 32) {
-        return Err(format!("нужен скин 64×64 (или 64×32), а тут {width}×{height}"));
+        return Err(format!(
+            "нужен скин 64×64 (или 64×32), а тут {width}×{height}"
+        ));
     }
     let stem = source
         .file_stem()
@@ -1364,13 +1479,23 @@ fn import_skin(state: State<'_, AppState>, path: String) -> Result<Value, String
         .unwrap_or("skin");
     let safe: String = stem
         .chars()
-        .map(|ch| if ch.is_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' })
+        .map(|ch| {
+            if ch.is_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
         .collect();
     let dir = state.paths.meta().join("skins");
     std::fs::create_dir_all(&dir).map_err(err)?;
     let file_name = format!(
         "{}-{}.png",
-        if safe.is_empty() { "skin".to_string() } else { safe },
+        if safe.is_empty() {
+            "skin".to_string()
+        } else {
+            safe
+        },
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|value| value.as_secs())
@@ -1390,7 +1515,8 @@ fn import_skin(state: State<'_, AppState>, path: String) -> Result<Value, String
 /// Картинка по пути в виде data-URL (для превью своего скина в webview).
 #[tauri::command]
 fn image_data_url(path: String) -> Result<String, String> {
-    let bytes = std::fs::read(&path).map_err(|error| format!("не удалось открыть файл: {error}"))?;
+    let bytes =
+        std::fs::read(&path).map_err(|error| format!("не удалось открыть файл: {error}"))?;
     if bytes.len() > 16 * 1024 * 1024 {
         return Err("файл слишком большой".into());
     }
@@ -1445,7 +1571,10 @@ async fn account_rename(
     if trimmed.chars().count() < 3 || trimmed.chars().count() > 16 {
         return Err("ник — от 3 до 16 символов".into());
     }
-    if !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
         return Err("в нике можно только латиницу, цифры и _".into());
     }
     let mut store = state.accounts.lock().await;
@@ -1511,7 +1640,9 @@ async fn ms_login_poll(
     let session = microsoft::poll_device_code(&state.http, &client_id, &device_code)
         .await
         .map_err(err)?;
-    let Some(session) = session else { return Ok(None) };
+    let Some(session) = session else {
+        return Ok(None);
+    };
     let account = Account::from_session(session);
     let mut store = state.accounts.lock().await;
     store.upsert(account.clone());
@@ -1522,7 +1653,6 @@ async fn ms_login_poll(
         active: store.active.clone(),
     }))
 }
-
 
 /* ==================== ФАЙЛЫ ОТ ПОЛЬЗОВАТЕЛЯ ==================== */
 
@@ -1536,14 +1666,19 @@ async fn pick_file(
         let mut dialog = rfd::FileDialog::new();
         dialog = dialog.set_title(title.unwrap_or_else(|| "Выбери файл".into()));
         if let Some(extensions) = extensions {
-            let list: Vec<String> = extensions.into_iter().map(|ext| ext.to_lowercase()).collect();
+            let list: Vec<String> = extensions
+                .into_iter()
+                .map(|ext| ext.to_lowercase())
+                .collect();
             let refs: Vec<&str> = list.iter().map(|ext| ext.as_str()).collect();
             if !refs.is_empty() {
                 dialog = dialog.add_filter("Подходящие файлы", &refs);
             }
             dialog = dialog.add_filter("Все файлы", &["*"]);
         }
-        dialog.pick_file().map(|path| path.to_string_lossy().to_string())
+        dialog
+            .pick_file()
+            .map(|path| path.to_string_lossy().to_string())
     })
     .await
     .map_err(|error| error.to_string())?;
@@ -1594,21 +1729,37 @@ fn set_instance_icon_file(
 
 /// Данные картинки-иконки в виде data-URL (webview не умеет читать локальные пути).
 #[tauri::command]
-fn instance_icon(state: State<'_, AppState>, instance_id: String) -> Result<Option<String>, String> {
+fn instance_icon(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<Option<String>, String> {
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    let Some(icon) = meta.icon else { return Ok(None) };
+    let Some(icon) = meta.icon else {
+        return Ok(None);
+    };
     if !icon.contains('.') {
         return Ok(None); // встроенная иконка, рисуется из спрайта
     }
     let path = state.paths.instance_dir(&instance_id).join(&icon);
-    let Ok(bytes) = std::fs::read(&path) else { return Ok(None) };
-    let mime = match icon.rsplit('.').next().unwrap_or("png").to_lowercase().as_str() {
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Ok(None);
+    };
+    let mime = match icon
+        .rsplit('.')
+        .next()
+        .unwrap_or("png")
+        .to_lowercase()
+        .as_str()
+    {
         "jpg" | "jpeg" => "image/jpeg",
         "webp" => "image/webp",
         "gif" => "image/gif",
         _ => "image/png",
     };
-    Ok(Some(format!("data:{mime};base64,{}", base64_encode(&bytes))))
+    Ok(Some(format!(
+        "data:{mime};base64,{}",
+        base64_encode(&bytes)
+    )))
 }
 
 /// Положить файл (мод/ресурспак) из проводника в папку сборки.
@@ -1736,7 +1887,10 @@ fn open_path(state: State<'_, AppState>, path: String) -> Result<(), String> {
     let folder = if target.is_dir() {
         target
     } else {
-        target.parent().map(|parent| parent.to_path_buf()).unwrap_or(target)
+        target
+            .parent()
+            .map(|parent| parent.to_path_buf())
+            .unwrap_or(target)
     };
     open_in_file_manager(&folder)
 }
@@ -1817,12 +1971,21 @@ fn custom_wallpaper(state: State<'_, AppState>) -> Result<Option<String>, String
     let Ok(bytes) = std::fs::read(&path) else {
         return Ok(None);
     };
-    let mime = match name.rsplit('.').next().unwrap_or("png").to_lowercase().as_str() {
+    let mime = match name
+        .rsplit('.')
+        .next()
+        .unwrap_or("png")
+        .to_lowercase()
+        .as_str()
+    {
         "jpg" | "jpeg" => "image/jpeg",
         "webp" => "image/webp",
         _ => "image/png",
     };
-    Ok(Some(format!("data:{mime};base64,{}", base64_encode(&bytes))))
+    Ok(Some(format!(
+        "data:{mime};base64,{}",
+        base64_encode(&bytes)
+    )))
 }
 
 /// Где лежит сборка — строка «папка: …» в главном окне.
@@ -1943,6 +2106,12 @@ fn main() {
             version_info,
             check_update,
             net_check,
+            content_list,
+            content_toggle,
+            content_delete,
+            content_updates,
+            content_update,
+            mods_ensure_dependencies,
             accounts_info,
             account_add_offline,
             account_rename,

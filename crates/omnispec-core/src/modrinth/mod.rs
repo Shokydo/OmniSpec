@@ -104,10 +104,7 @@ impl Modrinth {
         let mut params: Vec<(&str, String)> = Vec::new();
         if let Some(game_version) = game_version {
             if !game_version.trim().is_empty() {
-                params.push((
-                    "game_versions",
-                    serde_json::to_string(&vec![game_version])?,
-                ));
+                params.push(("game_versions", serde_json::to_string(&vec![game_version])?));
             }
         }
         if let Some(loader) = loader {
@@ -137,6 +134,12 @@ impl Modrinth {
             )));
         }
         Ok(response.json::<Vec<Version>>().await?)
+    }
+
+    /// Версия по SHA-1 файла: так узнаём, что за мод уже лежит в папке.
+    pub async fn version_file_by_hash(&self, hash: &str) -> Result<Version> {
+        let url = format!("{BASE_URL}/version_file/{hash}?algorithm=sha1");
+        self.http.get_json(&url).await
     }
 
     pub async fn version(&self, version_id: &str) -> Result<Version> {

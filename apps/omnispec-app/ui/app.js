@@ -40,7 +40,7 @@
   const FX_STYLES = { wave: "Волна", dot: "Точка", ring: "Кольцо", cross: "Крест", off: "Выкл" };
 
   /** Фоновая анимация: звёздочки, пыль, палочки, снег. */
-  const AMBIENT_STYLES = { stars: "Звёзды", dust: "Пыль", sticks: "Палочки", snow: "Снег", off: "Выкл" };
+  const AMBIENT_STYLES = { stars: "Звёзды", dust: "Пыль", sticks: "Палочки", snow: "Снег", flakes: "Снежинки", off: "Выкл" };
 
   function rgbOf(hex) {
     const clean = String(hex || "#000").replace("#", "");
@@ -137,6 +137,7 @@
     document.body.dataset.theme = valid ? name : "dark";
     // частицы фона подстраиваются под тему: тёмные на светлой, светлые на тёмной
     if (ambientInkRefresh) ambientInkRefresh();
+    trailFx.refreshInk();
     return valid ? name : "dark";
   }
 
@@ -298,6 +299,8 @@
     let height = 0;
     let style = "stars";
     let ink = "#e8e8ee";
+    // размер эффектов: настройка в процентах, влияет на все частицы
+    let scale = 1;
     let particles = [];
     let raf = 0;
     let last = 0;
@@ -323,6 +326,7 @@
 
     function count() {
       const area = width * height;
+      if (style === "flakes") return Math.max(24, Math.min(110, Math.round(area / 19000)));
       if (style === "snow") return Math.max(30, Math.min(140, Math.round(area / 15000)));
       if (style === "dust") return Math.max(40, Math.min(180, Math.round(area / 11000)));
       if (style === "sticks") return Math.max(16, Math.min(70, Math.round(area / 26000)));
@@ -332,6 +336,10 @@
     function spawn(anywhere = true) {
       const y = anywhere ? rand(0, height) : -rand(4, 40);
       const base = { x: rand(0, width), y, alpha: rand(0.25, 0.8), phase: rand(0, Math.PI * 2) };
+      if (style === "flakes") {
+        // снежинка: шесть лучей с «сучками», медленно кружится и падает
+        return { ...base, r: rand(3.2, 7.5) * scale, vy: rand(9, 24), drift: rand(-9, 9), spin: rand(-0.9, 0.9), rot: rand(0, Math.PI), sway: rand(0.3, 1.1), kind: "flake" };
+      }
       if (style === "dust") {
         return { ...base, y: anywhere ? rand(0, height) : height + rand(2, 30), r: rand(0.6, 1.7), vy: -rand(6, 22), drift: rand(-6, 6), kind: "dot" };
       }
@@ -378,6 +386,28 @@
       ctx.fill();
     }
 
+    function drawFlake(p) {
+      ctx.save();
+      ctx.globalAlpha = p.alpha * 0.9;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = Math.max(0.7, p.r * 0.14);
+      ctx.lineCap = "round";
+      for (let i = 0; i < 6; i += 1) {
+        ctx.rotate(Math.PI / 3);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, -p.r);
+        ctx.moveTo(0, -p.r * 0.62);
+        ctx.lineTo(p.r * 0.28, -p.r * 0.82);
+        ctx.moveTo(0, -p.r * 0.62);
+        ctx.lineTo(-p.r * 0.28, -p.r * 0.82);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     function drawStick(p) {
       ctx.save();
       ctx.globalAlpha = p.alpha * 0.7;
@@ -398,12 +428,13 @@
         const p = particles[i];
         p.y += p.vy * dt;
         p.x += (p.drift || 0) * dt;
-        if (p.kind === "stick") p.rot += p.spin * dt;
-        if (p.kind === "dot" && p.sway) p.x += Math.sin(time * p.sway + p.phase) * 6 * dt;
+        if (p.kind === "stick" || p.kind === "flake") p.rot += p.spin * dt;
+        if ((p.kind === "dot" || p.kind === "flake") && p.sway) p.x += Math.sin(time * p.sway + p.phase) * 6 * dt;
         const gone = p.vy > 0 ? p.y > height + 40 : p.y < -40;
         if (gone || p.x < -60 || p.x > width + 60) { particles[i] = spawn(false); continue; }
         if (p.kind === "star") drawStar(p, time);
         else if (p.kind === "stick") drawStick(p);
+        else if (p.kind === "flake") drawFlake(p);
         else drawDot(p);
       }
       ctx.globalAlpha = 1;
@@ -443,6 +474,13 @@
     };
 
     return {
+      /** Размер частиц в процентах: 60–220. */
+      size: (percent) => {
+        const clean = Math.max(40, Math.min(220, Number(percent) || 100));
+        scale = clean / 100;
+        if (style !== "off" && raf) build();
+        return clean;
+      },
       refreshInk: () => ambientInkRefresh && ambientInkRefresh(),
       apply: (name) => {
         style = AMBIENT_STYLES[name] ? name : "stars";
@@ -455,10 +493,125 @@
     };
   })();
 
+  /** Трейс за курсором: гаснущая цепочка точек поверх всего интерфейса. */
+  const trailFx = (() => {
+    const canvas = () => $("#trail");
+    let ctx = null;
+    let width = 0;
+    let height = 0;
+    let points = [];
+    let raf = 0;
+    let last = 0;
+    let scale = 1;
+    let enabled = true;
+    let ink = "#e8e8ee";
+
+    function resize() {
+      const el = canvas();
+      if (!el) return;
+      width = Math.max(1, el.clientWidth || window.innerWidth);
+      height = Math.max(1, el.clientHeight || window.innerHeight);
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      el.width = Math.round(width * dpr);
+      el.height = Math.round(height * dpr);
+      ctx = el.getContext("2d");
+      if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ink = getComputedStyle(document.body).getPropertyValue("--text").trim() || "#e8e8ee";
+    }
+
+    function step(now) {
+      const el = canvas();
+      if (!ctx || !el) { raf = 0; return; }
+      const dt = Math.min(0.05, (now - (last || now)) / 1000);
+      last = now;
+      ctx.clearRect(0, 0, width, height);
+      const alive = [];
+      for (const point of points) {
+        point.life -= dt * 1.6;
+        if (point.life <= 0) continue;
+        point.x += point.vx * dt;
+        point.y += point.vy * dt;
+        ctx.globalAlpha = Math.max(0, point.life) * 0.55;
+        ctx.fillStyle = ink;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, point.size * (0.4 + point.life) * scale, 0, Math.PI * 2);
+        ctx.fill();
+        alive.push(point);
+      }
+      ctx.globalAlpha = 1;
+      points = alive;
+      if (!points.length) { el.hidden = true; raf = 0; return; }
+      raf = requestAnimationFrame(step);
+    }
+
+    function start() {
+      const el = canvas();
+      if (!el) return;
+      el.hidden = false;
+      resize();
+      if (!raf) { last = 0; raf = requestAnimationFrame(step); }
+    }
+
+    function stop() {
+      const el = canvas();
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      points = [];
+      if (ctx) ctx.clearRect(0, 0, width, height);
+      if (el) el.hidden = true;
+    }
+
+    window.addEventListener("mousemove", (event) => {
+      if (!enabled) return;
+      points.push({
+        x: event.clientX,
+        y: event.clientY,
+        vx: (Math.random() - 0.5) * 12,
+        vy: (Math.random() - 0.5) * 12 - 6,
+        life: 1,
+        size: 2.2 + Math.random() * 1.6
+      });
+      if (points.length > 90) points.splice(0, points.length - 90);
+      start();
+    }, { passive: true });
+
+    window.addEventListener("resize", () => { if (enabled && canvas()) resize(); });
+
+    return {
+      enable: (on) => {
+        enabled = Boolean(on);
+        document.body.dataset.trail = enabled ? "on" : "off";
+        if (!enabled) stop();
+        return enabled;
+      },
+      isOn: () => enabled,
+      size: (percent) => {
+        scale = Math.max(0.4, Math.min(2.2, (Number(percent) || 100) / 100));
+      },
+      refreshInk: () => {
+        ink = getComputedStyle(document.body).getPropertyValue("--text").trim() || "#e8e8ee";
+      }
+    };
+  })();
+
   /** Включение/выключение фоновой анимации из настроек. */
   function applyAmbient(name) {
     state.ambient = ambient.apply(name);
     return state.ambient;
+  }
+
+  /** Размер эффектов в процентах — общий для фона и трейса. */
+  function applyEffectSize(percent) {
+    const clean = ambient.size(percent);
+    trailFx.size(clean);
+    state.effectSize = clean;
+    return clean;
+  }
+
+  /** Трейс за курсором: вкл/выкл. */
+  function applyTrail(on) {
+    state.trail = trailFx.enable(on);
+    return state.trail;
   }
 
   function wallUrl(name) {
@@ -1167,6 +1320,32 @@
     }
   }
 
+  /** Демо-содержимое: ресурспаки и шейдеры «как будто лежат в сборке». */
+  const DEMO_ASSETS = {
+    resourcepacks: [
+      { name: "Stay_True_1.21.zip", size: 4_204_800, enabled: true },
+      { name: "FreshAnimations_v1.9.zip", size: 1_986_560, enabled: true }
+    ],
+    shaderpacks: [
+      { name: "ComplementaryReimagined_r5.3.zip", size: 3_112_960, enabled: true },
+      { name: "BSL_v8.2.04.zip", size: 2_781_184, enabled: true }
+    ]
+  };
+
+  /** Демо-обновления: по одному «новому» файлу на вид содержимого. */
+  const demoUpdates = (kind) => {
+    if (kind === "mod") {
+      return [{
+        filename: "sodium-fabric-0.6.13+mc1.21.4.jar", kind: "mod", enabled: true,
+        title: "Sodium", page_url: "https://modrinth.com/mod/sodium", project_id: "AANobbMI",
+        version_id: "demo-sodium-2", current: "0.6.13", latest: "0.6.15",
+        download_url: "https://example.invalid/sodium.jar",
+        new_filename: "sodium-fabric-0.6.15+mc1.21.4.jar", size: 1_310_720
+      }];
+    }
+    return [];
+  };
+
   const DEMO = {
     instances: [
       { id: "fabulously-optimized", name: "Fabulously Optimized", category: "cat-perf", mc_version: "1.21.4", loader: { type: "fabric", version: "0.16.9" }, icon: null, created: now - 86400 * 9, last_played: now - 3600, playtime_secs: 7200, memory_mb: null, java_path: null, jvm_args: null, notes: "", source: "modrinth", source_url: null, version_override: null },
@@ -1218,6 +1397,13 @@
     deleteFile: (instanceId, path) => invoke("delete_file", { instanceId, path }),
     mods: (instanceId) => invoke("list_mods", { instanceId }),
     modIcons: (instanceId) => invoke("mod_icons", { instanceId }),
+    // содержимое сборки: моды, ресурспаки, шейдеры
+    contentList: (instanceId, kind) => invoke("content_list", { instanceId, kind }),
+    contentToggle: (instanceId, kind, name) => invoke("content_toggle", { instanceId, kind, name }),
+    contentDelete: (instanceId, kind, name) => invoke("content_delete", { instanceId, kind, name }),
+    contentUpdates: (instanceId, kind) => invoke("content_updates", { instanceId, kind }),
+    contentUpdate: (instanceId, kind, name) => invoke("content_update", { instanceId, kind, name }),
+    ensureDependencies: (instanceId) => invoke("mods_ensure_dependencies", { instanceId }),
     scanExternal: () => invoke("scan_external_launchers"),
     importExternal: (payload) => invoke("import_external", payload),
     exportInstance: (instanceId, path, format) => invoke("export_instance", { instanceId, path, format }),
@@ -1418,6 +1604,64 @@
     readFile: async () => "fov:0.0\nlang:ru_ru\nrenderDistance:12\nnarrator:0\n",
     deleteFile: async () => null,
     mods: async () => demoMods.map((m) => ({ ...m })),
+    // содержимое сборки в демо-режиме
+    contentList: async (_id, kind) => (kind === "mod"
+      ? demoMods.map((mod) => {
+        const version = /(\d+\.\d+(?:\.\d+)?)/.exec(mod.name);
+        const pretty = String(mod.name).split("-")[0];
+        return {
+          name: mod.name,
+          filename: mod.name,
+          enabled: mod.enabled,
+          size: mod.size,
+          project_id: null,
+          version_id: null,
+          version_number: version ? version[1] : null,
+          title: pretty ? pretty.charAt(0).toUpperCase() + pretty.slice(1) : null
+        };
+      })
+      : ((DEMO_ASSETS[kind === "shader" ? "shaderpacks" : "resourcepacks"] || []).map((item) => ({
+        name: item.name,
+        filename: item.name,
+        enabled: item.enabled !== false,
+        size: item.size,
+        project_id: null,
+        version_id: null,
+        version_number: null,
+        title: null
+      })))),
+    contentToggle: async (_id, kind, name) => {
+      if (kind === "mod") {
+        const mod = demoMods.find((item) => item.name === name);
+        if (mod) mod.enabled = !mod.enabled;
+        return name;
+      }
+      const list = DEMO_ASSETS[kind === "shader" ? "shaderpacks" : "resourcepacks"] || [];
+      const item = list.find((entry) => entry.name === name);
+      if (item) item.enabled = !(item.enabled !== false);
+      return name;
+    },
+    contentDelete: async (_id, kind, name) => {
+      if (kind === "mod") {
+        const index = demoMods.findIndex((item) => item.name === name);
+        if (index >= 0) demoMods.splice(index, 1);
+      } else {
+        const key = kind === "shader" ? "shaderpacks" : "resourcepacks";
+        DEMO_ASSETS[key] = (DEMO_ASSETS[key] || []).filter((item) => item.name !== name);
+      }
+      return null;
+    },
+    contentUpdates: async (_id, kind) => demoUpdates(kind),
+    contentUpdate: async (_id, kind, name) => {
+      const update = demoUpdates(kind).find((item) => item.filename === name);
+      if (!update) throw new Error("обновлений нет");
+      if (kind === "mod") {
+        const mod = demoMods.find((item) => item.name === name);
+        if (mod) mod.name = update.new_filename;
+      }
+      return update;
+    },
+    ensureDependencies: async () => ({ installed: [], skipped: [] }),
     // Иконки модов в демо-режиме — те же картинки, что отдал бы Modrinth.
     modIcons: async () => {
       const map = {};
@@ -1514,6 +1758,8 @@
     files: { path: "", entries: [], selected: null },
     mods: [],
     modIcons: {},
+    contentUpdates: {},
+    contentQuery: {},
     mcver: null,
     modsView: "list",
     external: { list: null, loading: false, error: null },
@@ -2165,9 +2411,9 @@
       case "discover": return renderDiscover();
       case "console": return renderConsole();
       case "files": return renderFiles();
-      case "mods": return renderMods();
-      case "resourcepacks": return renderAssetsList("resourcepacks", "Ресурспаки", "resourcepack");
-      case "shaders": return renderAssetsList("shaderpacks", "Шейдеры", "shader");
+      case "mods": return renderContent("mod");
+      case "resourcepacks": return renderContent("resourcepack");
+      case "shaders": return renderContent("shader");
       case "worlds": return renderWorlds();
       case "modrinth": return renderModrinth();
       case "settings": return renderSettings();
@@ -2479,7 +2725,41 @@
     await fmRefresh();
   }
 
-  /* ---------- моды ---------- */
+  /* ---------- моды / ресурспаки / шейдеры ---------- */
+  /** Что за вид содержимого: папка, заголовки, тексты. */
+  const CONTENT_KINDS = {
+    mod: {
+      folder: "mods",
+      title: "Моды сборки",
+      empty: "Модов нет",
+      addLabel: "Добавить с Modrinth",
+      search: "Найти мод",
+      deps: true,
+      menuTitle: "мода",
+      pageLabel: "Перейти на страницу мода"
+    },
+    resourcepack: {
+      folder: "resourcepacks",
+      title: "Ресурспаки",
+      empty: "Ресурспаков нет",
+      addLabel: "Скачать с Modrinth",
+      search: "Найти ресурспак",
+      deps: false,
+      menuTitle: "ресурспака",
+      pageLabel: "Перейти на страницу ресурспака"
+    },
+    shader: {
+      folder: "shaderpacks",
+      title: "Шейдеры",
+      empty: "Шейдеров нет",
+      addLabel: "Скачать с Modrinth",
+      search: "Найти шейдер",
+      deps: false,
+      menuTitle: "шейдера",
+      pageLabel: "Перейти на страницу шейдера"
+    }
+  };
+
   /** Иконка мода: картинка с Modrinth, иначе нейтральный значок. */
   function modIconHtml(mod) {
     const url = state.modIcons[mod.name];
@@ -2487,111 +2767,241 @@
     return `<span class="mod-icon"><svg class="ic"><use href="#i-mod"/></svg></span>`;
   }
 
-  async function renderMods() {
-    const meta = selected();
-    const mods = await api.mods(meta.id).catch(() => []);
-    state.mods = mods;
-    $("#badge-mods").hidden = !mods.length;
-    $("#badge-mods").textContent = String(mods.length);
-    const enabled = mods.filter((mod) => mod.enabled).length;
-    const grid = state.modsView === "grid";
-
-    // иконки подтягиваем один раз и перерисовываем, когда придут
-    if (!Object.keys(state.modIcons).length) {
-      api.modIcons(meta.id).then((map) => {
-        if (!map || !Object.keys(map).length) return;
-        state.modIcons = map;
-        if (state.tab === "mods" && state.selectedId === meta.id) renderMods();
-      }).catch(() => {});
-    }
-
-    const body = grid
-      ? `<div class="mods-grid">${mods.map((mod) => `
-          <div class="mod-card ${mod.enabled ? "" : "is-off"}">
-            ${modIconHtml(mod)}
-            <div class="mod-card-name" title="${esc(mod.name)}">${esc(mod.name)}</div>
-            <div class="mod-card-sub">${humanSize(mod.size)}</div>
-            <div class="mod-card-actions">
-              <button class="switch ${mod.enabled ? "on" : ""}" data-toggle="${esc(mod.name)}"></button>
-              <button class="icon-btn" data-delete="${esc(mod.name)}" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
-            </div>
-          </div>`).join("")}</div>`
-      : mods.map((mod) => `
-          <div class="item-row">
-            ${modIconHtml(mod)}
-            <div class="item-main">
-              <div class="item-title">${esc(mod.name)}</div>
-              <div class="item-sub">${humanSize(mod.size)} · ${mod.enabled ? "включён" : "выключен"}</div>
-            </div>
-            <button class="switch ${mod.enabled ? "on" : ""}" data-toggle="${esc(mod.name)}" title="Включить/выключить"></button>
-            <button class="icon-btn" data-delete="${esc(mod.name)}" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
-          </div>`).join("");
-
-    $("#tab-body").innerHTML = `
-      <div class="list-wrap">
-        <div class="panel">
-          <div class="panel-head">
-            <strong>Моды сборки</strong>
-            <span class="badge">${enabled} вкл. / ${mods.length}</span>
-            <div class="spacer"></div>
-            <div class="mr-view" title="Вид">
-              <button class="${grid ? "" : "is-active"}" data-mods-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
-              <button class="${grid ? "is-active" : ""}" data-mods-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
-            </div>
-            <button class="btn btn-small" id="mods-open">Открыть папку</button>
-            <button class="btn btn-small btn-primary" id="mods-add">Добавить с Modrinth</button>
-          </div>
-          ${mods.length ? body : `<div class="item-row"><div class="item-main muted">Модов нет</div></div>`}
-        </div>
-      </div>`;
-
-    $$("#tab-body [data-mods-view]").forEach((btn) => btn.addEventListener("click", () => {
-      state.modsView = btn.dataset.modsView;
-      renderMods();
-    }));
-    $("#mods-add").addEventListener("click", () => { state.modrinth.type = "mod"; state.tab = "modrinth"; renderTab(); });
-    $("#mods-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/mods`).catch((err) => toast(String(err), "err")));
-    $$("[data-toggle]").forEach((el) => el.addEventListener("click", async () => {
-      try { await api.toggleMod(meta.id, el.dataset.toggle); renderMods(); }
-      catch (err) { toast(String(err), "err"); }
-    }));
-    $$("[data-delete]").forEach((el) => el.addEventListener("click", async () => {
-      try { await api.deleteFile(meta.id, `mods/${el.dataset.delete}`); renderMods(); toast("Удалено", "ok"); }
-      catch (err) { toast(String(err), "err"); }
-    }));
+  /** Название файла без версии и расширения — для карточек без картотеки. */
+  function contentTitle(entry) {
+    return entry.title || entry.filename || entry.name;
   }
 
-  /* ---------- ресурспаки / шейдеры ---------- */
-  async function renderAssetsList(sub, title, projectType) {
+  function contentUpdates(kind) {
+    return state.contentUpdates[kind] || [];
+  }
+
+  function updateOf(kind, entry) {
+    return contentUpdates(kind).find((item) => item.filename === entry.filename);
+  }
+
+  async function renderContent(kind) {
+    const cfg = CONTENT_KINDS[kind] || CONTENT_KINDS.mod;
     const meta = selected();
-    const entries = await api.listDir(meta.id, sub).catch(() => []);
+    const entries = await api.contentList(meta.id, kind).catch(() => []);
+    if (kind === "mod") {
+      state.mods = entries;
+      $("#badge-mods").hidden = !entries.length;
+      $("#badge-mods").textContent = String(entries.length);
+      if (!Object.keys(state.modIcons).length) {
+        api.modIcons(meta.id).then((map) => {
+          if (!map || !Object.keys(map).length) return;
+          state.modIcons = map;
+          if (state.tab === "mods" && state.selectedId === meta.id) renderContent("mod");
+        }).catch(() => {});
+      }
+    }
+
+    const query = (state.contentQuery[kind] || "").trim().toLowerCase();
+    const visible = query
+      ? entries.filter((entry) => contentTitle(entry).toLowerCase().includes(query)
+        || String(entry.filename).toLowerCase().includes(query))
+      : entries;
+    const enabled = entries.filter((entry) => entry.enabled).length;
+    const updates = contentUpdates(kind);
+
+    const rows = visible.map((entry) => {
+      const update = updateOf(kind, entry);
+      return `
+        <div class="item-row content-row ${entry.enabled ? "" : "is-off"}" data-content="${esc(entry.filename)}">
+          ${kind === "mod" ? modIconHtml(entry) : `<span class="mod-icon"><svg class="ic"><use href="#${kind === "shader" ? "i-gem" : "i-base"}"/></svg></span>`}
+          <div class="item-main">
+            <div class="item-title">${esc(contentTitle(entry))}${entry.enabled ? "" : ' <span class="tag">выключен</span>'}</div>
+            <div class="item-sub">${entry.version_number ? `v${esc(entry.version_number)} · ` : ""}${humanSize(entry.size)}${update ? ` · <span class="content-update">есть ${esc(update.latest)}</span>` : ""}</div>
+          </div>
+          ${update ? `<button class="btn btn-small btn-primary" data-update-one="${esc(entry.filename)}">Обновить</button>` : ""}
+          <button class="switch ${entry.enabled ? "on" : ""}" data-toggle="${esc(entry.filename)}" title="Включить/выключить"></button>
+          <button class="icon-btn" data-delete="${esc(entry.filename)}" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
+        </div>`;
+    }).join("");
+
     $("#tab-body").innerHTML = `
       <div class="list-wrap">
         <div class="panel">
           <div class="panel-head">
-            <strong>${title}</strong>
-            <span class="badge">${entries.length}</span>
+            <strong>${cfg.title}</strong>
+            <span class="badge">${enabled} вкл. / ${entries.length}</span>
             <div class="spacer"></div>
-            <button class="btn btn-small" id="assets-open">Открыть папку</button>
-            <button class="btn btn-small btn-primary" id="assets-add">Скачать с Modrinth</button>
+            <label class="search content-search">
+              <svg class="ic"><use href="#i-search"/></svg>
+              <input id="content-query" placeholder="${cfg.search}" spellcheck="false" autocomplete="off" value="${esc(state.contentQuery[kind] || "")}">
+            </label>
+            <button class="btn btn-small" id="content-check" title="Проверить обновления под эту версию игры и загрузчик">
+              <svg class="ic"><use href="#i-refresh"/></svg>Проверить обновления
+            </button>
+            ${cfg.deps ? `<button class="btn btn-small" id="content-deps" title="Докачать недостающие зависимости модов"><svg class="ic"><use href="#i-download"/></svg>Зависимости</button>` : ""}
+            <button class="btn btn-small" id="content-open">Открыть папку</button>
+            <button class="btn btn-small btn-primary" id="content-add">${cfg.addLabel}</button>
           </div>
-          ${entries.length ? entries.map((entry) => `
-            <div class="item-row">
-              <svg class="ic" style="color:#6b727a"><use href="#i-base"/></svg>
-              <div class="item-main">
-                <div class="item-title">${esc(entry.name)}</div>
-                <div class="item-sub">${humanSize(entry.size)}</div>
-              </div>
-              <button class="icon-btn" data-del="${esc(entry.path)}"><svg class="ic"><use href="#i-trash"/></svg></button>
-            </div>`).join("") : `<div class="item-row"><div class="item-main muted">Пусто</div></div>`}
+          ${entries.length
+            ? (rows || `<div class="item-row"><div class="item-main muted">Ничего не нашлось</div></div>`)
+            : `<div class="item-row"><div class="item-main muted">${cfg.empty}</div></div>`}
+          ${updates.length ? `<div class="panel-foot muted" id="content-hint">Найдено обновлений: ${updates.length} — «Проверить обновления» покажет список</div>` : ""}
         </div>
       </div>`;
-    $("#assets-add").addEventListener("click", () => { state.modrinth.type = projectType; state.tab = "modrinth"; renderTab(); });
-    $("#assets-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/${sub}`).catch(() => {}));
-    $$("[data-del]").forEach((el) => el.addEventListener("click", async () => {
-      await api.deleteFile(meta.id, el.dataset.del).catch((err) => toast(String(err), "err"));
-      renderAssetsList(sub, title, projectType);
+
+    $("#content-add").addEventListener("click", () => { state.modrinth.type = kind; state.tab = "modrinth"; renderTab(); });
+    $("#content-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/${cfg.folder}`).catch((err) => toast(String(err), "err")));
+    const input = $("#content-query");
+    input.addEventListener("input", () => {
+      state.contentQuery[kind] = input.value;
+      const caret = input.selectionStart;
+      renderContent(kind).then(() => {
+        const next = $("#content-query");
+        if (!next) return;
+        next.focus();
+        try { next.setSelectionRange(caret, caret); } catch (error) { /* поле не в фокусе */ }
+      });
+    });
+    input.addEventListener("keydown", (event) => { if (event.key === "Escape") { input.value = ""; state.contentQuery[kind] = ""; renderContent(kind); } });
+
+    $$("#tab-body [data-toggle]").forEach((el) => el.addEventListener("click", async () => {
+      try { await api.contentToggle(meta.id, kind, el.dataset.toggle); renderContent(kind); }
+      catch (err) { toast(String(err), "err"); }
     }));
+    $$("#tab-body [data-delete]").forEach((el) => el.addEventListener("click", async () => {
+      const name = el.dataset.delete;
+      const ok = await askConfirm({
+        title: "Удалить файл?",
+        text: `«${name}» будет удалён из сборки.`,
+        ok: "Удалить",
+        danger: true
+      });
+      if (!ok) return;
+      try { await api.contentDelete(meta.id, kind, name); renderContent(kind); toast("Удалено", "ok"); }
+      catch (err) { toast(String(err), "err"); }
+    }));
+    $$("#tab-body [data-update-one]").forEach((el) => el.addEventListener("click", () => updateContentFile(kind, el.dataset.updateOne)));
+    $$("#tab-body .content-row").forEach((row) => row.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      const entry = entries.find((item) => item.filename === row.dataset.content);
+      if (entry) openContentMenu(event.clientX, event.clientY, kind, entry);
+    }));
+
+    $("#content-check").addEventListener("click", () => checkContentUpdates(kind));
+    const deps = $("#content-deps");
+    if (deps) deps.addEventListener("click", () => ensureDependencies());
+  }
+
+  /** ПКМ по файлу: обновления, страница проекта, вкл/выкл, папка, удаление. */
+  function openContentMenu(x, y, kind, entry) {
+    const cfg = CONTENT_KINDS[kind] || CONTENT_KINDS.mod;
+    const meta = selected();
+    const update = updateOf(kind, entry);
+    const pageUrl = (update && update.page_url)
+      || (entry.project_id ? `https://modrinth.com/${kind === "mod" ? "mod" : kind}/${entry.project_id}` : null);
+    const html = `
+      <div class="ctx-caption">${esc(contentTitle(entry))}${entry.version_number ? ` · v${esc(entry.version_number)}` : ""}</div>
+      <button class="ctx-item" data-act="check"><svg class="ic"><use href="#i-refresh"/></svg>Проверить обновления под мою версию</button>
+      ${update ? `<button class="ctx-item" data-act="update"><svg class="ic"><use href="#i-download"/></svg>Обновить до ${esc(update.latest)}</button>` : ""}
+      ${pageUrl ? `<button class="ctx-item" data-act="page"><svg class="ic"><use href="#i-link"/></svg>${cfg.pageLabel}</button>` : ""}
+      <div class="ctx-sep"></div>
+      <button class="ctx-item" data-act="toggle"><svg class="ic"><use href="#i-${entry.enabled ? "close" : "check"}"/></svg>${entry.enabled ? "Отключить" : "Включить"}</button>
+      <button class="ctx-item" data-act="folder"><svg class="ic"><use href="#i-folder"/></svg>Открыть папку ${cfg.folder}</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item danger" data-act="delete"><svg class="ic"><use href="#i-trash"/></svg>Удалить</button>`;
+    fillCtxMenu(x, y, html, async (act) => {
+      try {
+        if (act === "check") await checkContentUpdates(kind, entry.filename);
+        else if (act === "update") await updateContentFile(kind, entry.filename);
+        else if (act === "page") await api.openUrl(pageUrl);
+        else if (act === "toggle") { await api.contentToggle(meta.id, kind, entry.name); renderContent(kind); }
+        else if (act === "folder") await api.openPath(`${meta.id}/minecraft/${cfg.folder}`);
+        else if (act === "delete") {
+          const ok = await askConfirm({ title: "Удалить файл?", text: `«${entry.filename}» будет удалён из сборки.`, ok: "Удалить", danger: true });
+          if (ok) { await api.contentDelete(meta.id, kind, entry.filename); renderContent(kind); toast("Удалено", "ok"); }
+        }
+      } catch (err) { toast(String(err), "err"); }
+    });
+  }
+
+  /** Проверка обновлений: одного файла или всех сразу. */
+  async function checkContentUpdates(kind, filename = null) {
+    const meta = selected();
+    const body = kind === "mod" ? "моды сборки" : kind === "shader" ? "шейдеры сборки" : "ресурспаки сборки";
+    toast(filename ? `Проверяем обновления «${filename}»…` : `Проверяем обновления (${body})…`);
+    try {
+      const updates = await api.contentUpdates(meta.id, kind);
+      state.contentUpdates[kind] = updates;
+      if (filename) {
+        const found = updates.find((item) => item.filename === filename);
+        if (!found) { toast("Это последняя версия", "ok"); return; }
+        const ok = await askConfirm({
+          title: "Поставить обновление?",
+          text: `${found.title}: ${found.current} → ${found.latest}.\nПоставить под Minecraft ${meta.mc_version}${kind === "mod" ? ` · ${esc(loaderLabel(meta.loader))}` : ""}?`,
+          ok: "Обновить",
+          danger: false
+        });
+        if (ok) await updateContentFile(kind, filename);
+        else renderContent(kind);
+        return;
+      }
+      renderContent(kind);
+      if (!updates.length) { toast("Обновлений нет — все файлы актуальны", "ok"); return; }
+      openUpdatesDialog(kind, updates);
+    } catch (err) {
+      toast(String(err), "err");
+    }
+  }
+
+  /** Окно «Обновления»: список найденного и «Обновить всё». */
+  function openUpdatesDialog(kind, updates) {
+    const modal = $("#modal-updates-list");
+    if (!modal) return;
+    const cfg = CONTENT_KINDS[kind] || CONTENT_KINDS.mod;
+    $("#upd-list-title").textContent = `Обновления: ${cfg.title.toLowerCase()}`;
+    $("#upd-list-body").innerHTML = updates.map((item) => `
+      <div class="item-row upd-row" data-upd="${esc(item.filename)}">
+        <div class="item-main">
+          <div class="item-title">${esc(item.title)}</div>
+          <div class="item-sub">${esc(item.current)} → ${esc(item.latest)} · ${esc(item.new_filename)}</div>
+        </div>
+        <button class="btn btn-small btn-primary" data-upd-one="${esc(item.filename)}">Обновить</button>
+      </div>`).join("");
+    $$("#upd-list-body [data-upd-one]").forEach((btn) => btn.addEventListener("click", () => updateContentFile(kind, btn.dataset.updOne)));
+    const all = $("#upd-list-all");
+    all.onclick = async () => {
+      for (const item of updates.slice()) {
+        try { await api.contentUpdate(selected().id, kind, item.filename); }
+        catch (err) { toast(String(err), "err"); }
+      }
+      state.contentUpdates[kind] = [];
+      modal.hidden = true;
+      renderContent(kind);
+      toast("Обновления установлены", "ok");
+    };
+    modal.hidden = false;
+  }
+
+  /** Поставить обновление одного файла. */
+  async function updateContentFile(kind, filename) {
+    const meta = selected();
+    toast(`Обновляем «${filename}»…`);
+    try {
+      await api.contentUpdate(meta.id, kind, filename);
+      state.contentUpdates[kind] = (state.contentUpdates[kind] || []).filter((item) => item.filename !== filename);
+      const dialog = $("#modal-updates-list");
+      if (dialog && !dialog.hidden) { dialog.hidden = true; }
+      renderContent(kind);
+      toast("Обновлено", "ok");
+    } catch (err) { toast(String(err), "err"); }
+  }
+
+  /** Автодокачка зависимостей для уже установленных модов. */
+  async function ensureDependencies() {
+    const meta = selected();
+    toast("Проверяем зависимости модов…");
+    try {
+      const result = await api.ensureDependencies(meta.id);
+      const added = (result && result.installed) || [];
+      renderContent("mod");
+      toast(added.length ? `Докачано: ${added.join(", ")}` : "Все зависимости на месте", "ok");
+    } catch (err) { toast(String(err), "err"); }
   }
 
   /* ---------- миры ---------- */
@@ -2860,6 +3270,31 @@
     return level === 1 || level === 2 || level === 3 ? level : 2;
   }
 
+  /** Сколько карточек в ряд при текущей ширине окна и выбранном размере. */
+  function feedColumns(level = feedGridLevel(), width = 0) {
+    const max = level === 1 ? 12 : level === 3 ? 6 : 9;
+    const min = level === 1 ? 3 : level === 3 ? 2 : 3;
+    const available = width || Math.max(320, (window.innerWidth || 1280) - 264 - 16);
+    // карточка не должна быть уже ~96 px и шире ~260 px
+    const byWidth = Math.floor(available / (level === 3 ? 168 : level === 2 ? 124 : 92));
+    return Math.max(min, Math.min(max, byWidth || max));
+  }
+
+  /** Пересчитать число колонок у уже отрисованной ленты. */
+  function syncFeedColumns() {
+    const results = document.getElementById("dv-results");
+    if (!results) return;
+    const level = feedGridLevel();
+    results.style.setProperty("--feed-cols", String(feedColumns(level, results.clientWidth || 0)));
+  }
+
+  let feedResizeBound = false;
+  function bindFeedResize() {
+    if (feedResizeBound) { syncFeedColumns(); return; }
+    feedResizeBound = true;
+    window.addEventListener("resize", () => syncFeedColumns());
+  }
+
   function setFeedGridLevel(level) {
     const clean = level === 1 || level === 3 ? level : 2;
     state.settings = { ...(state.settings || {}), feed_grid: clean };
@@ -2887,14 +3322,14 @@
                 <button class="${view === "grid" ? "is-active" : ""}" data-dv-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
                 <button class="${view === "list" ? "is-active" : ""}" data-dv-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
               </div>
-              <label class="feed-size" title="Размер плиток: 1 — мелкие, 2 — обычные, 3 — крупные">
+              <label class="feed-size" title="Размер плиток: 1 — 12 в ряд, 2 — 9 в ряд, 3 — 6 в ряд">
                 <svg class="ic"><use href="#i-grid"/></svg>
                 <input type="range" id="feed-size" min="1" max="3" step="1" value="${feedGridLevel()}" aria-label="Размер плиток">
                 <span class="mono" id="feed-size-val">${feedGridLevel()}</span>
               </label>
             </div>
           </div>
-          <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${feedGridLevel()}` : ""}" id="dv-results">${dvResultsHtml()}</div>
+          <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${feedGridLevel()}` : ""}" id="dv-results" style="--feed-cols:${feedColumns()}">${dvResultsHtml()}</div>
         </div>
       </div>`;
 
@@ -2908,6 +3343,7 @@
       state.discover.view = btn.dataset.dvView;
       renderDiscover();
     }));
+    bindFeedResize();
     const feedSize = $("#feed-size");
     if (feedSize) {
       feedSize.addEventListener("input", () => {
@@ -2920,6 +3356,7 @@
           results.classList.add(`feed-grid-${level}`);
         }
         setFeedGridLevel(level);
+        syncFeedColumns();
       });
     }
     bindHomeImport();
@@ -3379,11 +3816,15 @@
           <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
         </div>
         <div class="card-actions">
-          <button class="btn btn-primary" data-install="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}">
-            ${isPack ? "Установить" : "Установить"}
+          <button class="icon-btn card-icon-btn is-primary" data-install="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}" title="Скачать и установить" aria-label="Скачать">
+            <svg class="ic"><use href="#i-download"/></svg>
           </button>
-          <button class="btn btn-ghost" data-versions="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}" data-title="${esc(hit.title)}">Версии</button>
-          <button class="btn btn-ghost" data-open-page="${esc(hit.slug || hit.project_id)}" data-open-type="${esc(openType)}">Страница</button>
+          <button class="icon-btn card-icon-btn" data-versions="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}" data-title="${esc(hit.title)}" title="Версии" aria-label="Версии">
+            <svg class="ic"><use href="#i-list"/></svg>
+          </button>
+          <button class="icon-btn card-icon-btn" data-open-page="${esc(hit.slug || hit.project_id)}" data-open-type="${esc(openType)}" title="Страница проекта" aria-label="Страница">
+            <svg class="ic"><use href="#i-link"/></svg>
+          </button>
         </div>
       </div>
     </div>`;
@@ -3864,13 +4305,15 @@
 
     if (mode === "offline") {
       body.innerHTML = `
-        <div class="field" style="max-width:320px">
-          <label>Ник в игре (3–16 символов, латиница, цифры, «_»)</label>
-          <input class="input" id="acc-username" placeholder="Steve" spellcheck="false" autocomplete="off">
-        </div>
-        <div class="modal-actions">
-          <button class="btn btn-ghost" data-back>Назад</button>
-          <button class="btn btn-primary" id="acc-add-offline">Добавить</button>
+        <div class="acc-pane">
+          <div class="field acc-field">
+            <label>Ник в игре (3–16 символов, латиница, цифры, «_»)</label>
+            <input class="input" id="acc-username" placeholder="Steve" spellcheck="false" autocomplete="off" maxlength="16">
+          </div>
+          <div class="acc-actions">
+            <button class="btn btn-ghost" data-back>Назад</button>
+            <button class="btn btn-primary" id="acc-add-offline">Добавить</button>
+          </div>
         </div>`;
       const input = $("#acc-username");
       input.focus();
@@ -4283,6 +4726,26 @@
         <div class="chips" id="ambient-chips">
           ${Object.entries(AMBIENT_STYLES).filter(([id]) => id !== "off").map(([id, label]) => `<button class="chip ${(state.ambient || "stars") === id ? "is-active" : ""}" data-ambient="${id}">${label}</button>`).join("")}
         </div>
+      </div>
+      <div class="prefs-section">
+        <div class="prefs-row-head">
+          <span class="prefs-label">Трейс за курсором</span>
+          <div class="spacer"></div>
+          <button class="switch ${state.trail !== false ? "on" : ""}" id="set-trail"></button>
+        </div>
+      </div>
+      <div class="prefs-section">
+        <div class="prefs-row-head">
+          <span class="prefs-label">Размер эффектов</span>
+          <div class="spacer"></div>
+          <span class="mono" id="fx-size-value">${Number(state.effectSize) || 100}%</span>
+        </div>
+        <div class="range">
+          <input type="range" id="set-fx-size" min="60" max="220" step="10" value="${Number(state.effectSize) || 100}">
+          <span class="muted" style="font-size:11px">маленькие</span>
+          <div class="spacer"></div>
+          <span class="muted" style="font-size:11px">крупные</span>
+        </div>
       </div>`;
   }
 
@@ -4398,6 +4861,15 @@
 
     $$("#theme-grid .theme-chip").forEach((chip) => chip.addEventListener("click", () => {
       state.theme = applyTheme(chip.dataset.themeId);
+      // тема запоминается сразу: иначе после перезапуска возвращалось «тёмная»
+      state.settings = {
+        ...(state.settings || {}),
+        theme: state.theme,
+        theme_bg: state.customTheme.bg,
+        theme_accent: state.customTheme.accent,
+        theme_text: state.customTheme.text
+      };
+      api.saveSettings(state.settings).catch(() => {});
       renderPrefs();
     }));
     // свои цвета: ползунки цвета + пипетка
@@ -4444,6 +4916,26 @@
       renderPrefs();
       toast("Цвета взяты из фона", "ok");
     });
+    const trailSwitch = $("#set-trail");
+    if (trailSwitch) trailSwitch.addEventListener("click", () => {
+      const on = !(state.trail !== false);
+      applyTrail(on);
+      trailSwitch.classList.toggle("on", on);
+      state.settings = { ...(state.settings || {}), trail: on };
+      api.saveSettings(state.settings).catch(() => {});
+    });
+    const fxSize = $("#set-fx-size");
+    if (fxSize) {
+      fxSize.addEventListener("input", () => {
+        const size = applyEffectSize(fxSize.value);
+        const label = $("#fx-size-value");
+        if (label) label.textContent = `${size}%`;
+      });
+      fxSize.addEventListener("change", () => {
+        state.settings = { ...(state.settings || {}), effect_size: applyEffectSize(fxSize.value) };
+        api.saveSettings(state.settings).catch(() => {});
+      });
+    }
     const ambientSwitch = $("#set-ambient");
     if (ambientSwitch) ambientSwitch.addEventListener("click", () => {
       const on = !(state.ambient && state.ambient !== "off");
@@ -4644,6 +5136,8 @@
       sound_style: state.sound.style || "soft",
       click_fx: state.fx,
       ambient: state.ambient || "stars",
+      effect_size: Number(state.effectSize) || 100,
+      trail: state.trail !== false,
       feed_grid: feedGridLevel(),
       wallpaper: state.wall.wallpaper,
       wallpaper_fit: state.wall.fit,
@@ -5890,6 +6384,7 @@
     });
     on("[data-close-acc]", "click", () => { $("#modal-account").hidden = true; });
     on("[data-close-versions]", "click", () => { $("#modal-versions").hidden = true; });
+    on("[data-close-upd-list]", "click", () => { $("#modal-updates-list").hidden = true; });
     // Версия в шапке кликабельна и ведёт на смену версии.
     on("#btn-build-menu", "click", (event) => {
       const meta = selected();
@@ -6011,6 +6506,8 @@
     state.fx = (state.settings && state.settings.click_fx) || "wave";
     applyClickFx(state.fx);
     applyAmbient((state.settings && state.settings.ambient) || "stars");
+    applyEffectSize((state.settings && state.settings.effect_size) || 100);
+    applyTrail(!state.settings || state.settings.trail !== false);
     applyShape((state.settings && state.settings.shape) || "soft");
     applyUiScale((state.settings && state.settings.ui_scale) || 100);
     state.sound = {

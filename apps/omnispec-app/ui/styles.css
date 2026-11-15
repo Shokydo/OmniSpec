@@ -2595,24 +2595,37 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 .feed-size .mono { min-width: 8px; text-align: center; font-size: 11px; color: var(--text); }
 .feed-size:hover { border-color: var(--line-3); color: var(--text); }
 
-.modrinth-results.is-grid.feed-grid-1 { grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; }
-.modrinth-results.is-grid.feed-grid-2 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-/* в плитке карточка открывается кликом — кнопка «Страница» только мешает узким карточкам */
-.modrinth-results.is-grid .card-actions [data-open-page] { display: none; }
+/* Три режима «Готовых сборок»: 1 — 12 в ряд, 2 — 9, 3 — 6.
+   Колонок ровно столько, сколько влезает в текущую ширину окна (--feed-cols),
+   но не больше выбранного режима — ползунок задаёт верхнюю границу. */
+.modrinth-results.is-grid { grid-template-columns: repeat(var(--feed-cols, 6), minmax(0, 1fr)); }
+.modrinth-results.is-grid.feed-grid-1 { gap: 6px; }
+.modrinth-results.is-grid.feed-grid-2 { gap: 7px; }
+.modrinth-results.is-grid.feed-grid-3 { gap: 8px; }
 .modrinth-results.is-grid .card-actions .btn { font-size: 11px; padding: 0 6px; }
-.modrinth-results.is-grid.feed-grid-3 { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 /* мелкие плитки: карточка компактнее, но кнопки того же размера */
 .modrinth-results.is-grid.feed-grid-1 .card { padding: 6px; gap: 5px; }
-.modrinth-results.is-grid.feed-grid-1 .card-title { font-size: 11px; }
+.modrinth-results.is-grid.feed-grid-1 .card-title,
+.modrinth-results.is-grid.feed-grid-2 .card-title { font-size: 11px; }
 .modrinth-results.is-grid.feed-grid-1 .card-desc,
 .modrinth-results.is-grid.feed-grid-1 .card-meta { display: none; }
-.modrinth-results.is-grid.feed-grid-1 .card-actions .btn { padding: 0 4px; font-size: 10.5px; }
 @media (max-width: 1180px) {
-  .modrinth-results.is-grid.feed-grid-1 { grid-template-columns: repeat(8, minmax(0, 1fr)); }
-  .modrinth-results.is-grid.feed-grid-2 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-  .modrinth-results.is-grid.feed-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .home-feed-head { grid-template-columns: minmax(0, 1fr) minmax(180px, 420px) minmax(0, 1fr); }
 }
+
+/* маленькие кнопки-иконки на карточке: скачать / версии / страница */
+.card-actions .card-icon-btn {
+  width: 30px; height: var(--h-sm); flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--bg-3); color: var(--dim);
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.card-actions .card-icon-btn:hover { background: var(--bg-4); color: var(--text); border-color: var(--line-3); }
+.card-actions .card-icon-btn.is-primary {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-fg);
+}
+.card-actions .card-icon-btn.is-primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
 
 /* ---------- живая строка импорта: спиннер, этап, процент ---------- */
 .imp-live {
@@ -2670,3 +2683,52 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 }
 .cape-card.is-active .cape-name { color: var(--text); }
 .cape-note { font-size: 11px; color: var(--dim-2); align-self: center; }
+
+/* ==================== ЭТАП 18 ==================== */
+
+/* модалки почти непрозрачные: обои просвечивают только по краям */
+:root { --modal-solid: var(--bg-2); }
+@supports (background: color-mix(in srgb, red 50%, transparent)) {
+  :root { --modal-solid: color-mix(in srgb, var(--bg-2) 97%, transparent); }
+}
+body.has-wall .modal { background: var(--modal-solid); }
+body.has-wall .modal-foot { background: var(--bg-3a); }
+body.has-wall .modal-head { background: transparent; }
+
+/* --- поиск в заголовке панели модов/шейдеров/ресурспаков --- */
+.content-search { width: 220px; height: var(--h-sm); margin: 0; }
+.content-search input { font-size: 11.5px; }
+.content-row { align-items: center; }
+.content-row.is-off .item-title,
+.content-row.is-off .item-sub,
+.content-row.is-off .mod-icon { opacity: 0.55; }
+.content-update { color: var(--accent); }
+.panel-foot {
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+}
+.upd-row { align-items: center; }
+#modal-updates-list .modal { height: auto; }
+#modal-updates-list .modal-body { flex: 0 1 auto; min-height: 0; max-height: 56vh; overflow-y: auto; }
+
+/* --- трейс за курсором: под частицами, но выше окон --- */
+.trail {
+  position: fixed; inset: 0;
+  width: 100%; height: 100%;
+  z-index: 4999;
+  pointer-events: none;
+}
+body[data-trail="off"] .trail { display: none; }
+
+/* --- прозрачные заголовки поверх обоев --- */
+body.has-wall .home-head, body.has-wall .home-feed-head { background: transparent; }
+
+/* --- окно аккаунта: инпут на всю ширину, кнопки равные и прижаты к низу --- */
+#modal-account .modal { width: min(560px, 94vw); }
+#acc-body { min-height: 196px; display: flex; flex-direction: column; }
+.acc-pane { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.acc-field { width: 100%; }
+.acc-field .input, .acc-pane .input { width: 100%; }
+.acc-actions { display: flex; gap: 8px; margin-top: auto; padding-top: 12px; }
+.acc-actions .btn { flex: 1 1 0; min-width: 132px; height: var(--h-sm); }
