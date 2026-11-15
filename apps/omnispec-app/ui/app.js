@@ -303,6 +303,9 @@
     let scale = 1;
     // плотность: сколько частиц на экране (0.3–2)
     let density = 1;
+    // свой цвет частиц (null — как в теме) и прозрачность слоя
+    let colorOverride = null;
+    let layerOpacity = 0.8;
     let particles = [];
     let raf = 0;
     let last = 0;
@@ -321,9 +324,10 @@
       el.height = Math.round(height * dpr);
       ctx = el.getContext("2d");
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      // цвет частиц берём из темы: на светлой теме они тёмные, на тёмной — светлые
+      // цвет частиц: свой, если выбран, иначе из темы
       const textColor = getComputedStyle(document.body).getPropertyValue("--text").trim();
-      ink = textColor || "#e8e8ee";
+      ink = colorOverride || textColor || "#e8e8ee";
+      el.style.opacity = String(layerOpacity);
     }
 
     function count() {
@@ -473,7 +477,7 @@
 
     ambientInkRefresh = () => {
       const textColor = getComputedStyle(document.body).getPropertyValue("--text").trim();
-      if (textColor) ink = textColor;
+      ink = colorOverride || textColor || "#e8e8ee";
     };
 
     return {
@@ -489,6 +493,20 @@
         const clean = Math.max(20, Math.min(300, Number(percent) || 100));
         density = clean / 100;
         if (style !== "off" && raf) build();
+        return clean;
+      },
+      /** Свой цвет частиц: hex или null — «как в теме». */
+      color: (hex) => {
+        colorOverride = /^#[0-9a-f]{6}$/i.test(String(hex || "")) ? String(hex).toLowerCase() : null;
+        ink = colorOverride || getComputedStyle(document.body).getPropertyValue("--text").trim() || "#e8e8ee";
+        return colorOverride;
+      },
+      /** Прозрачность слоя частиц в процентах: 5–100. */
+      opacity: (percent) => {
+        const clean = Math.max(5, Math.min(100, Number(percent) || 80));
+        layerOpacity = clean / 100;
+        const el = canvas();
+        if (el) el.style.opacity = String(layerOpacity);
         return clean;
       },
       refreshInk: () => ambientInkRefresh && ambientInkRefresh(),
@@ -530,6 +548,9 @@
     let enabled = true;
     let ink = "#e8e8ee";
     let accent = "#ffffff";
+    // своя палитра (null — как в теме) и прозрачность следа
+    let colorOverride = null;
+    let opacity = 1;
 
     function resize() {
       const el = canvas();
@@ -546,8 +567,8 @@
 
     function readInk() {
       const css = getComputedStyle(document.body);
-      ink = css.getPropertyValue("--text").trim() || "#e8e8ee";
-      accent = css.getPropertyValue("--accent").trim() || "#ffffff";
+      ink = colorOverride || css.getPropertyValue("--text").trim() || "#e8e8ee";
+      accent = colorOverride || css.getPropertyValue("--accent").trim() || "#ffffff";
     }
 
     /** Толщина в пикселях при 100 % — у каждого варианта своя. */
@@ -586,7 +607,7 @@
         const base = baseWidth();
         // хвост гаснет целиком, а не по кусочкам — поэтому линия сплошная
         const sinceMove = Math.max(0, (now - lastMove) / 1000);
-        const fade = Math.max(0, Math.min(1, 1 - sinceMove / (life * 1.8)));
+        const fade = Math.max(0, Math.min(1, 1 - sinceMove / (life * 1.8))) * opacity;
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
 
@@ -708,6 +729,18 @@
         length = clean / 100;
         return clean;
       },
+      /** Свой цвет трейса: hex или null — «как в теме». */
+      color: (hex) => {
+        colorOverride = /^#[0-9a-f]{6}$/i.test(String(hex || "")) ? String(hex).toLowerCase() : null;
+        readInk();
+        return colorOverride;
+      },
+      /** Прозрачность следа в процентах: 5–100. */
+      opacity: (percent) => {
+        const clean = Math.max(5, Math.min(100, Number(percent) || 100));
+        opacity = clean / 100;
+        return clean;
+      },
       refreshInk: readInk
     };
   })();
@@ -743,6 +776,32 @@
   function applyTrailStyle(name) {
     state.trailStyle = trailFx.style(name);
     return state.trailStyle;
+  }
+
+  /** Свой цвет трейса (null — как в теме). */
+  function applyTrailColor(hex) {
+    state.trailColor = trailFx.color(hex);
+    return state.trailColor;
+  }
+
+  /** Прозрачность трейса в процентах. */
+  function applyTrailOpacity(percent) {
+    const clean = trailFx.opacity(percent);
+    state.trailOpacity = clean;
+    return clean;
+  }
+
+  /** Свой цвет частиц на экране (null — как в теме). */
+  function applyAmbientColor(hex) {
+    state.ambientColor = ambient.color(hex);
+    return state.ambientColor;
+  }
+
+  /** Прозрачность частиц на экране в процентах. */
+  function applyAmbientOpacity(percent) {
+    const clean = ambient.opacity(percent);
+    state.ambientOpacity = clean;
+    return clean;
   }
 
   /** Трейс за курсором: вкл/выкл. */
@@ -4897,6 +4956,23 @@
               <span class="muted" style="font-size:11px">длинный</span>
             </div>
           </div>
+          <div class="prefs-section">
+            <div class="prefs-row-head">
+              <span class="prefs-label">Прозрачность</span>
+              <div class="spacer"></div>
+              <span class="mono" id="trail-opacity-value">${Number(state.trailOpacity) || 100}%</span>
+            </div>
+            <div class="range">
+              <input type="range" id="set-trail-opacity" min="5" max="100" step="5" value="${Number(state.trailOpacity) || 100}">
+              <span class="muted" style="font-size:11px">прозрачный</span>
+              <div class="spacer"></div>
+              <span class="muted" style="font-size:11px">плотный</span>
+            </div>
+          </div>
+          <div class="prefs-section">
+            <div class="prefs-label">Цвет</div>
+            ${fxColorRow({ id: "trail-color", value: state.trailColor, fallback: themeTextColor() })}
+          </div>
         </div>
       </div>
 
@@ -4940,8 +5016,41 @@
               <span class="muted" style="font-size:11px">густо</span>
             </div>
           </div>
+          <div class="prefs-section">
+            <div class="prefs-row-head">
+              <span class="prefs-label">Прозрачность</span>
+              <div class="spacer"></div>
+              <span class="mono" id="amb-opacity-value">${Number(state.ambientOpacity) || 80}%</span>
+            </div>
+            <div class="range">
+              <input type="range" id="set-amb-opacity" min="5" max="100" step="5" value="${Number(state.ambientOpacity) || 80}">
+              <span class="muted" style="font-size:11px">прозрачные</span>
+              <div class="spacer"></div>
+              <span class="muted" style="font-size:11px">плотные</span>
+            </div>
+          </div>
+          <div class="prefs-section">
+            <div class="prefs-label">Цвет</div>
+            ${fxColorRow({ id: "ambient-color", value: state.ambientColor, fallback: themeTextColor() })}
+          </div>
         </div>
       </div>`;
+  }
+
+  /** Цвет из темы — подставляется в палитру, пока свой цвет не выбран. */
+  function themeTextColor() {
+    const value = getComputedStyle(document.body).getPropertyValue("--text").trim();
+    return /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : "#ececee";
+  }
+
+  /** Строка «цвет» для эффектов: палитра, hex и кнопка «как в теме». */
+  function fxColorRow({ id, value, fallback }) {
+    const color = value || fallback;
+    return `<div class="color-field">
+      <input type="color" id="${id}" value="${esc(color)}" aria-label="Цвет">
+      <span class="color-hex" id="${id}-hex">${esc(value ? value : "как в теме")}</span>
+      <button class="btn btn-small" id="${id}-reset" title="Брать цвет из темы"><svg class="ic"><use href="#i-refresh"/></svg>Как в теме</button>
+    </div>`;
   }
 
   /** Плотность частиц: сколько их на экране, в процентах. */
@@ -5051,6 +5160,53 @@
       });
       trailLength.addEventListener("change", () => {
         state.settings = { ...(state.settings || {}), trail_length: applyTrailLength(trailLength.value) };
+        api.saveSettings(state.settings).catch(() => {});
+      });
+    }
+    const bindFxColor = (id, apply, key) => {
+      const input = $(`#${id}`);
+      const hex = $(`#${id}-hex`);
+      const reset = $(`#${id}-reset`);
+      const paint = (value) => {
+        if (hex) hex.textContent = value ? value : "как в теме";
+        if (input && value) input.value = value;
+      };
+      if (input) input.addEventListener("input", () => {
+        const value = apply(input.value);
+        paint(value);
+        state.settings = { ...(state.settings || {}), [key]: value };
+        api.saveSettings(state.settings).catch(() => {});
+      });
+      if (reset) reset.addEventListener("click", () => {
+        apply(null);
+        paint(null);
+        state.settings = { ...(state.settings || {}), [key]: null };
+        api.saveSettings(state.settings).catch(() => {});
+      });
+    };
+    bindFxColor("trail-color", applyTrailColor, "trail_color");
+    bindFxColor("ambient-color", applyAmbientColor, "ambient_color");
+    const trailOpacity = $("#set-trail-opacity");
+    if (trailOpacity) {
+      trailOpacity.addEventListener("input", () => {
+        const value = applyTrailOpacity(trailOpacity.value);
+        const label = $("#trail-opacity-value");
+        if (label) label.textContent = `${value}%`;
+      });
+      trailOpacity.addEventListener("change", () => {
+        state.settings = { ...(state.settings || {}), trail_opacity: applyTrailOpacity(trailOpacity.value) };
+        api.saveSettings(state.settings).catch(() => {});
+      });
+    }
+    const ambOpacity = $("#set-amb-opacity");
+    if (ambOpacity) {
+      ambOpacity.addEventListener("input", () => {
+        const value = applyAmbientOpacity(ambOpacity.value);
+        const label = $("#amb-opacity-value");
+        if (label) label.textContent = `${value}%`;
+      });
+      ambOpacity.addEventListener("change", () => {
+        state.settings = { ...(state.settings || {}), ambient_opacity: applyAmbientOpacity(ambOpacity.value) };
         api.saveSettings(state.settings).catch(() => {});
       });
     }
@@ -5283,6 +5439,10 @@
       trail_style: state.trailStyle || "line",
       trail_length: Number(state.trailLength) || 100,
       ambient_density: Number(state.ambientDensity) || 100,
+      trail_opacity: Number(state.trailOpacity) || 100,
+      trail_color: state.trailColor || null,
+      ambient_opacity: Number(state.ambientOpacity) || 80,
+      ambient_color: state.ambientColor || null,
       trail: state.trail !== false,
       feed_grid: feedGridLevel(),
       wallpaper: state.wall.wallpaper,
@@ -6657,6 +6817,10 @@
     applyTrailLength((state.settings && state.settings.trail_length) || 100);
     applyTrailStyle((state.settings && state.settings.trail_style) || "line");
     applyDensity((state.settings && state.settings.ambient_density) || 100);
+    applyTrailOpacity((state.settings && state.settings.trail_opacity) || 100);
+    applyTrailColor((state.settings && state.settings.trail_color) || null);
+    applyAmbientOpacity((state.settings && state.settings.ambient_opacity) ?? 80);
+    applyAmbientColor((state.settings && state.settings.ambient_color) || null);
     applyTrail(!state.settings || state.settings.trail !== false);
     applyShape((state.settings && state.settings.shape) || "soft");
     applyUiScale((state.settings && state.settings.ui_scale) || 100);

@@ -71,6 +71,16 @@ fn default_ambient_density() -> u8 {
     100
 }
 
+/// Прозрачность трейса в процентах.
+fn default_trail_opacity() -> u8 {
+    100
+}
+
+/// Прозрачность частиц на экране в процентах.
+fn default_ambient_opacity() -> u8 {
+    80
+}
+
 fn default_ambient() -> String {
     "stars".to_string()
 }
@@ -231,6 +241,18 @@ pub struct Settings {
     /// Плотность частиц на экране: 30–200 %.
     #[serde(default = "default_ambient_density")]
     pub ambient_density: u8,
+    /// Прозрачность трейса: 5–100 %.
+    #[serde(default = "default_trail_opacity")]
+    pub trail_opacity: u8,
+    /// Свой цвет трейса (`#rrggbb`), `None` — как в теме.
+    #[serde(default)]
+    pub trail_color: Option<String>,
+    /// Прозрачность частиц на экране: 5–100 %.
+    #[serde(default = "default_ambient_opacity")]
+    pub ambient_opacity: u8,
+    /// Свой цвет частиц (`#rrggbb`), `None` — как в теме.
+    #[serde(default)]
+    pub ambient_color: Option<String>,
 }
 
 /// Категория сборок: обычная «папка» в списке слева.
@@ -309,6 +331,10 @@ impl Default for Settings {
             trail_style: default_trail_style(),
             trail_length: default_trail_length(),
             ambient_density: default_ambient_density(),
+            trail_opacity: default_trail_opacity(),
+            trail_color: None,
+            ambient_opacity: default_ambient_opacity(),
+            ambient_color: None,
         }
     }
 }

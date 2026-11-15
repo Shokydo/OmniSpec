@@ -2739,6 +2739,9 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
   border-radius: var(--r-md);
   background: var(--bg-3);
   overflow: hidden;
+  /* грид настроек сжимает строки под высоту окна — группа не должна резаться */
+  min-height: max-content;
+  align-self: start;
 }
 .fx-group + .fx-group { margin-top: 2px; }
 .fx-group-head {
@@ -2753,3 +2756,7 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 }
 .fx-group-body { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
 .fx-group-body .prefs-section { margin: 0; }
+
+/* цвет и прозрачность эффектов: палитра + подпись + «как в теме» */
+.fx-group-body .color-field { width: 100%; }
+.fx-group-body .color-field .btn { margin-left: auto; }
