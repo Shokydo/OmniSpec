@@ -10,8 +10,9 @@
   * многоразмерный .ico для exe и панели задач Windows;
   * логотип в интерфейсе (ui/assets/logo.png) и favicon.
 
-Мелкие размеры (≤48 px) берутся с кропом 68 % — лицо занимает больше места
-и иконка читается на панели задач; крупные — полный кадр, как в исходнике.
+Раньше мелкие размеры кропились (лицо «в упор») — на панели задач это
+выглядело как зум. Теперь наоборот: картинка вписывается с полями, чтобы
+иконка дышала и не липла к краям.
 """
 
 from pathlib import Path
@@ -21,8 +22,18 @@ from PIL import Image, ImageFilter, ImageOps
 ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "apps" / "omnispec-app"
 SOURCE = APP / "icon-source.jpg"
-SMALL_CROP = 0.68          # кроп для мелких размеров
-SMALL_LIMIT = 48           # до какого размера использовать кроп
+# сколько места занимает картинка внутри квадрата иконки
+SCALE_TINY = 0.74          # 16–32 px: сильнее поля, иначе лицо «в упор»
+SCALE_SMALL = 0.80         # 33–64 px
+SCALE_LARGE = 0.88         # всё, что крупнее
+
+
+def scale_for(size: int) -> float:
+    if size <= 32:
+        return SCALE_TINY
+    if size <= 64:
+        return SCALE_SMALL
+    return SCALE_LARGE
 
 
 def build_master() -> Image.Image:
@@ -35,16 +46,16 @@ def build_master() -> Image.Image:
 
 
 def render(master: Image.Image, size: int) -> Image.Image:
-    image = master
-    if size <= SMALL_LIMIT:
-        box = int(1024 * SMALL_CROP)
-        left = (1024 - box) // 2
-        image = master.crop((left, left, left + box, left + box))
-    image = image.resize((size, size), Image.LANCZOS)
+    """Картинка по центру прозрачного квадрата, с полями — без зума в упор."""
+    inner = max(8, int(round(size * scale_for(size))))
+    image = master.resize((inner, inner), Image.LANCZOS)
     if size <= 64:
         # иначе на мелких размерах линии превращаются в серую кашу
         image = image.filter(ImageFilter.UnsharpMask(radius=0.7, percent=100, threshold=1))
-    return image.convert("RGBA")
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    offset = (size - inner) // 2
+    canvas.paste(image.convert("RGBA"), (offset, offset))
+    return canvas
 
 
 def main() -> None:
@@ -65,7 +76,7 @@ def main() -> None:
 
     ico_sizes = [(16, 16), (20, 20), (24, 24), (32, 32), (40, 40), (48, 48),
                  (64, 64), (128, 128), (256, 256)]
-    # .ico собираем из уже отрисованных размеров, чтобы кроп применился
+    # .ico собираем из уже отрисованных размеров, чтобы поля применились
     frames = [render(master, size[0]) for size in ico_sizes]
     frames[-1].save(icons / "icon.ico", format="ICO",
                    sizes=ico_sizes, append_images=frames[:-1])

@@ -32,6 +32,8 @@ type ChildHandle = Arc<Mutex<tokio::process::Child>>;
 
 struct AppState {
     paths: Paths,
+    /// Путь, с которым лаунчер запустили (`.mrpack` двойным щелчком или drag&drop в ярлык).
+    startup_file: Option<String>,
     accounts: Mutex<AccountStore>,
     http: Http,
     modrinth: Modrinth,
@@ -826,6 +828,154 @@ async fn ms_login_poll(
     }))
 }
 
+
+/* ==================== ФАЙЛЫ ОТ ПОЛЬЗОВАТЕЛЯ ==================== */
+
+/// Открыть системный диалог выбора файла. `None` — пользователь закрыл окно.
+#[tauri::command]
+async fn pick_file(
+    title: Option<String>,
+    extensions: Option<Vec<String>>,
+) -> Result<Option<String>, String> {
+    let chosen = tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = rfd::FileDialog::new();
+        dialog = dialog.set_title(title.unwrap_or_else(|| "Выбери файл".into()));
+        if let Some(extensions) = extensions {
+            let list: Vec<String> = extensions.into_iter().map(|ext| ext.to_lowercase()).collect();
+            let refs: Vec<&str> = list.iter().map(|ext| ext.as_str()).collect();
+            if !refs.is_empty() {
+                dialog = dialog.add_filter("Подходящие файлы", &refs);
+            }
+            dialog = dialog.add_filter("Все файлы", &["*"]);
+        }
+        dialog.pick_file().map(|path| path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(chosen)
+}
+
+/// Открыть системный диалог выбора папки.
+#[tauri::command]
+async fn pick_dir(title: Option<String>) -> Result<Option<String>, String> {
+    let chosen = tauri::async_runtime::spawn_blocking(move || {
+        rfd::FileDialog::new()
+            .set_title(title.unwrap_or_else(|| "Выбери папку".into()))
+            .pick_folder()
+            .map(|path| path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(chosen)
+}
+
+/// Своя иконка сборки из картинки: копируем в папку сборки и пишем имя в `icon`.
+#[tauri::command]
+fn set_instance_icon_file(
+    state: State<'_, AppState>,
+    instance_id: String,
+    path: String,
+) -> Result<InstanceMeta, String> {
+    let source = PathBuf::from(&path);
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+        return Err("подойдёт PNG, JPG или WebP".into());
+    }
+    let dir = state.paths.instance_dir(&instance_id);
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let file_name = format!("icon.{extension}");
+    std::fs::copy(&source, dir.join(&file_name))
+        .map_err(|error| format!("не удалось скопировать картинку: {error}"))?;
+
+    let mut meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    meta.icon = Some(file_name);
+    instances::save(&state.paths, &meta).map_err(err)?;
+    Ok(meta)
+}
+
+/// Данные картинки-иконки в виде data-URL (webview не умеет читать локальные пути).
+#[tauri::command]
+fn instance_icon(state: State<'_, AppState>, instance_id: String) -> Result<Option<String>, String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let Some(icon) = meta.icon else { return Ok(None) };
+    if !icon.contains('.') {
+        return Ok(None); // встроенная иконка, рисуется из спрайта
+    }
+    let path = state.paths.instance_dir(&instance_id).join(&icon);
+    let Ok(bytes) = std::fs::read(&path) else { return Ok(None) };
+    let mime = match icon.rsplit('.').next().unwrap_or("png").to_lowercase().as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        _ => "image/png",
+    };
+    Ok(Some(format!("data:{mime};base64,{}", base64_encode(&bytes))))
+}
+
+/// Положить файл (мод/ресурспак) из проводника в папку сборки.
+#[tauri::command]
+fn copy_instance_file(
+    state: State<'_, AppState>,
+    instance_id: String,
+    path: String,
+    sub: String,
+) -> Result<String, String> {
+    let source = PathBuf::from(&path);
+    let name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "у файла нет имени".to_string())?
+        .to_string();
+    let allowed = ["jar", "zip", "jar.disabled", "mrpack"];
+    let lower = name.to_lowercase();
+    if !allowed.iter().any(|ext| lower.ends_with(*ext)) {
+        return Err("подойдёт .jar, .zip или .mrpack".into());
+    }
+    let target_dir = state
+        .paths
+        .instance_dir(&instance_id)
+        .join("minecraft")
+        .join(&sub);
+    std::fs::create_dir_all(&target_dir).map_err(err)?;
+    std::fs::copy(&source, target_dir.join(&name))
+        .map_err(|error| format!("не удалось скопировать: {error}"))?;
+    Ok(name)
+}
+
+/// Файл, с которым лаунчер запустили (например, `.mrpack` двойным щелчком).
+#[tauri::command]
+fn startup_file(state: State<'_, AppState>) -> Option<String> {
+    state.startup_file.clone()
+}
+
+/// Простейший base64 — чтобы не тянуть отдельный крейт ради иконок.
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[(triple >> 18) as usize & 63] as char);
+        out.push(TABLE[(triple >> 12) as usize & 63] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(triple >> 6) as usize & 63] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[triple as usize & 63] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
 /* ==================== JAVA И СИСТЕМА ==================== */
 
 #[tauri::command]
@@ -923,8 +1073,12 @@ fn main() {
     update::cleanup(&paths, None);
     let http = Http::with_proxy(settings.proxy.as_deref());
 
+    let startup_file = std::env::args()
+        .skip(1)
+        .find(|arg| !arg.starts_with('-') && std::path::Path::new(arg).exists());
     let state = AppState {
         modrinth: Modrinth::new(http.clone()),
+        startup_file,
         accounts: Mutex::new(AccountStore::load(&paths)),
         paths,
         http,
@@ -974,6 +1128,12 @@ fn main() {
             account_remove,
             ms_login_start,
             ms_login_poll,
+            pick_file,
+            pick_dir,
+            set_instance_icon_file,
+            instance_icon,
+            copy_instance_file,
+            startup_file,
             install_update,
             open_url,
         ])

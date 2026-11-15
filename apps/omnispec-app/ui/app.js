@@ -156,11 +156,212 @@
     "i-crown", "i-house", "i-globe", "i-grid", "i-mod", "i-terminal", "i-folder", "i-download"
   ];
 
+  function isImageIcon(icon) {
+    return Boolean(icon) && String(icon).includes(".") && /\.(png|jpe?g|webp)$/i.test(String(icon));
+  }
+
   function instanceIconHtml(meta) {
     const icon = meta && meta.icon;
-    if (!icon) return esc(String((meta && meta.name) || "?").trim().charAt(0).toUpperCase());
-    if (INSTANCE_ICONS.includes(icon)) return `<svg class="ic"><use href="#${icon}"/></svg>`;
-    return `<img src="${esc(icon)}" alt="">`;
+    if (isImageIcon(icon)) {
+      const data = state.iconCache[meta.id];
+      return data ? `<img src="${data}" alt="">` : "";
+    }
+    if (icon && INSTANCE_ICONS.includes(icon)) return `<svg class="ic"><use href="#${icon}"/></svg>`;
+    return esc(String((meta && meta.name) || "?").trim().charAt(0).toUpperCase());
+  }
+
+  /** Подтянуть картинки-иконки сборок (webview не читает локальные пути). */
+  async function loadInstanceIcons() {
+    const customs = state.instances.filter((item) => isImageIcon(item.icon));
+    await Promise.all(customs.map(async (item) => {
+      try {
+        const data = await api.instanceIcon(item.id);
+        if (data) state.iconCache[item.id] = data;
+      } catch (error) { /* иконка не критична */ }
+    }));
+  }
+
+  /* ==================== КОНТЕКСТНОЕ МЕНЮ ==================== */
+  function closeCtxMenu() {
+    const el = $("#ctx-menu");
+    if (el) el.hidden = true;
+  }
+
+  function openInstanceMenu(x, y, meta) {
+    const el = $("#ctx-menu");
+    if (!el) return;
+    const running = state.running.has(meta.id);
+    el.innerHTML = `
+      <div class="ctx-caption">${esc(meta.name)} · MC ${esc(meta.mc_version)}</div>
+      <button class="ctx-item" data-act="play"><svg class="ic"><use href="#${running ? "i-stop" : "i-play"}"/></svg>${running ? "Остановить" : "Играть"}</button>
+      <button class="ctx-item" data-act="settings"><svg class="ic"><use href="#i-sliders"/></svg>Настройки сборки</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item" data-act="icon"><svg class="ic"><use href="#i-image"/></svg>Иконка из картинки…</button>
+      ${isImageIcon(meta.icon) ? `<button class="ctx-item" data-act="icon-reset"><svg class="ic"><use href="#i-close"/></svg>Вернуть обычную иконку</button>` : ""}
+      <button class="ctx-item" data-act="rename"><svg class="ic"><use href="#i-pencil"/></svg>Переименовать</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item" data-act="folder"><svg class="ic"><use href="#i-folder"/></svg>Открыть папку сборки</button>
+      <button class="ctx-item" data-act="refresh"><svg class="ic"><use href="#i-download"/></svg>Обновить файлы игры</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item danger" data-act="delete"><svg class="ic"><use href="#i-trash"/></svg>Удалить сборку</button>`;
+    el.hidden = false;
+    const rect = el.getBoundingClientRect();
+    el.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+    el.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+    $$(".ctx-item", el).forEach((btn) => btn.addEventListener("click", () => {
+      closeCtxMenu();
+      runInstanceAction(btn.dataset.act, meta);
+    }));
+  }
+
+  async function runInstanceAction(action, meta) {
+    const fresh = state.instances.find((item) => item.id === meta.id) || meta;
+    if (action === "play") {
+      state.selectedId = fresh.id;
+      renderSidebar();
+      if (state.running.has(fresh.id)) await stopGame();
+      else play();
+      return;
+    }
+    if (action === "settings") {
+      selectInstance(fresh.id);
+      state.tab = "settings";
+      renderTab();
+      return;
+    }
+    if (action === "icon") {
+      const path = await api.pickFile("Иконка сборки", ["png", "jpg", "jpeg", "webp"]).catch(() => null);
+      if (path) await setIconFromFile(fresh, path);
+      return;
+    }
+    if (action === "icon-reset") {
+      try {
+        await api.updateInstance({ ...fresh, icon: null });
+        delete state.iconCache[fresh.id];
+        await refreshInstances();
+        toast("Иконка сброшена", "ok");
+      } catch (err) { toast(String(err), "err"); }
+      return;
+    }
+    if (action === "rename") {
+      const name = await promptModal({ title: "Переименовать сборку", label: "Название", value: fresh.name });
+      if (name === null || !name.trim() || name.trim() === fresh.name) return;
+      try {
+        await api.updateInstance({ ...fresh, name: name.trim() });
+        await refreshInstances();
+        toast("Переименовано", "ok");
+      } catch (err) { toast(String(err), "err"); }
+      return;
+    }
+    if (action === "folder") {
+      api.openPath(`/instances/${fresh.id}/minecraft`).catch((err) => toast(String(err), "err"));
+      return;
+    }
+    if (action === "refresh") {
+      try {
+        toast("Проверяем и докачиваем файлы…");
+        await api.installInstance(fresh.id);
+        toast("Файлы игры готовы", "ok");
+      } catch (err) { toast(String(err), "err"); }
+      return;
+    }
+    if (action === "delete") {
+      if (!confirm(`Удалить сборку «${fresh.name}» вместе с модами и мирами?`)) return;
+      try {
+        await api.deleteInstance(fresh.id);
+        if (state.selectedId === fresh.id) state.selectedId = null;
+        await refreshInstances();
+        renderTab();
+        toast("Сборка удалена", "ok");
+      } catch (err) { toast(String(err), "err"); }
+    }
+  }
+
+  /** Своя иконка сборки из файла-картинки. */
+  async function setIconFromFile(meta, path) {
+    try {
+      await api.setInstanceIconFile(meta.id, path);
+      const data = await api.instanceIcon(meta.id).catch(() => null);
+      if (data) state.iconCache[meta.id] = data;
+      await refreshInstances();
+      toast("Иконка обновлена", "ok");
+      if (state.tab === "settings") renderSettings();
+    } catch (err) { toast(String(err), "err"); }
+  }
+
+  /* ==================== ОКНО ВВОДА ==================== */
+  function promptModal({ title, label, value = "" }) {
+    return new Promise((resolve) => {
+      const modal = $("#modal-prompt");
+      if (!modal) { resolve(null); return; }
+      $("#prompt-title").textContent = title || "Ввод";
+      $("#prompt-label").textContent = label || "Значение";
+      const input = $("#prompt-input");
+      input.value = value;
+      modal.hidden = false;
+      setTimeout(() => { input.focus(); input.select(); }, 30);
+      const finish = (result) => {
+        modal.hidden = true;
+        $("#prompt-ok").onclick = null;
+        input.onkeydown = null;
+        resolve(result);
+      };
+      $("#prompt-ok").onclick = () => finish(input.value.trim());
+      input.onkeydown = (event) => {
+        if (event.key === "Enter") finish(input.value.trim());
+        if (event.key === "Escape") finish(null);
+      };
+      $$("[data-close-prompt]", modal).forEach((btn) => { btn.onclick = () => finish(null); });
+    });
+  }
+
+  /* ==================== ФАЙЛЫ: ПЕРЕТАСКИВАНИЕ И .MRPACK ==================== */
+  async function installMrpackPath(path) {
+    try {
+      toast("Разворачиваем модпак…");
+      const meta = await api.installModpack(path);
+      await refreshInstances();
+      selectInstance(meta.id);
+      toast(`Сборка «${meta.name}» установлена`, "ok");
+    } catch (err) { toast(String(err), "err"); }
+  }
+
+  async function handleDroppedFiles(paths) {
+    if (!paths || !paths.length) return;
+    for (const raw of paths) {
+      const path = String(raw);
+      const name = path.split(/[\\/]/).pop() || path;
+      const lower = name.toLowerCase();
+      if (lower.endsWith(".mrpack")) { await installMrpackPath(path); continue; }
+      const meta = selected();
+      if (!meta) { toast("Сначала выбери сборку слева", "err"); continue; }
+      if (/\.(png|jpe?g|webp)$/.test(lower)) { await setIconFromFile(meta, path); continue; }
+      if (lower.endsWith(".jar") || lower.endsWith(".zip")) {
+        const sub = lower.endsWith(".zip") ? "resourcepacks" : "mods";
+        try {
+          const saved = await api.copyInstanceFile(meta.id, path, sub);
+          toast(`${sub === "mods" ? "Мод" : "Ресурспак"} «${saved}» добавлен в сборку`, "ok");
+          if (["mods", "resourcepacks", "files"].includes(state.tab)) renderTab();
+        } catch (err) { toast(String(err), "err"); }
+        continue;
+      }
+      toast(`Файл «${name}» не подходит: нужен .mrpack, .jar, .zip или картинка`, "err");
+    }
+  }
+
+  function bindFileDrop() {
+    if (!IS_APP) return;
+    const zone = $("#drop-zone");
+    try {
+      TAURI.event.listen("tauri://drag-enter", () => { if (zone) zone.hidden = false; });
+      TAURI.event.listen("tauri://drag-over", () => { if (zone) zone.hidden = false; });
+      TAURI.event.listen("tauri://drag-leave", () => { if (zone) zone.hidden = true; });
+      TAURI.event.listen("tauri://drag-drop", (event) => {
+        if (zone) zone.hidden = true;
+        const payload = event && event.payload ? event.payload : {};
+        handleDroppedFiles(payload.paths || []);
+      });
+    } catch (error) { /* старые версии webview без drag-событий */ }
   }
 
   /* эффект от клика мышью — как в OmniPanel */
@@ -253,6 +454,12 @@
     accountRemove: (uuid) => invoke("account_remove", { uuid }),
     msStart: () => invoke("ms_login_start"),
     msPoll: (deviceCode) => invoke("ms_login_poll", { deviceCode }),
+    pickFile: (title, extensions) => invoke("pick_file", { title, extensions }),
+    pickDir: (title) => invoke("pick_dir", { title }),
+    setInstanceIconFile: (instanceId, path) => invoke("set_instance_icon_file", { instanceId, path }),
+    instanceIcon: (instanceId) => invoke("instance_icon", { instanceId }),
+    copyInstanceFile: (instanceId, path, sub) => invoke("copy_instance_file", { instanceId, path, sub }),
+    startupFile: () => invoke("startup_file"),
     openUrl: (url) => invoke("open_url", { url })
   };
 
@@ -368,6 +575,16 @@
     },
     msStart: async () => ({ user_code: "K7QP2X4MB", device_code: "demo", verification_uri: "https://www.microsoft.com/link", expires_in: 900, interval: 5 }),
     msPoll: async () => null,
+    pickFile: async () => "C:\\Users\\Vanya\\Downloads\\pack.mrpack",
+    pickDir: async () => "C:\\OmniSpec",
+    setInstanceIconFile: async (instanceId) => {
+      const meta = DEMO.instances.find((item) => item.id === instanceId);
+      if (meta) meta.icon = "icon.png";
+      return meta || null;
+    },
+    instanceIcon: async () => null,
+    copyInstanceFile: async (_id, path) => String(path).split(/[\\/]/).pop(),
+    startupFile: async () => null,
     openUrl: async (url) => { window.open(url, "_blank"); return null; },
     onProgress: () => Promise.resolve(),
     onLog: () => Promise.resolve(),
@@ -388,6 +605,7 @@
     logs: {},
     files: { path: "", entries: [], selected: null },
     mods: [],
+    iconCache: {},
     modrinth: {
       query: "", type: "mod", mc: "", loader: "",
       results: [], total: 0, loading: false, loadingMore: false,
@@ -487,7 +705,7 @@
     list.innerHTML = items.map((item) => {
       const running = state.running.has(item.id);
       return `<div class="instance ${item.id === state.selectedId ? "is-active" : ""}" data-id="${esc(item.id)}">
-        <div class="instance-icon">${instanceIconHtml(item) || esc(letter)}</div>
+        <div class="instance-icon">${instanceIconHtml(item)}</div>
         <div class="instance-body">
           <div class="instance-name">${esc(item.name)}</div>
           <div class="instance-sub">MC ${esc(item.mc_version)} · ${esc(loaderLabel(item.loader))}</div>
@@ -496,7 +714,14 @@
       </div>`;
     }).join("");
 
-    $$(".instance", list).forEach((el) => el.addEventListener("click", () => selectInstance(el.dataset.id)));
+    $$(".instance", list).forEach((el) => {
+      el.addEventListener("click", () => selectInstance(el.dataset.id));
+      el.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        const meta = state.instances.find((item) => item.id === el.dataset.id);
+        if (meta) openInstanceMenu(event.clientX, event.clientY, meta);
+      });
+    });
   }
 
   function selectInstance(id) {
@@ -1387,21 +1612,32 @@
 
     if (mode === "microsoft") {
       body.innerHTML = `
-        <div class="field" style="max-width:320px">
-          <label>Код для входа</label>
+        <div class="device-wrap">
+          <div class="device-label">Код для входа</div>
           <div class="device-code" id="acc-code">получаем код…</div>
+          <button class="btn" id="acc-copy"><svg class="ic"><use href="#i-copy"/></svg>Скопировать код</button>
         </div>
         <div class="settings-note" id="acc-status">
-          Открой <b>microsoft.com/link</b> на телефоне или в браузере и введи код.
+          Открой <b>microsoft.com/link</b> на телефоне или в браузере и введи этот код.
         </div>
         <div class="modal-actions">
           <button class="btn btn-ghost" data-back>Назад</button>
-          <button class="btn" id="acc-open-link">Открыть microsoft.com/link</button>
+          <button class="btn btn-primary" id="acc-open-link">Открыть microsoft.com/link</button>
         </div>`;
       $$("[data-back]", body).forEach((btn) => btn.addEventListener("click", () => renderAccountModal("choose")));
       $("#acc-open-link").addEventListener("click", () => {
-        const link = extra.verification || "https://www.microsoft.com/link";
+        const link = ($("#acc-open-link").dataset.uri) || "https://www.microsoft.com/link";
         api.openUrl(link).catch(() => {});
+      });
+      $("#acc-copy").addEventListener("click", async () => {
+        const code = $("#acc-code") ? $("#acc-code").textContent.trim() : "";
+        if (!code || code === "получаем код…") return;
+        try {
+          await navigator.clipboard.writeText(code);
+          toast(`Код ${code} скопирован`, "ok");
+        } catch (error) {
+          toast(`Не удалось скопировать — код ${code}`, "err");
+        }
       });
       startMicrosoftLogin();
     }
@@ -1443,7 +1679,7 @@
     if (codeBox) codeBox.textContent = flow.user_code;
     setStatus("Ждём подтверждения… Открой <b>microsoft.com/link</b> и введи код выше.");
     const link = $("#acc-open-link");
-    if (link) link.dataset.uri = flow.verification_uri;
+    if (link) link.dataset.uri = flow.verification_uri || "https://www.microsoft.com/link";
 
     const deadline = Date.now() + (flow.expires_in || 900) * 1000;
     const interval = Math.max(3, flow.interval || 5) * 1000;
@@ -1624,7 +1860,10 @@
           <div class="settings-row">
             <div class="label">Путь к Java</div>
             <div>
-              <input class="input" style="width:100%" id="set-java" placeholder="автоматически (рекомендуется)" value="${esc(settings.java_path || "")}" spellcheck="false">
+              <div class="flex-row">
+                <input class="input grow" id="set-java" placeholder="автоматически (рекомендуется)" value="${esc(settings.java_path || "")}" spellcheck="false">
+                <button class="btn" id="set-java-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать…</button>
+              </div>
               <div class="hint" id="set-java-hint">ищем установленные Java…</div>
             </div>
           </div>
@@ -1775,6 +2014,11 @@
         if (box) box.textContent = info.version || "—";
       }).catch(() => {});
     }
+    const javaPick = $("#set-java-pick");
+    if (javaPick) javaPick.addEventListener("click", async () => {
+      const picked = await api.pickFile("Выбери java.exe / javaw.exe / java", ["exe", ""]).catch(() => null);
+      if (picked) { $("#set-java").value = picked; toast("Путь к Java выбран — не забудь сохранить", "ok"); }
+    });
     const javaHint = $("#set-java-hint");
     if (javaHint) {
       api.javas().then((list) => {
@@ -1855,7 +2099,12 @@
                 <div class="label">Иконка</div>
                 <div class="icon-grid" id="inst-icons">
                   <button class="icon-chip letter ${!meta.icon ? "is-active" : ""}" data-icon="" title="Первая буква">${esc(String(meta.name).trim().charAt(0).toUpperCase())}</button>
+                  ${isImageIcon(meta.icon) && state.iconCache[meta.id] ? `<button class="icon-chip img is-active" data-icon="${esc(meta.icon)}" title="Своя картинка"><img src="${state.iconCache[meta.id]}" alt=""></button>` : ""}
                   ${INSTANCE_ICONS.map((icon) => `<button class="icon-chip ${meta.icon === icon ? "is-active" : ""}" data-icon="${icon}" title="${icon.replace("i-", "")}"><svg class="ic"><use href="#${icon}"/></svg></button>`).join("")}
+                </div>
+                <div class="settings-actions" style="margin-top:8px">
+                  <button class="btn" id="inst-icon-file"><svg class="ic"><use href="#i-image"/></svg>Иконка из картинки…</button>
+                  ${isImageIcon(meta.icon) ? '<button class="btn btn-ghost" id="inst-icon-reset">Сбросить</button>' : ""}
                 </div>
               </div>
               <div class="settings-row">
@@ -1905,6 +2154,20 @@
       $$("#inst-icons .icon-chip").forEach((el) => el.classList.toggle("is-active", el === chip));
     }));
     $("#open-launcher-prefs").addEventListener("click", () => openPrefs());
+    const iconFile = $("#inst-icon-file");
+    if (iconFile) iconFile.addEventListener("click", async () => {
+      const path = await api.pickFile("Иконка сборки", ["png", "jpg", "jpeg", "webp"]).catch(() => null);
+      if (path) await setIconFromFile(meta, path);
+    });
+    const iconReset = $("#inst-icon-reset");
+    if (iconReset) iconReset.addEventListener("click", async () => {
+      try {
+        await api.updateInstance({ ...meta, icon: null });
+        delete state.iconCache[meta.id];
+        await refreshInstances();
+        renderSettings();
+      } catch (err) { toast(String(err), "err"); }
+    });
     $("#inst-save").addEventListener("click", async () => {
       const chip = $("#inst-icons .icon-chip.is-active");
       const next = {
@@ -2059,6 +2322,7 @@
     } catch (err) {
       toast(String(err), "err");
     }
+    await loadInstanceIcons();
     renderSidebar();
     if (!state.selectedId && state.instances.length) selectInstance(state.instances[0].id);
   }
@@ -2160,13 +2424,21 @@
         <div class="form-grid">
           <div class="field">
             <label>Путь к файлу .mrpack</label>
-            <input class="input" id="add-path" value="${esc(cfg.path)}" placeholder="C:\\Users\\Иван\\Downloads\\pack.mrpack" spellcheck="false">
+            <div class="flex-row">
+              <input class="input grow" id="add-path" value="${esc(cfg.path)}" placeholder="C:\\Users\\Иван\\Downloads\\pack.mrpack" spellcheck="false">
+              <button class="btn" id="add-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать файл…</button>
+            </div>
           </div>
-          <div class="hint" style="color:var(--muted);font-size:11.5px">
-            Подойдёт любой модпак в формате Modrinth (.mrpack) — лаунчер развернёт его в отдельную сборку.
+          <div class="settings-note" style="margin:0">
+            Можно просто перетащить .mrpack в окно лаунчера — сборка появится сама.
+            Файл .mrpack открывается и двойным щелчком в проводнике (после установки через Setup).
           </div>
         </div>`;
       $("#add-path").addEventListener("input", (event) => { cfg.path = event.target.value; });
+      $("#add-pick").addEventListener("click", async () => {
+        const picked = await api.pickFile("Выбери модпак .mrpack", ["mrpack"]).catch(() => null);
+        if (picked) { cfg.path = picked; $("#add-path").value = picked; }
+      });
       $("#add-path").addEventListener("keydown", (event) => { if (event.key === "Enter") submitAdd(); });
       setTimeout(() => { const el = $("#add-path"); if (el) el.focus(); }, 30);
     } else {
@@ -2410,10 +2682,12 @@
     /* аккаунты и настройки лаунчера */
     on("#btn-add-account", "click", openAccounts);
     on("#btn-prefs", "click", () => openPrefs());
+    on("#btn-launcher-settings", "click", () => openPrefs());
     on("#btn-global-settings", "click", () => openPrefs());
     on("[data-close-prefs]", "click", () => { $("#modal-prefs").hidden = true; });
     on("[data-close-acc]", "click", () => { $("#modal-account").hidden = true; });
     on("[data-close-versions]", "click", () => { $("#modal-versions").hidden = true; });
+    on("[data-close-prompt]", "click", () => { const modal = $("#modal-prompt"); if (modal) modal.hidden = true; });
     const verModal = $("#modal-versions");
     if (verModal) verModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-versions") verModal.hidden = true; });
     const prefsModal = $("#modal-prefs");
@@ -2448,6 +2722,13 @@
     $("#create-submit").addEventListener("click", submitCreate);
     $$("#create-tabs .mtab").forEach((tab) => tab.addEventListener("click", () => { state.create.mode = tab.dataset.mode; renderCreateModal(); }));
 
+    // контекстное меню закрывается кликом мимо, прокруткой и Escape
+    document.addEventListener("mousedown", (event) => {
+      const menu = $("#ctx-menu");
+      if (menu && !menu.hidden && !menu.contains(event.target)) closeCtxMenu();
+    });
+    window.addEventListener("blur", closeCtxMenu);
+
     document.addEventListener("keydown", (event) => {
       if (event.ctrlKey && event.key.toLowerCase() === "r") { event.preventDefault(); refreshInstances(); }
       if (event.ctrlKey && event.key.toLowerCase() === "l") { event.preventDefault(); state.logs[state.selectedId] = []; renderLogs(state.selectedId); }
@@ -2460,6 +2741,9 @@
         if (acc) acc.hidden = true;
         const ver = $("#modal-versions");
         if (ver) ver.hidden = true;
+        const prompt = $("#modal-prompt");
+        if (prompt) prompt.hidden = true;
+        closeCtxMenu();
       }
       if (event.key === "Enter" && !event.target.matches("input, select, textarea") && $("#modal-create").hidden) play();
     });
@@ -2504,6 +2788,7 @@
     applyClickFx(state.fx);
     applyWallpaper();
     await loadAccounts();
+    bindFileDrop();
     await refreshInstances();
     if (state.instances.length) selectInstance(state.instances[0].id);
     else renderTab();
@@ -2514,6 +2799,13 @@
       // Без разрешений Tauri события недоступны — лаунчер продолжит работать,
       // просто без живого лога (см. capabilities/default.json).
       toast(`Живой лог недоступен: ${error && error.message ? error.message : error}`, "err");
+    }
+    // .mrpack, с которым запустили лаунчер (двойной щелчок в проводнике)
+    if (IS_APP) {
+      try {
+        const startup = await api.startupFile();
+        if (startup) installMrpackPath(startup);
+      } catch (error) { /* без аргументов — обычный запуск */ }
     }
     if (!IS_APP) {
       toast("Демо-режим: интерфейс без бэкенда. Запусти cargo run — заработает всё.", "");

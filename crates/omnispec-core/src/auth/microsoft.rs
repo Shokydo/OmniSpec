@@ -61,17 +61,42 @@ fn default_interval() -> u64 {
     5
 }
 
-#[derive(Debug, Deserialize)]
+/// Ответ `oauth20_token.srf`. Пока пользователь не подтвердил вход, Microsoft
+/// присылает **только** `{"error": "authorization_pending"}`, без `access_token`,
+/// поэтому все поля необязательные — иначе разбор падает вместо «ждём дальше».
+#[derive(Debug, Default, Deserialize)]
 struct TokenResponse {
-    access_token: String,
     #[serde(default)]
-    refresh_token: String,
+    access_token: Option<String>,
     #[serde(default)]
-    expires_in: u64,
+    refresh_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<u64>,
     #[serde(default)]
     error: Option<String>,
     #[serde(default)]
     error_description: Option<String>,
+}
+
+impl TokenResponse {
+    /// Токен или внятная ошибка (вместо «missing field»).
+    fn into_token(self, context: &str) -> Result<(String, String, u64)> {
+        if let Some(error) = self.error.clone() {
+            let detail = self
+                .error_description
+                .or(self.error)
+                .unwrap_or_else(|| context.to_string());
+            return Err(Error::Other(format!("{context}: {detail}")));
+        }
+        let token = self
+            .access_token
+            .ok_or_else(|| Error::Other(format!("{context}: Microsoft не выдал токен доступа")))?;
+        Ok((
+            token,
+            self.refresh_token.unwrap_or_default(),
+            self.expires_in.unwrap_or(3600),
+        ))
+    }
 }
 
 /// Итог входа: то, что нужно для запуска игры и для карточки аккаунта.
@@ -83,6 +108,16 @@ pub struct MicrosoftSession {
     pub refresh_token: String,
     /// Когда истечёт `access_token` (unix-время).
     pub expires_at: u64,
+}
+
+/// Первые 200 символов ответа — чтобы ошибка была читаемой, а не простынёй.
+fn clip(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= 200 {
+        return trimmed.to_string();
+    }
+    let short: String = trimmed.chars().take(200).collect();
+    format!("{short}…")
 }
 
 fn now_secs() -> u64 {
@@ -109,7 +144,12 @@ pub async fn start_device_code(http: &Http, client_id: &str) -> Result<DeviceCod
             ],
         )
         .await?;
-    let parsed: DeviceCodeResponse = serde_json::from_str(&text)?;
+    let parsed: DeviceCodeResponse = serde_json::from_str(&text).map_err(|_| {
+        Error::Other(format!(
+            "Microsoft не выдал код устройства (проверь client id в настройках). Ответ: {}",
+            clip(&text)
+        ))
+    })?;
     Ok(DeviceCode {
         user_code: parsed.user_code,
         device_code: parsed.device_code,
@@ -140,17 +180,28 @@ pub async fn poll_device_code(
             ],
         )
         .await?;
-    let token: TokenResponse = serde_json::from_str(&text)?;
-    if let Some(error) = token.error {
-        // Штатные состояния опроса — не ошибки.
+    let token: TokenResponse = serde_json::from_str(&text).map_err(|_| {
+        Error::Other(format!("Microsoft ответил неожиданным JSON: {}", clip(&text)))
+    })?;
+    if let Some(error) = &token.error {
+        // Штатные состояния опроса — не ошибки, просто ждём дальше.
         if error == "authorization_pending" || error == "slow_down" {
             return Ok(None);
         }
-        let detail = token.error_description.unwrap_or(error.clone());
-        return Err(Error::Other(format!("Microsoft: {error} — {detail}")));
+        if error == "expired_token" {
+            return Err(Error::Other(
+                "код истёк — нажми «Добавить аккаунт» и получи новый".into(),
+            ));
+        }
+        let detail = token
+            .error_description
+            .clone()
+            .unwrap_or_else(|| error.clone());
+        return Err(Error::Other(format!("Microsoft: {detail}")));
     }
-    let expires_at = now_secs() + token.expires_in.max(60);
-    let session = chain(http, &token.access_token, &token.refresh_token, expires_at).await?;
+    let (access, refresh, expires_in) = token.into_token("вход через Microsoft")?;
+    let expires_at = now_secs() + expires_in.max(60);
+    let session = chain(http, &access, &refresh, expires_at).await?;
     Ok(Some(session))
 }
 
@@ -172,13 +223,12 @@ pub async fn refresh(http: &Http, client_id: &str, refresh_token: &str) -> Resul
             ],
         )
         .await?;
-    let token: TokenResponse = serde_json::from_str(&text)?;
-    if let Some(error) = token.error {
-        let detail = token.error_description.unwrap_or(error.clone());
-        return Err(Error::Other(format!("не удалось обновить вход: {error} — {detail}")));
-    }
-    let expires_at = now_secs() + token.expires_in.max(60);
-    chain(http, &token.access_token, &token.refresh_token, expires_at).await
+    let token: TokenResponse = serde_json::from_str(&text).map_err(|_| {
+        Error::Other(format!("Microsoft ответил неожиданным JSON: {}", clip(&text)))
+    })?;
+    let (access, refresh, expires_in) = token.into_token("не удалось обновить вход")?;
+    let expires_at = now_secs() + expires_in.max(60);
+    chain(http, &access, &refresh, expires_at).await
 }
 
 /// Xbox Live → XSTS → Minecraft. Общая часть для входа и обновления.
@@ -317,6 +367,22 @@ mod tests {
     #[test]
     fn uuid_stays_when_short() {
         assert_eq!(format_uuid("123"), "123");
+    }
+
+    #[test]
+    fn pending_without_token_is_not_an_error() {
+        let text = r#"{"error":"authorization_pending","error_description":"AADSTS70016"}"#;
+        let parsed: TokenResponse = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed.error.as_deref(), Some("authorization_pending"));
+        assert!(parsed.access_token.is_none());
+    }
+
+    #[test]
+    fn token_answer_without_token_explains_itself() {
+        let text = r#"{"error":"expired_token","error_description":"код истёк"}"#;
+        let parsed: TokenResponse = serde_json::from_str(text).unwrap();
+        let error = parsed.into_token("вход").unwrap_err().to_string();
+        assert!(error.contains("код истёк"));
     }
 
     #[test]
