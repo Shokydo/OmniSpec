@@ -2402,7 +2402,8 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 .skin-row .btn { flex: 1 1 0; justify-content: center; }
 .skin-section .skin-note { margin-top: 2px; }
 .skin-section .tag.green { color: var(--green); border-color: var(--line-2); }
-.instance-dup .dup-sep { opacity: .5; }
+.instance-dup .dup-sep { opacity: .5; margin: 0 1px; }
+.instance-dup .dup-name { margin-right: 1px; }
 
 /* панель действий прячется, пока сборка не выбрана — контент поднимается выше */
 .toolbar.is-idle { display: none; }
@@ -2483,3 +2484,55 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 .build-tile-sub { font-size: 10.5px; color: var(--dim-2); }
 .build-tile-flag { font-size: 10px; color: var(--green); letter-spacing: .03em; }
 .builds-empty { padding: 40px 0; text-align: center; font-size: 12px; color: var(--dim-2); }
+
+/* ==================== ЭТАП 14 ==================== */
+
+/* --- настройки сборки на всё окно, без панели «Лаунчер» --- */
+.settings-grid { max-width: none; width: 100%; }
+.settings-wrap { padding: 16px 20px 32px; }
+.settings-wrap .panel { width: 100%; }
+@media (min-width: 1200px) {
+  /* на широком окне поля идут в две колонки, чтобы строки не растягивались в километр */
+  .settings-wrap .panel > div[style*="grid"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 28px;
+  }
+  .settings-wrap .panel > div[style*="grid"] > .settings-actions { grid-column: 1 / -1; }
+}
+
+/* --- кнопки в строках настроек: одинаковые и не уже своего текста --- */
+.settings-actions { flex-wrap: wrap; }
+.settings-actions > .btn { flex: 1 1 0; min-width: max-content; }
+.icon-grid + .settings-actions { max-width: none; justify-content: flex-start; }
+.icon-grid + .settings-actions > .btn { flex: 0 0 auto; min-width: 200px; }
+
+/* --- окно настроек крупнее, вкладки шире --- */
+.prefs-box { width: min(1120px, 97vw); height: min(780px, 92vh); }
+.prefs { grid-template-columns: 232px 1fr; }
+.prefs-tab { height: 32px; padding: 0 12px; font-size: 12.5px; }
+.prefs-row-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.prefs-row-head .prefs-label { margin: 0; }
+.prefs-value { font-size: 11px; color: var(--dim); }
+
+/* --- плитки «Все сборки»: иконка-символ того же размера, что и картинка --- */
+.build-tile-icon.is-symbol { display: flex; align-items: center; justify-content: center; }
+.build-tile-icon.is-symbol .ic { width: 34px; height: 34px; color: var(--dim); }
+.build-tile-shot { flex: none; }
+
+/* --- при масштабе интерфейса окно всё равно ровно по размеру окна --- */
+html { overflow: hidden; }
+body { overflow: hidden; }
+/* .app тянется по body, а не по 100vh: при масштабе 100vh не пересчитывается */
+html[data-ui-scale] .app { height: 100%; width: 100%; }
+
+/* --- нода дубликата: пункт «Выключить дубликат» в ПКМ --- */
+.instance-dup { cursor: context-menu; }
+
+/* ячейка настроек: контрол + кнопки под ним в одной колонке */
+.settings-cell { display: grid; gap: 8px; min-width: 0; }
+.settings-cell .icon-grid { max-width: none; }
+.settings-cell .settings-actions { padding-top: 0; }
+.settings-cell .settings-actions > .btn { flex: 1 1 0; min-width: max-content; }
+/* строка с иконками занимает всю ширину, кнопки под ней одинаковые */
+.settings-row.is-wide { grid-column: 1 / -1; }
+.settings-row.is-wide .settings-actions > .btn { flex: 0 0 220px; min-width: 0; justify-content: center; }

@@ -146,6 +146,28 @@
     ["pill", "Таблетки"]
   ];
 
+  const UI_SCALES = [80, 90, 100, 110, 125, 150];
+
+  /** Масштаб интерфейса как «размер интерфейса» в Minecraft / zoom в Discord. */
+  function applyUiScale(value) {
+    const scale = Math.min(150, Math.max(70, Number(value) || 100));
+    state.uiScale = scale;
+    const body = document.body;
+    if (scale === 100) {
+      body.style.zoom = "";
+      body.style.width = "";
+      body.style.height = "";
+    } else {
+      const factor = scale / 100;
+      body.style.zoom = String(factor);
+      // zoom не пересчитывает vh/vw — компенсируем, чтобы окно осталось ровно по размеру
+      body.style.width = `calc(100vw / ${factor})`;
+      body.style.height = `calc(100vh / ${factor})`;
+    }
+    document.documentElement.dataset.uiScale = String(scale);
+    return scale;
+  }
+
   function applyShape(name) {
     const known = SHAPES.some(([id]) => id === name);
     state.shape = known ? name : "soft";
@@ -232,8 +254,11 @@
   function instanceIconHtml(meta) {
     const icon = meta && meta.icon;
     if (isImageIcon(icon)) {
+      // кэша нет (файл ещё не прочитан) — показываем букву, а не пустую рамку
       const data = state.iconCache[meta.id];
-      return data ? `<img src="${data}" alt="">` : "";
+      return data
+        ? `<img src="${esc(data)}" alt="" onerror="this.remove()">`
+        : esc(String((meta && meta.name) || "?").trim().charAt(0).toUpperCase());
     }
     if (icon && INSTANCE_ICONS.includes(icon)) return `<svg class="ic"><use href="#${icon}"/></svg>`;
     return esc(String((meta && meta.name) || "?").trim().charAt(0).toUpperCase());
@@ -482,9 +507,15 @@
   function buildTileHtml(item) {
     const running = state.running.has(item.id);
     const sessions = sessionsOf(item.id);
-    const icon = item.icon
-      ? `<img class="build-tile-icon" src="${esc(item.icon)}" alt="">`
-      : `<span class="build-tile-icon is-letter">${esc((item.name || "?").trim().slice(0, 1).toUpperCase())}</span>`;
+    const letter = esc(String(item.name || "?").trim().charAt(0).toUpperCase());
+    const cached = isImageIcon(item.icon) ? state.iconCache[item.id] : "";
+    const icon = cached
+      ? `<img class="build-tile-icon" src="${cached}" alt="">`
+      : isImageIcon(item.icon)
+        ? `<img class="build-tile-icon" data-tile-icon="${esc(item.id)}" alt=""><span class="build-tile-icon is-letter" hidden>${letter}</span>`
+        : item.icon && INSTANCE_ICONS.includes(item.icon)
+          ? `<span class="build-tile-icon is-symbol"><svg class="ic"><use href="#${item.icon}"/></svg></span>`
+          : `<span class="build-tile-icon is-letter">${letter}</span>`;
     const version = [item.mc_version, loaderLabel(item.loader)].filter(Boolean).join(" · ");
     return `
       <button class="build-tile ${running ? "is-running" : ""}" data-build-tile="${esc(item.id)}" title="${esc(item.name)}">
@@ -498,10 +529,17 @@
   function binderAllBuilds() {
     const modal = $("#modal-builds");
     if (!modal) return;
-    const open = () => {
-      $("#builds-body").innerHTML = allBuildsHtml();
+    const open = async () => {
       modal.hidden = false;
-      loadInstanceIcons();
+      $("#builds-body").innerHTML = `<div class="builds-empty">Загружаю сборки…</div>`;
+      await loadInstanceIcons();
+      $("#builds-body").innerHTML = allBuildsHtml();
+      // если иконка не нашлась — остаётся буква, «битых» картинок нет
+      $$("#builds-body img[data-tile-icon]").forEach((img) => {
+        img.addEventListener("error", () => img.remove());
+        const id = img.dataset.tileIcon;
+        if (!img.getAttribute("src") && !state.iconCache[id]) img.remove();
+      });
     };
     const btn = $("#btn-grid");
     if (btn) btn.addEventListener("click", open);
@@ -779,7 +817,7 @@
     loaderVersions: (kind, mc) => invoke("loader_versions", { kind, mcVersion: mc }),
     installInstance: (id) => invoke("install_instance", { instanceId: id }),
     launch: (id, accountUuid = null) => invoke("launch_instance", { instanceId: id, accountUuid }),
-    stop: (id) => invoke("stop_instance", { instanceId: id }),
+    stop: (id, runId) => invoke("stop_instance", { instanceId: id, runId: runId || null }),
     running: () => invoke("running_instances"),
     search: (q) => invoke("search_modrinth", q),
     modrinthVersions: (projectId, mc, loader) => invoke("modrinth_versions", { projectId, mcVersion: mc, loader }),
@@ -1175,7 +1213,7 @@
     if (!state.sessions) state.sessions = new Map();
     if (!state.sessions.has(instanceId)) state.sessions.set(instanceId, new Map());
     const key = runId || `local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    state.sessions.get(instanceId).set(key, { account: account || "" });
+    state.sessions.get(instanceId).set(key, { account: account || "", runId: key });
     state.running.add(instanceId);
   }
 
@@ -1214,7 +1252,7 @@
     const dups = options.dups ? sessions.slice(1) : [];
     const dupsHtml = dups.length
       ? `<div class="instance-dups">${dups.map((session) => `
-          <div class="instance-dup" data-dup-of="${esc(item.id)}" title="Дубликат сборки${session.account ? ` · ${esc(session.account)}` : ""}">
+          <div class="instance-dup" data-dup-of="${esc(item.id)}" data-run-id="${esc(session.runId || "")}" title="Дубликат сборки${session.account ? ` · ${esc(session.account)}` : ""} — ПКМ, чтобы выключить">
             <span class="dup-branch"></span>
             <span class="dup-name">дубликат</span>
             ${session.account ? `<span class="dup-sep">·</span><span class="dup-account">${esc(session.account)}</span>` : ""}
@@ -1330,6 +1368,13 @@
     $$(".instance-dup", list).forEach((el) => {
       el.addEventListener("click", () => {
         if (el.dataset.dupOf) selectInstance(el.dataset.dupOf);
+      });
+      // ПКМ по самому дубликату — выключить именно это окно игры
+      el.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const session = sessionsOf(el.dataset.dupOf).find((item) => item.runId === el.dataset.runId);
+        openDupMenu(event.clientX, event.clientY, el.dataset.dupOf, el.dataset.runId, session ? session.account : "");
       });
     });
 
@@ -1448,6 +1493,29 @@
       const name = categoryId ? (categoriesOf().find((c) => c.id === categoryId) || {}).name : "";
       toast(categoryId ? `Перенесено в «${name}»` : "Убрано из категории", "ok");
     } catch (err) { toast(String(err), "err"); }
+  }
+
+  /** ПКМ по ноде дубликата: выключить именно это окно игры. */
+  function openDupMenu(x, y, instanceId, runId, account) {
+    const meta = state.instances.find((item) => item.id === instanceId);
+    fillCtxMenu(x, y, `
+      <div class="ctx-caption">Дубликат${account ? ` · ${esc(account)}` : ""}</div>
+      <button class="ctx-item" data-act="focus"><svg class="ic"><use href="#i-house"/></svg>Открыть сборку</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item danger" data-act="stop-dup"><svg class="ic"><use href="#i-close"/></svg>Выключить дубликат</button>`, async (act) => {
+      if (act === "focus" && meta) { selectInstance(meta.id); return; }
+      if (act !== "stop-dup") return;
+      try {
+        await api.stop(instanceId, runId);
+        dropSession(instanceId, runId);
+        renderSidebar();
+        renderTab();
+        updateStatus();
+        toast("Дубликат выключен", "ok");
+      } catch (error) {
+        toast(`Не удалось выключить дубликат: ${error}`, "err");
+      }
+    });
   }
 
   /** ПКМ по пустому месту списка сборок. */
@@ -3428,7 +3496,8 @@
       recent: Array.isArray(settings.wallpaper_recent) ? settings.wallpaper_recent.slice(0, 6) : []
     };
     skinState();
-    if (state.skin.licensed === undefined) refreshAccountSkin().then(() => {
+    // скин аккаунта тянем при каждом открытии настроек: лицензия могла появиться только что
+    refreshAccountSkin().then(() => {
       if (!$("#modal-prefs").hidden && prefsCategory === "profile") renderPrefs();
     });
     modal.hidden = false;
@@ -3596,6 +3665,17 @@
         ${colorRow({ id: "theme-text", label: "Текст", value: own.text })}
         <div class="settings-note">Остальные поверхности, рамки и приглушённый текст выводятся из этих трёх цветов.</div>
       </div>` : ""}
+      <div class="prefs-section">
+        <div class="prefs-row-head">
+          <span class="prefs-label">Масштаб интерфейса</span>
+          <div class="spacer"></div>
+          <span class="mono prefs-value" id="ui-scale-value">${Number(state.uiScale) || 100}%</span>
+        </div>
+        <div class="chips" id="ui-scale-chips">
+          ${UI_SCALES.map((scale) => `<button class="chip ${(Number(state.uiScale) || 100) === scale ? "is-active" : ""}" data-ui-scale="${scale}">${scale}%</button>`).join("")}
+        </div>
+        <div class="settings-note">Как «размер интерфейса» в Minecraft: 100% — обычный, 125% — крупнее, 80% — компактнее.</div>
+      </div>
       <div class="prefs-section">
         <div class="prefs-label">Форма элементов</div>
         <div class="chips" id="shape-chips">
@@ -3839,6 +3919,14 @@
       applyClickFx(state.fx);
       $$("#fx-chips .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
     }));
+    $$("#ui-scale-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
+      applyUiScale(chip.dataset.uiScale);
+      $$("#ui-scale-chips .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+      const label = $("#ui-scale-value");
+      if (label) label.textContent = `${state.uiScale}%`;
+      state.settings = { ...(state.settings || {}), ui_scale: state.uiScale };
+      api.saveSettings(state.settings).catch(() => {});
+    }));
     $$("#shape-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
       applyShape(chip.dataset.shape);
       $$("#shape-chips .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
@@ -3993,6 +4081,7 @@
       theme_accent: state.customTheme.accent,
       theme_text: state.customTheme.text,
       shape: state.shape,
+      ui_scale: Number(state.uiScale) || 100,
       sound_fx: state.sound.on,
       sound_volume: state.sound.volume,
       click_fx: state.fx,
@@ -4172,7 +4261,7 @@
   /** Состояние раздела «Скин» (живёт в профиле). */
   function skinState() {
     if (!state.skin) {
-      state.skin = { preset: null, variant: "classic", angle: -18, licensed: false, currentPath: "", currentName: "", texture: null };
+      state.skin = { preset: null, variant: "classic", angle: -18, licensed: false, currentPath: "", currentName: "", texture: null, dataUrl: "" };
     }
     return state.skin;
   }
@@ -4260,6 +4349,18 @@
     });
   }
 
+  /** Миниатюра головы скина: лицо + второй слой (шапка/волосы), как в игре. */
+  function headThumb(texture, size = 64) {
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(texture, 8, 8, 8, 8, 0, 0, size, size);          // лицо
+    ctx.drawImage(texture, 40, 8, 8, 8, 0, 0, size, size);         // второй слой
+    return canvas;
+  }
+
   function redrawSkinPreview() {
     const canvas = $("#skin-canvas");
     if (!canvas) return;
@@ -4271,9 +4372,11 @@
     const skin = skinState();
     const dataUrl = await api.imageDataUrl(filePath).catch(() => null);
     if (!dataUrl) return false;
+    skin.dataUrl = dataUrl;
     const texture = await textureFromImage(dataUrl);
     if (!texture) return false;
     skin.texture = texture;
+    skin.dataUrl = dataUrl;
     skin.currentPath = filePath;
     skin.currentName = name || "скин";
     if (presetId !== undefined) skin.preset = presetId;
@@ -4290,14 +4393,8 @@
       if (!dataUrl) return;
       const texture = await textureFromImage(dataUrl);
       if (!texture) return;
-      const canvas = document.createElement("canvas");
-      canvas.width = 64;
-      canvas.height = 64;
-      const ctx = canvas.getContext("2d");
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(texture, 8, 8, 8, 8, 0, 0, 64, 64);
       slot.innerHTML = "";
-      slot.appendChild(canvas);
+      slot.appendChild(headThumb(texture, 64));
     });
 
     $$("#skin-presets .skin-preset").forEach((btn) => {
@@ -4305,7 +4402,10 @@
         const preset = findSkinPreset(btn.dataset.preset);
         if (!preset) return;
         const loaded = await loadSkinFile(preset.path, preset.name, preset.id);
-        if (!loaded) return toast("Не нашёл файл пресета — загрузи скин заново", "err");
+        if (!loaded) {
+          btn.classList.remove("is-active");
+          return toast(`Файл пресета «${preset.name}» не читается — загрузи скин заново`, "err");
+        }
         if (preset.variant === "classic" || preset.variant === "slim") skin.variant = preset.variant;
         if (Number.isFinite(Number(preset.angle))) skin.angle = Number(preset.angle);
         renderPrefs();
@@ -4431,17 +4531,24 @@
 
   /** Текущий скин аккаунта — показываем при открытии профиля (только просмотр). */
   async function refreshAccountSkin() {
-    const info = await api.accountSkin().catch(() => null);
     const skin = skinState();
-    if (!info) return;
-    skin.licensed = Boolean(info.licensed);
+    const active = ((state.accounts && state.accounts.accounts) || [])
+      .find((item) => state.accounts && item.uuid === state.accounts.active) || null;
+    const licensedByAccount = Boolean(active && active.kind === "microsoft");
+    const info = await api.accountSkin().catch(() => null);
+    if (!info) {
+      // профиль скина не ответил — но лицензию видно по самому аккаунту
+      if (licensedByAccount) skin.licensed = true;
+      return;
+    }
+    skin.licensed = Boolean(info.licensed) || licensedByAccount;
     if (info.variant && !skin.touchedVariant) skin.variant = info.variant === "slim" ? "slim" : "classic";
     if (info.data_url && !skin.texture) {
       const texture = await textureFromImage(info.data_url);
       if (texture) {
         skin.texture = texture;
-        skin.currentName = info.name || "скин аккаунта";
-        skin.currentPath = skin.currentPath || "";
+        skin.dataUrl = info.data_url;
+        skin.currentName = skin.currentName || info.name || "скин аккаунта";
       }
     }
   }
@@ -4469,16 +4576,18 @@
                 <div class="label">Название</div>
                 <div><input class="input" id="inst-name" style="width:100%" value="${esc(meta.name)}" spellcheck="false"></div>
               </div>
-              <div class="settings-row">
+              <div class="settings-row is-wide">
                 <div class="label">Иконка</div>
+                <div class="settings-cell">
                 <div class="icon-grid" id="inst-icons">
                   <button class="icon-chip letter ${!meta.icon ? "is-active" : ""}" data-icon="" title="Первая буква">${esc(String(meta.name).trim().charAt(0).toUpperCase())}</button>
                   ${isImageIcon(meta.icon) && state.iconCache[meta.id] ? `<button class="icon-chip img is-active" data-icon="${esc(meta.icon)}" title="Своя картинка"><img src="${state.iconCache[meta.id]}" alt=""></button>` : ""}
                   ${INSTANCE_ICONS.map((icon) => `<button class="icon-chip ${meta.icon === icon ? "is-active" : ""}" data-icon="${icon}" title="${icon.replace("i-", "")}"><svg class="ic"><use href="#${icon}"/></svg></button>`).join("")}
                 </div>
-                <div class="settings-actions" style="margin-top:8px">
+                <div class="settings-actions">
                   <button class="btn" id="inst-icon-file"><svg class="ic"><use href="#i-image"/></svg>Иконка из картинки…</button>
                   ${isImageIcon(meta.icon) ? '<button class="btn btn-ghost" id="inst-icon-reset">Сбросить</button>' : ""}
+                </div>
                 </div>
               </div>
               <div class="settings-row">
@@ -4533,21 +4642,12 @@
             </div>
           </div>
 
-          <div class="panel">
-            <div class="panel-head"><strong>Лаунчер</strong><div class="spacer"></div><span class="muted" style="font-size:11px">общие настройки</span></div>
-            <div style="padding:14px">
-              <div class="settings-actions">
-                <button class="btn" id="open-launcher-prefs">Настройки лаунчера</button>
-              </div>
-            </div>
-          </div>
         </div>
       </div>`;
 
     $$("#inst-icons .icon-chip").forEach((chip) => chip.addEventListener("click", () => {
       $$("#inst-icons .icon-chip").forEach((el) => el.classList.toggle("is-active", el === chip));
     }));
-    $("#open-launcher-prefs").addEventListener("click", () => openPrefs());
     const memorySlider = $("#inst-memory");
     if (memorySlider) memorySlider.addEventListener("input", (event) => {
       $("#inst-memory-value").textContent = `${event.target.value} МБ`;
@@ -4753,7 +4853,7 @@
       const plan = await api.launch(meta.id);
       setProgress(null);
       addSession(meta.id, plan && plan.run_id, plan && plan.account);
-      pushLog(meta.id, `[omnispec] Java ${plan.java_major}: ${plan.java}`, "dim");
+      pushLog(meta.id, `[omnispec] Java ${plan.java_major || plan.major || "—"}: ${plan.java || "java"}`, "dim");
       pushLog(meta.id, `[omnispec] Память ${plan.memory_mb} МБ, артефактов в classpath: ${plan.classpath_entries}`, "dim");
       state.running.add(meta.id);
       renderSidebar();
@@ -5252,6 +5352,7 @@
     state.fx = (state.settings && state.settings.click_fx) || "wave";
     applyClickFx(state.fx);
     applyShape((state.settings && state.settings.shape) || "soft");
+    applyUiScale((state.settings && state.settings.ui_scale) || 100);
     state.sound = {
       on: state.settings && state.settings.sound_fx !== false,
       volume: Number((state.settings && state.settings.sound_volume) ?? 60)

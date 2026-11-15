@@ -30,6 +30,10 @@ fn default_theme() -> String {
     "dark".to_string()
 }
 
+fn default_ui_scale() -> u32 {
+    100
+}
+
 fn default_click_fx() -> String {
     "wave".to_string()
 }
@@ -149,6 +153,9 @@ pub struct Settings {
     /// Эффект от клика: wave | dot | ring | cross | off.
     #[serde(default = "default_click_fx")]
     pub click_fx: String,
+    /// Масштаб интерфейса в процентах: 80, 90, 100, 110, 125, 150.
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: u32,
 }
 
 /// Категория сборок: обычная «папка» в списке слева.
@@ -216,6 +223,7 @@ impl Default for Settings {
             theme_accent: None,
             theme_text: None,
             click_fx: default_click_fx(),
+            ui_scale: default_ui_scale(),
         }
     }
 }

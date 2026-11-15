@@ -332,12 +332,21 @@ where
 }
 
 #[tauri::command]
-async fn stop_instance(state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
+async fn stop_instance(
+    state: State<'_, AppState>,
+    instance_id: String,
+    run_id: Option<String>,
+) -> Result<(), String> {
+    // run_id задан — гасим только это окно (дубликат), иначе все окна сборки
+    let exact = run_id.map(|value| format!("{instance_id}#{value}"));
     let handles: Vec<ChildHandle> = {
         let running = state.running.lock().await;
         running
             .iter()
-            .filter(|(key, _)| key.split_once('#').map(|(id, _)| id) == Some(instance_id.as_str()))
+            .filter(|(key, _)| match &exact {
+                Some(target) => key.as_str() == target,
+                None => key.split_once('#').map(|(id, _)| id) == Some(instance_id.as_str()),
+            })
             .map(|(_, handle)| handle.clone())
             .collect()
     };
