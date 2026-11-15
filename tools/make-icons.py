@@ -30,7 +30,8 @@ def build_master() -> Image.Image:
     master = source.convert("L").resize((1024, 1024), Image.LANCZOS)
     master = master.filter(ImageFilter.UnsharpMask(radius=1.6, percent=55, threshold=2))
     master = ImageOps.autocontrast(master, cutoff=0)
-    return master.convert("RGB")
+    # Tauri требует RGBA: PNG в режиме «L»/«RGB» он отвергает
+    return master.convert("RGBA")
 
 
 def render(master: Image.Image, size: int) -> Image.Image:
@@ -43,7 +44,7 @@ def render(master: Image.Image, size: int) -> Image.Image:
     if size <= 64:
         # иначе на мелких размерах линии превращаются в серую кашу
         image = image.filter(ImageFilter.UnsharpMask(radius=0.7, percent=100, threshold=1))
-    return image
+    return image.convert("RGBA")
 
 
 def main() -> None:
@@ -59,7 +60,7 @@ def main() -> None:
         (512, "icon.png"),
         (512, "icon-512.png"),
     ]:
-        render(master, size).save(icons / name)
+        render(master, size).save(icons / name, format="PNG", optimize=True)
         print(f"  icons/{name} — {size}×{size}")
 
     ico_sizes = [(16, 16), (20, 20), (24, 24), (32, 32), (40, 40), (48, 48),
