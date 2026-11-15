@@ -3,6 +3,7 @@
 //! Ядро ничего не знает про GUI: его использует и Tauri‑приложение (`apps/omnispec-app`),
 //! и консольная утилита `omnispec`. Всё, что связано с Minecraft, лежит здесь.
 
+pub mod accounts;
 pub mod auth;
 pub mod error;
 pub mod game;

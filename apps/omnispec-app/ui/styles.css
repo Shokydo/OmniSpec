@@ -128,7 +128,7 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .brand-logo {
   width: 28px; height: 28px; flex: none;
-  border-radius: var(--r-sm);
+  border-radius: 8px;
   overflow: hidden;
   background: var(--bg-4);
   border: 1px solid var(--line-2);
@@ -304,7 +304,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .tb-icon {
   width: 22px; height: 22px; flex: none;
   display: grid; place-items: center;
-  border-radius: var(--r-xs);
+  border-radius: 6px;
   background: var(--bg-4); border: 1px solid var(--line-2);
   overflow: hidden;
 }
@@ -334,6 +334,20 @@ input, select, textarea { font: inherit; color: inherit; }
   border-bottom: 1px solid var(--line);
 }
 .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 6px; }
+
+/* в тулбаре все контролы одного роста — иначе «Играть», «Стоп» и шестерёнки
+   выглядят как три разных набора кнопок */
+.toolbar .btn,
+.toolbar .icon-btn.lg,
+.toolbar .pill {
+  height: var(--h-lg);
+  border-radius: var(--r-sm);
+  flex: 0 0 auto;
+}
+.toolbar .icon-btn.lg { width: var(--h-lg); }
+.toolbar .btn-play { padding: 0 18px 0 15px; }
+.toolbar .pill { padding: 0 11px; }
+.toolbar .btn .ic, .toolbar .pill .ic { width: 13px; height: 13px; }
 
 .pill {
   display: inline-flex; align-items: center; gap: 6px;
@@ -680,7 +694,8 @@ input, select, textarea { font: inherit; color: inherit; }
   flex: 1; min-height: 0; overflow-y: auto;
   padding: var(--pad) var(--pad) 28px;
   display: grid; gap: var(--gap);
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  /* режим «Список» — одна колонка, карточки-строки; «Плитка» — сетка ниже */
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
 }
 .card {
@@ -897,7 +912,7 @@ input[type="range"] {
 }
 
 /* ═══════════════════ эффект клика ═══════════════════ */
-.fx-layer { position: fixed; inset: 0; z-index: 900; pointer-events: none; overflow: hidden; }
+.fx-layer { position: fixed; inset: 0; z-index: 45; pointer-events: none; overflow: hidden; }
 .cfx {
   position: absolute; display: block; pointer-events: none;
   transform: translate(-50%, -50%); border-radius: 50%;
@@ -1009,3 +1024,304 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
 .icon-chip.is-active { border-color: var(--accent); background: var(--bg-4); color: var(--text); }
 .icon-chip.letter { font-size: 12px; font-weight: 650; }
 .icon-chip .ic { width: 16px; height: 16px; }
+
+/* ==================== АККАУНТЫ В САЙДБАРЕ ==================== */
+.acc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-1);
+}
+.acc-actions { display: flex; gap: 6px; margin-top: 6px; }
+.acc-actions .btn-wide { flex: 1; }
+.account-list { display: grid; gap: 4px; }
+.account-empty {
+  padding: 10px;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  color: var(--dim-2);
+  text-align: center;
+}
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.account-row:hover { background: var(--bg-4); border-color: var(--line-2); }
+.account-row.is-active { border-color: var(--line-3); background: var(--bg-4); }
+.account-ava {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-xs);
+  background: var(--bg-5);
+  border: 1px solid var(--line-2);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+.account-row.is-active .account-ava { border-color: var(--line-3); background: var(--bg-1); }
+.account-body { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
+.account-name {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-body .tag { flex: 0 0 auto; font-size: 9.5px; padding: 1px 5px; }
+.account-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--green);
+}
+.account-row .icon-btn { width: 22px; height: 22px; }
+
+/* выбор «лицензия / пиратка» */
+.choice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+.choice {
+  display: grid;
+  gap: 5px;
+  padding: 13px 14px;
+  text-align: left;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r);
+  background: var(--bg-3);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.choice:hover { border-color: var(--line-3); background: var(--bg-4); }
+.choice-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.choice-sub { font-size: 11px; line-height: 1.45; color: var(--dim-2); }
+.device-code {
+  font-family: var(--mono);
+  font-size: 20px;
+  letter-spacing: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+  color: var(--text);
+  text-align: center;
+}
+.settings-note {
+  margin: 12px 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line-1);
+  border-left: 2px solid var(--line-3);
+  border-radius: var(--r-xs);
+  background: var(--bg-3);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--dim);
+}
+.settings-note.warn { border-left-color: var(--red); color: var(--red); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 14px; }
+.settings-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+
+/* кнопка «Стоп» рядом с «Играть» */
+.btn-stop { padding: 0 13px; color: var(--dim); }
+.btn-stop:hover { color: var(--text); }
+
+/* ==================== НАСТРОЙКИ ЛАУНЧЕРА ==================== */
+.prefs-box { width: min(860px, 96vw); height: min(620px, 88vh); display: flex; flex-direction: column; }
+.prefs {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 186px 1fr;
+}
+.prefs-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px;
+  border-right: 1px solid var(--line-1);
+  background: var(--bg-2);
+  overflow-y: auto;
+}
+.prefs-tab {
+  height: var(--h-md);
+  padding: 0 10px;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+.prefs-tab:hover { background: var(--bg-3); color: var(--text); }
+.prefs-tab.is-active {
+  background: var(--bg-4);
+  border-color: var(--line-2);
+  color: var(--text);
+  font-weight: 600;
+}
+.prefs-body { overflow-y: auto; padding: 14px; display: grid; gap: 16px; align-content: start; }
+.prefs-section {
+  border: 1px solid var(--line-1);
+  border-radius: var(--r);
+  background: var(--bg-3);
+  padding: 12px 14px 14px;
+}
+.prefs-label {
+  font-size: 10px;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--dim-2);
+  margin-bottom: 10px;
+}
+.prefs-rows { display: grid; gap: 12px; }
+.prefs-inline { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.prefs-body .settings-row { grid-template-columns: 170px 1fr; }
+.wall-group { margin-top: 10px; }
+.wall-group:first-of-type { margin-top: 0; }
+.wall-group-name {
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--dim-2);
+  margin-bottom: 5px;
+}
+/* превью обоев должно быть видно, а не тонуть в тёмном */
+.prefs-body .wall-chip { height: 62px; }
+.prefs-body .wall-chip::after { background: rgba(0, 0, 0, 0.18); }
+.prefs-label-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.prefs-label-row .prefs-label { margin: 0; }
+.wall-none {
+  height: var(--h-xs);
+  padding: 0 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xs);
+  background: var(--bg-4);
+  color: var(--dim);
+  font-size: 10.5px;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+.wall-none:hover { color: var(--text); border-color: var(--line-3); }
+.wall-none.is-active { border-color: var(--accent); color: var(--text); }
+.prefs-body .device-code { width: 100%; }
+
+/* сайдбар: блоки аккаунтов не должны обрезаться */
+.sidebar-foot { gap: 6px; padding-bottom: 8px; }
+.sidebar-foot .acc-head { margin-top: 2px; padding-top: 8px; }
+.sidebar-foot .active-row { margin-top: 2px; }
+
+
+/* ==================== MODRINTH: ПЛИТКА, ВЕРСИИ, ЛЕНТА ==================== */
+.modrinth-results.is-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+  align-content: start;
+}
+.modrinth-results.is-grid .card { flex-direction: column; gap: 8px; }
+.modrinth-results.is-grid .card-icon { width: 100%; height: 96px; border-radius: var(--r-sm); }
+.modrinth-results.is-grid .card-body { width: 100%; }
+.modrinth-results.is-grid .card-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.modrinth-results.is-grid .card-actions { margin-top: auto; }
+
+/* переключатель «список / плитка» */
+.mr-view {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+}
+.mr-view button {
+  height: var(--h-xs);
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: var(--r-xs);
+  font-size: 11px;
+  color: var(--dim-2);
+  cursor: pointer;
+}
+.mr-view button:hover { color: var(--text); }
+.mr-view button.is-active { background: var(--bg-5); color: var(--text); }
+.mr-view .ic { width: 12px; height: 12px; }
+
+/* конец ленты */
+.mr-sentinel {
+  grid-column: 1 / -1;
+  padding: 14px 0 6px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--dim-2);
+}
+.mr-more-spinner {
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  display: inline-block;
+  vertical-align: -2px;
+  border: 1.5px solid var(--line-3);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: mr-spin 0.7s linear infinite;
+}
+@keyframes mr-spin { to { transform: rotate(360deg); } }
+
+/* версии мода/модпака */
+.ver-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+}
+.ver-row:hover { border-color: var(--line-2); background: var(--bg-4); }
+.ver-main { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.ver-name { font-size: 12px; color: var(--text); font-weight: 600; }
+.ver-meta { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.ver-date { font-size: 10.5px; color: var(--dim-2); white-space: nowrap; }
+.ver-list { display: grid; gap: 5px; }
+
+/* режим «Список»: описание слева, кнопки справа — карточка не пустует */
+.modrinth-results:not(.is-grid) .card { align-items: center; }
+.modrinth-results:not(.is-grid) .card-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "title actions" "desc actions" "meta actions";
+  align-items: start;
+  column-gap: 16px;
+  row-gap: 3px;
+}
+.modrinth-results:not(.is-grid) .card-title { grid-area: title; }
+.modrinth-results:not(.is-grid) .card-desc { grid-area: desc; }
+.modrinth-results:not(.is-grid) .card-meta { grid-area: meta; margin-top: 2px; }
+.modrinth-results:not(.is-grid) .card-actions {
+  grid-area: actions;
+  align-self: center;
+  margin-top: 0;
+  padding-top: 0;
+  flex-wrap: nowrap;
+}

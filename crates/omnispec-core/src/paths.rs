@@ -81,6 +81,11 @@ impl Paths {
     pub fn cache(&self) -> PathBuf {
         self.root.join("cache")
     }
+    /// Файл со списком аккаунтов.
+    pub fn accounts_file(&self) -> PathBuf {
+        self.root.join("accounts.json")
+    }
+
     pub fn settings_file(&self) -> PathBuf {
         self.root.join("settings.json")
     }

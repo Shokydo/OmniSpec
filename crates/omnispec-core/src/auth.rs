@@ -1,9 +1,13 @@
-//! Аккаунты. Сейчас поддерживаются только офлайн-аккаунты (без лицензии),
-//! но структура готова к добавлению Ely.by / Microsoft.
+//! Аккаунты: офлайн (без лицензии) и Microsoft (лицензия).
+//!
+//! Вход через Microsoft живёт в [`microsoft`]: device code → Xbox Live → XSTS →
+//! Minecraft. Офлайн-аккаунт не требует сети вообще.
 //!
 //! UUID офлайн-игрока — это UUID v3 (MD5) от строки `OfflinePlayer:<ник>`.
 //! Именно так его считает сама игра и сервера (в т.ч. плагины с offline-mode),
 //! поэтому скины через сторонние сервисы и права на сервере совпадают.
+
+pub mod microsoft;
 
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
@@ -23,6 +27,12 @@ pub struct Account {
     /// Токен доступа (для офлайна — пустая строка).
     #[serde(default)]
     pub access_token: String,
+    /// Refresh-токен Microsoft (только для лицензии).
+    #[serde(default)]
+    pub refresh_token: String,
+    /// Когда истекает `access_token` (unix-время, для лицензии).
+    #[serde(default)]
+    pub expires_at: u64,
 }
 
 impl Account {
@@ -34,11 +44,41 @@ impl Account {
             username,
             kind: "offline".into(),
             access_token: String::new(),
+            refresh_token: String::new(),
+            expires_at: 0,
         })
     }
 
     pub fn is_offline(&self) -> bool {
         self.kind == "offline"
+    }
+
+    /// Лицензионный аккаунт (вход через Microsoft).
+    pub fn is_microsoft(&self) -> bool {
+        self.kind == "microsoft"
+    }
+
+    /// Пора обновить токен (запас — 2 минуты).
+    pub fn needs_refresh(&self) -> bool {
+        self.is_microsoft()
+            && (self.access_token.is_empty()
+                || self.expires_at <= std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|value| value.as_secs())
+                    .unwrap_or(0)
+                    + 120)
+    }
+
+    /// Аккаунт из сессии Microsoft.
+    pub fn from_session(session: microsoft::MicrosoftSession) -> Self {
+        Self {
+            username: session.username,
+            uuid: session.uuid,
+            kind: "microsoft".into(),
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+            expires_at: session.expires_at,
+        }
     }
 
     /// Тип пользователя для аргументов запуска.

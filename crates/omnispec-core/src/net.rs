@@ -162,6 +162,45 @@ impl Http {
         serde_json::from_str(&text).map_err(Error::from)
     }
 
+    /// POST с телом `application/x-www-form-urlencoded` (OAuth-обмен токенов).
+    pub async fn post_form(&self, url: &str, form: &[(&str, &str)]) -> Result<String> {
+        let response = self
+            .client
+            .post(url)
+            .form(form)
+            .send()
+            .await
+            .map_err(|error| Error::http(url, error))?;
+        Ok(response.text().await?)
+    }
+
+    /// POST с JSON-телом; возвращает текст ответа (даже при 4xx — его разбирает вызывающий).
+    pub async fn post_json(&self, url: &str, body: &serde_json::Value) -> Result<String> {
+        let response = self
+            .client
+            .post(url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|error| Error::http(url, error))?;
+        Ok(response.text().await?)
+    }
+
+    /// GET с заголовком `Authorization: Bearer`.
+    pub async fn get_with_bearer(&self, url: &str, token: &str) -> Result<String> {
+        let response = self
+            .client
+            .get(url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|error| Error::http(url, error))?;
+        if !response.status().is_success() {
+            return Err(Error::Other(format!("{url} → HTTP {}", response.status())));
+        }
+        Ok(response.text().await?)
+    }
+
     pub async fn get_text(&self, url: &str) -> Result<String> {
         let response = self.send_get(url).await?;
         let status = response.status();

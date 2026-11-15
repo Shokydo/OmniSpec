@@ -14,6 +14,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 
+use omnispec_core::accounts::AccountStore;
+use omnispec_core::auth::microsoft;
 use omnispec_core::auth::Account;
 use omnispec_core::game;
 use omnispec_core::game::java::JavaInstall;
@@ -30,6 +32,7 @@ type ChildHandle = Arc<Mutex<tokio::process::Child>>;
 
 struct AppState {
     paths: Paths,
+    accounts: Mutex<AccountStore>,
     http: Http,
     modrinth: Modrinth,
     settings: Mutex<Settings>,
@@ -195,7 +198,7 @@ async fn launch_instance(
 
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let settings = state.settings.lock().await.clone();
-    let account = Account::offline(&settings.username).map_err(err)?;
+    let account = current_account(&state, &settings).await?;
     let reporter = reporter_for(&app, &instance_id);
 
     let plan = game::launch::prepare(
@@ -694,6 +697,135 @@ fn open_url(url: String) -> Result<(), String> {
     result.map(|_| ()).map_err(err)
 }
 
+
+/* ==================== АККАУНТЫ ==================== */
+
+#[derive(Serialize)]
+struct AccountsInfo {
+    accounts: Vec<Account>,
+    active: Option<String>,
+}
+
+/// Выбранный аккаунт; если его нет — офлайн-аккаунт из настроек.
+async fn current_account(state: &AppState, settings: &Settings) -> Result<Account, String> {
+    let mut store = state.accounts.lock().await;
+    let account = store
+        .current()
+        .cloned()
+        .unwrap_or_else(|| Account::offline(&settings.username).unwrap_or_else(|_| Account {
+            username: "Player".into(),
+            uuid: omnispec_core::auth::offline_uuid("Player"),
+            kind: "offline".into(),
+            access_token: String::new(),
+            refresh_token: String::new(),
+            expires_at: 0,
+        }));
+
+    // Лицензионный токен живёт час — обновляем заранее, иначе игра не пустит на сервер.
+    if account.needs_refresh() && !account.refresh_token.is_empty() {
+        let client_id = settings.ms_client_id.clone().unwrap_or_default();
+        match microsoft::refresh(&state.http, &client_id, &account.refresh_token).await {
+            Ok(session) => {
+                let fresh = Account::from_session(session);
+                store.upsert(fresh.clone());
+                let _ = store.save(&state.paths);
+                return Ok(fresh);
+            }
+            Err(error) => {
+                return Err(format!(
+                    "не удалось обновить вход в Microsoft ({error}) — зайди в аккаунт заново"
+                ))
+            }
+        }
+    }
+    Ok(account)
+}
+
+#[tauri::command]
+async fn accounts_info(state: State<'_, AppState>) -> Result<AccountsInfo, String> {
+    let store = state.accounts.lock().await;
+    Ok(AccountsInfo {
+        accounts: store.accounts.clone(),
+        active: store.current().map(|account| account.uuid.clone()),
+    })
+}
+
+#[tauri::command]
+async fn account_add_offline(
+    state: State<'_, AppState>,
+    username: String,
+) -> Result<AccountsInfo, String> {
+    let account = Account::offline(&username).map_err(err)?;
+    let mut store = state.accounts.lock().await;
+    store.upsert(account.clone());
+    store.set_active(&account.uuid);
+    store.save(&state.paths).map_err(err)?;
+    Ok(AccountsInfo {
+        accounts: store.accounts.clone(),
+        active: store.active.clone(),
+    })
+}
+
+#[tauri::command]
+async fn account_set_active(
+    state: State<'_, AppState>,
+    uuid: String,
+) -> Result<AccountsInfo, String> {
+    let mut store = state.accounts.lock().await;
+    if !store.set_active(&uuid) {
+        return Err("аккаунт не найден".into());
+    }
+    store.save(&state.paths).map_err(err)?;
+    Ok(AccountsInfo {
+        accounts: store.accounts.clone(),
+        active: store.active.clone(),
+    })
+}
+
+#[tauri::command]
+async fn account_remove(state: State<'_, AppState>, uuid: String) -> Result<AccountsInfo, String> {
+    let mut store = state.accounts.lock().await;
+    store.remove(&uuid);
+    store.save(&state.paths).map_err(err)?;
+    Ok(AccountsInfo {
+        accounts: store.accounts.clone(),
+        active: store.current().map(|account| account.uuid.clone()),
+    })
+}
+
+/// Шаг 1 входа через Microsoft: короткий код для microsoft.com/link.
+#[tauri::command]
+async fn ms_login_start(state: State<'_, AppState>) -> Result<microsoft::DeviceCode, String> {
+    let settings = state.settings.lock().await.clone();
+    let client_id = settings.ms_client_id.clone().unwrap_or_default();
+    microsoft::start_device_code(&state.http, &client_id)
+        .await
+        .map_err(err)
+}
+
+/// Шаг 2: опрос. `null` — пользователь ещё не подтвердил вход.
+#[tauri::command]
+async fn ms_login_poll(
+    state: State<'_, AppState>,
+    device_code: String,
+) -> Result<Option<AccountsInfo>, String> {
+    let settings = state.settings.lock().await.clone();
+    let client_id = settings.ms_client_id.clone().unwrap_or_default();
+    let session = microsoft::poll_device_code(&state.http, &client_id, &device_code)
+        .await
+        .map_err(err)?;
+    let Some(session) = session else { return Ok(None) };
+    let account = Account::from_session(session);
+    let mut store = state.accounts.lock().await;
+    store.upsert(account.clone());
+    store.set_active(&account.uuid);
+    store.save(&state.paths).map_err(err)?;
+    Ok(Some(AccountsInfo {
+        accounts: store.accounts.clone(),
+        active: store.active.clone(),
+    }))
+}
+
 /* ==================== JAVA И СИСТЕМА ==================== */
 
 #[tauri::command]
@@ -793,6 +925,7 @@ fn main() {
 
     let state = AppState {
         modrinth: Modrinth::new(http.clone()),
+        accounts: Mutex::new(AccountStore::load(&paths)),
         paths,
         http,
         settings: Mutex::new(settings),
@@ -835,6 +968,12 @@ fn main() {
             version_info,
             check_update,
             net_check,
+            accounts_info,
+            account_add_offline,
+            account_set_active,
+            account_remove,
+            ms_login_start,
+            ms_login_poll,
             install_update,
             open_url,
         ])

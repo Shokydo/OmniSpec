@@ -76,6 +76,9 @@ pub struct Settings {
     /// Прокси для запросов к Modrinth/Mojang: `http://host:port` или `socks5://…`.
     pub proxy: Option<String>,
 
+    /// Свой client id Azure для входа через Microsoft (пусто — публичный ID лаунчера).
+    pub ms_client_id: Option<String>,
+
     /* ---------- оформление ---------- */
     /// Обои: имя встроенных (`grid`, `aurora`, …) или путь к своему файлу.
     pub wallpaper: Option<String>,
@@ -85,6 +88,8 @@ pub struct Settings {
     pub wallpaper_blur: u8,
     /// Затемнение обоев под интерфейсом, 0–80 %.
     pub wallpaper_dim: u8,
+    /// История обоев: последние выбранные, свежие — в начале.
+    pub wallpaper_recent: Vec<String>,
 
     /* ---------- автообновление ---------- */
     /// Репозиторий GitHub с релизами: «владелец/репозиторий».
@@ -122,10 +127,12 @@ impl Default for Settings {
             hide_on_launch: false,
             last_instance: None,
             proxy: None,
+            ms_client_id: None,
             wallpaper: None,
             wallpaper_fit: default_wallpaper_fit(),
             wallpaper_blur: 0,
             wallpaper_dim: 40,
+            wallpaper_recent: Vec::new(),
             update_repo: default_update_repo(),
             update_enabled: true,
             update_token: None,

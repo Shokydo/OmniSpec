@@ -192,6 +192,11 @@
       { id: "vanya-vanilla", name: "Ванилла 1.20.1", mc_version: "1.20.1", loader: { type: "vanilla" }, icon: null, created: now - 86400 * 3, last_played: null, playtime_secs: 0, memory_mb: null, java_path: null, jvm_args: null, notes: "", source: "manual", source_url: null, version_override: null },
       { id: "cobblemon", name: "Cobblemon", mc_version: "1.21.1", loader: { type: "fabric", version: "0.16.5" }, icon: null, created: now - 86400 * 40, last_played: now - 86400 * 5, playtime_secs: 5400, memory_mb: null, java_path: null, jvm_args: null, notes: "", source: "modrinth", source_url: null, version_override: null }
     ],
+    accounts: [
+      { username: "Steve", uuid: "069a79f4-44e9-4726-a5be-fca90e38aaf5", kind: "microsoft", access_token: "demo", expires_at: 0 },
+      { username: "Vanya_2012", uuid: "5627dd98-1f5e-3f4e-9c1a-2b3c4d5e6f70", kind: "offline", access_token: "" }
+    ],
+    active: "069a79f4-44e9-4726-a5be-fca90e38aaf5",
     settings: { username: "Player", java_path: null, memory_mb: 4096, jvm_args: "-XX:+UseG1GC", game_args: "", auto_java: true, show_snapshots: false, verify_hashes: false, language: "ru", keep_console_open: false, enable_modrinth: true, hide_on_launch: false, last_instance: null, update_repo: "Shokydo/OmniSpec", update_enabled: true, update_token: null, update_prerelease: false, theme: "dark", click_fx: "wave" },
     versions: ["1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21", "1.20.6", "1.20.4", "1.20.1", "1.19.4", "1.18.2", "1.16.5", "1.12.2", "1.8.9"].map((id) => ({ id, type: "release", url: "", release_time: null })),
     demoLogs: [
@@ -242,6 +247,12 @@
     checkUpdate: () => invoke("check_update"),
     installUpdate: () => invoke("install_update"),
     netCheck: () => invoke("net_check"),
+    accounts: () => invoke("accounts_info"),
+    accountAddOffline: (username) => invoke("account_add_offline", { username }),
+    accountSetActive: (uuid) => invoke("account_set_active", { uuid }),
+    accountRemove: (uuid) => invoke("account_remove", { uuid }),
+    msStart: () => invoke("ms_login_start"),
+    msPoll: (deviceCode) => invoke("ms_login_poll", { deviceCode }),
     openUrl: (url) => invoke("open_url", { url })
   };
 
@@ -293,8 +304,30 @@
     launch: async () => ({ version_id: "demo", java: "java", memory_mb: 4096, args: [], instance_id: "demo", game_dir: "", natives_dir: "", classpath_entries: 0 }),
     stop: async () => null,
     running: async () => [],
-    search: async () => { throw new Error("нет связи с api.modrinth.com: error sending request (dns error) ← попытка подключиться к серверу не удалась"); },
-    modrinthVersions: async () => [{ id: "v1", name: "1.0.0", version_number: "1.0.0", game_versions: ["1.21.4"], loaders: ["fabric"], files: [], dependencies: [] }],
+    search: async (q) => {
+      const base = demoSearch(q).hits;
+      const seed = ["Sodium", "Lithium", "Iris Shaders", "Mod Menu", "Fabric API", "Cloth Config", "Indium", "FerriteCore", "Krypton", "LazyDFU", "Starlight", "C2ME", "Entity Culling", "Dynamic FPS", "Reese's Sodium Options", "Zoomify", "AppleSkin", "Jade", "Roughly Enough Items", "Continuity", "Controlling", "BetterF3", "ImmediatelyFast", "No Chat Reports"];
+      const all = [];
+      for (let page = 0; page < 3; page += 1) {
+        seed.forEach((name, index) => {
+          const copy = { ...base[index % base.length] };
+          copy.title = page ? `${name} ${page + 1}` : name;
+          copy.project_id = `demo-${page}-${index}`;
+          copy.slug = copy.title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+          copy.downloads = Math.max(1000, (copy.downloads || 100000) - index * 1234 - page * 5000);
+          all.push(copy);
+        });
+      }
+      const offset = (q && q.offset) || 0;
+      const limit = (q && q.limit) || 24;
+      return { hits: all.slice(offset, offset + limit), offset, limit, total_hits: all.length };
+    },
+    modrinthVersions: async () => ([
+      { id: "v1", name: "Sodium 0.6.13", version_number: "0.6.13", game_versions: ["1.21.4"], loaders: ["fabric"], date_published: "2025-06-01T10:00:00Z", files: [], dependencies: [] },
+      { id: "v2", name: "Sodium 0.6.9", version_number: "0.6.9", game_versions: ["1.21.2", "1.21.3"], loaders: ["fabric"], date_published: "2025-03-11T10:00:00Z", files: [], dependencies: [] },
+      { id: "v3", name: "Sodium 0.5.11", version_number: "0.5.11", game_versions: ["1.20.6", "1.20.4"], loaders: ["fabric", "quilt"], date_published: "2024-11-02T10:00:00Z", files: [], dependencies: [] },
+      { id: "v4", name: "Sodium 0.4.10", version_number: "0.4.10", game_versions: ["1.20.1"], loaders: ["fabric"], date_published: "2023-08-19T10:00:00Z", files: [], dependencies: [] }
+    ]),
     installMod: async (_i, projectId) => ({ installed: [`${projectId}-1.0.0.jar`], skipped: [] }),
     installModVersion: async () => ({ installed: ["mod.jar"], skipped: [] }),
     installModpack: async () => DEMO.instances[0],
@@ -320,6 +353,21 @@
     checkUpdate: async () => DEMO_UPDATE,
     installUpdate: async () => { await new Promise((r) => setTimeout(r, 1500)); return DEMO_UPDATE; },
     netCheck: async () => "демо-режим: связь не проверяется",
+    accounts: async () => ({ accounts: DEMO.accounts.map((a) => ({ ...a })), active: DEMO.active }),
+    accountAddOffline: async (username) => {
+      const uuid = "demo-" + username.toLowerCase();
+      DEMO.accounts.push({ username, uuid, kind: "offline", access_token: "" });
+      DEMO.active = uuid;
+      return { accounts: DEMO.accounts.map((a) => ({ ...a })), active: DEMO.active };
+    },
+    accountSetActive: async (uuid) => { DEMO.active = uuid; return { accounts: DEMO.accounts.map((a) => ({ ...a })), active: DEMO.active }; },
+    accountRemove: async (uuid) => {
+      DEMO.accounts = DEMO.accounts.filter((a) => a.uuid !== uuid);
+      if (DEMO.active === uuid) DEMO.active = DEMO.accounts[0] ? DEMO.accounts[0].uuid : null;
+      return { accounts: DEMO.accounts.map((a) => ({ ...a })), active: DEMO.active };
+    },
+    msStart: async () => ({ user_code: "K7QP2X4MB", device_code: "demo", verification_uri: "https://www.microsoft.com/link", expires_in: 900, interval: 5 }),
+    msPoll: async () => null,
     openUrl: async (url) => { window.open(url, "_blank"); return null; },
     onProgress: () => Promise.resolve(),
     onLog: () => Promise.resolve(),
@@ -334,12 +382,17 @@
     instances: [],
     selectedId: null,
     settings: null,
+    accounts: { accounts: [], active: null },
     tab: "console",
     running: new Set(),
     logs: {},
     files: { path: "", entries: [], selected: null },
     mods: [],
-    modrinth: { query: "", type: "mod", results: [], loading: false, error: null, tried: false },
+    modrinth: {
+      query: "", type: "mod", mc: "", loader: "",
+      results: [], total: 0, loading: false, loadingMore: false,
+      error: null, tried: false, view: "list"
+    },
     wall: { wallpaper: null, fit: "cover", blur: 0, dim: 40 },
     update: { info: null, version: "0.1.0", repo: null, enabled: true, checking: false, installing: false },
     theme: "dark",
@@ -917,10 +970,15 @@
   }
 
   /* ---------- Modrinth ---------- */
+  const MR_PAGE = 24;
+  let mrObserver = null;
+
   function renderModrinth() {
     const meta = selected();
     const cfg = state.modrinth;
+    const view = cfg.view || "list";
     const types = [["mod", "Моды"], ["modpack", "Модпаки"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
+    const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
     $("#tab-body").innerHTML = `
       <div class="modrinth-wrap">
         <div class="modrinth-filters">
@@ -938,44 +996,146 @@
             <label>Версия игры</label>
             <select class="select" id="mr-mc">
               <option value="">любая</option>
-              ${(meta ? [meta.mc_version] : []).concat([]).map((v) => `<option value="${esc(v)}" selected>${esc(v)}</option>`).join("")}
+              ${mcOptions.map((value) => `<option value="${esc(value)}" ${cfg.mc === value ? "selected" : ""}>${esc(value)}</option>`).join("")}
             </select>
           </div>
           <div class="field">
             <label>Загрузчик</label>
             <select class="select" id="mr-loader">
               <option value="">любой</option>
-              ${Object.entries(LOADER_NAMES).map(([value, label]) => `<option value="${value}" ${meta && meta.loader && meta.loader.type === value ? "selected" : ""}>${label}</option>`).join("")}
+              ${Object.entries(LOADER_NAMES).map(([value, label]) => `<option value="${value}" ${cfg.loader === value ? "selected" : ""}>${label}</option>`).join("")}
             </select>
           </div>
           <button class="btn" id="mr-search" style="align-self:flex-end">Найти</button>
+          <div class="mr-view" style="align-self:flex-end" title="Вид списка">
+            <button class="${view === "list" ? "is-active" : ""}" data-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
+            <button class="${view === "grid" ? "is-active" : ""}" data-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
+          </div>
         </div>
-        <div class="modrinth-results" id="mr-results">
-          ${cfg.loading
-            ? `<div class="empty-state">Ищем…</div>`
-            : cfg.error
-              ? `<div class="empty-state" style="display:flex;flex-direction:column;align-items:center;gap:10px">
-                   <div style="max-width:640px;text-align:left;white-space:pre-wrap;font-size:12px;color:var(--red)">${esc(cfg.error)}</div>
-                   <button class="btn" id="mr-retry">Повторить</button>
-                 </div>`
-              : cfg.results.length
-                ? cfg.results.map(cardHtml).join("")
-                : `<div class="empty-state">Введи запрос и нажми «Найти»</div>`}
+        <div class="modrinth-results ${view === "grid" ? "is-grid" : ""}" id="mr-results">
+          ${resultsHtml()}
         </div>
       </div>`;
 
-    $("#mr-search").addEventListener("click", runSearch);
+    $("#mr-search").addEventListener("click", () => runSearch());
     $("#mr-query").addEventListener("keydown", (event) => { if (event.key === "Enter") runSearch(); });
     $("#mr-type").addEventListener("change", (event) => { state.modrinth.type = event.target.value; runSearch(); });
+    $("#mr-mc").addEventListener("change", (event) => { state.modrinth.mc = event.target.value; runSearch(); });
+    $("#mr-loader").addEventListener("change", (event) => { state.modrinth.loader = event.target.value; runSearch(); });
+    $$("#tab-body [data-view]").forEach((btn) => btn.addEventListener("click", () => {
+      state.modrinth.view = btn.dataset.view;
+      renderModrinth();
+    }));
+    bindResultEvents();
     const retry = $("#mr-retry");
     if (retry) retry.addEventListener("click", () => runSearch());
-    $$("[data-install]").forEach((btn) => btn.addEventListener("click", () => installFromModrinth(btn.dataset.install, btn.dataset.kind)));
-    $$("[data-open-page]").forEach((btn) => btn.addEventListener("click", () => {
-      const type = state.modrinth.type || "mod";
-      const url = type === "modpack" ? `https://modrinth.com/modpack/${btn.dataset.openPage}` : `https://modrinth.com/${type}/${btn.dataset.openPage}`;
-      api.openUrl(url).catch((error) => toast(String(error), "err"));
-    }));
+    watchMore();
     if (!cfg.tried && !cfg.loading && !cfg.error) runSearch();
+  }
+
+  function resultsHtml() {
+    const cfg = state.modrinth;
+    if (cfg.loading && !cfg.results.length) return `<div class="empty-state">Ищем…</div>`;
+    if (cfg.error) {
+      return `<div class="empty-state" style="display:flex;flex-direction:column;align-items:center;gap:10px">
+        <div style="max-width:640px;text-align:left;white-space:pre-wrap;font-size:12px;color:var(--red)">${esc(cfg.error)}</div>
+        <button class="btn" id="mr-retry">Повторить</button>
+      </div>`;
+    }
+    if (!cfg.results.length) return `<div class="empty-state">Введи запрос и нажми «Найти»</div>`;
+    return `${cfg.results.map(cardHtml).join("")}<div class="mr-sentinel" id="mr-sentinel">${sentinelText()}</div>`;
+  }
+
+  function sentinelText() {
+    const cfg = state.modrinth;
+    if (cfg.loadingMore) return `<span class="mr-more-spinner"></span>Загружаем ещё…`;
+    if (cfg.results.length >= cfg.total) return `Показано всё: ${cfg.results.length}`;
+    return `Прокрути вниз — ещё ${Math.max(0, cfg.total - cfg.results.length)}`;
+  }
+
+  /** Догрузка следующей страницы при прокрутке до конца. */
+  function watchMore() {
+    if (mrObserver) { mrObserver.disconnect(); mrObserver = null; }
+    const sentinel = $("#mr-sentinel");
+    if (!sentinel) return;
+    mrObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadMore();
+    }, { rootMargin: "200px" });
+    mrObserver.observe(sentinel);
+  }
+
+  async function loadMore() {
+    const cfg = state.modrinth;
+    if (cfg.loading || cfg.loadingMore || cfg.error) return;
+    if (!cfg.results.length || cfg.results.length >= cfg.total) return;
+    cfg.loadingMore = true;
+    updateSentinel();
+    try {
+      const hits = await api.search(searchQuery(cfg.results.length));
+      const known = new Set(cfg.results.map((hit) => hit.project_id));
+      cfg.results = cfg.results.concat((hits.hits || []).filter((hit) => !known.has(hit.project_id)));
+      cfg.total = hits.total_hits || cfg.total;
+      // сервер может отдать пустую страницу в конце — считаем, что всё
+      if (!(hits.hits || []).length) cfg.results.length = cfg.results.length;
+      const container = $("#mr-results");
+      if (container) {
+        const sentinel = $("#mr-sentinel");
+        const html = (hits.hits || []).filter((hit) => !known.has(hit.project_id)).map(cardHtml).join("");
+        if (sentinel) sentinel.insertAdjacentHTML("beforebegin", html);
+        else container.insertAdjacentHTML("beforeend", html);
+        bindResultEvents();
+      }
+    } catch (err) {
+      cfg.error = String(err);
+      renderModrinth();
+      return;
+    }
+    cfg.loadingMore = false;
+    updateSentinel();
+  }
+
+  function updateSentinel() {
+    const sentinel = $("#mr-sentinel");
+    if (sentinel) sentinel.innerHTML = sentinelText();
+    const cfg = state.modrinth;
+    if (sentinel && !cfg.loadingMore && cfg.results.length >= cfg.total) {
+      if (mrObserver) { mrObserver.disconnect(); mrObserver = null; }
+    }
+  }
+
+  function searchQuery(offset) {
+    const cfg = state.modrinth;
+    const meta = selected();
+    return {
+      query: cfg.query,
+      projectType: cfg.type,
+      mcVersion: cfg.mc || (meta ? meta.mc_version : null),
+      loader: cfg.loader || (meta && meta.loader ? meta.loader.type : null),
+      offset: offset || 0,
+      limit: MR_PAGE
+    };
+  }
+
+  function bindResultEvents() {
+    $$("[data-install]").forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", () => installFromModrinth(btn.dataset.install, btn.dataset.kind));
+    });
+    $$("[data-versions]").forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", () => openVersions(btn.dataset.versions, btn.dataset.kind, btn.dataset.title));
+    });
+    $$("[data-open-page]").forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", () => {
+        const type = state.modrinth.type || "mod";
+        const url = type === "modpack" ? `https://modrinth.com/modpack/${btn.dataset.openPage}` : `https://modrinth.com/${type}/${btn.dataset.openPage}`;
+        api.openUrl(url).catch((error) => toast(String(error), "err"));
+      });
+    });
   }
 
   function cardHtml(hit) {
@@ -991,33 +1151,99 @@
         </div>
         <div class="card-actions">
           <button class="btn btn-primary" data-install="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}">
-            ${isPack ? "Установить сборку" : "Установить"}
+            ${isPack ? "Установить" : "Установить"}
           </button>
+          <button class="btn btn-ghost" data-versions="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}" data-title="${esc(hit.title)}">Версии</button>
           <button class="btn btn-ghost" data-open-page="${esc(hit.slug || hit.project_id)}">Страница</button>
         </div>
       </div>
     </div>`;
   }
 
-  async function runSearch() {
-    state.modrinth.query = $("#mr-query") ? $("#mr-query").value : "";
-    state.modrinth.loading = true;
-    state.modrinth.tried = true;
-    state.modrinth.error = null;
-    renderModrinth();
+  /* ---------- выбор версии мода / модпака ---------- */
+  async function openVersions(projectId, kind, title) {
+    const modal = $("#modal-versions");
+    if (!modal) return;
+    modal.hidden = false;
+    $("#ver-title").textContent = `${title || "Версии"} — выбор версии`;
+    $("#ver-body").innerHTML = `<div class="empty-state">Загружаем версии…</div>`;
     const meta = selected();
+    const mc = kind === "pack" ? null : (state.modrinth.mc || (meta ? meta.mc_version : null));
+    const loader = kind === "pack" ? null : (state.modrinth.loader || (meta && meta.loader ? meta.loader.type : null));
+    let versions = [];
     try {
-      const result = await api.search({
-        query: state.modrinth.query,
-        projectType: state.modrinth.type,
-        mcVersion: meta && state.modrinth.type !== "modpack" ? meta.mc_version : null,
-        loader: meta && meta.loader ? meta.loader.type : null,
-        offset: 0
-      });
+      versions = await api.modrinthVersions(projectId, mc, loader);
+    } catch (err) {
+      $("#ver-body").innerHTML = `<div class="empty-state" style="color:var(--red)">${esc(String(err))}</div>`;
+      return;
+    }
+    if (!versions.length) {
+      $("#ver-body").innerHTML = `<div class="empty-state">Подходящих версий нет${mc ? ` (MC ${esc(mc)}${loader ? `, ${esc(loader)}` : ""})` : ""}. Попробуй снять фильтры.</div>`;
+      return;
+    }
+    $("#ver-body").innerHTML = `
+      <div class="settings-note" style="margin-top:0">${kind === "pack" ? "Версия модпака создаст новую сборку." : "Версия будет установлена в текущую сборку."}</div>
+      <div class="ver-list">
+        ${versions.slice(0, 60).map((version) => `
+          <div class="ver-row">
+            <div class="ver-main">
+              <div class="ver-name">${esc(version.name || version.version_number)}</div>
+              <div class="ver-meta">
+                <span class="tag">${esc(version.version_number)}</span>
+                ${(version.game_versions || []).slice(0, 3).map((gv) => `<span class="tag">${esc(gv)}</span>`).join("")}
+                ${(version.loaders || []).slice(0, 2).map((ld) => `<span class="tag">${esc(ld)}</span>`).join("")}
+              </div>
+            </div>
+            <span class="ver-date">${(version.date_published || "").slice(0, 10)}</span>
+            <button class="btn btn-primary" data-install-version="${esc(version.id)}" data-kind="${kind}">Установить</button>
+          </div>`).join("")}
+      </div>`;
+    $$("[data-install-version]").forEach((btn) => btn.addEventListener("click", () => installVersion(btn.dataset.installVersion, btn.dataset.kind, btn)));
+  }
+
+  async function installVersion(versionId, kind, btn) {
+    const modal = $("#modal-versions");
+    if (btn) { btn.disabled = true; btn.textContent = "Ставим…"; }
+    try {
+      if (kind === "pack") {
+        const meta = await api.installModpack(versionId);
+        await refreshInstances();
+        selectInstance(meta.id);
+        toast(`Сборка «${meta.name}» установлена`, "ok");
+      } else {
+        const meta = selected();
+        if (!meta) { toast("Сначала выбери сборку", "err"); return; }
+        const outcome = await api.installModVersion(meta.id, versionId);
+        toast(outcome.installed.length ? `Установлено: ${outcome.installed.join(", ")}` : "Уже установлено", "ok");
+        if (state.tab === "modrinth") renderModrinth();
+      }
+      if (modal) modal.hidden = true;
+    } catch (err) {
+      toast(String(err), "err");
+      if (btn) { btn.disabled = false; btn.textContent = "Установить"; }
+    }
+  }
+
+  async function runSearch() {
+    if ($("#mr-query")) state.modrinth.query = $("#mr-query").value;
+    if ($("#mr-mc")) state.modrinth.mc = $("#mr-mc").value;
+    if ($("#mr-loader")) state.modrinth.loader = $("#mr-loader").value;
+    const cfg = state.modrinth;
+    cfg.loading = true;
+    cfg.loadingMore = false;
+    cfg.tried = true;
+    cfg.error = null;
+    cfg.results = [];
+    cfg.total = 0;
+    renderModrinth();
+    try {
+      const result = await api.search(searchQuery(0));
       state.modrinth.results = result.hits || [];
+      state.modrinth.total = result.total_hits || state.modrinth.results.length;
       state.modrinth.error = null;
     } catch (err) {
       state.modrinth.results = [];
+      state.modrinth.total = 0;
       state.modrinth.error = String(err);
     }
     state.modrinth.loading = false;
@@ -1046,309 +1272,667 @@
     } catch (err) { toast(String(err), "err"); }
   }
 
-  /* ---------- настройки ---------- */
-  async function renderSettings() {
+  /* ==================== АККАУНТЫ ==================== */
+  const kindLabel = (kind) => (kind === "microsoft" ? "лицензия" : "пиратка");
+  const kindClass = (kind) => (kind === "microsoft" ? "tag green" : "tag");
+
+  function activeAccount() {
+    const list = (state.accounts && state.accounts.accounts) || [];
+    const activeId = state.accounts && state.accounts.active;
+    return list.find((item) => item.uuid === activeId) || list[0] || null;
+  }
+
+  function renderAccounts() {
+    const list = $("#account-list");
+    if (!list) return;
+    const accounts = (state.accounts && state.accounts.accounts) || [];
+    const activeId = (state.accounts && state.accounts.active) || (accounts[0] && accounts[0].uuid);
+    if (!accounts.length) {
+      list.innerHTML = `<div class="account-empty">Аккаунтов нет — добавь первый</div>`;
+      return;
+    }
+    list.innerHTML = accounts.map((account) => `
+      <div class="account-row ${account.uuid === activeId ? "is-active" : ""}" data-uuid="${esc(account.uuid)}">
+        <span class="account-ava">${esc((account.username || "?").charAt(0).toUpperCase())}</span>
+        <span class="account-body">
+          <span class="account-name">${esc(account.username)}</span>
+          <span class="${kindClass(account.kind)}">${kindLabel(account.kind)}</span>
+        </span>
+        ${account.uuid === activeId ? '<span class="account-dot" title="Активный"></span>' : ""}
+      </div>`).join("");
+    $$(".account-row", list).forEach((row) => row.addEventListener("click", async () => {
+      try {
+        state.accounts = await api.accountSetActive(row.dataset.uuid);
+        renderAccounts();
+        toast("Аккаунт переключён", "ok");
+      } catch (err) { toast(String(err), "err"); }
+    }));
+  }
+
+  async function loadAccounts() {
+    try {
+      state.accounts = await api.accounts();
+    } catch (err) {
+      state.accounts = { accounts: [], active: null };
+    }
+    renderAccounts();
+  }
+
+  /* отдельное окно аккаунтов: выбор «лицензия / пиратка» */
+  function openAccounts() {
+    const modal = $("#modal-account");
+    if (!modal) return;
+    modal.hidden = false;
+    renderAccountModal("choose");
+  }
+
+  function renderAccountModal(mode, extra = {}) {
+    const body = $("#acc-body");
+    if (!body) return;
+    const accounts = (state.accounts && state.accounts.accounts) || [];
+    const list = accounts.length ? `
+      <div class="account-list" style="margin-bottom:12px">
+        ${accounts.map((account) => `
+          <div class="account-row ${account.uuid === ((state.accounts && state.accounts.active) || "") ? "is-active" : ""}" data-pick="${esc(account.uuid)}">
+            <span class="account-ava">${esc((account.username || "?").charAt(0).toUpperCase())}</span>
+            <span class="account-body">
+              <span class="account-name">${esc(account.username)}</span>
+              <span class="${kindClass(account.kind)}">${kindLabel(account.kind)}</span>
+            </span>
+            ${account.uuid === ((state.accounts && state.accounts.active) || "") ? '<span class="account-dot" title="Активный"></span>' : ""}
+            <button class="icon-btn" data-del="${esc(account.uuid)}" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
+          </div>`).join("")}
+      </div>` : "";
+
+    if (mode === "choose") {
+      body.innerHTML = `
+        ${list}
+        <div class="choice-grid">
+          <button class="choice" data-mode="microsoft">
+            <span class="choice-title">Лицензия</span>
+            <span class="choice-sub">вход через Microsoft, серверы с online-mode, свой скин</span>
+          </button>
+          <button class="choice" data-mode="offline">
+            <span class="choice-title">Пиратка</span>
+            <span class="choice-sub">просто ник, без интернета и пароля</span>
+          </button>
+        </div>`;
+      $$("[data-mode]", body).forEach((btn) => btn.addEventListener("click", () => renderAccountModal(btn.dataset.mode)));
+    }
+
+    if (mode === "offline") {
+      body.innerHTML = `
+        <div class="field" style="max-width:320px">
+          <label>Ник в игре (3–16 символов, латиница, цифры, «_»)</label>
+          <input class="input" id="acc-username" placeholder="Steve" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="settings-note">Лицензия не нужна: UUID считается из ника, как в самой игре.</div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" data-back>Назад</button>
+          <button class="btn btn-primary" id="acc-add-offline">Добавить</button>
+        </div>`;
+      const input = $("#acc-username");
+      input.focus();
+      $("#acc-add-offline").addEventListener("click", async () => {
+        try {
+          state.accounts = await api.accountAddOffline(input.value.trim());
+          renderAccounts();
+          toast("Офлайн-аккаунт добавлен", "ok");
+          $("#modal-account").hidden = true;
+        } catch (err) { toast(String(err), "err"); }
+      });
+      input.addEventListener("keydown", (event) => { if (event.key === "Enter") $("#acc-add-offline").click(); });
+      $$("[data-back]", body).forEach((btn) => btn.addEventListener("click", () => renderAccountModal("choose")));
+    }
+
+    if (mode === "microsoft") {
+      body.innerHTML = `
+        <div class="field" style="max-width:320px">
+          <label>Код для входа</label>
+          <div class="device-code" id="acc-code">получаем код…</div>
+        </div>
+        <div class="settings-note" id="acc-status">
+          Открой <b>microsoft.com/link</b> на телефоне или в браузере и введи код.
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" data-back>Назад</button>
+          <button class="btn" id="acc-open-link">Открыть microsoft.com/link</button>
+        </div>`;
+      $$("[data-back]", body).forEach((btn) => btn.addEventListener("click", () => renderAccountModal("choose")));
+      $("#acc-open-link").addEventListener("click", () => {
+        const link = extra.verification || "https://www.microsoft.com/link";
+        api.openUrl(link).catch(() => {});
+      });
+      startMicrosoftLogin();
+    }
+
+    $$("[data-pick]", body).forEach((row) => row.addEventListener("click", async (event) => {
+      if (event.target.closest("[data-del]")) return;
+      try {
+        state.accounts = await api.accountSetActive(row.dataset.pick);
+        renderAccounts();
+        renderAccountModal("choose");
+      } catch (err) { toast(String(err), "err"); }
+    }));
+    $$("[data-del]", body).forEach((btn) => btn.addEventListener("click", async () => {
+      try {
+        state.accounts = await api.accountRemove(btn.dataset.del);
+        renderAccounts();
+        renderAccountModal("choose");
+      } catch (err) { toast(String(err), "err"); }
+    }));
+  }
+
+  /** Device-code вход: показываем код и опрашиваем Microsoft, пока не подтвердят. */
+  async function startMicrosoftLogin() {
+    const codeBox = $("#acc-code");
+    const status = $("#acc-status");
+    const setStatus = (text, kind = "") => {
+      if (!status) return;
+      status.innerHTML = text;
+      status.className = `settings-note${kind ? ` ${kind}` : ""}`;
+    };
+    let flow;
+    try {
+      flow = await api.msStart();
+    } catch (err) {
+      if (codeBox) codeBox.textContent = "—";
+      setStatus(`Microsoft недоступен: ${esc(String(err))}`, "warn");
+      return;
+    }
+    if (codeBox) codeBox.textContent = flow.user_code;
+    setStatus("Ждём подтверждения… Открой <b>microsoft.com/link</b> и введи код выше.");
+    const link = $("#acc-open-link");
+    if (link) link.dataset.uri = flow.verification_uri;
+
+    const deadline = Date.now() + (flow.expires_in || 900) * 1000;
+    const interval = Math.max(3, flow.interval || 5) * 1000;
+
+    const tick = async () => {
+      if ($("#modal-account") && $("#modal-account").hidden) return;
+      if (Date.now() > deadline) {
+        setStatus("Код истёк — начни вход заново.", "warn");
+        return;
+      }
+      try {
+        const result = await api.msPoll(flow.device_code);
+        if (result) {
+          state.accounts = result;
+          renderAccounts();
+          toast("Вход выполнен — аккаунт лицензии добавлен", "ok");
+          $("#modal-account").hidden = true;
+          return;
+        }
+        setStatus("Ждём подтверждения… Открой <b>microsoft.com/link</b> и введи код выше.");
+      } catch (err) {
+        setStatus(`Не получилось: ${esc(String(err))}`, "warn");
+        return;
+      }
+      setTimeout(tick, interval);
+    };
+    setTimeout(tick, interval);
+  }
+
+  /* ==================== НАСТРОЙКИ ЛАУНЧЕРА (по категориям) ==================== */
+  const PREFS = [
+    { id: "look", label: "Оформление" },
+    { id: "wall", label: "Обои" },
+    { id: "fx", label: "Эффекты" },
+    { id: "game", label: "Игра и Java" },
+    { id: "net", label: "Сеть" },
+    { id: "updates", label: "Обновления" },
+    { id: "about", label: "О лаунчере" }
+  ];
+  let prefsCategory = "look";
+
+  function openPrefs(category) {
+    const modal = $("#modal-prefs");
+    if (!modal) return;
+    if (category) prefsCategory = category;
     const settings = state.settings || {};
-    const meta = selected();
     state.wall = {
       wallpaper: settings.wallpaper || null,
       fit: settings.wallpaper_fit || "cover",
       blur: Number(settings.wallpaper_blur ?? 0),
-      dim: Number(settings.wallpaper_dim ?? 40)
+      dim: Number(settings.wallpaper_dim ?? 40),
+      // история: сохранённая + то, что выбрали в этом сеансе
+      recent: Array.isArray(settings.wallpaper_recent) ? settings.wallpaper_recent.slice(0, 6) : []
     };
-    const javas = await api.javas().catch(() => []);
-    const info = await api.appInfo().catch(() => ({ home: "", version: "" }));
-    $("#tab-body").innerHTML = `
-      <div class="settings-wrap">
-        <div class="settings-grid">
-          <div class="panel">
-            <div class="panel-head"><strong>Аккаунт</strong><span class="badge">офлайн</span></div>
-            <div style="padding:14px">
-              <div class="field" style="max-width:320px">
-                <label>Ник в игре (3–16 символов, латиница)</label>
-                <input class="input" id="set-username" value="${esc(settings.username || "")}" spellcheck="false">
-              </div>
-              <div class="hint" style="margin-top:8px;color:var(--muted);font-size:11px">
-                Лицензия не нужна. UUID считается из ника — скины через сторонние сервисы работают,
-                вход на серверы с online-mode нет.
-              </div>
-            </div>
-          </div>
+    modal.hidden = false;
+    renderPrefs();
+  }
 
-          <div class="panel">
-            <div class="panel-head">
-              <strong>Оформление</strong>
-              <span class="badge" id="theme-badge">${esc((THEMES[state.theme] || THEMES.dark).label)}</span>
-              <div class="spacer"></div>
-              <span class="muted" style="font-size:11px">как в OmniPanel</span>
-            </div>
-            <div style="padding:14px;display:grid;gap:14px">
-              <div class="theme-grid" id="theme-grid">
-                ${Object.entries(THEMES).map(([id, theme]) => `
-                  <button class="theme-chip ${state.theme === id ? "is-active" : ""}" data-theme-id="${id}" title="${esc(theme.label)}">
-                    <span class="theme-swatch" style="background:${theme.bg};border-color:${theme.panel}">
-                      <span style="position:absolute;left:3px;top:3px;width:12px;height:12px;border-radius:4px;background:${theme.accent}"></span>
-                    </span>
-                    <span class="theme-name">${esc(theme.label)}</span>
-                  </button>`).join("")}
-              </div>
-              <div class="settings-row">
-                <div class="label">Эффект от клика</div>
-                <div class="chips" id="fx-chips">
-                  ${Object.entries(FX_STYLES).map(([id, label]) => `<button class="chip ${state.fx === id ? "is-active" : ""}" data-fx="${id}">${label}</button>`).join("")}
-                </div>
-              </div>
-              <div class="settings-row">
-                <div class="label">Обои</div>
-                <div>
-                  <div class="wall-grid" id="wall-grid">
-                    <button class="wall-chip none ${!state.wall.wallpaper ? "is-active" : ""}" data-wall="">нет</button>
-                    ${WALLS.map(([id, label]) => `
-                      <button class="wall-chip ${state.wall.wallpaper === id ? "is-active" : ""}" data-wall="${id}" style="background-image:url('${wallUrl(id)}')" title="${esc(label)}"><span>${esc(label)}</span></button>`).join("")}
-                  </div>
-                  <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:10px">
-                    <div class="field">
-                      <label>Как показывать</label>
-                      <select class="select" id="wall-fit">
-                        ${[["cover", "Заполнить"], ["contain", "Вписать"], ["fill", "Растянуть"], ["tile", "Плиткой"]]
-                          .map(([value, label]) => `<option value="${value}" ${state.wall.fit === value ? "selected" : ""}>${label}</option>`).join("")}
-                      </select>
-                    </div>
-                    <div class="field" style="flex:1;min-width:170px">
-                      <label>Размытие</label>
-                      <div class="range"><input type="range" id="wall-blur" min="0" max="20" value="${state.wall.blur}"><span class="tag" id="wall-blur-value">${state.wall.blur}</span></div>
-                    </div>
-                    <div class="field" style="flex:1;min-width:170px">
-                      <label>Затемнение</label>
-                      <div class="range"><input type="range" id="wall-dim" min="0" max="80" value="${state.wall.dim}"><span class="tag" id="wall-dim-value">${state.wall.dim}%</span></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+  function renderPrefs() {
+    const nav = $("#prefs-nav");
+    const body = $("#prefs-body");
+    if (!nav || !body) return;
+    nav.innerHTML = PREFS.map((item) => `
+      <button class="prefs-tab ${item.id === prefsCategory ? "is-active" : ""}" data-pref="${item.id}">${item.label}</button>`).join("");
+    $$(".prefs-tab", nav).forEach((tab) => tab.addEventListener("click", () => {
+      prefsCategory = tab.dataset.pref;
+      renderPrefs();
+    }));
 
-          <div class="panel">
-            <div class="panel-head"><strong>Java и память</strong></div>
-            <div style="padding:14px;display:grid;gap:14px">
-              <div class="settings-row">
-                <div class="label">Память, МБ</div>
-                <div>
-                  <div class="range">
-                    <input type="range" id="set-memory" min="1024" max="16384" step="512" value="${settings.memory_mb || 4096}">
-                    <span class="tag" id="set-memory-value">${settings.memory_mb || 4096} МБ</span>
-                  </div>
-                </div>
-              </div>
-              <div class="settings-row">
-                <div class="label">Путь к Java</div>
-                <div>
-                  <input class="input" style="width:100%" id="set-java" placeholder="автоматически (рекомендуется)" value="${esc(settings.java_path || "")}" spellcheck="false">
-                  <div class="hint">Найдено: ${javas.length ? javas.map((j) => `Java ${j.major}`).join(", ") : "нет — лаунчер скачает рантайм Mojang"}</div>
-                </div>
-              </div>
-              <div class="settings-row">
-                <div class="label">JVM-аргументы</div>
-                <div><input class="input" style="width:100%" id="set-jvm" value="${esc(settings.jvm_args || "")}" spellcheck="false"></div>
-              </div>
-              <div class="settings-row">
-                <div class="label">Автоскачивание Java</div>
-                <div><div class="switch-row"><button class="switch ${settings.auto_java ? "on" : ""}" id="set-auto-java"></button><span class="muted">если подходящей Java нет</span></div></div>
-              </div>
-            </div>
-          </div>
+    const settings = state.settings || {};
+    if (prefsCategory === "look") body.innerHTML = prefsLook(settings);
+    if (prefsCategory === "wall") body.innerHTML = prefsWall(settings);
+    if (prefsCategory === "fx") body.innerHTML = prefsFx();
+    if (prefsCategory === "game") body.innerHTML = prefsGame(settings);
+    if (prefsCategory === "net") body.innerHTML = prefsNet(settings);
+    if (prefsCategory === "updates") body.innerHTML = prefsUpdates(settings);
+    if (prefsCategory === "about") body.innerHTML = prefsAbout();
+    bindPrefs();
+  }
 
-          ${meta ? `<div class="panel">
-            <div class="panel-head"><strong>Сборка «${esc(meta.name)}»</strong><span class="badge">MC ${esc(meta.mc_version)}</span></div>
-            <div style="padding:14px;display:grid;gap:14px">
-              <div class="settings-row">
-                <div class="label">Память этой сборки, МБ</div>
-                <div><input class="input" id="set-inst-memory" type="number" min="512" step="256" style="width:160px" placeholder="как в общих" value="${meta.memory_mb ?? ""}"></div>
-              </div>
-              <div class="settings-row">
-                <div class="label">Иконка сборки</div>
-                <div class="icon-grid" id="inst-icons">
-                  <button class="icon-chip letter ${!meta.icon ? "is-active" : ""}" data-icon="" title="Первая буква">${esc(String(meta.name).trim().charAt(0).toUpperCase())}</button>
-                  ${INSTANCE_ICONS.map((icon) => `<button class="icon-chip ${meta.icon === icon ? "is-active" : ""}" data-icon="${icon}" title="${icon.replace("i-", "")}"><svg class="ic"><use href="#${icon}"/></svg></button>`).join("")}
-                </div>
-              </div>
-              <div class="settings-row">
-                <div class="label">Загрузчик</div>
-                <div class="muted" style="padding-top:7px">${esc(loaderLabel(meta.loader))} · профиль <span class="kbd">${esc(versionId(meta))}</span></div>
-              </div>
-              <div class="settings-actions">
-                <button class="btn" id="inst-folder">Открыть папку сборки</button>
-                <button class="btn btn-danger" id="inst-delete">Удалить сборку</button>
-              </div>
-            </div>
+  function prefsLook(settings) {
+    return `
+      <div class="prefs-section">
+        <div class="prefs-label">Тема</div>
+        <div class="theme-grid" id="theme-grid">
+          ${Object.entries(THEMES).map(([id, theme]) => `
+            <button class="theme-chip ${state.theme === id ? "is-active" : ""}" data-theme-id="${id}" title="${esc(theme.label)}">
+              <span class="theme-swatch" style="background:${theme.bg};border-color:${theme.panel}">
+                <span style="position:absolute;left:3px;top:3px;width:12px;height:12px;border-radius:4px;background:${theme.accent}"></span>
+              </span>
+              <span class="theme-name">${esc(theme.label)}</span>
+            </button>`).join("")}
+        </div>
+      </div>`;
+  }
+
+  function wallGridHtml(ids) {
+    return ids.map((id) => {
+      const label = (WALLS.find(([wall]) => wall === id) || [id, id])[1];
+      return `<button class="wall-chip ${state.wall.wallpaper === id ? "is-active" : ""}" data-wall="${id}" style="background-image:url('${wallUrl(id)}')" title="${esc(label)}"><span>${esc(label)}</span></button>`;
+    }).join("");
+  }
+
+  function prefsWall(settings) {
+    const recent = ((state.wall.recent && state.wall.recent.length) ? state.wall.recent : (settings.wallpaper_recent || []))
+      .filter((id) => WALLS.some(([wall]) => wall === id))
+      .slice(0, 6);
+    const groups = [
+      { label: "Градиенты", ids: ["aurora", "waves", "blobs"] },
+      { label: "Текстуры", ids: ["grid", "dots", "noise", "stripes"] },
+      { label: "Природа", ids: ["mountains"] }
+    ];
+    return `
+      <div class="prefs-section">
+        <div class="prefs-label-row">
+          <span class="prefs-label">Обои</span>
+          <div class="spacer"></div>
+          <button class="wall-none ${!state.wall.wallpaper ? "is-active" : ""}" data-wall="">Убрать фон</button>
+        </div>
+        ${groups.map((group) => `
+          <div class="wall-group">
+            <div class="wall-group-name">${esc(group.label)}</div>
+            <div class="wall-grid">${wallGridHtml(group.ids)}</div>
+          </div>`).join("")}
+        ${recent.length ? `
+          <div class="wall-group">
+            <div class="wall-group-name">Недавние</div>
+            <div class="wall-grid">${wallGridHtml(recent)}</div>
           </div>` : ""}
+      </div>
+      <div class="prefs-section">
+        <div class="prefs-label">Как показывать</div>
+        <div class="prefs-inline">
+          <div class="field">
+            <label>Заполнение</label>
+            <select class="select" id="wall-fit">
+              ${[["cover", "Заполнить"], ["contain", "Вписать"], ["fill", "Растянуть"], ["tile", "Плиткой"]]
+                .map(([value, label]) => `<option value="${value}" ${state.wall.fit === value ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field" style="flex:1;min-width:170px">
+            <label>Размытие</label>
+            <div class="range"><input type="range" id="wall-blur" min="0" max="20" value="${state.wall.blur}"><span class="tag" id="wall-blur-value">${state.wall.blur}</span></div>
+          </div>
+          <div class="field" style="flex:1;min-width:170px">
+            <label>Затемнение</label>
+            <div class="range"><input type="range" id="wall-dim" min="0" max="80" value="${state.wall.dim}"><span class="tag" id="wall-dim-value">${state.wall.dim}%</span></div>
+          </div>
+        </div>
+        <div class="settings-note" style="margin-bottom:0">
+          История обоев хранится в настройках: последние шесть выбранных всегда под рукой.
+        </div>
+      </div>`;
+  }
 
-          <div class="panel">
-            <div class="panel-head"><strong>Сеть и прокси</strong><span class="spacer"></span><span class="muted" style="font-size:11px">Modrinth · Mojang</span></div>
-            <div style="padding:14px;display:grid;gap:14px">
-              <div class="settings-row">
-                <div class="label">Прокси</div>
-                <div>
-                  <input class="input" style="width:100%" id="set-proxy" placeholder="http://127.0.0.1:8080 или socks5://…" value="${esc(settings.proxy || "")}" spellcheck="false">
-                  <div class="hint">Применяется после перезапуска лаунчера. Пусто — подключаться напрямую.</div>
-                </div>
-              </div>
-              <div class="settings-actions">
-                <button class="btn" id="net-check">Проверить связь с Modrinth</button>
-                <span class="muted" id="net-check-result" style="font-size:11px;align-self:center;max-width:520px"></span>
-              </div>
+  function prefsFx() {
+    return `
+      <div class="prefs-section">
+        <div class="prefs-label">Эффект от клика</div>
+        <div class="chips" id="fx-chips">
+          ${Object.entries(FX_STYLES).map(([id, label]) => `<button class="chip ${state.fx === id ? "is-active" : ""}" data-fx="${id}">${label}</button>`).join("")}
+        </div>
+      </div>`;
+  }
+
+  function prefsGame(settings) {
+    return `
+      <div class="prefs-section">
+        <div class="prefs-label">Память и Java</div>
+        <div class="prefs-rows">
+          <div class="settings-row">
+            <div class="label">Память по умолчанию, МБ</div>
+            <div class="range">
+              <input type="range" id="set-memory" min="1024" max="16384" step="512" value="${settings.memory_mb || 4096}">
+              <span class="tag" id="set-memory-value">${settings.memory_mb || 4096} МБ</span>
             </div>
           </div>
-
-          <div class="panel">
-            <div class="panel-head">
-              <strong>Обновления</strong>
-              <span class="badge">v${esc(state.update.version)}</span>
-              <div class="spacer"></div>
-              <button class="btn btn-small" id="upd-check-now">Проверить сейчас</button>
-            </div>
-            <div style="padding:14px;display:grid;gap:14px">
-              <div class="settings-row">
-                <div class="label">Репозиторий обновлений</div>
-                <div>
-                  <input class="input" style="width:100%" id="set-upd-repo" placeholder="владелец/репозиторий" value="${esc(settings.update_repo || "")}" spellcheck="false">
-                  <div class="settings-note">Релизы берутся из GitHub Releases по тегу <span class="kbd">vX.Y.Z</span>. Публичный репозиторий токен не требует.</div>
-                </div>
-              </div>
-              <div class="settings-row">
-                <div class="label">Проверять при запуске</div>
-                <div>
-                  <div class="switch-row"><button class="switch ${settings.update_enabled ? "on" : ""}" id="set-upd-enabled"></button><span class="muted">тихая проверка, обновление — по кнопке</span></div>
-                  <div class="switch-row" style="margin-top:8px"><button class="switch ${settings.update_prerelease ? "on" : ""}" id="set-upd-pre"></button><span class="muted">учитывать бета-версии (prerelease)</span></div>
-                </div>
-              </div>
-              <div class="settings-row">
-                <div class="label">Токен GitHub</div>
-                <div>
-                  <input class="input" style="width:100%" id="set-upd-token" type="password" placeholder="не требуется для публичного репозитория" value="${esc(settings.update_token || "")}" spellcheck="false">
-                  <div class="settings-note warn">Нужен только для приватного репозитория. Не публикуй сборку с токеном внутри: его можно вытащить из файла.</div>
-                </div>
-              </div>
+          <div class="settings-row">
+            <div class="label">Путь к Java</div>
+            <div>
+              <input class="input" style="width:100%" id="set-java" placeholder="автоматически (рекомендуется)" value="${esc(settings.java_path || "")}" spellcheck="false">
+              <div class="hint" id="set-java-hint">ищем установленные Java…</div>
             </div>
           </div>
-
-          <div class="panel">
-            <div class="panel-head"><strong>Лаунчер</strong></div>
-            <div style="padding:14px;display:grid;gap:10px">
-              <div class="settings-row"><div class="label">Папка данных</div><div class="muted" style="padding-top:7px;word-break:break-all">${esc(info.home)} <span class="kbd">${esc(info.version)}</span></div></div>
-              <div class="settings-actions">
-                <button class="btn" id="set-open-data">Открыть папку данных</button>
-                <button class="btn btn-primary" id="set-save">Сохранить настройки</button>
-              </div>
-            </div>
+          <div class="settings-row">
+            <div class="label">JVM-аргументы</div>
+            <div><input class="input" style="width:100%" id="set-jvm" value="${esc(settings.jvm_args || "")}" spellcheck="false"></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Автоскачивание Java</div>
+            <div><div class="switch-row"><button class="switch ${settings.auto_java ? "on" : ""}" id="set-auto-java"></button><span class="muted">если подходящей Java нет</span></div></div>
           </div>
         </div>
       </div>`;
+  }
 
-    $("#set-memory").addEventListener("input", (event) => { $("#set-memory-value").textContent = `${event.target.value} МБ`; });
-    $("#set-auto-java").addEventListener("click", (event) => event.target.classList.toggle("on"));
-    $("#set-open-data").addEventListener("click", () => api.openPath("").catch(() => {}));
+  function prefsNet(settings) {
+    return `
+      <div class="prefs-section">
+        <div class="prefs-label">Прокси</div>
+        <div class="settings-row">
+          <div class="label">Адрес</div>
+          <div>
+            <input class="input" style="width:100%" id="set-proxy" placeholder="http://127.0.0.1:8080 или socks5://…" value="${esc(settings.proxy || "")}" spellcheck="false">
+            <div class="hint">Применяется после перезапуска лаунчера. Пусто — напрямую.</div>
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button class="btn" id="net-check">Проверить связь с Modrinth</button>
+          <span class="muted" id="net-check-result" style="font-size:11px;align-self:center;max-width:520px"></span>
+        </div>
+      </div>
+      <div class="prefs-section">
+        <div class="prefs-label">Вход через Microsoft</div>
+        <div class="settings-row">
+          <div class="label">Свой client id</div>
+          <div>
+            <input class="input" style="width:100%" id="set-ms-client" placeholder="00000000402b5328 (публичный ID лаунчера)" value="${esc(settings.ms_client_id || "")}" spellcheck="false">
+            <div class="hint">Оставь пустым — вход работает на публичном client id официального лаунчера. Свой ID требует одобрения Mojang.</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function prefsUpdates(settings) {
+    return `
+      <div class="prefs-section">
+        <div class="prefs-label">Откуда обновляться</div>
+        <div class="prefs-rows">
+          <div class="settings-row">
+            <div class="label">Репозиторий GitHub</div>
+            <div><input class="input" style="width:100%" id="set-upd-repo" value="${esc(settings.update_repo || "")}" placeholder="владелец/репозиторий" spellcheck="false"></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Токен (если репозиторий приватный)</div>
+            <div><input class="input" style="width:100%" id="set-upd-token" value="${esc(settings.update_token || "")}" placeholder="необязательно" spellcheck="false"></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Проверять при запуске</div>
+            <div><div class="switch-row"><button class="switch ${settings.update_enabled ? "on" : ""}" id="set-upd-enabled"></button><span class="muted">спрашивать GitHub о новом релизе</span></div></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Бета-версии</div>
+            <div><div class="switch-row"><button class="switch ${settings.update_prerelease ? "on" : ""}" id="set-upd-pre"></button><span class="muted">учитывать prerelease</span></div></div>
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button class="btn" id="upd-check-now">Проверить сейчас</button>
+        </div>
+      </div>`;
+  }
+
+  function prefsAbout() {
+    return `
+      <div class="prefs-section">
+        <div class="prefs-label">OmniSpec</div>
+        <div class="about-list" style="padding-left:0;margin:0;list-style:none">
+          <div>Версия: <span id="prefs-version" class="kbd">—</span></div>
+          <div style="margin-top:6px">Сборки, моды и модпаки с Modrinth, автоматическая Java, офлайн и лицензионные аккаунты.</div>
+          <div style="margin-top:6px"><button class="btn" id="prefs-open-data">Открыть папку данных</button></div>
+        </div>
+      </div>`;
+  }
+
+  /* обработчики для всех категорий сразу — их немного */
+  function bindPrefs() {
+    const settings = state.settings || {};
+
     $$("#theme-grid .theme-chip").forEach((chip) => chip.addEventListener("click", () => {
       state.theme = applyTheme(chip.dataset.themeId);
       $$("#theme-grid .theme-chip").forEach((el) => el.classList.toggle("is-active", el === chip));
-      const badge = $("#theme-badge");
-      if (badge) badge.textContent = (THEMES[state.theme] || THEMES.dark).label;
     }));
     $$("#fx-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
       state.fx = chip.dataset.fx;
       applyClickFx(state.fx);
       $$("#fx-chips .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
     }));
-    // ---------- обои ----------
-    const redrawWallChips = () => {
-      $$("#wall-grid .wall-chip").forEach((chip) => chip.classList.toggle("is-active", (chip.dataset.wall || null) === state.wall.wallpaper));
-    };
-    $$("#wall-grid .wall-chip").forEach((chip) => chip.addEventListener("click", () => {
-      state.wall.wallpaper = chip.dataset.wall || null;
-      redrawWallChips();
+
+    $$("#prefs-body [data-wall]").forEach((chip) => chip.addEventListener("click", () => {
+      const picked = chip.dataset.wall || null;
+      state.wall.wallpaper = picked;
+      state.wall.recent = rememberWallpaper(state.wall.recent, picked);
+      $$("#prefs-body [data-wall]").forEach((el) => el.classList.toggle("is-active", el === chip));
       applyWallpaper(state.wall);
+      renderPrefs();
     }));
-    $("#wall-fit").addEventListener("change", (event) => { state.wall.fit = event.target.value; applyWallpaper(state.wall); });
-    $("#wall-blur").addEventListener("input", (event) => {
+    const fit = $("#wall-fit");
+    if (fit) fit.addEventListener("change", (event) => { state.wall.fit = event.target.value; applyWallpaper(state.wall); });
+    const blur = $("#wall-blur");
+    if (blur) blur.addEventListener("input", (event) => {
       state.wall.blur = Number(event.target.value);
       $("#wall-blur-value").textContent = String(state.wall.blur);
       applyWallpaper(state.wall);
     });
-    $("#wall-dim").addEventListener("input", (event) => {
+    const dim = $("#wall-dim");
+    if (dim) dim.addEventListener("input", (event) => {
       state.wall.dim = Number(event.target.value);
       $("#wall-dim-value").textContent = `${state.wall.dim}%`;
       applyWallpaper(state.wall);
     });
 
-    // ---------- проверка связи ----------
-    $("#net-check").addEventListener("click", async () => {
+    const memory = $("#set-memory");
+    if (memory) memory.addEventListener("input", (event) => { $("#set-memory-value").textContent = `${event.target.value} МБ`; });
+    const autoJava = $("#set-auto-java");
+    if (autoJava) autoJava.addEventListener("click", () => autoJava.classList.toggle("on"));
+    const updEnabled = $("#set-upd-enabled");
+    if (updEnabled) updEnabled.addEventListener("click", () => updEnabled.classList.toggle("on"));
+    const updPre = $("#set-upd-pre");
+    if (updPre) updPre.addEventListener("click", () => updPre.classList.toggle("on"));
+
+    const netCheck = $("#net-check");
+    if (netCheck) netCheck.addEventListener("click", async () => {
       const box = $("#net-check-result");
       box.className = "muted";
       box.textContent = "Проверяем…";
-      try {
-        box.textContent = await api.netCheck();
-      } catch (err) {
-        box.textContent = String(err);
-        box.className = "settings-note warn";
-      }
+      try { box.textContent = await api.netCheck(); }
+      catch (err) { box.textContent = String(err); box.className = "settings-note warn"; }
     });
-
-    $("#set-upd-enabled").addEventListener("click", (event) => event.target.classList.toggle("on"));
-    $("#set-upd-pre").addEventListener("click", (event) => event.target.classList.toggle("on"));
-    $("#upd-check-now").addEventListener("click", async () => {
+    const checkNow = $("#upd-check-now");
+    if (checkNow) checkNow.addEventListener("click", async () => {
       const info = await checkUpdates(false);
-      if (info) $("#modal-update").hidden = false;
+      if (info) { $("#modal-prefs").hidden = true; $("#modal-update").hidden = false; }
     });
-    $("#set-save").addEventListener("click", async () => {
-      const next = {
-        ...settings,
-        username: $("#set-username").value.trim(),
-        memory_mb: Number($("#set-memory").value),
-        java_path: $("#set-java").value.trim() || null,
-        jvm_args: $("#set-jvm").value,
-        auto_java: $("#set-auto-java").classList.contains("on"),
-        update_repo: ($("#set-upd-repo").value || "").trim() || null,
-        update_enabled: $("#set-upd-enabled").classList.contains("on"),
-        update_prerelease: $("#set-upd-pre").classList.contains("on"),
-        update_token: ($("#set-upd-token").value || "").trim() || null,
-        theme: state.theme,
-        click_fx: state.fx,
-        proxy: ($("#set-proxy").value || "").trim() || null,
-        wallpaper: state.wall.wallpaper,
-        wallpaper_fit: state.wall.fit,
-        wallpaper_blur: state.wall.blur,
-        wallpaper_dim: state.wall.dim
-      };
-      try { await api.saveSettings(next); state.settings = next; toast("Настройки сохранены", "ok"); }
-      catch (err) { toast(String(err), "err"); }
-    });
-    if (meta) {
-      $("#inst-folder").addEventListener("click", () => api.openPath(`${meta.id}/minecraft`).catch(() => {}));
-      $("#inst-delete").addEventListener("click", async () => {
-        if (!confirm(`Удалить сборку «${meta.name}» вместе с модами и мирами?`)) return;
-        try {
-          await api.deleteInstance(meta.id);
-          state.selectedId = null;
-          await refreshInstances();
-          renderTab();
-          toast("Сборка удалена", "ok");
-        } catch (err) { toast(String(err), "err"); }
-      });
-      $$("#inst-icons .icon-chip").forEach((chip) => chip.addEventListener("click", async () => {
-        const icon = chip.dataset.icon || null;
-        $$("#inst-icons .icon-chip").forEach((el) => el.classList.toggle("is-active", el === chip));
-        try {
-          await api.updateInstance({ ...meta, icon });
-          await refreshInstances();
-          toast(icon ? "Иконка сборки обновлена" : "Иконка сброшена к букве", "ok");
-        } catch (err) { toast(String(err), "err"); }
-      }));
-      $("#set-inst-memory").addEventListener("change", async (event) => {
-        const value = event.target.value ? Number(event.target.value) : null;
-        await api.updateInstance({ ...meta, memory_mb: value }).catch((err) => toast(String(err), "err"));
-        await refreshInstances();
-      });
+    const openData = $("#prefs-open-data");
+    if (openData) openData.addEventListener("click", () => api.openPath("").catch(() => {}));
+    if ($("#prefs-version")) {
+      api.appInfo().then((info) => {
+        const box = $("#prefs-version");
+        if (box) box.textContent = info.version || "—";
+      }).catch(() => {});
     }
+    const javaHint = $("#set-java-hint");
+    if (javaHint) {
+      api.javas().then((list) => {
+        javaHint.textContent = list.length
+          ? `Найдено: ${list.map((item) => `Java ${item.major}`).join(", ")}`
+          : "не найдено — лаунчер скачает рантайм Mojang";
+      }).catch(() => { javaHint.textContent = ""; });
+    }
+
+    // сохранение общих настроек
+    const save = $("#prefs-save");
+    if (save) save.addEventListener("click", saveLauncherSettings);
+  }
+
+  async function saveLauncherSettings() {
+    const settings = state.settings || {};
+    const value = (selector) => { const el = $(selector); return el ? el.value : undefined; };
+    const flag = (selector, fallback) => { const el = $(selector); return el ? el.classList.contains("on") : fallback; };
+    const next = {
+      ...settings,
+      memory_mb: value("#set-memory") !== undefined ? Number(value("#set-memory")) : settings.memory_mb,
+      java_path: value("#set-java") !== undefined ? (value("#set-java").trim() || null) : settings.java_path,
+      jvm_args: value("#set-jvm") !== undefined ? value("#set-jvm") : settings.jvm_args,
+      auto_java: flag("#set-auto-java", settings.auto_java),
+      proxy: value("#set-proxy") !== undefined ? (value("#set-proxy").trim() || null) : settings.proxy,
+      ms_client_id: value("#set-ms-client") !== undefined ? (value("#set-ms-client").trim() || null) : settings.ms_client_id,
+      update_repo: value("#set-upd-repo") !== undefined ? (value("#set-upd-repo").trim() || null) : settings.update_repo,
+      update_token: value("#set-upd-token") !== undefined ? (value("#set-upd-token").trim() || null) : settings.update_token,
+      update_enabled: flag("#set-upd-enabled", settings.update_enabled),
+      update_prerelease: flag("#set-upd-pre", settings.update_prerelease),
+      theme: state.theme,
+      click_fx: state.fx,
+      wallpaper: state.wall.wallpaper,
+      wallpaper_fit: state.wall.fit,
+      wallpaper_blur: state.wall.blur,
+      wallpaper_dim: state.wall.dim,
+      wallpaper_recent: state.wall.recent || rememberWallpaper(settings.wallpaper_recent, state.wall.wallpaper)
+    };
+    try {
+      await api.saveSettings(next);
+      state.settings = next;
+      toast("Настройки сохранены", "ok");
+      $("#modal-prefs").hidden = true;
+    } catch (err) { toast(String(err), "err"); }
+  }
+
+  /** История обоев: свежие впереди, без повторов, не длиннее шести. */
+  function rememberWallpaper(recent, current) {
+    const list = Array.isArray(recent) ? recent.slice() : [];
+    if (!current) return list.filter((id) => id !== current);
+    return [current, ...list.filter((id) => id !== current)].slice(0, 6);
+  }
+
+  /* ==================== НАСТРОЙКИ СБОРКИ (свои у каждой) ==================== */
+  async function renderSettings() {
+    const meta = selected();
+    if (!meta) {
+      $("#tab-body").innerHTML = `<div class="empty-state">Выбери сборку слева</div>`;
+      return;
+    }
+    const javas = await api.javas().catch(() => []);
+    $("#tab-body").innerHTML = `
+      <div class="settings-wrap">
+        <div class="settings-grid">
+          <div class="panel">
+            <div class="panel-head">
+              <strong>Сборка «${esc(meta.name)}»</strong>
+              <span class="badge">MC ${esc(meta.mc_version)}</span>
+              <div class="spacer"></div>
+              <span class="muted" style="font-size:11px">только эта сборка</span>
+            </div>
+            <div style="padding:14px;display:grid;gap:14px">
+              <div class="settings-row">
+                <div class="label">Название</div>
+                <div><input class="input" id="inst-name" style="width:100%" value="${esc(meta.name)}" spellcheck="false"></div>
+              </div>
+              <div class="settings-row">
+                <div class="label">Иконка</div>
+                <div class="icon-grid" id="inst-icons">
+                  <button class="icon-chip letter ${!meta.icon ? "is-active" : ""}" data-icon="" title="Первая буква">${esc(String(meta.name).trim().charAt(0).toUpperCase())}</button>
+                  ${INSTANCE_ICONS.map((icon) => `<button class="icon-chip ${meta.icon === icon ? "is-active" : ""}" data-icon="${icon}" title="${icon.replace("i-", "")}"><svg class="ic"><use href="#${icon}"/></svg></button>`).join("")}
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="label">Память, МБ</div>
+                <div><input class="input" id="inst-memory" type="number" min="512" step="256" style="width:160px" placeholder="как в общих (${state.settings && state.settings.memory_mb || 4096})" value="${meta.memory_mb ?? ""}"></div>
+              </div>
+              <div class="settings-row">
+                <div class="label">Java для этой сборки</div>
+                <div>
+                  <input class="input" id="inst-java" style="width:100%" placeholder="как в общих" value="${esc(meta.java_path || "")}" spellcheck="false">
+                  <div class="hint">Найдено: ${javas.length ? javas.map((item) => `Java ${item.major}`).join(", ") : "нет"}</div>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="label">JVM-аргументы</div>
+                <div><input class="input" id="inst-jvm" style="width:100%" placeholder="как в общих" value="${esc(meta.jvm_args || "")}" spellcheck="false"></div>
+              </div>
+              <div class="settings-row">
+                <div class="label">Заметка</div>
+                <div><input class="input" id="inst-notes" style="width:100%" placeholder="например: для сборки с шейдерами" value="${esc(meta.notes || "")}" spellcheck="false"></div>
+              </div>
+              <div class="settings-row">
+                <div class="label">Загрузчик</div>
+                <div class="muted" style="padding-top:7px">${esc(loaderLabel(meta.loader))} · профиль <span class="kbd">${esc(versionId(meta))}</span></div>
+              </div>
+              <div class="settings-actions">
+                <button class="btn btn-primary" id="inst-save">Сохранить сборку</button>
+                <button class="btn" id="inst-folder">Открыть папку</button>
+                <button class="btn btn-danger" id="inst-delete">Удалить сборку</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><strong>Лаунчер</strong><div class="spacer"></div><span class="muted" style="font-size:11px">общие настройки</span></div>
+            <div style="padding:14px">
+              <div class="settings-note">Тема, обои, Java по умолчанию, сеть и обновления — в настройках лаунчера.</div>
+              <div class="settings-actions">
+                <button class="btn" id="open-launcher-prefs">Настройки лаунчера</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    $$("#inst-icons .icon-chip").forEach((chip) => chip.addEventListener("click", () => {
+      $$("#inst-icons .icon-chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+    }));
+    $("#open-launcher-prefs").addEventListener("click", () => openPrefs());
+    $("#inst-save").addEventListener("click", async () => {
+      const chip = $("#inst-icons .icon-chip.is-active");
+      const next = {
+        ...meta,
+        name: $("#inst-name").value.trim() || meta.name,
+        icon: chip && chip.dataset.icon ? chip.dataset.icon : null,
+        memory_mb: $("#inst-memory").value ? Number($("#inst-memory").value) : null,
+        java_path: $("#inst-java").value.trim() || null,
+        jvm_args: $("#inst-jvm").value.trim() || null,
+        notes: $("#inst-notes").value.trim()
+      };
+      try {
+        await api.updateInstance(next);
+        await refreshInstances();
+        toast("Сборка сохранена", "ok");
+      } catch (err) { toast(String(err), "err"); }
+    });
+    $("#inst-folder").addEventListener("click", () => api.openPath(`${meta.id}/minecraft`).catch((err) => toast(String(err), "err")));
+    $("#inst-delete").addEventListener("click", async () => {
+      if (!confirm(`Удалить сборку «${meta.name}» вместе с модами и мирами?`)) return;
+      try {
+        await api.deleteInstance(meta.id);
+        state.selectedId = null;
+        await refreshInstances();
+        renderTab();
+        toast("Сборка удалена", "ok");
+      } catch (err) { toast(String(err), "err"); }
+    });
   }
 
   function versionId(meta) {
@@ -1809,25 +2393,42 @@
       else window.open(href, "_blank");
     }, true);
 
+  /** Привязка, которая не падает, если элемента нет (часть кнопок живёт в модалках). */
+  function on(selector, event, handler) {
+    const el = $(selector);
+    if (el) el.addEventListener(event, handler);
+  }
+
   function bindEvents() {
     $$(".tab").forEach((tab) => tab.addEventListener("click", () => { state.tab = tab.dataset.tab; renderTab(); }));
-    $("#btn-play").addEventListener("click", play);
-    $("#btn-stop").addEventListener("click", stopGame);
-    $("#btn-restart").addEventListener("click", async () => { await stopGame(); setTimeout(play, 800); });
-    $("#btn-start-all").addEventListener("click", play);
-    $("#btn-create").addEventListener("click", openCreate);
-    $("#btn-import").addEventListener("click", () => openAdd("modrinth"));
-    // кнопка Modrinth убрана из тулбара — она живёт в модалке «Добавить существующую»
-    $("#btn-folder").addEventListener("click", () => { const meta = selected(); if (meta) api.openPath(`/instances/${meta.id}/minecraft`).catch(() => {}); });
-    $("#btn-tab-settings").addEventListener("click", () => { state.tab = "settings"; renderTab(); });
-    $("#btn-global-settings").addEventListener("click", () => { state.tab = "settings"; renderTab(); });
-    $("#btn-settings-short").addEventListener("click", () => { state.tab = "settings"; renderTab(); });
-    $("#btn-grid").addEventListener("click", () => toast("Сетка появится в следующей версии"));
-    $("#btn-sort").addEventListener("click", () => {
+    on("#btn-play", "click", play);
+    on("#btn-stop", "click", stopGame);
+    on("#btn-restart", "click", async () => { await stopGame(); setTimeout(play, 800); });
+    on("#btn-create", "click", openCreate);
+    on("#btn-import", "click", () => openAdd("modrinth"));
+
+    /* аккаунты и настройки лаунчера */
+    on("#btn-add-account", "click", openAccounts);
+    on("#btn-prefs", "click", () => openPrefs());
+    on("#btn-global-settings", "click", () => openPrefs());
+    on("[data-close-prefs]", "click", () => { $("#modal-prefs").hidden = true; });
+    on("[data-close-acc]", "click", () => { $("#modal-account").hidden = true; });
+    on("[data-close-versions]", "click", () => { $("#modal-versions").hidden = true; });
+    const verModal = $("#modal-versions");
+    if (verModal) verModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-versions") verModal.hidden = true; });
+    const prefsModal = $("#modal-prefs");
+    if (prefsModal) prefsModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-prefs") prefsModal.hidden = true; });
+    const accModal = $("#modal-account");
+    if (accModal) accModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-account") accModal.hidden = true; });
+
+    on("#btn-folder", "click", () => { const meta = selected(); if (meta) api.openPath(`/instances/${meta.id}/minecraft`).catch(() => {}); });
+    on("#btn-tab-settings", "click", () => { state.tab = "settings"; renderTab(); });
+    on("#btn-grid", "click", () => toast("Сетка появится в следующей версии"));
+    on("#btn-sort", "click", () => {
       state.instances.sort((a, b) => a.name.localeCompare(b.name));
       renderSidebar();
     });
-    $("#instance-search").addEventListener("input", renderSidebar);
+    on("#instance-search", "input", renderSidebar);
 
     $$("[data-win]").forEach((btn) => btn.addEventListener("click", () => api.window(btn.dataset.win).catch(() => {})));
     $$("[data-close-modal]").forEach((btn) => btn.addEventListener("click", () => { $("#modal-create").hidden = true; }));
@@ -1850,7 +2451,16 @@
     document.addEventListener("keydown", (event) => {
       if (event.ctrlKey && event.key.toLowerCase() === "r") { event.preventDefault(); refreshInstances(); }
       if (event.ctrlKey && event.key.toLowerCase() === "l") { event.preventDefault(); state.logs[state.selectedId] = []; renderLogs(state.selectedId); }
-      if (event.key === "Escape") { $("#modal-create").hidden = true; $("#modal-add").hidden = true; }
+      if (event.key === "Escape") {
+        $("#modal-create").hidden = true;
+        $("#modal-add").hidden = true;
+        const prefs = $("#modal-prefs");
+        if (prefs) prefs.hidden = true;
+        const acc = $("#modal-account");
+        if (acc) acc.hidden = true;
+        const ver = $("#modal-versions");
+        if (ver) ver.hidden = true;
+      }
       if (event.key === "Enter" && !event.target.matches("input, select, textarea") && $("#modal-create").hidden) play();
     });
   }
@@ -1893,6 +2503,7 @@
     state.fx = (state.settings && state.settings.click_fx) || "wave";
     applyClickFx(state.fx);
     applyWallpaper();
+    await loadAccounts();
     await refreshInstances();
     if (state.instances.length) selectInstance(state.instances[0].id);
     else renderTab();
