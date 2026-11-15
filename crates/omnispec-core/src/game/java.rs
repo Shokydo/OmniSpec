@@ -175,6 +175,12 @@ pub fn system_candidates() -> Vec<PathBuf> {
 
 /// Найти все Java в системе (без дублей).
 pub async fn detect_all(paths: &Paths) -> Vec<JavaInstall> {
+    // Ключ — реальный путь к бинарнику: `/usr/bin/java` и `/usr/lib/jvm/.../bin/java`
+    // ведут к одной и той же Java, дублировать их в списке не нужно.
+    fn key(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
     let mut seen: HashMap<PathBuf, JavaInstall> = HashMap::new();
 
     // Скачанные нами рантаймы Mojang
@@ -183,23 +189,20 @@ pub async fn detect_all(paths: &Paths) -> Vec<JavaInstall> {
             let binary = java_binary(&version.path());
             if let Some(mut install) = probe(&binary).await {
                 install.source = "mojang".into();
-                seen.insert(binary, install);
+                seen.insert(key(&install.path), install);
             }
         }
     }
 
     for candidate in system_candidates() {
-        if seen.contains_key(&candidate) {
-            continue;
-        }
         if let Some(install) = probe(&candidate).await {
-            seen.insert(candidate, install);
+            seen.entry(key(&install.path)).or_insert(install);
         }
     }
 
     // "java" из PATH
     if let Some(install) = probe(Path::new("java")).await {
-        seen.entry(install.path.clone()).or_insert(install);
+        seen.entry(key(&install.path)).or_insert(install);
     }
 
     let mut result: Vec<JavaInstall> = seen.into_values().collect();
