@@ -177,6 +177,12 @@
     return scale;
   }
 
+  /** Масштаб интерфейса: body { zoom }, поэтому координаты мыши надо приводить к нему. */
+  function uiZoom() {
+    const factor = (Number(state.uiScale) || 100) / 100;
+    return factor > 0 ? factor : 1;
+  }
+
   function applyShape(name) {
     const known = SHAPES.some(([id]) => id === name);
     state.shape = known ? name : "soft";
@@ -319,7 +325,7 @@
       // у канваса внутри body с масштабом интерфейса ширина в CSS-пикселях
       width = Math.max(1, Math.round(el.clientWidth || rect.width));
       height = Math.max(1, Math.round(el.clientHeight || rect.height));
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const dpr = Math.min(3, (window.devicePixelRatio || 1) * uiZoom());
       el.width = Math.round(width * dpr);
       el.height = Math.round(height * dpr);
       ctx = el.getContext("2d");
@@ -557,7 +563,8 @@
       if (!el) return;
       width = Math.max(1, el.clientWidth || window.innerWidth);
       height = Math.max(1, el.clientHeight || window.innerHeight);
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      // при zoom интерфейса пикселей в канвасе больше — иначе трейс мылит
+      const dpr = Math.min(3, (window.devicePixelRatio || 1) * uiZoom());
       el.width = Math.round(width * dpr);
       el.height = Math.round(height * dpr);
       ctx = el.getContext("2d");
@@ -688,13 +695,16 @@
 
     function push(event) {
       if (!enabled) return;
+      // clientX/Y — в пикселях окна, а канвас живёт внутри body с zoom
+      const x = event.clientX / uiZoom();
+      const y = event.clientY / uiZoom();
       const previous = points[points.length - 1];
       if (previous) {
-        const dx = event.clientX - previous.x;
-        const dy = event.clientY - previous.y;
+        const dx = x - previous.x;
+        const dy = y - previous.y;
         if (dx * dx + dy * dy < 2.25) return;
       }
-      points.push({ x: event.clientX, y: event.clientY, age: 0 });
+      points.push({ x, y, age: 0 });
       if (points.length > MAX_POINTS) points.splice(0, points.length - MAX_POINTS);
       lastMove = performance.now();
       start();
@@ -1422,8 +1432,8 @@
       if (style === "off" || document.body.classList.contains("no-fx")) return;
       const effect = document.createElement("span");
       effect.className = `cfx cfx-${style}`;
-      effect.style.left = `${event.clientX}px`;
-      effect.style.top = `${event.clientY}px`;
+      effect.style.left = `${event.clientX / uiZoom()}px`;
+      effect.style.top = `${event.clientY / uiZoom()}px`;
       layer.appendChild(effect);
       setTimeout(() => effect.remove(), 700);
     }, true);
@@ -4218,11 +4228,47 @@
   }
 
   /** Скин аккаунта: у лицензии голова по UUID, у офлайна — по нику. */
+  /** Метка кеша скинов: раз в час и принудительно после смены скина. */
+  function skinStampBump() {
+    state.skinStamp = String(Date.now());
+    return state.skinStamp;
+  }
+
+  function skinStamp() {
+    if (!state.skinStamp) state.skinStamp = String(Math.floor(Date.now() / 3600000));
+    return state.skinStamp;
+  }
+
+  /**
+   * Скин по нику. Без метки webview держал картинку вечно — скин в игре менялся,
+   * а в лаунчере оставался старый.
+   */
   function skinUrl(account) {
     if (!account) return "";
+    const own = ownSkinHeadUrl(account);
+    if (own) return own;
     const key = account.kind === "microsoft" ? (account.uuid || account.username) : account.username;
     if (!key) return "";
-    return `https://mc-heads.net/avatar/${encodeURIComponent(key)}/64`;
+    return `https://mc-heads.net/avatar/${encodeURIComponent(key)}/64?t=${skinStamp()}`;
+  }
+
+  /**
+   * Голова из PNG, который лаунчер уже скачал у Mojang: внешний сервис кеширует
+   * картинку по нику и продолжает отдавать старый скин после смены.
+   */
+  function ownSkinHeadUrl(account) {
+    const skin = state.skin;
+    if (!skin || !skin.texture || !skin.fromAccount) return "";
+    const active = activeAccount();
+    if (!active || !account || account.uuid !== active.uuid) return "";
+    if (skin.headUrl && skin.headStamp === skinStamp()) return skin.headUrl;
+    try {
+      skin.headUrl = headThumb(skin.texture, 64).toDataURL("image/png");
+      skin.headStamp = skinStamp();
+    } catch (error) {
+      return "";
+    }
+    return skin.headUrl;
   }
 
   /** Аватар: буква + скин поверх. Если скин не загрузился — остаётся буква. */
@@ -4744,7 +4790,6 @@
             : `<div class="profile-card is-empty"><span class="muted">Аккаунта пока нет</span></div>`}
         </section>
       </div>
-      ${capeSectionHtml()}
       ${skinSectionHtml()}`;
   }
 
@@ -5630,147 +5675,151 @@
     return [current, ...list.filter((id) => id !== current)].slice(0, 6);
   }
 
-  /* ==================== СКИН: ПРЕСЕТЫ И РЕНДЕР ==================== */
+  /* ==================== СКИН: МОДЕЛЬ, ПРЕСЕТЫ, ПЛАЩИ ==================== */
 
-  /** UV-разметка частей скина 64×64 (как в ванильном формате). */
-  function skinBoxes(variant) {
-    const aw = variant === "slim" ? 3 : 4;
-    return [
-      {
-        name: "head", x0: -4, x1: 4, y0: 24, y1: 32, z0: -4, z1: 4,
-        base: { front: [8, 8, 8, 8], back: [24, 8, 8, 8], left: [16, 8, 8, 8], right: [0, 8, 8, 8], top: [8, 0, 8, 8], bottom: [16, 0, 8, 8] },
-        over: { front: [40, 8, 8, 8], back: [56, 8, 8, 8], left: [48, 8, 8, 8], right: [32, 8, 8, 8], top: [40, 0, 8, 8], bottom: [48, 0, 8, 8] }
-      },
-      {
-        name: "body", x0: -4, x1: 4, y0: 12, y1: 24, z0: -2, z1: 2,
-        base: { front: [20, 20, 8, 12], back: [32, 20, 8, 12], left: [28, 20, 4, 12], right: [16, 20, 4, 12], top: [20, 16, 8, 4], bottom: [28, 16, 8, 4] },
-        over: { front: [20, 36, 8, 12], back: [32, 36, 8, 12], left: [28, 36, 4, 12], right: [16, 36, 4, 12], top: [20, 32, 8, 4], bottom: [28, 32, 8, 4] }
-      },
-      {
-        name: "armR", x0: -4 - aw, x1: -4, y0: 12, y1: 24, z0: -2, z1: 2,
-        base: { front: [44, 20, aw, 12], back: [52, 20, aw, 12], left: [48, 20, aw, 12], right: [40, 20, aw, 12], top: [44, 16, aw, 4], bottom: [48, 16, aw, 4] },
-        over: { front: [44, 36, aw, 12], back: [52, 36, aw, 12], left: [48, 36, aw, 12], right: [40, 36, aw, 12], top: [44, 32, aw, 4], bottom: [48, 32, aw, 4] }
-      },
-      {
-        name: "armL", x0: 4, x1: 4 + aw, y0: 12, y1: 24, z0: -2, z1: 2,
-        base: { front: [36, 52, aw, 12], back: [44, 52, aw, 12], left: [40, 52, aw, 12], right: [32, 52, aw, 12], top: [36, 48, aw, 4], bottom: [40, 48, aw, 4] },
-        over: { front: [52, 52, aw, 12], back: [60, 52, aw, 12], left: [56, 52, aw, 12], right: [48, 52, aw, 12], top: [52, 48, aw, 4], bottom: [56, 48, aw, 4] }
-      },
-      {
-        name: "legR", x0: -4, x1: 0, y0: 0, y1: 12, z0: -2, z1: 2,
-        base: { front: [4, 20, 4, 12], back: [12, 20, 4, 12], left: [8, 20, 4, 12], right: [0, 20, 4, 12], top: [4, 16, 4, 4], bottom: [8, 16, 4, 4] },
-        over: { front: [4, 36, 4, 12], back: [12, 36, 4, 12], left: [8, 36, 4, 12], right: [0, 36, 4, 12], top: [4, 32, 4, 4], bottom: [8, 32, 4, 4] }
-      },
-      {
-        name: "legL", x0: 0, x1: 4, y0: 0, y1: 12, z0: -2, z1: 2,
-        base: { front: [20, 52, 4, 12], back: [28, 52, 4, 12], left: [24, 52, 4, 12], right: [16, 52, 4, 12], top: [20, 48, 4, 4], bottom: [24, 48, 4, 4] },
-        over: { front: [4, 52, 4, 12], back: [12, 52, 4, 12], left: [8, 52, 4, 12], right: [0, 52, 4, 12], top: [4, 48, 4, 4], bottom: [8, 48, 4, 4] }
-      }
+  /*
+   * Модель скина: координаты и UV взяты ровно из Blockbench (3px / 4px руки),
+   * без «на глаз». Оси как в Blockbench: X вправо, Y вверх, Z к зрителю (юг).
+   * У каждой грани свой прямоугольник текстуры 64×64.
+   */
+  const MODEL_CLASSIC = [
+      { n: "Head", b: [-4, 24, -4, 4, 32, 4], i: 0, uv: { north: [8, 8, 16, 16], east: [0, 8, 8, 16], south: [24, 8, 32, 16], west: [16, 8, 24, 16], up: [16, 8, 8, 0], down: [24, 0, 16, 8] } },
+      { n: "Hat Layer", b: [-4, 24, -4, 4, 32, 4], i: 0.5, uv: { north: [40, 8, 48, 16], east: [32, 8, 40, 16], south: [56, 8, 64, 16], west: [48, 8, 56, 16], up: [48, 8, 40, 0], down: [56, 0, 48, 8] } },
+      { n: "Body", b: [-4, 12, -2, 4, 24, 2], i: 0, uv: { north: [20, 20, 28, 32], east: [16, 20, 20, 32], south: [32, 20, 40, 32], west: [28, 20, 32, 32], up: [28, 20, 20, 16], down: [36, 16, 28, 20] } },
+      { n: "Body Layer", b: [-4, 12, -2, 4, 24, 2], i: 0.25, uv: { north: [20, 36, 28, 48], east: [16, 36, 20, 48], south: [32, 36, 40, 48], west: [28, 36, 32, 48], up: [28, 36, 20, 32], down: [36, 32, 28, 36] } },
+      { n: "Right Arm", b: [4, 12, -2, 8, 24, 2], i: 0, uv: { north: [44, 20, 48, 32], east: [40, 20, 44, 32], south: [52, 20, 56, 32], west: [48, 20, 52, 32], up: [48, 20, 44, 16], down: [52, 16, 48, 20] } },
+      { n: "Right Arm Layer", b: [4, 12, -2, 8, 24, 2], i: 0.25, uv: { north: [44, 36, 48, 48], east: [40, 36, 44, 48], south: [52, 36, 56, 48], west: [48, 36, 52, 48], up: [48, 36, 44, 32], down: [52, 32, 48, 36] } },
+      { n: "Left Arm", b: [-8, 12, -2, -4, 24, 2], i: 0, uv: { north: [36, 52, 40, 64], east: [32, 52, 36, 64], south: [44, 52, 48, 64], west: [40, 52, 44, 64], up: [40, 52, 36, 48], down: [44, 48, 40, 52] } },
+      { n: "Left Arm Layer", b: [-8, 12, -2, -4, 24, 2], i: 0.25, uv: { north: [52, 52, 56, 64], east: [48, 52, 52, 64], south: [60, 52, 64, 64], west: [56, 52, 60, 64], up: [56, 52, 52, 48], down: [60, 48, 56, 52] } },
+      { n: "Right Leg", b: [0, 0, -2, 4, 12, 2], i: 0, uv: { north: [4, 20, 8, 32], east: [0, 20, 4, 32], south: [12, 20, 16, 32], west: [8, 20, 12, 32], up: [8, 20, 4, 16], down: [12, 16, 8, 20] } },
+      { n: "Right Leg Layer", b: [0, 0, -2, 4, 12, 2], i: 0.25, uv: { north: [4, 36, 8, 48], east: [0, 36, 4, 48], south: [12, 36, 16, 48], west: [8, 36, 12, 48], up: [8, 36, 4, 32], down: [12, 32, 8, 36] } },
+      { n: "Left Leg", b: [-4, 0, -2, 0, 12, 2], i: 0, uv: { north: [20, 52, 24, 64], east: [16, 52, 20, 64], south: [28, 52, 32, 64], west: [24, 52, 28, 64], up: [24, 52, 20, 48], down: [28, 48, 24, 52] } },
+      { n: "Left Leg Layer", b: [-4, 0, -2, 0, 12, 2], i: 0.25, uv: { north: [4, 52, 8, 64], east: [0, 52, 4, 64], south: [12, 52, 16, 64], west: [8, 52, 12, 64], up: [8, 52, 4, 48], down: [12, 48, 8, 52] } }
     ];
+
+  const MODEL_SLIM = [
+      { n: "Head", b: [-4, 24, -4, 4, 32, 4], i: 0, uv: { north: [8, 8, 16, 16], east: [0, 8, 8, 16], south: [24, 8, 32, 16], west: [16, 8, 24, 16], up: [16, 8, 8, 0], down: [24, 0, 16, 8] } },
+      { n: "Hat Layer", b: [-4, 24, -4, 4, 32, 4], i: 0.5, uv: { north: [40, 8, 48, 16], east: [32, 8, 40, 16], south: [56, 8, 64, 16], west: [48, 8, 56, 16], up: [48, 8, 40, 0], down: [56, 0, 48, 8] } },
+      { n: "Body", b: [-4, 12, -2, 4, 24, 2], i: 0, uv: { north: [20, 20, 28, 32], east: [16, 20, 20, 32], south: [32, 20, 40, 32], west: [28, 20, 32, 32], up: [28, 20, 20, 16], down: [36, 16, 28, 20] } },
+      { n: "Body Layer", b: [-4, 12, -2, 4, 24, 2], i: 0.25, uv: { north: [20, 36, 28, 48], east: [16, 36, 20, 48], south: [32, 36, 40, 48], west: [28, 36, 32, 48], up: [28, 36, 20, 32], down: [36, 32, 28, 36] } },
+      { n: "Right Arm", b: [4, 12, -2, 7, 24, 2], i: 0, uv: { north: [44, 20, 47, 32], east: [40, 20, 44, 32], south: [51, 20, 54, 32], west: [47, 20, 51, 32], up: [47, 20, 44, 16], down: [50, 16, 47, 20] } },
+      { n: "Right Arm Layer", b: [4, 12, -2, 7, 24, 2], i: 0.25, uv: { north: [44, 36, 47, 48], east: [40, 36, 44, 48], south: [51, 36, 54, 48], west: [47, 36, 51, 48], up: [47, 36, 44, 32], down: [50, 32, 47, 36] } },
+      { n: "Left Arm", b: [-7, 12, -2, -4, 24, 2], i: 0, uv: { north: [36, 52, 39, 64], east: [32, 52, 36, 64], south: [43, 52, 46, 64], west: [39, 52, 43, 64], up: [39, 52, 36, 48], down: [42, 48, 39, 52] } },
+      { n: "Left Arm Layer", b: [-7, 12, -2, -4, 24, 2], i: 0.25, uv: { north: [52, 52, 55, 64], east: [48, 52, 52, 64], south: [59, 52, 62, 64], west: [55, 52, 59, 64], up: [55, 52, 52, 48], down: [58, 48, 55, 52] } },
+      { n: "Right Leg", b: [0, 0, -2, 4, 12, 2], i: 0, uv: { north: [4, 20, 8, 32], east: [0, 20, 4, 32], south: [12, 20, 16, 32], west: [8, 20, 12, 32], up: [8, 20, 4, 16], down: [12, 16, 8, 20] } },
+      { n: "Right Leg Layer", b: [0, 0, -2, 4, 12, 2], i: 0.25, uv: { north: [4, 36, 8, 48], east: [0, 36, 4, 48], south: [12, 36, 16, 48], west: [8, 36, 12, 48], up: [8, 36, 4, 32], down: [12, 32, 8, 36] } },
+      { n: "Left Leg", b: [-4, 0, -2, 0, 12, 2], i: 0, uv: { north: [20, 52, 24, 64], east: [16, 52, 20, 64], south: [28, 52, 32, 64], west: [24, 52, 28, 64], up: [24, 52, 20, 48], down: [28, 48, 24, 52] } },
+      { n: "Left Leg Layer", b: [-4, 0, -2, 0, 12, 2], i: 0.25, uv: { north: [4, 52, 8, 64], east: [0, 52, 4, 64], south: [12, 52, 16, 64], west: [8, 52, 12, 64], up: [8, 52, 4, 48], down: [12, 48, 8, 52] } }
+    ];
+
+  const SKIN_MODEL = {
+    classic: MODEL_CLASSIC,
+    slim: MODEL_SLIM
+  };
+
+  const SKIN_FACE_NORMALS = {
+    north: [0, 0, -1], south: [0, 0, 1], east: [1, 0, 0],
+    west: [-1, 0, 0], up: [0, 1, 0], down: [0, -1, 0]
+  };
+
+  /** Четыре угла каждой грани коробки: [верх-лево, верх-право, низ-право, низ-лево]. */
+  function skinFaceCorners(box, inflate) {
+    const [x0, y0, z0, x1, y1, z1] = box;
+    const ix0 = x0 - inflate, iy0 = y0 - inflate, iz0 = z0 - inflate;
+    const ix1 = x1 + inflate, iy1 = y1 + inflate, iz1 = z1 + inflate;
+    return {
+      north: [[ix1, iy1, iz0], [ix0, iy1, iz0], [ix0, iy0, iz0], [ix1, iy0, iz0]],
+      south: [[ix0, iy1, iz1], [ix1, iy1, iz1], [ix1, iy0, iz1], [ix0, iy0, iz1]],
+      east: [[ix1, iy1, iz1], [ix1, iy1, iz0], [ix1, iy0, iz0], [ix1, iy0, iz1]],
+      west: [[ix0, iy1, iz0], [ix0, iy1, iz1], [ix0, iy0, iz1], [ix0, iy0, iz0]],
+      up: [[ix1, iy1, iz1], [ix0, iy1, iz1], [ix0, iy1, iz0], [ix1, iy1, iz0]],
+      down: [[ix0, iy0, iz0], [ix1, iy0, iz0], [ix1, iy0, iz1], [ix0, iy0, iz1]]
+    };
   }
 
-  /** Трёхмерный предпросмотр: обрезка повёрнута на угол, второй слой сверху. */
-  function drawSkinPreview(canvas, texture, variant, angleDeg) {
+  /**
+   * Отрисовка модели в canvas: второй слой поверх, грани отвёрнутые от камеры не рисуем,
+   * дальние — первыми. `yaw` крутит вокруг оси Y, `pitch` наклоняет (плюс — камера сверху).
+   */
+  function drawSkinModel(canvas, texture, variant, yawDeg, pitchDeg) {
     const ctx = canvas.getContext("2d");
+    if (!ctx) return;
     const W = canvas.width;
     const H = canvas.height;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
     if (!texture) return;
 
-    const th = (angleDeg * Math.PI) / 180;
-    const pitch = 0.14;
-    const cosT = Math.cos(th);
-    const sinT = Math.sin(th);
-    const cosP = Math.cos(pitch);
-    const sinP = Math.sin(pitch);
+    const yaw = (Number(yawDeg) || 0) * Math.PI / 180;
+    const pitch = (Number(pitchDeg) || 0) * Math.PI / 180;
+    const cy = Math.cos(yaw), sy = Math.sin(yaw);
+    const cp = Math.cos(pitch), sp = -Math.sin(pitch);
 
-    // точка → экранные координаты (ось Y вверх, камера смотрит вдоль +Z)
-    const project = (x, y, z) => {
-      const x1 = x * cosT + z * sinT;
-      const z1 = -x * sinT + z * cosT;
-      const y2 = y * cosP - z1 * sinP;
-      const z2 = y * sinP + z1 * cosP;
-      return [x1, -y2, z2];
+    const rotate = ([x, y, z]) => {
+      const x1 = x * cy + z * sy;
+      const z1 = -x * sy + z * cy;
+      return [x1, y * cp - z1 * sp, y * sp + z1 * cp];
     };
+
+    // масштаб постоянный: модель не «дышит» при вращении
+    const unit = Math.min(W / 24, H / 38);
+    const originX = W / 2;
+    const originY = H / 2;
+    const project = ([x, y, z]) => [originX + x * unit, originY - (y - 16) * unit, z];
 
     const faces = [];
-    const pushFace = (box, uvs, scale) => {
-      const cx = (box.x0 + box.x1) / 2;
-      const cy = (box.y0 + box.y1) / 2;
-      const cz = (box.z0 + box.z1) / 2;
-      const grow = (value, center) => center + (value - center) * scale;
-      const x0 = grow(box.x0, cx), x1 = grow(box.x1, cx);
-      const y0 = grow(box.y0, cy), y1 = grow(box.y1, cy);
-      const z0 = grow(box.z0, cz), z1 = grow(box.z1, cz);
-      const quads = [
-        { uv: uvs.front, n: [0, 0, 1], p: [[x0, y1, z1], [x1, y1, z1], [x1, y0, z1], [x0, y0, z1]] },
-        { uv: uvs.back, n: [0, 0, -1], p: [[x1, y1, z0], [x0, y1, z0], [x0, y0, z0], [x1, y0, z0]] },
-        { uv: uvs.left, n: [-1, 0, 0], p: [[x0, y1, z0], [x0, y1, z1], [x0, y0, z1], [x0, y0, z0]] },
-        { uv: uvs.right, n: [1, 0, 0], p: [[x1, y1, z1], [x1, y1, z0], [x1, y0, z0], [x1, y0, z1]] },
-        { uv: uvs.top, n: [0, 1, 0], p: [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]] },
-        { uv: uvs.bottom, n: [0, -1, 0], p: [[x0, y0, z1], [x1, y0, z1], [x1, y0, z0], [x0, y0, z0]] }
-      ];
-      quads.forEach((quad) => {
-        const [nx1, nz1] = [quad.n[0] * cosT + quad.n[2] * sinT, -quad.n[0] * sinT + quad.n[2] * cosT];
-        const nz2 = quad.n[1] * sinP + nz1 * cosP;
-        if (nz2 <= 0.001) return; // отвёрнуто от камеры
-        const pts = quad.p.map(([x, y, z]) => project(x, y, z));
-        const depth = pts.reduce((sum, point) => sum + point[2], 0) / 4;
-        faces.push({ uv: quad.uv, pts, depth });
+    (SKIN_MODEL[variant] || SKIN_MODEL.classic).forEach((part) => {
+      const corners = skinFaceCorners(part.b, part.i);
+      Object.keys(part.uv).forEach((dir) => {
+        const normal = rotate(SKIN_FACE_NORMALS[dir]);
+        if (normal[2] >= -0.001) return; // грань смотрит от камеры
+        const pts = corners[dir].map(rotate).map(project);
+        faces.push({ uv: part.uv[dir], pts, depth: (pts[0][2] + pts[1][2] + pts[2][2] + pts[3][2]) / 4 });
       });
-    };
-
-    skinBoxes(variant).forEach((box) => {
-      pushFace(box, box.base, 1);
-      pushFace(box, box.over, 1.06); // второй слой чуть сверху
     });
 
-    // масштаб и центрирование по всем вершинам
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    faces.forEach((face) => face.pts.forEach(([x, y]) => {
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-    }));
-    if (!Number.isFinite(minX)) return;
-    const pad = 12;
-    const unit = Math.min((W - pad * 2) / Math.max(1, maxX - minX), (H - pad * 2) / Math.max(1, maxY - minY));
-    const offsetX = (W - (maxX - minX) * unit) / 2 - minX * unit;
-    const offsetY = (H - (maxY - minY) * unit) / 2 - minY * unit;
-
-    faces.sort((a, b) => a.depth - b.depth);
+    // дальние (больший z) — раньше, ближние — поверх
+    faces.sort((a, b) => b.depth - a.depth);
     ctx.imageSmoothingEnabled = false;
     faces.forEach((face) => {
-      const [u0, v0, uw, vh] = face.uv;
-      const [p0, p1, , p3] = face.pts.map(([x, y]) => [x * unit + offsetX, y * unit + offsetY]);
-      // путь-квад в экранных координатах
+      const [p0, p1, , p3] = face.pts;
+      const u1 = Math.min(face.uv[0], face.uv[2]);
+      const u2 = Math.max(face.uv[0], face.uv[2]);
+      const v1 = Math.min(face.uv[1], face.uv[3]);
+      const v2 = Math.max(face.uv[1], face.uv[3]);
+      const uw = u2 - u1;
+      const vh = v2 - v1;
+      if (uw <= 0 || vh <= 0) return;
       ctx.save();
       ctx.beginPath();
-      ctx.moveTo(p0[0], p0[1]);
-      face.pts.forEach(([x, y]) => ctx.lineTo(x * unit + offsetX, y * unit + offsetY));
+      face.pts.forEach((point, index) => (index ? ctx.lineTo(point[0], point[1]) : ctx.moveTo(point[0], point[1])));
       ctx.closePath();
       ctx.clip();
-      if (uw > 0 && vh > 0) {
-        const a = (p1[0] - p0[0]) / uw;
-        const b = (p1[1] - p0[1]) / uw;
-        const c = (p3[0] - p0[0]) / vh;
-        const d = (p3[1] - p0[1]) / vh;
-        const e = p0[0] - a * u0 - c * v0;
-        const f = p0[1] - b * u0 - d * v0;
-        ctx.setTransform(a, b, c, d, e, f);
-        ctx.drawImage(texture, 0, 0);
-      }
+      // аффинное преобразование: прямоугольник текстуры → четырёхугольник на экране
+      const a = (p1[0] - p0[0]) / uw, b = (p1[1] - p0[1]) / uw;
+      const c = (p3[0] - p0[0]) / vh, d = (p3[1] - p0[1]) / vh;
+      const e = p0[0] - a * u1 - c * v1, f = p0[1] - b * u1 - d * v1;
+      ctx.setTransform(a, b, c, d, e, f);
+      ctx.drawImage(texture, 0, 0);
       ctx.restore();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     });
   }
 
+  /** Размер канваса под реальный размер блока: без мыла при любом зуме интерфейса. */
+  function skinCanvasSize(canvas, cssWidth, cssHeight) {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
+  }
+
   /** Состояние раздела «Скин» (живёт в профиле). */
   function skinState() {
     if (!state.skin) {
-      state.skin = { preset: null, variant: "classic", angle: -18, licensed: false, currentPath: "", currentName: "", texture: null, dataUrl: "" };
+      state.skin = {
+        preset: null, variant: "classic", yaw: -18, pitch: 6, licensed: false, touchedVariant: false,
+        currentPath: "", currentName: "", texture: null, dataUrl: "", fromAccount: false
+      };
     }
     return state.skin;
   }
@@ -5785,59 +5834,107 @@
     return userSkinPresets().find((preset) => preset.id === id) || null;
   }
 
+  /** Строка под кнопками: обновляется без перерисовки всего профиля. */
+  function skinStatusText() {
+    const skin = skinState();
+    const variant = skin.variant === "slim" ? "slim, руки 3 px" : "wide, руки 4 px";
+    if (skin.currentName) return `Выбран скин «${skin.currentName}» · ${variant}.`;
+    return skin.licensed
+      ? "В модели сейчас твой скин с сервера. Загрузи PNG 64×64, чтобы поставить новый."
+      : "Смена скина возможна только у лицензионного аккаунта.";
+  }
+
+  /** Перерисовать только строку статуса. */
+  function refreshSkinStatus() {
+    const el = $("#skin-status");
+    if (el) el.textContent = skinStatusText();
+  }
+
   function skinSectionHtml() {
     const skin = skinState();
     const licensed = Boolean(skin.licensed);
     const presets = userSkinPresets();
+    const variant = skin.variant === "slim" ? "slim" : "classic";
+    const status = skinStatusText();
     return `
       <section class="prefs-section skin-section">
         <div class="prefs-label-row">
           <span class="prefs-label">Скин аккаунта</span>
           <div class="spacer"></div>
           <span class="tag ${licensed ? "green" : ""}">${licensed ? "лицензия" : "только лицензия"}</span>
+          <button class="icon-btn" id="skin-refresh" title="Загрузить скин с сервера заново">
+            <svg class="ic"><use href="#i-refresh"/></svg>
+          </button>
         </div>
-        <div class="skin-grid">
-          <div class="skin-stage">
-            ${skin.texture ? `<canvas id="skin-canvas" width="640" height="760"></canvas>`
-              : `<div class="skin-stage-empty">Загрузи скин PNG 64×64 — он появится здесь в объёме.</div>`}
+
+        <div class="skin-top">
+          <span class="skin-top-label">Ширина рук</span>
+          <div class="chips" id="skin-variant">
+            <button class="chip ${variant === "classic" ? "is-active" : ""}" data-variant="classic">Wide (4 px)</button>
+            <button class="chip ${variant === "slim" ? "is-active" : ""}" data-variant="slim">Slim (3 px)</button>
           </div>
-          <div class="skin-ctrl">
-            <div class="chips" id="skin-variant">
-              <button class="chip ${skin.variant === "classic" ? "is-active" : ""}" data-variant="classic">Wide (4 px)</button>
-              <button class="chip ${skin.variant === "slim" ? "is-active" : ""}" data-variant="slim">Slim (3 px)</button>
-            </div>
-            <div class="skin-angle">
-              <span class="prefs-label" style="margin:0">Поворот</span>
-              <input type="range" id="skin-angle" min="-180" max="180" step="1" value="${Number(skin.angle ?? -18)}" />
-              <span class="val" id="skin-angle-value">${Number(skin.angle ?? -18)}°</span>
-            </div>
-            <div class="prefs-label-row" style="margin:2px 0 0">
-              <span class="prefs-label">Мои пресеты</span>
-              <div class="spacer"></div>
-              <button class="btn btn-small" id="skin-save-preset" ${skin.currentPath ? "" : "disabled"}>
-                <svg class="ic"><use href="#i-plus"/></svg>Сохранить пресет
+        </div>
+
+        <div class="skin-layout">
+          <div class="skin-col skin-col-capes">
+            <div class="skin-col-head">Плащи</div>
+            ${capeColumnHtml()}
+          </div>
+          <div class="skin-stage ${skin.texture ? "" : "is-empty"}">
+            ${skin.texture
+              ? `<canvas id="skin-canvas"></canvas><span class="skin-stage-hint">ЛКМ — повернуть</span>`
+              : `<div class="skin-stage-empty">Скин появится здесь в объёме.<br>Загрузи PNG 64×64.</div>`}
+          </div>
+          <div class="skin-col skin-col-presets">
+            <div class="skin-col-head">
+              Пресеты
+              <button class="icon-btn" id="skin-save-preset" title="Сохранить пресет" ${skin.currentPath ? "" : "disabled"}>
+                <svg class="ic"><use href="#i-plus"/></svg>
               </button>
             </div>
             <div class="skin-presets" id="skin-presets">
               ${presets.length
                 ? presets.map((preset) => `
                   <button class="skin-preset is-user ${preset.id === skin.preset ? "is-active" : ""}" data-preset="${esc(preset.id)}" title="${esc(preset.name)}">
-                    <span class="skin-thumb" data-thumb-path="${esc(preset.path)}"></span>
-                    <span>${esc(preset.name)}</span>
+                    <span class="skin-mini" data-thumb-path="${esc(preset.path)}"></span>
+                    <span class="skin-preset-name">${esc(preset.name)}</span>
                     <span class="preset-del" data-del-preset="${esc(preset.id)}" title="Удалить пресет">×</span>
                   </button>`).join("")
-                : `<div class="skin-note">Пресетов пока нет.</div>`}
+                : `<div class="skin-note">Пресетов пока нет — загрузи скин и нажми «+».</div>`}
             </div>
-            <div class="skin-row">
-              <button class="btn" id="skin-upload">Загрузить скин…</button>
-              <button class="btn btn-primary" id="skin-apply" ${licensed && skin.currentPath ? "" : "disabled"}>Применить к аккаунту</button>
-            </div>
-            <div class="skin-note ${licensed ? "" : "warn"}" id="skin-status">${skin.currentName
-              ? `Выбран скин «${esc(skin.currentName)}» · ${skin.variant === "slim" ? "slim" : "wide"}.`
-              : (licensed ? "Скин меняется только для лицензионного аккаунта." : "Смена скина только для лицензированного аккаунта.")}</div>
           </div>
         </div>
+
+        <div class="skin-row">
+          <button class="btn" id="skin-upload">Загрузить скин…</button>
+          <button class="btn btn-primary" id="skin-apply" ${licensed ? "" : "disabled"}>Применить к аккаунту</button>
+        </div>
+        <div class="skin-note ${licensed ? "" : "warn"}" id="skin-status">${status}</div>
       </section>`;
+  }
+
+  /** Плащи — левая колонка раздела «Скин». */
+  function capeColumnHtml() {
+    const capes = capeState();
+    const licensed = Boolean(capes.licensed);
+    const list = capes.list || [];
+    const activeId = (list.find((cape) => cape.active) || {}).id || "";
+    const cards = list.map((cape) => `
+      <button class="cape-card ${cape.id === activeId ? "is-active" : ""}" data-cape-id="${esc(cape.id)}" title="${esc(cape.alias)}">
+        <canvas class="cape-thumb" width="40" height="64" data-cape-src="${esc(cape.data_url || "")}"></canvas>
+        <span class="cape-name">${esc(cape.alias)}</span>
+      </button>`).join("");
+    return `
+      <div class="cape-list" id="skin-capes">
+        <button class="cape-card cape-off ${activeId ? "" : "is-active"}" data-cape-id="" title="Снять плащ">
+          <span class="cape-thumb cape-thumb-off"><svg class="ic"><use href="#i-minus"/></svg></span>
+          <span class="cape-name">Без плаща</span>
+        </button>
+        ${cards}
+        ${!licensed ? `<div class="cape-note">Плащи есть только у лицензионного аккаунта.</div>`
+          : (!list.length && !capes.loading ? `<div class="cape-note">${capes.error ? esc(capes.error) : "У аккаунта нет плащей."}</div>` : "")}
+        ${capes.loading ? `<div class="cape-note">Загружаем плащи…</div>` : ""}
+      </div>`;
   }
 
   /* ==================== ПЛАЩИ АККАУНТА ==================== */
@@ -5858,37 +5955,6 @@
       ctx.drawImage(image, 1, 1, 10, 16, 0, 0, canvas.width, canvas.height);
     };
     image.src = src;
-  }
-
-  function capeSectionHtml() {
-    const capes = capeState();
-    const licensed = Boolean(capes.licensed);
-    const list = capes.list || [];
-    const activeId = (list.find((cape) => cape.active) || {}).id || "";
-    const cards = list.map((cape) => `
-      <button class="cape-card ${cape.id === activeId ? "is-active" : ""}" data-cape-id="${esc(cape.id)}" title="${esc(cape.alias)}">
-        <canvas class="cape-thumb" width="52" height="84" data-cape-src="${esc(cape.data_url || "")}"></canvas>
-        <span class="cape-name">${esc(cape.alias)}</span>
-      </button>`).join("");
-    return `
-      <section class="prefs-section cape-section">
-        <div class="prefs-label-row">
-          <span class="prefs-label">Плащ аккаунта</span>
-          <div class="spacer"></div>
-          <span class="tag ${licensed ? "green" : ""}">${licensed ? "лицензия" : "только лицензия"}</span>
-          <button class="icon-btn" id="cape-refresh" title="Обновить плащи"><svg class="ic"><use href="#i-refresh"/></svg></button>
-        </div>
-        <div class="cape-list">
-          <button class="cape-card cape-off ${activeId ? "" : "is-active"}" data-cape-id="" title="Снять плащ">
-            <span class="cape-thumb cape-thumb-off"><svg class="ic"><use href="#i-minus"/></svg></span>
-            <span class="cape-name">Без плаща</span>
-          </button>
-          ${cards}
-          ${!licensed ? `<div class="cape-note">Плащи есть только у лицензионного аккаунта.</div>`
-            : (!list.length && !capes.loading ? `<div class="cape-note">${capes.error ? esc(capes.error) : "У аккаунта нет плащей."}</div>` : "")}
-          ${capes.loading ? `<div class="cape-note">Загружаем плащи…</div>` : ""}
-        </div>
-      </section>`;
   }
 
   /** Плащи подгружаем при открытии профиля. */
@@ -5915,7 +5981,7 @@
       renderPrefs();
       toast("Список плащей обновлён", "ok");
     });
-    $$(".cape-card", $(".cape-section") || document).forEach((card) => card.addEventListener("click", async () => {
+    $$("#skin-capes .cape-card").forEach((card) => card.addEventListener("click", async () => {
       const id = card.dataset.capeId || null;
       const capes = capeState();
       const current = (capes.list.find((cape) => cape.active) || {}).id || "";
@@ -5961,13 +6027,6 @@
     return canvas;
   }
 
-  function redrawSkinPreview() {
-    const canvas = $("#skin-canvas");
-    if (!canvas) return;
-    const skin = skinState();
-    drawSkinPreview(canvas, skin.texture || null, skin.variant || "classic", Number(skin.angle ?? -18));
-  }
-
   async function loadSkinFile(filePath, name, presetId) {
     const skin = skinState();
     const dataUrl = await api.imageDataUrl(filePath).catch(() => null);
@@ -5979,23 +6038,89 @@
     skin.dataUrl = dataUrl;
     skin.currentPath = filePath;
     skin.currentName = name || "скин";
+    skin.fromAccount = false;
     if (presetId !== undefined) skin.preset = presetId;
     return true;
   }
 
+  /** Перерисовать модель в модалке настроек. */
+  function redrawSkinPreview() {
+    const canvas = $("#skin-canvas");
+    if (!canvas) return;
+    const skin = skinState();
+    const rect = canvas.getBoundingClientRect();
+    const cssWidth = Math.round(rect.width || 260);
+    const cssHeight = Math.round(rect.height || 380);
+    if (!cssWidth || !cssHeight) return;
+    skinCanvasSize(canvas, cssWidth, cssHeight);
+    drawSkinModel(canvas, skin.texture || null, skin.variant, skin.yaw, skin.pitch);
+  }
+
+  /** Мини-модель для пресета: тот же рендер, маленький. */
+  function paintSkinMini(slot, texture) {
+    if (!slot || !texture) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = 96;
+    canvas.height = 140;
+    drawSkinModel(canvas, texture, "classic", -22, 6);
+    slot.innerHTML = "";
+    slot.appendChild(canvas);
+  }
+
   function bindSkin() {
     const skin = skinState();
-    if ($("#skin-canvas")) redrawSkinPreview();
+    if ($("#skin-canvas")) requestAnimationFrame(redrawSkinPreview);
 
-    // миниатюры пресетов — сами скины (голова), не нужно искать файл заново
+    // мини-скины пресетов собираем из их же PNG
     $$("[data-thumb-path]").forEach(async (slot) => {
       const dataUrl = await api.imageDataUrl(slot.dataset.thumbPath).catch(() => null);
       if (!dataUrl) return;
       const texture = await textureFromImage(dataUrl);
-      if (!texture) return;
-      slot.innerHTML = "";
-      slot.appendChild(headThumb(texture, 64));
+      if (texture) paintSkinMini(slot, texture);
     });
+
+    // поворот модели мышью: зажал ЛКМ и крутишь
+    const canvas = $("#skin-canvas");
+    if (canvas) {
+      let dragging = false;
+      let lastX = 0;
+      let lastY = 0;
+      canvas.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        dragging = true;
+        lastX = event.clientX;
+        lastY = event.clientY;
+        canvas.classList.add("is-dragging");
+        canvas.setPointerCapture(event.pointerId);
+      });
+      canvas.addEventListener("pointermove", (event) => {
+        if (!dragging) return;
+        const dx = event.clientX - lastX;
+        const dy = event.clientY - lastY;
+        lastX = event.clientX;
+        lastY = event.clientY;
+        const zoom = uiZoom();
+        skin.yaw = ((Number(skin.yaw) || 0) - (dx / zoom) * 0.6) % 360;
+        skin.pitch = Math.max(-70, Math.min(70, (Number(skin.pitch) || 0) + (dy / zoom) * 0.45));
+        redrawSkinPreview();
+      });
+      const stopDrag = (event) => {
+        if (!dragging) return;
+        dragging = false;
+        canvas.classList.remove("is-dragging");
+        if (event && event.pointerId !== undefined && canvas.hasPointerCapture(event.pointerId)) {
+          canvas.releasePointerCapture(event.pointerId);
+        }
+      };
+      canvas.addEventListener("pointerup", stopDrag);
+      canvas.addEventListener("pointercancel", stopDrag);
+      canvas.addEventListener("pointerleave", stopDrag);
+      canvas.addEventListener("dblclick", () => {
+        skin.yaw = -18;
+        skin.pitch = 6;
+        redrawSkinPreview();
+      });
+    }
 
     $$("#skin-presets .skin-preset").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -6007,7 +6132,7 @@
           return toast(`Файл пресета «${preset.name}» не читается — загрузи скин заново`, "err");
         }
         if (preset.variant === "classic" || preset.variant === "slim") skin.variant = preset.variant;
-        if (Number.isFinite(Number(preset.angle))) skin.angle = Number(preset.angle);
+        if (Number.isFinite(Number(preset.angle))) skin.yaw = Number(preset.angle);
         renderPrefs();
       });
       const del = btn.querySelector("[data-del-preset]");
@@ -6018,18 +6143,12 @@
     });
 
     $$("#skin-variant .chip").forEach((chip) => chip.addEventListener("click", () => {
-      skin.variant = chip.dataset.variant;
+      skin.variant = chip.dataset.variant === "slim" ? "slim" : "classic";
+      skin.touchedVariant = true;
       $$("#skin-variant .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
       redrawSkinPreview();
+      refreshSkinStatus();
     }));
-
-    const angle = $("#skin-angle");
-    if (angle) angle.addEventListener("input", () => {
-      skin.angle = Number(angle.value);
-      const label = $("#skin-angle-value");
-      if (label) label.textContent = `${angle.value}°`;
-      redrawSkinPreview();
-    });
 
     const upload = $("#skin-upload");
     if (upload) upload.addEventListener("click", uploadSkin);
@@ -6037,6 +6156,18 @@
     if (savePreset) savePreset.addEventListener("click", saveSkinPreset);
     const apply = $("#skin-apply");
     if (apply) apply.addEventListener("click", applySkinToAccount);
+    const refresh = $("#skin-refresh");
+    if (refresh) refresh.addEventListener("click", async () => {
+      const fresh = await refreshAccountSkin(true);
+      skinStampBump();
+      renderPrefs();
+      renderAccounts();
+      toast(fresh ? "Скин обновлён с сервера" : "Сервер не отдал скин — попробуй позже", fresh ? "ok" : "err");
+    });
+
+    window.addEventListener("resize", () => {
+      if ($("#skin-canvas")) redrawSkinPreview();
+    }, { passive: true });
   }
 
   async function uploadSkin() {
@@ -6069,7 +6200,7 @@
       name,
       path: skin.currentPath,
       variant: skin.variant || "classic",
-      angle: Number(skin.angle ?? -18)
+      angle: Math.round(Number(skin.yaw) || 0)
     };
     const known = userSkinPresets().find((item) => item.path === preset.path);
     const list = known
@@ -6119,8 +6250,13 @@
     if (button) button.disabled = true;
     try {
       await api.applySkin(skin.currentPath, skin.variant || "classic");
-      const status = $("#skin-status");
-      if (status) status.textContent = `Скин «${skin.currentName}» загружен в аккаунт.`;
+      // скин сменился в аккаунте — забираем его заново, чтобы модель и голова не отставали
+      skin.fromAccount = true;
+      skinStampBump();
+      await refreshAccountSkin(true);
+      renderAccounts();
+      refreshSkinStatus();
+      await redrawSkinPreview();
       toast(`Скин «${skin.currentName}» обновлён`, "ok");
     } catch (error) {
       toast(String(error), "err");
@@ -6130,7 +6266,11 @@
   }
 
   /** Текущий скин аккаунта — показываем при открытии профиля (только просмотр). */
-  async function refreshAccountSkin() {
+  /**
+   * Скин с сервера Mojang. `force` — обновить даже если модель уже нарисована:
+   * скин в игре могли поменять, а в лаунчере он висел старый.
+   */
+  async function refreshAccountSkin(force = false) {
     const skin = skinState();
     const active = ((state.accounts && state.accounts.accounts) || [])
       .find((item) => state.accounts && item.uuid === state.accounts.active) || null;
@@ -6139,18 +6279,26 @@
     if (!info) {
       // профиль скина не ответил — но лицензию видно по самому аккаунту
       if (licensedByAccount) skin.licensed = true;
-      return;
+      return false;
     }
     skin.licensed = Boolean(info.licensed) || licensedByAccount;
     if (info.variant && !skin.touchedVariant) skin.variant = info.variant === "slim" ? "slim" : "classic";
-    if (info.data_url && !skin.texture) {
+    // свой файл, выбранный в этом сеансе, не перебиваем серверным
+    const keepLocal = skin.currentPath && !skin.fromAccount;
+    if (info.data_url && (force ? !keepLocal : !skin.texture)) {
       const texture = await textureFromImage(info.data_url);
       if (texture) {
         skin.texture = texture;
         skin.dataUrl = info.data_url;
-        skin.currentName = skin.currentName || info.name || "скин аккаунта";
+        skin.fromAccount = true;
+        if (!keepLocal) {
+          skin.currentPath = "";
+          skin.currentName = info.name || "скин аккаунта";
+        }
       }
     }
+    if (force && info.variant && !skin.touchedVariant) skin.variant = info.variant === "slim" ? "slim" : "classic";
+    return Boolean(info.licensed || licensedByAccount);
   }
 
   /* ==================== НАСТРОЙКИ СБОРКИ (свои у каждой) ==================== */

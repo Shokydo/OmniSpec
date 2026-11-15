@@ -2229,35 +2229,96 @@ body.has-wall .home-import { background: var(--bg-1a); -webkit-backdrop-filter: 
 .prefs-side-foot .btn { width: 100%; height: var(--h); justify-content: center; color: var(--red); }
 .prefs-side-foot .btn:hover { border-color: var(--line-2); color: var(--red); background: var(--bg-4); }
 
-/* ── скин ── */
-.skin-grid { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); gap: 16px; align-items: start; }
-.skin-stage {
-  position: relative;
-  display: grid; place-items: center;
-  min-height: 300px; padding: 10px;
-  background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r);
+/* ── скин: плащи слева, модель в центре, пресеты справа ── */
+.skin-top { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.skin-top-label {
+  flex: none; font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--dim-2);
 }
-.skin-stage canvas { display: block; width: 100%; height: auto; image-rendering: auto; }
-.skin-stage-empty { font-size: 11px; color: var(--dim-2); text-align: center; padding: 20px; }
-.skin-ctrl { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.skin-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+.skin-top .chips { flex: 1 1 auto; }
+.skin-top .chips .chip { flex: 1 1 0; min-width: 0; }
+.skin-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 158px) minmax(0, 1fr) minmax(0, 196px);
+  gap: 10px;
+  align-items: stretch;
+}
+.skin-col {
+  display: flex; flex-direction: column; gap: 8px; min-width: 0;
+  padding: 9px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg-2);
+}
+.skin-col-head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--dim-2);
+}
+.skin-col-head .icon-btn { margin-left: auto; width: 22px; height: 22px; }
+.skin-col-head .icon-btn[disabled] { opacity: .4; pointer-events: none; }
+.skin-stage {
+  position: relative; min-width: 0; height: 372px;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: var(--r); background: var(--bg-2);
+  overflow: hidden;
+}
+.skin-stage canvas {
+  display: block; width: 100%; height: 100%;
+  cursor: grab; touch-action: none;
+}
+.skin-stage canvas.is-dragging { cursor: grabbing; }
+.skin-stage-hint {
+  position: absolute; left: 8px; bottom: 6px;
+  font-size: 10px; color: var(--dim-2); opacity: .8; pointer-events: none;
+}
+.skin-stage.is-empty { background: var(--bg-2); }
+.skin-stage-empty {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  height: 100%; padding: 18px; font-size: 11.5px; line-height: 1.7; color: var(--dim-2);
+}
+.skin-presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .skin-preset {
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
-  padding: 8px 6px; border-radius: var(--r);
-  background: var(--bg-2); border: 1px solid var(--line);
-  color: var(--dim); font-size: 10.5px; text-align: center;
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 6px 4px; border-radius: var(--r-sm);
+  background: var(--bg-3); border: 1px solid var(--line);
+  color: var(--dim); font-size: 10px; text-align: center;
   transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
 }
 .skin-preset:hover { background: var(--bg-3); border-color: var(--line-2); color: var(--text); }
-.skin-preset.is-active { border-color: var(--accent); background: var(--bg-4); color: var(--text); }
-.skin-preset canvas { width: 44px; height: 44px; border-radius: var(--r-sm); image-rendering: pixelated; }
-.skin-row { display: flex; align-items: center; gap: 8px; }
-.skin-row .chips { flex: 1; }
-.skin-angle { display: flex; align-items: center; gap: 10px; }
-.skin-angle input[type="range"] { flex: 1; }
-.skin-angle .val { width: 42px; text-align: right; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
-.skin-note { font-size: 10.5px; line-height: 1.55; color: var(--dim-2); }
-.skin-note.warn { color: var(--yellow, #e3b341); }
+.skin-preset.is-active { border-color: var(--accent); background: var(--bg-3); color: var(--text); }
+.skin-mini { display: block; width: 100%; aspect-ratio: 96 / 140; }
+.skin-mini canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+.skin-preset-name {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.skin-preset .preset-del {
+  position: absolute; top: 2px; right: 2px;
+  width: 15px; height: 15px; display: grid; place-items: center;
+  border-radius: 4px; font-size: 12px; line-height: 1; color: var(--dim-2); opacity: 0;
+}
+.skin-preset:hover .preset-del { opacity: .7; }
+.skin-preset .preset-del:hover { background: var(--bg-5); color: var(--red); opacity: 1; }
+.skin-presets .skin-note { grid-column: 1 / -1; }
+.skin-row { display: flex; gap: 8px; margin-top: 10px; }
+.skin-row .btn { flex: 1 1 0; justify-content: center; }
+.skin-note { font-size: 11px; line-height: 1.6; color: var(--dim-2); margin-top: 6px; }
+.skin-note.warn { color: var(--red); }
+.skin-section .tag.green { color: var(--green); border-color: var(--line-2); }
+
+/* плащи — вертикальный список в левой колонке */
+.skin-col-capes .cape-list { display: flex; flex-direction: column; gap: 6px; }
+.skin-col-capes .cape-card {
+  width: 100%; padding: 5px; gap: 8px;
+  flex-direction: row; align-items: center; justify-content: flex-start;
+  border-radius: var(--r-sm);
+}
+.skin-col-capes .cape-thumb { width: 30px; height: 48px; flex: none; }
+.skin-col-capes .cape-name { text-align: left; white-space: normal; line-height: 1.25; }
+.skin-col-capes .cape-note { font-size: 10.5px; line-height: 1.4; }
+
+@media (max-width: 860px) {
+  .skin-layout { grid-template-columns: minmax(0, 1fr); }
+  .skin-stage { height: 320px; }
+  .skin-col-capes .cape-list { flex-direction: row; flex-wrap: wrap; }
+  .skin-col-capes .cape-card { width: auto; flex: 1 1 96px; flex-direction: column; }
+}
 
 /* ── окно сведений о проекте Modrinth ── */
 .proj-box { width: min(880px, 96vw); height: min(660px, 90vh); }
@@ -2377,10 +2438,7 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 .ctx-item[disabled] { opacity: .45; pointer-events: none; }
 .ctx-caption + .ctx-item { margin-top: 2px; }
 
-/* скин переехал в «Профиль»: блок под аккаунтами */
-.profile-grid + .skin-section { margin-top: 16px; }
-.skin-section .skin-grid { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); }
-.skin-section .skin-stage { min-height: 260px; }
+.profile-grid + .skin-section { margin-top: 14px; }
 .skin-colors { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .skin-color {
   display: flex; align-items: center; gap: 6px;
@@ -2405,13 +2463,6 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 .skin-preset .preset-del:hover { background: var(--bg-5); color: var(--red); opacity: 1; }
 .skin-preset.is-user { position: relative; }
 
-/* скин внутри профиля: кнопки одного размера, компактные отступы */
-.skin-section .skin-ctrl { gap: 10px; }
-.skin-section .skin-presets { grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); }
-.skin-row { display: flex; gap: 8px; }
-.skin-row .btn { flex: 1 1 0; justify-content: center; }
-.skin-section .skin-note { margin-top: 2px; }
-.skin-section .tag.green { color: var(--green); border-color: var(--line-2); }
 .instance-dup .dup-sep { opacity: .5; margin: 0 1px; }
 .instance-dup .dup-name { margin-right: 1px; }
 
@@ -2444,21 +2495,6 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 .imp-progress .progress-fill { transition: width .18s linear; }
 .imp-progress-text { font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
 
-/* --- скин: только свои пресеты, полный оборот --- */
-.skin-stage-empty {
-  display: flex; align-items: center; justify-content: center; text-align: center;
-  height: 100%; min-height: 260px; padding: 18px;
-  font-size: 11.5px; line-height: 1.7; color: var(--dim-2);
-}
-.skin-angle { display: flex; align-items: center; gap: 10px; }
-.skin-angle input[type="range"] { flex: 1 1 auto; }
-.skin-angle .val { font-family: "JetBrains Mono", Consolas, monospace; font-size: 11px; color: var(--dim); min-width: 40px; text-align: right; }
-.skin-note { font-size: 11px; line-height: 1.6; color: var(--dim-2); }
-.skin-note.warn { color: var(--red); }
-.skin-thumb { width: 100%; height: 44px; display: flex; align-items: center; justify-content: center; }
-.skin-thumb canvas { width: 40px; height: 40px; image-rendering: pixelated; border-radius: 4px; }
-.skin-preset.is-user { padding-bottom: 6px; }
-.skin-presets .skin-note { grid-column: 1 / -1; }
 .btn:disabled { opacity: .45; pointer-events: none; }
 
 /* --- окно «Все сборки» --- */
