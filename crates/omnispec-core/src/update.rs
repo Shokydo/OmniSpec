@@ -294,7 +294,10 @@ pub async fn check(
             "{GITHUB_API}/repos/{}/{}/releases?per_page=10",
             config.owner, config.repo
         );
-        let releases: Vec<Release> = http.get_json_with_token(&url, token).await?;
+        let releases: Vec<Release> = http
+            .get_json_with_token(&url, token)
+            .await
+            .map_err(explain_api_error)?;
         for release in releases.iter() {
             if release.prerelease && !release.draft {
                 if let Some(info) = evaluate(release, current_version) {
@@ -316,10 +319,28 @@ pub async fn check(
             if text.contains("404") {
                 return Ok(None);
             }
-            return Err(error);
+            return Err(explain_api_error(error));
         }
     };
     Ok(evaluate(&release, current_version))
+}
+
+/// Понятные сообщения вместо голого JSON от GitHub.
+fn explain_api_error(error: Error) -> Error {
+    let text = error.to_string();
+    if text.contains("403") && (text.contains("rate limit") || text.contains("rate_limit")) {
+        return Error::Other(
+            "GitHub ограничил частоту запросов (60 в час на IP). Подождите несколько минут \
+             или укажите токен GitHub в настройках → «Обновления»."
+                .into(),
+        );
+    }
+    if text.contains("401") || text.contains("Bad credentials") {
+        return Error::Other(
+            "GitHub не принял токен — проверьте его в настройках → «Обновления».".into(),
+        );
+    }
+    error
 }
 
 /// Скачать новый бинарник в `<данные>/updates/`.
@@ -361,6 +382,14 @@ pub async fn download(
             info.asset_size
         )));
     }
+    // На Unix у скачанного файла нет права на исполнение — без этого подмена
+    // exe пройдёт, а вот запуск упадёт с «Permission denied».
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+    }
+
     reporter.emit("update", info.asset_size, info.asset_size, "загрузка завершена");
     Ok(dest)
 }
@@ -468,7 +497,16 @@ pub fn run_helper(new_binary: &Path, target: &Path) -> i32 {
     // Помощник тоже скопирован из exe — удалим его при следующем запуске.
     let _ = std::fs::metadata(target);
 
-    match std::process::Command::new(target).spawn() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o755));
+    }
+
+    match std::process::Command::new(target)
+        .current_dir(target.parent().unwrap_or_else(|| Path::new(".")))
+        .spawn()
+    {
         Ok(_) => 0,
         Err(error) => {
             eprintln!("[omnispec] не удалось перезапустить лаунчер: {error}");
@@ -481,7 +519,24 @@ pub fn run_helper(new_binary: &Path, target: &Path) -> i32 {
 #[cfg(unix)]
 pub fn apply_now(new_binary: &Path, current_exe: &Path) -> Result<()> {
     std::fs::rename(new_binary, current_exe)?;
-    std::process::Command::new(current_exe).spawn()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(current_exe, std::fs::Permissions::from_mode(0o755));
+    }
+    std::process::Command::new(current_exe)
+        .current_dir(
+            current_exe
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(".")),
+        )
+        .spawn()
+        .map_err(|error| {
+            Error::Other(format!(
+                "обновление установлено, но запустить лаунчер не удалось ({error}). Запустите его вручную."
+            ))
+        })?;
     Ok(())
 }
 

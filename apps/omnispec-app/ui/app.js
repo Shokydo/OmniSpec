@@ -1187,7 +1187,7 @@
     else renderTab();
     try {
       await initUpdates();
-    await attachBackendEvents();
+      await attachBackendEvents();
     } catch (error) {
       // Без разрешений Tauri события недоступны — лаунчер продолжит работать,
       // просто без живого лога (см. capabilities/default.json).

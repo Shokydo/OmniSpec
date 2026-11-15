@@ -318,8 +318,16 @@ async fn run(command: &str, args: Args) -> omnispec_core::Result<()> {
                 .map(|value| value.to_string())
                 .or_else(|| settings.update_repo.clone())
                 .ok_or("не указан репозиторий обновлений")?;
-            let config = UpdateConfig::from_slug(&repo)
-                .ok_or_else(|| omnispec_core::Error::Other(format!("неверный репозиторий: {repo}")))?;
+            let mut config: UpdateConfig = settings
+                .update_config()
+                .unwrap_or_else(|| UpdateConfig::new("Shokydo", "OmniSpec"));
+            // --repo важнее настроек, но токен и «бета-версии» берём из settings.json
+            if args.flag("repo").is_some() {
+                let parsed = UpdateConfig::from_slug(&repo)
+                    .ok_or_else(|| omnispec_core::Error::Other(format!("неверный репозиторий: {repo}")))?;
+                config.owner = parsed.owner;
+                config.repo = parsed.repo;
+            }
             let current = args
                 .flag("current")
                 .map(|value| value.to_string())
@@ -334,7 +342,9 @@ async fn run(command: &str, args: Args) -> omnispec_core::Result<()> {
                     if let Some(date) = &info.published_at {
                         println!("Опубликовано: {date}");
                     }
-                    if !info.notes.trim().is_empty() {
+                    if info.notes.trim().is_empty() {
+                        println!("(описание релиза пустое)");
+                    } else {
                         println!("--- описание релиза ---\n{}", info.notes);
                     }
                 }
