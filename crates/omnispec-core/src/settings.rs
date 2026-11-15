@@ -166,22 +166,15 @@ pub struct Category {
 pub struct SkinPreset {
     pub id: String,
     pub name: String,
+    /// PNG скина, скопированный в папку лаунчера: пресет не зависит от исходника.
+    #[serde(default)]
+    pub path: String,
+    /// classic (wide) | slim.
     #[serde(default)]
     pub variant: String,
+    /// Угол поворота превью, −180…180.
     #[serde(default)]
     pub angle: i32,
-    #[serde(default)]
-    pub skin: String,
-    #[serde(default)]
-    pub hair: String,
-    #[serde(default)]
-    pub shirt: String,
-    #[serde(default)]
-    pub pants: String,
-    #[serde(default)]
-    pub shoe: String,
-    #[serde(default)]
-    pub accent: String,
 }
 
 impl Default for Settings {

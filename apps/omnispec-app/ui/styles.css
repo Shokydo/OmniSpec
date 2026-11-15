@@ -2403,3 +2403,83 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 .skin-section .skin-note { margin-top: 2px; }
 .skin-section .tag.green { color: var(--green); border-color: var(--line-2); }
 .instance-dup .dup-sep { opacity: .5; }
+
+/* панель действий прячется, пока сборка не выбрана — контент поднимается выше */
+.toolbar.is-idle { display: none; }
+.home-scroll { padding-top: 4px; }
+
+/* ==================== ЭТАП 13 ==================== */
+
+/* --- уведомление/подтверждение в стиле лаунчера --- */
+.confirm-box {
+  width: min(520px, 94vw); height: auto; min-height: 0;
+  border-radius: var(--r-lg); overflow: hidden;
+}
+.confirm-box .modal-body { padding: 16px 20px 18px; min-height: 0; }
+.confirm-box .modal-head { height: 48px; border-bottom: 1px solid var(--line); }
+.confirm-text { font-size: 12.5px; line-height: 1.7; color: var(--dim); }
+.confirm-box .modal-foot { gap: 8px; }
+.confirm-box .modal-foot .btn { min-width: 148px; justify-content: center; }
+.btn.confirm-ok.btn-danger { background: var(--red); border-color: var(--red); color: #160f0e; font-weight: 600; }
+.btn.confirm-ok.btn-danger:hover { background: #ff8f86; border-color: #ff8f86; }
+
+/* --- полоса процессов импорта на главной --- */
+.imp-progress {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 10px; padding: 8px 10px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-sm);
+}
+.imp-progress .progress-bar { flex: 1 1 auto; width: auto; height: 6px; }
+.imp-progress .progress-fill { transition: width .18s linear; }
+.imp-progress-text { font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
+
+/* --- скин: только свои пресеты, полный оборот --- */
+.skin-stage-empty {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  height: 100%; min-height: 260px; padding: 18px;
+  font-size: 11.5px; line-height: 1.7; color: var(--dim-2);
+}
+.skin-angle { display: flex; align-items: center; gap: 10px; }
+.skin-angle input[type="range"] { flex: 1 1 auto; }
+.skin-angle .val { font-family: "JetBrains Mono", Consolas, monospace; font-size: 11px; color: var(--dim); min-width: 40px; text-align: right; }
+.skin-note { font-size: 11px; line-height: 1.6; color: var(--dim-2); }
+.skin-note.warn { color: var(--red); }
+.skin-thumb { width: 100%; height: 44px; display: flex; align-items: center; justify-content: center; }
+.skin-thumb canvas { width: 40px; height: 40px; image-rendering: pixelated; border-radius: 4px; }
+.skin-preset.is-user { padding-bottom: 6px; }
+.skin-presets .skin-note { grid-column: 1 / -1; }
+.btn:disabled { opacity: .45; pointer-events: none; }
+
+/* --- окно «Все сборки» --- */
+.builds-box {
+  width: min(1180px, 94vw); height: min(760px, 88vh);
+  display: flex; flex-direction: column;
+}
+.builds-body { flex: 1 1 auto; overflow-y: auto; padding: 4px 18px 20px; }
+.builds-group { margin-top: 16px; }
+.builds-group:first-child { margin-top: 4px; }
+.builds-group-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 2px 8px; border-bottom: 1px solid var(--line-2); margin-bottom: 12px;
+}
+.builds-group-name { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
+.builds-group-count { font-size: 10.5px; color: var(--dim-2); }
+.builds-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+.build-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 16px 10px 12px; min-height: 172px; text-align: center;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r);
+  color: var(--text); cursor: pointer; transition: border-color .12s, background .12s;
+}
+.build-tile:hover { background: var(--panel-3); border-color: var(--line-3); }
+.build-tile.is-running { border-color: var(--green); }
+.build-tile-shot {
+  width: 84px; height: 84px; display: flex; align-items: center; justify-content: center;
+  border-radius: var(--r); overflow: hidden; background: var(--panel-3); border: 1px solid var(--line);
+}
+.build-tile-icon { width: 84px; height: 84px; object-fit: cover; image-rendering: pixelated; }
+.build-tile-icon.is-letter { display: flex; align-items: center; justify-content: center; font-size: 30px; font-weight: 600; color: var(--dim); }
+.build-tile-name { font-size: 12px; font-weight: 500; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.build-tile-sub { font-size: 10.5px; color: var(--dim-2); }
+.build-tile-flag { font-size: 10px; color: var(--green); letter-spacing: .03em; }
+.builds-empty { padding: 40px 0; text-align: center; font-size: 12px; color: var(--dim-2); }

@@ -380,7 +380,12 @@
       return;
     }
     if (action === "delete") {
-      if (!confirm(`Удалить сборку «${fresh.name}» вместе с модами и мирами?`)) return;
+      const okDelete = await askConfirm({
+        title: "Удалить сборку",
+        text: `Сборка «${fresh.name}» будет удалена вместе с модами и мирами. Файлы игры останутся в кэше.`,
+        ok: "Удалить"
+      });
+      if (!okDelete) return;
       try {
         await api.deleteInstance(fresh.id);
         if (state.selectedId === fresh.id) state.selectedId = null;
@@ -444,6 +449,116 @@
       toast("Иконка обновлена", "ok");
       if (state.tab === "settings") renderSettings();
     } catch (err) { toast(String(err), "err"); }
+  }
+
+  /* ==================== ОКНО «ВСЕ СБОРКИ» (сетка иконок по категориям) ==================== */
+  function allBuildsHtml() {
+    const instances = state.instances || [];
+    const cats = (state.settings && state.settings.categories) || [];
+    const groups = [];
+    const uncategorized = instances.filter((item) => !item.category || !cats.some((cat) => cat.id === item.category));
+    const ordered = [
+      ...cats.map((cat) => ({ id: cat.id, name: cat.name, items: instances.filter((item) => item.category === cat.id) })),
+      { id: "", name: "Без категории", items: uncategorized }
+    ].filter((group) => group.items.length);
+    if (!ordered.length) {
+      return `<div class="builds-empty">Сборок пока нет.</div>`;
+    }
+    for (const group of ordered) {
+      groups.push(`
+        <section class="builds-group">
+          <div class="builds-group-head">
+            <span class="builds-group-name">${esc(group.name)}</span>
+            <span class="builds-group-count mono">${group.items.length}</span>
+          </div>
+          <div class="builds-grid">
+            ${group.items.map((item) => buildTileHtml(item)).join("")}
+          </div>
+        </section>`);
+    }
+    return groups.join("");
+  }
+
+  function buildTileHtml(item) {
+    const running = state.running.has(item.id);
+    const sessions = sessionsOf(item.id);
+    const icon = item.icon
+      ? `<img class="build-tile-icon" src="${esc(item.icon)}" alt="">`
+      : `<span class="build-tile-icon is-letter">${esc((item.name || "?").trim().slice(0, 1).toUpperCase())}</span>`;
+    const version = [item.mc_version, loaderLabel(item.loader)].filter(Boolean).join(" · ");
+    return `
+      <button class="build-tile ${running ? "is-running" : ""}" data-build-tile="${esc(item.id)}" title="${esc(item.name)}">
+        <span class="build-tile-shot">${icon}</span>
+        <span class="build-tile-name">${esc(item.name)}</span>
+        <span class="build-tile-sub mono">${esc(version || "—")}</span>
+        ${running ? `<span class="build-tile-flag">${sessions > 1 ? `${sessions} окна` : "запущена"}</span>` : ""}
+      </button>`;
+  }
+
+  function binderAllBuilds() {
+    const modal = $("#modal-builds");
+    if (!modal) return;
+    const open = () => {
+      $("#builds-body").innerHTML = allBuildsHtml();
+      modal.hidden = false;
+      loadInstanceIcons();
+    };
+    const btn = $("#btn-grid");
+    if (btn) btn.addEventListener("click", open);
+    const close = () => { modal.hidden = true; };
+    $$("[data-close-builds]", modal).forEach((el) => el.addEventListener("click", close));
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !modal.hidden) close();
+    });
+    modal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-builds") close(); });
+    $("#builds-body").addEventListener("click", (event) => {
+      const tile = event.target.closest("[data-build-tile]");
+      if (!tile) return;
+      close();
+      selectInstance(tile.dataset.buildTile);
+    });
+    $("#builds-body").addEventListener("contextmenu", (event) => {
+      const tile = event.target.closest("[data-build-tile]");
+      if (!tile) return;
+      event.preventDefault();
+      const meta = state.instances.find((item) => item.id === tile.dataset.buildTile);
+      if (!meta) return;
+      close();
+      selectInstance(meta.id);
+      openInstanceMenu(event.clientX, event.clientY, meta);
+    });
+  }
+
+  /* ==================== ОКНО ПОДТВЕРЖДЕНИЯ ==================== */
+  /** confirm в стиле лаунчера: без системного «Сообщение с tauri.localhost». */
+  function askConfirm({ title = "Подтверждение", text = "", ok = "Удалить", danger = true } = {}) {
+    return new Promise((resolve) => {
+      const modal = $("#modal-confirm");
+      if (!modal) { resolve(window.confirm(text)); return; }
+      $("#confirm-title").textContent = title;
+      $("#confirm-text").textContent = text;
+      const okBtn = $("#confirm-ok");
+      okBtn.textContent = ok;
+      okBtn.className = `btn confirm-ok ${danger ? "btn-danger" : "btn-primary"}`;
+      modal.hidden = false;
+      setTimeout(() => okBtn.focus(), 30);
+      const finish = (result) => {
+        modal.hidden = true;
+        okBtn.onclick = null;
+        $("#confirm-cancel").onclick = null;
+        document.removeEventListener("keydown", onKey);
+        resolve(result);
+      };
+      const onKey = (event) => {
+        if (event.key === "Escape") finish(false);
+        if (event.key === "Enter") finish(true);
+      };
+      document.addEventListener("keydown", onKey);
+      okBtn.onclick = () => finish(true);
+      $("#confirm-cancel").onclick = () => finish(false);
+      $$("[data-close-confirm]", modal).forEach((btn) => { btn.onclick = () => finish(false); });
+      modal.onmousedown = (event) => { if (event.target.id === "modal-confirm") finish(false); };
+    });
   }
 
   /* ==================== ОКНО ВВОДА ==================== */
@@ -597,6 +712,34 @@
     };
   }
 
+  /** Демо-режим в браузере: скин 64×64 рисуется на канвасе (в exe приходит из Rust). */
+  let demoSkinCache = null;
+  function demoSkinDataUrl() {
+    if (demoSkinCache) return demoSkinCache;
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d");
+    const paint = (x, y, w, h, color) => { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); };
+    paint(0, 0, 64, 64, "#00000000");
+    paint(0, 0, 64, 16, "#e8b98f");   // голова
+    paint(8, 0, 16, 8, "#3b2a20");    // волосы
+    paint(0, 16, 64, 16, "#4a7ec8");  // тело
+    paint(0, 32, 64, 32, "#2f3d55");  // ноги
+    demoSkinCache = canvas.toDataURL("image/png");
+    return demoSkinCache;
+  }
+
+  /** Демо-прогресс: событие за событием, чтобы полоса процессов была видна. */
+  let demoProgressCb = null;
+  async function demoProgress(stage, detail) {
+    const total = 4;
+    for (let done = 0; done <= total; done += 1) {
+      if (demoProgressCb) demoProgressCb({ stage, done, total, detail });
+      await new Promise((resolve) => setTimeout(resolve, 90));
+    }
+  }
+
   const DEMO = {
     instances: [
       { id: "fabulously-optimized", name: "Fabulously Optimized", category: "cat-perf", mc_version: "1.21.4", loader: { type: "fabric", version: "0.16.9" }, icon: null, created: now - 86400 * 9, last_played: now - 3600, playtime_secs: 7200, memory_mb: null, java_path: null, jvm_args: null, notes: "", source: "modrinth", source_url: null, version_override: null },
@@ -683,6 +826,7 @@
     applySkin: (path, variant) => invoke("apply_skin", { path, variant }),
     saveSkinPng: (dataUrl, name) => invoke("save_skin_png", { dataUrl, name }),
     imageDataUrl: (path) => invoke("image_data_url", { path }),
+    importSkin: (path) => invoke("import_skin", { path }),
     instancePath: (instanceId) => invoke("instance_path", { instanceId }),
     openUrl: (url) => invoke("open_url", { url })
   };
@@ -737,11 +881,16 @@
     modrinthProject: async (projectId) => demoProject(projectId),
     accountSkin: async () => {
       const active = DEMO.accounts.find((a) => a.uuid === DEMO.active);
-      return { licensed: Boolean(active && active.kind === "microsoft"), variant: "classic", data_url: null };
+      return { licensed: Boolean(active && active.kind === "microsoft"), variant: "classic", data_url: demoSkinDataUrl() };
     },
     applySkin: async () => ({ ok: true }),
     saveSkinPng: async () => "demo/skins/preset.png",
-    imageDataUrl: async () => null,
+    imageDataUrl: async () => demoSkinDataUrl(),
+    importSkin: async (path) => ({
+      path,
+      name: String(path).split(/[\\/]/).pop().replace(/\.[^.]+$/, "") || "skin",
+      data_url: demoSkinDataUrl()
+    }),
     versions: async () => DEMO.versions,
     loaderVersions: async (kind) => (kind === "vanilla" ? [] : [{ version: "0.16.9", stable: true }, { version: "0.16.5", stable: true }, { version: "0.15.11", stable: false }]),
     installInstance: async () => null,
@@ -791,7 +940,11 @@
     ]),
     installMod: async (_i, projectId) => ({ installed: [`${projectId}-1.0.0.jar`], skipped: [] }),
     installModVersion: async () => ({ installed: ["mod.jar"], skipped: [] }),
-    installModpack: async () => DEMO.instances[0],
+    installModpack: async () => {
+      await demoProgress("modpack", "читаем манифест модпака");
+      await demoProgress("mods", "скачиваем моды");
+      return DEMO.instances[0];
+    },
     listDir: async (_id, sub) => {
       const tree = {
         "": [
@@ -843,6 +996,8 @@
     },
     exportInstance: async (_id, path) => path,
     installZip: async (payload) => {
+      await demoProgress("unzip", "распаковка архива сборки");
+      await demoProgress("copy", "перенос модов и конфигов");
       const meta = { ...DEMO.instances[0], id: "demo-" + Date.now(), name: "Zip сборка", mc_version: payload.mcVersion, loader: { type: "vanilla" } };
       DEMO.instances.unshift(meta);
       return meta;
@@ -893,7 +1048,7 @@
     customWallpaper: async () => null,
     instancePath: async (id) => `demo/instances/${id}`,
     openUrl: async (url) => { window.open(url, "_blank"); return null; },
-    onProgress: () => Promise.resolve(),
+    onProgress: (cb) => { demoProgressCb = cb; return Promise.resolve(); },
     onLog: () => Promise.resolve(),
     onExit: () => Promise.resolve(),
     onToast: () => Promise.resolve()
@@ -1327,7 +1482,12 @@
       }
       if (act === "collapse") await toggleCategory(id);
       if (act === "delete") {
-        if (!confirm(`Удалить категорию «${category.name}»? Сборки останутся в списке.`)) return;
+        const okCategory = await askConfirm({
+          title: "Удалить категорию",
+          text: `Категория «${category.name}» будет удалена. Сборки останутся в списке.`,
+          ok: "Удалить"
+        });
+        if (!okCategory) return;
         const own = state.instances.filter((item) => item.category === id);
         for (const item of own) {
           try {
@@ -1396,7 +1556,38 @@
   }
 
   /* ==================== ПРОГРЕСС ==================== */
+  const PROGRESS_STAGES = {
+    version: "версия", libraries: "библиотеки", assets: "ресурсы", java: "Java",
+    mods: "моды", modpack: "модпак", loader: "загрузчик", launch: "запуск",
+    unzip: "распаковка", copy: "копирование", import: "импорт"
+  };
+
+  function progressInfo(payload) {
+    const total = Number(payload.total || 0);
+    const done = Number(payload.done || 0);
+    const percent = total > 0 ? Math.max(0, Math.min(100, Math.round((done / total) * 100))) : 0;
+    const stage = PROGRESS_STAGES[payload.stage] || payload.stage || "импорт";
+    const detail = `${stage}: ${payload.detail || "…"}`.slice(0, 80);
+    return { percent, text: total > 0 ? `${detail} · ${percent}%` : detail };
+  }
+
+  /** Полоса процессов на главной: видна всё время импорта/распаковки. */
+  function renderImpProgress() {
+    const box = $("#imp-progress");
+    if (!box) return;
+    const payload = state.progress;
+    if (!payload) { box.hidden = true; return; }
+    box.hidden = false;
+    const info = progressInfo(payload);
+    const fill = $("#imp-progress-fill");
+    if (fill) fill.style.width = `${info.percent}%`;
+    const text = $("#imp-progress-text");
+    if (text) text.textContent = info.text;
+  }
+
   function setProgress(payload) {
+    state.progress = payload || null;
+    renderImpProgress();
     const box = $("#progress");
     if (!payload) { box.hidden = true; return; }
     box.hidden = false;
@@ -2097,6 +2288,10 @@
         <span class="home-sub">${esc(cfg.status || "файл модпака, другой лаунчер или ссылка")}</span>
       </button>
       <div class="imp-body">${parts.join("")}</div>
+      <div class="imp-progress" id="imp-progress" hidden>
+        <div class="progress-bar"><div class="progress-fill" id="imp-progress-fill"></div></div>
+        <span class="imp-progress-text mono" id="imp-progress-text"></span>
+      </div>
     </section>`;
   }
 
@@ -2107,15 +2302,6 @@
     const instances = (state.instances || []).slice().sort((a, b) => (b.last_played || b.created || 0) - (a.last_played || a.created || 0));
     $("#tab-body").innerHTML = `
       <div class="home">
-        <div class="home-head">
-          <div class="home-titles">
-            <div class="home-title">Сборки</div>
-            <div class="home-sub">${instances.length ? `${instances.length} ${instances.length === 1 ? "сборка" : instances.length < 5 ? "сборки" : "сборок"} — своя папка, моды, миры` : "Пока пусто: создай сборку или добавь готовую"}</div>
-          </div>
-          <div class="home-actions">
-            <button class="btn btn-primary" id="home-create"><svg class="ic"><use href="#i-plus"/></svg>Создать сборку</button>
-          </div>
-        </div>
         <div class="home-scroll" id="home-scroll">
           ${instances.length ? `<div class="home-section-title">Недавнее</div><div class="home-grid">${instances.map(homeInstanceHtml).join("")}</div>` : ""}
           ${homeImportHtml()}
@@ -2141,7 +2327,6 @@
       state.tab = "console";
       renderTab();
     }));
-    $("#home-create").addEventListener("click", openCreate);
     $("#dv-query").addEventListener("keydown", (event) => { if (event.key === "Enter") dvReset(); });
     $$("#tab-body [data-dv-view]").forEach((btn) => btn.addEventListener("click", () => {
       state.discover.view = btn.dataset.dvView;
@@ -2310,6 +2495,7 @@
       cfg.status = "";
     } finally {
       cfg.busy = false;
+      setProgress(null);
       if (state.tab === "discover") renderDiscover();
     }
   }
@@ -2995,7 +3181,12 @@
     if (action === "profile") { openPrefs("profile"); return; }
     if (action === "add") { openAccounts(); return; }
     if (action === "remove") {
-      if (!confirm(`Удалить аккаунт «${account.username}»?`)) return;
+      const okAccount = await askConfirm({
+        title: "Удалить аккаунт",
+        text: `Аккаунт «${account.username}» будет удалён из лаунчера.`,
+        ok: "Удалить"
+      });
+      if (!okAccount) return;
       try {
         state.accounts = await api.accountRemove(account.uuid);
         renderAccounts();
@@ -3761,8 +3952,13 @@
     const save = $("#prefs-save");
     if (save) save.addEventListener("click", saveLauncherSettings);
     const reset = $("#prefs-reset");
-    if (reset) reset.addEventListener("click", () => {
-      if (!confirm("Сбросить оформление, фон, звук и Java к значениям по умолчанию?")) return;
+    if (reset) reset.addEventListener("click", async () => {
+      const okReset = await askConfirm({
+        title: "Сбросить настройки",
+        text: "Оформление, фон, звук и Java вернутся к значениям по умолчанию.",
+        ok: "Сбросить"
+      });
+      if (!okReset) return;
       state.theme = applyTheme("dark");
       applyShape("soft");
       state.fx = "wave";
@@ -3838,18 +4034,6 @@
 
   /* ==================== СКИН: ПРЕСЕТЫ И РЕНДЕР ==================== */
 
-  /** Пресеты: цвет кожи, волос, одежды + акцент. Из них собирается PNG 64×64. */
-  const SKIN_PRESETS = [
-    { id: "classic", name: "Стив", skin: "#c49a76", hair: "#3b2a1c", shirt: "#2f8faf", pants: "#3a3f8f", shoe: "#3b3b44", accent: "#8fd6e8" },
-    { id: "shadow", name: "Тень", skin: "#7d6b5d", hair: "#181a1f", shirt: "#22252c", pants: "#191b21", shoe: "#111318", accent: "#79c0ff" },
-    { id: "neon", name: "Неон", skin: "#d8d3c8", hair: "#2a1f3d", shirt: "#1a1030", pants: "#101a2e", shoe: "#0b0d14", accent: "#7ee787" },
-    { id: "forest", name: "Лес", skin: "#c9a077", hair: "#2f2418", shirt: "#2f5d3a", pants: "#3b4a2f", shoe: "#2a2a22", accent: "#9ad36b" },
-    { id: "sand", name: "Пустыня", skin: "#d9b489", hair: "#5b4227", shirt: "#c8a25c", pants: "#8d6b3f", shoe: "#4a3a26", accent: "#f2d98c" },
-    { id: "ice", name: "Лёд", skin: "#e0d6cc", hair: "#9ec8e0", shirt: "#4f7fa8", pants: "#2f4a63", shoe: "#24303d", accent: "#bfe6ff" },
-    { id: "ember", name: "Уголь", skin: "#bf9670", hair: "#241a14", shirt: "#8f2f2f", pants: "#3a2a26", shoe: "#22201e", accent: "#ff7b72" },
-    { id: "mono", name: "Монохром", skin: "#cfcfcf", hair: "#4a4a4a", shirt: "#e8e8e8", pants: "#6a6a6a", shoe: "#3a3a3a", accent: "#ffffff" }
-  ];
-
   /** UV-разметка частей скина 64×64 (как в ванильном формате). */
   function skinBoxes(variant) {
     const aw = variant === "slim" ? 3 : 4;
@@ -3885,118 +4069,6 @@
         over: { front: [4, 52, 4, 12], back: [12, 52, 4, 12], left: [8, 52, 4, 12], right: [0, 52, 4, 12], top: [4, 48, 4, 4], bottom: [8, 48, 4, 4] }
       }
     ];
-  }
-
-  /** Затемнение/осветление цвета для объёма. */
-  function shadeColor(hex, amount) {
-    const value = parseInt(String(hex).replace("#", ""), 16);
-    const mix = (channel) => {
-      const next = amount < 0
-        ? channel * (1 + amount)
-        : channel + (255 - channel) * amount;
-      return Math.max(0, Math.min(255, Math.round(next)));
-    };
-    const r = mix((value >> 16) & 255);
-    const g = mix((value >> 8) & 255);
-    const b = mix(value & 255);
-    return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
-  }
-
-  /** Текстура 64×64 из пресета: грани с разным светом + второй слой. */
-  function buildSkinTexture(preset) {
-    const canvas = document.createElement("canvas");
-    canvas.width = 64;
-    canvas.height = 64;
-    const ctx = canvas.getContext("2d");
-    const fill = (x, y, w, h, color) => { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); };
-    const faces = (uv, front, side, back, top, bottom) => {
-      fill(uv.front[0], uv.front[1], uv.front[2], uv.front[3], front);
-      fill(uv.left[0], uv.left[1], uv.left[2], uv.left[3], side);
-      fill(uv.right[0], uv.right[1], uv.right[2], uv.right[3], shadeColor(side, -0.08));
-      fill(uv.back[0], uv.back[1], uv.back[2], uv.back[3], back);
-      fill(uv.top[0], uv.top[1], uv.top[2], uv.top[3], top);
-      fill(uv.bottom[0], uv.bottom[1], uv.bottom[2], uv.bottom[3], bottom);
-    };
-
-    const boxes = skinBoxes("classic");
-    const byName = {};
-    boxes.forEach((box) => { byName[box.name] = box; });
-
-    // ── база: голова ──
-    const head = byName.head;
-    faces(head.base, preset.skin, shadeColor(preset.skin, -0.16), preset.hair, preset.hair, shadeColor(preset.skin, -0.34));
-    fill(8, 8, 8, 2, preset.hair);                       // чёлка
-    fill(8, 10, 1, 2, preset.hair);
-    fill(15, 10, 1, 2, preset.hair);
-    fill(9, 12, 1, 1, "#1b1b1f");                        // глаза
-    fill(14, 12, 1, 1, "#1b1b1f");
-    fill(9, 11, 1, 1, "#ffffff");                        // блики
-    fill(14, 11, 1, 1, "#ffffff");
-    fill(11, 14, 2, 1, shadeColor(preset.skin, -0.34));  // рот
-
-    // ── база: тело ──
-    const body = byName.body;
-    faces(body.base,
-      preset.shirt,
-      shadeColor(preset.shirt, -0.14),
-      shadeColor(preset.shirt, -0.24),
-      shadeColor(preset.shirt, 0.10),
-      shadeColor(preset.shirt, -0.34));
-    fill(20, 20, 8, 1, preset.accent);                   // воротник
-    fill(20, 21, 1, 8, preset.accent);                   // молния
-    fill(27, 21, 1, 8, shadeColor(preset.accent, -0.2));
-    fill(20, 30, 8, 2, preset.pants);                    // ремень
-    fill(23, 30, 2, 2, preset.accent);                   // пряжка
-
-    // ── база: руки ──
-    ["armR", "armL"].forEach((name) => {
-      faces(byName[name].base,
-        preset.shirt,
-        shadeColor(preset.shirt, -0.14),
-        shadeColor(preset.shirt, -0.24),
-        shadeColor(preset.shirt, 0.10),
-        shadeColor(preset.shirt, -0.3));
-    });
-    // кисти: нижние 3 пикселя рукавов
-    [[44, 29], [40, 29], [48, 29], [52, 29]].forEach(([x, y]) => fill(x, y, 4, 3, preset.skin));
-    [[36, 61], [32, 61], [40, 61], [44, 61]].forEach(([x, y]) => fill(x, y, 4, 3, preset.skin));
-    fill(48, 16, 4, 4, preset.skin);
-    fill(40, 48, 4, 4, preset.skin);
-
-    // ── база: ноги ──
-    ["legR", "legL"].forEach((name) => {
-      faces(byName[name].base,
-        preset.pants,
-        shadeColor(preset.pants, -0.14),
-        shadeColor(preset.pants, -0.24),
-        shadeColor(preset.pants, 0.10),
-        preset.shoe);
-    });
-    // обувь: нижние 4 пикселя
-    fill(4, 28, 4, 4, preset.shoe);
-    fill(0, 28, 4, 4, shadeColor(preset.shoe, -0.14));
-    fill(8, 28, 4, 4, shadeColor(preset.shoe, -0.2));
-    fill(12, 28, 4, 4, shadeColor(preset.shoe, -0.24));
-    fill(20, 60, 4, 4, preset.shoe);
-    fill(16, 60, 4, 4, shadeColor(preset.shoe, -0.14));
-    fill(24, 60, 4, 4, shadeColor(preset.shoe, -0.2));
-    fill(28, 60, 4, 4, shadeColor(preset.shoe, -0.24));
-
-    // ── второй слой: кепка ──
-    fill(40, 0, 8, 8, preset.accent);
-    fill(32, 8, 8, 8, shadeColor(preset.accent, -0.14));
-    fill(48, 8, 8, 8, shadeColor(preset.accent, -0.22));
-    fill(56, 8, 8, 8, shadeColor(preset.accent, -0.3));
-    fill(40, 8, 8, 2, shadeColor(preset.accent, 0.08));  // козырёк
-
-    // ── второй слой: жилет по бокам ──
-    fill(20, 36, 2, 10, preset.accent);
-    fill(26, 36, 2, 10, preset.accent);
-    fill(32, 36, 2, 10, shadeColor(preset.accent, -0.24));
-    fill(38, 36, 2, 10, shadeColor(preset.accent, -0.24));
-    fill(16, 36, 4, 10, shadeColor(preset.accent, -0.14));
-    fill(28, 36, 4, 10, shadeColor(preset.accent, -0.2));
-    return canvas;
   }
 
   /** Трёхмерный предпросмотр: обрезка повёрнута на угол, второй слой сверху. */
@@ -4097,57 +4169,28 @@
     });
   }
 
-  /** Состояние раздела «Скин» (лежит в профиле). */
+  /** Состояние раздела «Скин» (живёт в профиле). */
   function skinState() {
     if (!state.skin) {
-      const base = SKIN_PRESETS[0];
-      state.skin = { preset: base.id, variant: "classic", angle: -18, mode: "preset", colors: colorsOfPreset(base) };
+      state.skin = { preset: null, variant: "classic", angle: -18, licensed: false, currentPath: "", currentName: "", texture: null };
     }
-    if (!state.skin.colors) state.skin.colors = colorsOfPreset(SKIN_PRESETS[0]);
     return state.skin;
   }
 
-  /** Сохранённые пользователем пресеты (сколько угодно). */
+  /** Сохранённые пресеты — это скины, которые пользователь загрузил сам. */
   function userSkinPresets() {
     const list = state.settings && Array.isArray(state.settings.skin_presets) ? state.settings.skin_presets : [];
-    return list.filter((item) => item && item.id);
-  }
-
-  function colorsOfPreset(preset) {
-    return {
-      skin: preset.skin || "#c49a76",
-      hair: preset.hair || "#3b2a1c",
-      shirt: preset.shirt || "#2f8faf",
-      pants: preset.pants || "#3a3f8f",
-      shoe: preset.shoe || "#3b3b44",
-      accent: preset.accent || "#8fd6e8"
-    };
-  }
-
-  function allSkinPresets() {
-    return [...SKIN_PRESETS, ...userSkinPresets()];
+    return list.filter((item) => item && item.id && item.path);
   }
 
   function findSkinPreset(id) {
-    return allSkinPresets().find((preset) => preset.id === id) || null;
+    return userSkinPresets().find((preset) => preset.id === id) || null;
   }
-
-  const SKIN_COLOR_FIELDS = [
-    ["skin", "кожа"], ["hair", "волосы"], ["shirt", "рубашка"],
-    ["pants", "штаны"], ["shoe", "обувь"], ["accent", "акцент"]
-  ];
 
   function skinSectionHtml() {
     const skin = skinState();
     const licensed = Boolean(skin.licensed);
-    const variant = skin.variant || "classic";
-    const presetButton = (preset, isUser) => `
-      <button class="skin-preset ${isUser ? "is-user" : ""} ${preset.id === skin.preset ? "is-active" : ""}"
-              data-preset="${esc(preset.id)}" ${isUser ? 'data-user="1"' : ""} title="${esc(preset.name)}">
-        <canvas data-preset-thumb="${esc(preset.id)}" width="64" height="64"></canvas>
-        <span>${esc(preset.name)}</span>
-        ${isUser ? `<span class="preset-del" data-del-preset="${esc(preset.id)}" title="Удалить пресет">×</span>` : ""}
-      </button>`;
+    const presets = userSkinPresets();
     return `
       <section class="prefs-section skin-section">
         <div class="prefs-label-row">
@@ -4156,82 +4199,113 @@
           <span class="tag ${licensed ? "green" : ""}">${licensed ? "лицензия" : "только лицензия"}</span>
         </div>
         <div class="skin-grid">
-          <div class="skin-stage"><canvas id="skin-canvas" width="640" height="900"></canvas></div>
+          <div class="skin-stage">
+            ${skin.texture ? `<canvas id="skin-canvas" width="640" height="760"></canvas>`
+              : `<div class="skin-stage-empty">Загрузи скин PNG 64×64 — он появится здесь в объёме.</div>`}
+          </div>
           <div class="skin-ctrl">
             <div class="chips" id="skin-variant">
-              <button class="chip ${variant === "classic" ? "is-active" : ""}" data-variant="classic">Wide (4 px)</button>
-              <button class="chip ${variant === "slim" ? "is-active" : ""}" data-variant="slim">Slim (3 px)</button>
-            </div>
-            <div class="skin-colors">
-              ${SKIN_COLOR_FIELDS.map(([field, label]) => `
-                <label class="skin-color" title="${label}">
-                  <input type="color" data-skin-color="${field}" value="${skin.colors[field] || "#000000"}" />
-                  <span>${label}</span>
-                </label>`).join("")}
+              <button class="chip ${skin.variant === "classic" ? "is-active" : ""}" data-variant="classic">Wide (4 px)</button>
+              <button class="chip ${skin.variant === "slim" ? "is-active" : ""}" data-variant="slim">Slim (3 px)</button>
             </div>
             <div class="skin-angle">
               <span class="prefs-label" style="margin:0">Поворот</span>
-              <input type="range" id="skin-angle" min="-35" max="35" step="1" value="${Number(skin.angle ?? -18)}" />
+              <input type="range" id="skin-angle" min="-180" max="180" step="1" value="${Number(skin.angle ?? -18)}" />
               <span class="val" id="skin-angle-value">${Number(skin.angle ?? -18)}°</span>
             </div>
             <div class="prefs-label-row" style="margin:2px 0 0">
-              <span class="prefs-label">Пресеты</span>
+              <span class="prefs-label">Мои пресеты</span>
               <div class="spacer"></div>
-              <button class="btn btn-small" id="skin-save-preset">
+              <button class="btn btn-small" id="skin-save-preset" ${skin.currentPath ? "" : "disabled"}>
                 <svg class="ic"><use href="#i-plus"/></svg>Сохранить пресет
               </button>
             </div>
             <div class="skin-presets" id="skin-presets">
-              ${SKIN_PRESETS.map((preset) => presetButton(preset, false)).join("")}
-              ${userSkinPresets().map((preset) => presetButton(preset, true)).join("")}
+              ${presets.length
+                ? presets.map((preset) => `
+                  <button class="skin-preset is-user ${preset.id === skin.preset ? "is-active" : ""}" data-preset="${esc(preset.id)}" title="${esc(preset.name)}">
+                    <span class="skin-thumb" data-thumb-path="${esc(preset.path)}"></span>
+                    <span>${esc(preset.name)}</span>
+                    <span class="preset-del" data-del-preset="${esc(preset.id)}" title="Удалить пресет">×</span>
+                  </button>`).join("")
+                : `<div class="skin-note">Пресетов пока нет. Загрузи скин и нажми «Сохранить пресет» — не придётся каждый раз искать файл.</div>`}
             </div>
             <div class="skin-row">
-              <button class="btn" id="skin-custom">Свой PNG…</button>
-              <button class="btn btn-primary" id="skin-apply" ${licensed ? "" : "disabled"}>Применить к аккаунту</button>
+              <button class="btn" id="skin-upload">Загрузить скин…</button>
+              <button class="btn btn-primary" id="skin-apply" ${licensed && skin.currentPath ? "" : "disabled"}>Применить к аккаунту</button>
             </div>
-            <div class="skin-note ${licensed ? "" : "warn"}" id="skin-status">${licensed
-              ? "Второй слой — кепка и жилет; скин уйдёт в лицензионный аккаунт."
-              : "Смена скина только для лицензионного аккаунта. Пресеты можно посмотреть и сохранить."}</div>
+            <div class="skin-note ${licensed ? "" : "warn"}" id="skin-status">${skin.currentName
+              ? `Выбран скин «${esc(skin.currentName)}» · ${skin.variant === "slim" ? "slim" : "wide"}.`
+              : (licensed ? "Скин меняется только для лицензионного аккаунта." : "Смена скина только для лицензированного аккаунта.")}</div>
           </div>
         </div>
       </section>`;
   }
 
-  function currentSkinTexture() {
-    const skin = skinState();
-    if (skin.mode === "account" && skin.accountTex) return skin.accountTex;
-    if (!skin.textures) skin.textures = {};
-    const key = `${skin.variant || "classic"}|${Object.values(skin.colors).join("-")}`;
-    if (!skin.textures[key]) skin.textures[key] = buildSkinTexture(skin.colors);
-    return skin.textures[key];
+  /** PNG-скин → offscreen-канвас 64×64 для рендера. */
+  function textureFromImage(dataUrl) {
+    return new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 64;
+        canvas.height = 64;
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(image, 0, 0, 64, Math.min(64, image.height), 0, 0, 64, Math.min(64, image.height));
+        resolve(canvas);
+      };
+      image.onerror = () => resolve(null);
+      image.src = dataUrl;
+    });
   }
 
   function redrawSkinPreview() {
     const canvas = $("#skin-canvas");
     if (!canvas) return;
     const skin = skinState();
-    drawSkinPreview(canvas, currentSkinTexture(), skin.variant || "classic", Number(skin.angle ?? -18));
+    drawSkinPreview(canvas, skin.texture || null, skin.variant || "classic", Number(skin.angle ?? -18));
+  }
+
+  async function loadSkinFile(filePath, name, presetId) {
+    const skin = skinState();
+    const dataUrl = await api.imageDataUrl(filePath).catch(() => null);
+    if (!dataUrl) return false;
+    const texture = await textureFromImage(dataUrl);
+    if (!texture) return false;
+    skin.texture = texture;
+    skin.currentPath = filePath;
+    skin.currentName = name || "скин";
+    if (presetId !== undefined) skin.preset = presetId;
+    return true;
   }
 
   function bindSkin() {
     const skin = skinState();
     if ($("#skin-canvas")) redrawSkinPreview();
 
-    $$("[data-preset-thumb]").forEach((thumb) => {
-      const preset = findSkinPreset(thumb.dataset.presetThumb);
-      if (!preset) return;
-      const ctx = thumb.getContext("2d");
+    // миниатюры пресетов — сами скины (голова), не нужно искать файл заново
+    $$("[data-thumb-path]").forEach(async (slot) => {
+      const dataUrl = await api.imageDataUrl(slot.dataset.thumbPath).catch(() => null);
+      if (!dataUrl) return;
+      const texture = await textureFromImage(dataUrl);
+      if (!texture) return;
+      const canvas = document.createElement("canvas");
+      canvas.width = 64;
+      canvas.height = 64;
+      const ctx = canvas.getContext("2d");
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(buildSkinTexture(colorsOfPreset(preset)), 8, 8, 8, 8, 0, 0, 64, 64);
+      ctx.drawImage(texture, 8, 8, 8, 8, 0, 0, 64, 64);
+      slot.innerHTML = "";
+      slot.appendChild(canvas);
     });
 
     $$("#skin-presets .skin-preset").forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         const preset = findSkinPreset(btn.dataset.preset);
         if (!preset) return;
-        skin.preset = preset.id;
-        skin.mode = "preset";
-        skin.colors = colorsOfPreset(preset);
+        const loaded = await loadSkinFile(preset.path, preset.name, preset.id);
+        if (!loaded) return toast("Не нашёл файл пресета — загрузи скин заново", "err");
         if (preset.variant === "classic" || preset.variant === "slim") skin.variant = preset.variant;
         if (Number.isFinite(Number(preset.angle))) skin.angle = Number(preset.angle);
         renderPrefs();
@@ -4249,13 +4323,6 @@
       redrawSkinPreview();
     }));
 
-    $$("[data-skin-color]").forEach((input) => input.addEventListener("input", () => {
-      skin.colors = { ...skin.colors, [input.dataset.skinColor]: input.value };
-      skin.mode = "preset";
-      $$("#skin-presets .skin-preset").forEach((el) => el.classList.remove("is-active"));
-      redrawSkinPreview();
-    }));
-
     const angle = $("#skin-angle");
     if (angle) angle.addEventListener("input", () => {
       skin.angle = Number(angle.value);
@@ -4264,30 +4331,51 @@
       redrawSkinPreview();
     });
 
+    const upload = $("#skin-upload");
+    if (upload) upload.addEventListener("click", uploadSkin);
     const savePreset = $("#skin-save-preset");
     if (savePreset) savePreset.addEventListener("click", saveSkinPreset);
     const apply = $("#skin-apply");
-    if (apply) apply.addEventListener("click", applySkinPreset);
-    const custom = $("#skin-custom");
-    if (custom) custom.addEventListener("click", applyCustomSkin);
+    if (apply) apply.addEventListener("click", applySkinToAccount);
+  }
+
+  async function uploadSkin() {
+    const path = await api.pickFile("Скин 64×64 PNG", ["png"]).catch(() => null);
+    if (!path) return;
+    try {
+      const imported = await api.importSkin(path);
+      const skin = skinState();
+      const loaded = await loadSkinFile(imported.path, imported.name, null);
+      if (!loaded) return toast("Не удалось прочитать скин", "err");
+      skin.preset = null;
+      toast(`Скин «${imported.name}» загружен — сохрани пресет, чтобы не искать файл снова`, "ok");
+      renderPrefs();
+    } catch (error) {
+      toast(String(error), "err");
+    }
   }
 
   async function saveSkinPreset() {
     const skin = skinState();
+    if (!skin.currentPath) return toast("Сначала загрузи скин", "err");
     const name = await promptModal({
       title: "Сохранить пресет скина",
       label: "Название",
-      value: `Пресет ${userSkinPresets().length + 1}`
+      value: skin.currentName || `Пресет ${userSkinPresets().length + 1}`
     });
     if (!name) return;
     const preset = {
       id: `skin-${Date.now().toString(36)}`,
       name,
+      path: skin.currentPath,
       variant: skin.variant || "classic",
-      angle: Number(skin.angle ?? -18),
-      ...skin.colors
+      angle: Number(skin.angle ?? -18)
     };
-    const next = { ...(state.settings || {}), skin_presets: [...userSkinPresets(), preset] };
+    const known = userSkinPresets().find((item) => item.path === preset.path);
+    const list = known
+      ? userSkinPresets().map((item) => (item.path === preset.path ? { ...item, name, variant: preset.variant, angle: preset.angle } : item))
+      : [...userSkinPresets(), preset];
+    const next = { ...(state.settings || {}), skin_presets: list };
     state.settings = next;
     try {
       await api.saveSettings(next);
@@ -4295,16 +4383,20 @@
       toast(String(error), "err");
       return;
     }
-    skin.preset = preset.id;
-    skin.mode = "preset";
+    skin.preset = known ? known.id : preset.id;
     toast(`Пресет «${name}» сохранён`, "ok");
     renderPrefs();
   }
 
   async function deleteSkinPreset(id) {
-    const preset = userSkinPresets().find((item) => item.id === id);
+    const preset = findSkinPreset(id);
     if (!preset) return;
-    if (!confirm(`Удалить пресет «${preset.name}»?`)) return;
+    const okPreset = await askConfirm({
+      title: "Удалить пресет",
+      text: `Пресет скина «${preset.name}» будет удалён из списка. Сам файл скина остаётся в папке лаунчера.`,
+      ok: "Удалить"
+    });
+    if (!okPreset) return;
     const next = { ...(state.settings || {}), skin_presets: userSkinPresets().filter((item) => item.id !== id) };
     state.settings = next;
     try {
@@ -4314,81 +4406,43 @@
       return;
     }
     const skin = skinState();
-    if (skin.preset === id) {
-      skin.preset = SKIN_PRESETS[0].id;
-      skin.colors = colorsOfPreset(SKIN_PRESETS[0]);
-    }
+    if (skin.preset === id) skin.preset = null;
     toast("Пресет удалён", "ok");
     renderPrefs();
   }
 
-  async function applySkinPreset() {
+  async function applySkinToAccount() {
     const skin = skinState();
     if (!skin.licensed) return toast("Смена скина только для лицензии", "err");
-    const preset = findSkinPreset(skin.preset);
-    const name = preset ? preset.name : "свой";
-    const texture = buildSkinTexture(skin.colors);
+    if (!skin.currentPath) return toast("Сначала загрузи скин", "err");
     const button = $("#skin-apply");
     if (button) button.disabled = true;
     try {
-      const path = await api.saveSkinPng(texture.toDataURL("image/png"), `preset-${skin.preset || "custom"}`);
-      await api.applySkin(path, skin.variant || "classic");
+      await api.applySkin(skin.currentPath, skin.variant || "classic");
       const status = $("#skin-status");
-      if (status) status.textContent = `Скин «${name}» загружен в аккаунт.`;
-      toast(`Скин «${name}» обновлён`, "ok");
-      await refreshAccountSkin();
-      redrawSkinPreview();
-    } catch (err) {
-      toast(String(err), "err");
+      if (status) status.textContent = `Скин «${skin.currentName}» загружен в аккаунт.`;
+      toast(`Скин «${skin.currentName}» обновлён`, "ok");
+    } catch (error) {
+      toast(String(error), "err");
     } finally {
       if (button) button.disabled = false;
     }
   }
 
-  async function applyCustomSkin() {
-    const skin = skinState();
-    const path = await api.pickFile("Скин 64×64 PNG", ["png"]).catch(() => null);
-    if (!path) return;
-    if (!skin.licensed) return toast("Смена скина только для лицензии", "err");
-    try {
-      await api.applySkin(path, skin.variant || "classic");
-      toast("Скин загружен", "ok");
-      const dataUrl = await api.imageDataUrl(path).catch(() => null);
-      if (dataUrl) await useSkinImage(dataUrl);
-      redrawSkinPreview();
-    } catch (err) { toast(String(err), "err"); }
-  }
-
-  /** Картинка-скин → offscreen-канвас (для предпросмотра реального скина). */
-  function useSkinImage(dataUrl) {
-    return new Promise((resolve) => {
-      const image = new Image();
-      image.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = 64;
-        canvas.height = 64;
-        canvas.getContext("2d").drawImage(image, 0, 0, 64, 64);
-        const skin = skinState();
-        skin.accountTex = canvas;
-        skin.mode = "account";
-        resolve(true);
-      };
-      image.onerror = () => resolve(false);
-      image.src = dataUrl;
-    });
-  }
-
+  /** Текущий скин аккаунта — показываем при открытии профиля (только просмотр). */
   async function refreshAccountSkin() {
     const info = await api.accountSkin().catch(() => null);
     const skin = skinState();
     if (!info) return;
     skin.licensed = Boolean(info.licensed);
     if (info.variant && !skin.touchedVariant) skin.variant = info.variant === "slim" ? "slim" : "classic";
-    if (info.data_url) {
-      const shown = await useSkinImage(info.data_url);
-      if (!shown) skin.mode = "preset";
-    } else if (!skin.preset) {
-      skin.preset = SKIN_PRESETS[0].id;
+    if (info.data_url && !skin.texture) {
+      const texture = await textureFromImage(info.data_url);
+      if (texture) {
+        skin.texture = texture;
+        skin.currentName = info.name || "скин аккаунта";
+        skin.currentPath = skin.currentPath || "";
+      }
     }
   }
 
@@ -4545,7 +4599,12 @@
     $("#inst-export-zip").addEventListener("click", () => exportBuild(meta, "zip"));
     $("#inst-folder").addEventListener("click", () => api.openPath(`${meta.id}/minecraft`).catch((err) => toast(String(err), "err")));
     $("#inst-delete").addEventListener("click", async () => {
-      if (!confirm(`Удалить сборку «${meta.name}» вместе с модами и мирами?`)) return;
+      const okDelete2 = await askConfirm({
+        title: "Удалить сборку",
+        text: `Сборка «${meta.name}» будет удалена вместе с модами и мирами.`,
+        ok: "Удалить"
+      });
+      if (!okDelete2) return;
       try {
         await api.deleteInstance(meta.id);
         state.selectedId = null;
@@ -5092,12 +5151,8 @@
     if (accModal) accModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-account") accModal.hidden = true; });
 
     on("#btn-folder", "click", () => { const meta = selected(); if (meta) api.openPath(`/instances/${meta.id}/minecraft`).catch(() => {}); });
-    on("#btn-grid", "click", () => {
-      state.compact = !state.compact;
-      const list = $("#instance-list");
-      if (list) list.classList.toggle("is-compact", state.compact);
-      toast(state.compact ? "Компактный список" : "Обычный список");
-    });
+    // «Вид» больше не переключает компактный список — открывает окно «Все сборки»
+    binderAllBuilds();
     on("#btn-sort", "click", () => {
       state.instances.sort((a, b) => a.name.localeCompare(b.name));
       renderSidebar();
@@ -5159,6 +5214,8 @@
         pushLog("fabulously-optimized", demo[index], classify(demo[index]));
         index += 1;
       }, 260);
+      // прогресс импорта в демо-режиме тоже доходит до полосы процессов
+      api.onProgress((payload) => setProgress(payload));
       return;
     }
 

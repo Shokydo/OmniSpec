@@ -86,7 +86,7 @@
       <span class="section-title">СБОРКИ</span>
       <span class="badge" id="instances-count">0</span>
       <div class="spacer"></div>
-      <button class="icon-btn" id="btn-grid" title="Вид"><svg class="ic"><use href="#i-grid"/></svg></button>
+      <button class="icon-btn" id="btn-grid" title="Все сборки"><svg class="ic"><use href="#i-grid"/></svg></button>
       <button class="icon-btn" id="btn-sort" title="Сортировка"><svg class="ic"><use href="#i-sort"/></svg></button>
     </div>
 
@@ -318,6 +318,37 @@
       <span class="hint">Второе окно игры с другим аккаунтом</span>
       <div class="spacer"></div>
       <button class="btn btn-ghost" data-close-dup>Отмена</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ============ ВСЕ СБОРКИ: СЕТКА ИКОНОК ПО КАТЕГОРИЯМ ============ -->
+<div class="modal-backdrop" id="modal-builds" hidden>
+  <div class="modal builds-box">
+    <header class="modal-head">
+      <h2>Все сборки</h2>
+      <div class="spacer"></div>
+      <button class="icon-btn" data-close-builds title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="modal-body builds-body" id="builds-body"></div>
+  </div>
+</div>
+
+<!-- ============ ПОДТВЕРЖДЕНИЕ В ДИЗАЙНЕ ЛАУНЧЕРА ============ -->
+<div class="modal-backdrop" id="modal-confirm" hidden>
+  <div class="modal confirm-box">
+    <header class="modal-head">
+      <h2 id="confirm-title">Подтверждение</h2>
+      <div class="spacer"></div>
+      <button class="icon-btn" data-close-confirm title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="modal-body">
+      <div class="confirm-text" id="confirm-text"></div>
+    </div>
+    <footer class="modal-foot">
+      <div class="spacer"></div>
+      <button class="btn" id="confirm-cancel">Отмена</button>
+      <button class="btn btn-danger confirm-ok" id="confirm-ok">Удалить</button>
     </footer>
   </div>
 </div>

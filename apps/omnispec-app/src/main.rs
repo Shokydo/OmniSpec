@@ -1224,6 +1224,52 @@ fn save_skin_png(state: State<'_, AppState>, data_url: String, name: String) -> 
     Ok(file.to_string_lossy().to_string())
 }
 
+/// Скин из файла: копируем PNG в папку данных, чтобы пресет не зависел от исходника.
+#[tauri::command]
+fn import_skin(state: State<'_, AppState>, path: String) -> Result<Value, String> {
+    let source = PathBuf::from(&path);
+    let bytes = std::fs::read(&source).map_err(|error| format!("не удалось открыть файл: {error}"))?;
+    if bytes.len() < 64 {
+        return Err("файл пустой или это не PNG".into());
+    }
+    // PNG 64×64 (или 64×32 для старых скинов) — проверяем по заголовку IHDR
+    if bytes.len() < 26 || &bytes[1..4] != b"PNG" {
+        return Err("нужен файл PNG со скином".into());
+    }
+    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    if width != 64 || (height != 64 && height != 32) {
+        return Err(format!("нужен скин 64×64 (или 64×32), а тут {width}×{height}"));
+    }
+    let stem = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("skin");
+    let safe: String = stem
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' })
+        .collect();
+    let dir = state.paths.meta().join("skins");
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let file_name = format!(
+        "{}-{}.png",
+        if safe.is_empty() { "skin".to_string() } else { safe },
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_secs())
+            .unwrap_or(0)
+    );
+    let target = dir.join(&file_name);
+    std::fs::write(&target, &bytes).map_err(err)?;
+    Ok(json!({
+        "path": target.to_string_lossy().to_string(),
+        "name": stem,
+        "data_url": format!("data:image/png;base64,{}", base64_encode(&bytes)),
+        "width": width,
+        "height": height,
+    }))
+}
+
 /// Картинка по пути в виде data-URL (для превью своего скина в webview).
 #[tauri::command]
 fn image_data_url(path: String) -> Result<String, String> {
@@ -1754,6 +1800,7 @@ fn main() {
             apply_skin,
             save_skin_png,
             image_data_url,
+            import_skin,
             install_mod,
             install_mod_version,
             install_modpack,
