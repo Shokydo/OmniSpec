@@ -329,6 +329,9 @@ async fn search_modrinth(
     mc_version: Option<String>,
     loader: Option<String>,
     offset: Option<u32>,
+    /// Сортировка Modrinth: relevance | downloads | follows | newest | updated.
+    sort: Option<String>,
+    limit: Option<u32>,
 ) -> Result<omnispec_core::modrinth::SearchResults, String> {
     state
         .modrinth
@@ -338,9 +341,9 @@ async fn search_modrinth(
             game_version: mc_version,
             loader,
             categories: Vec::new(),
-            limit: 24,
+            limit: limit.unwrap_or(24),
             offset: offset.unwrap_or(0),
-            sort: "relevance".into(),
+            sort: sort.unwrap_or_else(|| "relevance".into()),
         })
         .await
         .map_err(err)
@@ -910,6 +913,7 @@ fn instance_icon(state: State<'_, AppState>, instance_id: String) -> Result<Opti
     let mime = match icon.rsplit('.').next().unwrap_or("png").to_lowercase().as_str() {
         "jpg" | "jpeg" => "image/jpeg",
         "webp" => "image/webp",
+        "gif" => "image/gif",
         _ => "image/png",
     };
     Ok(Some(format!("data:{mime};base64,{}", base64_encode(&bytes))))

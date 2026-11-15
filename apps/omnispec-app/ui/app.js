@@ -157,7 +157,7 @@
   ];
 
   function isImageIcon(icon) {
-    return Boolean(icon) && String(icon).includes(".") && /\.(png|jpe?g|webp)$/i.test(String(icon));
+    return Boolean(icon) && String(icon).includes(".") && /\.(png|jpe?g|webp|gif)$/i.test(String(icon));
   }
 
   function instanceIconHtml(meta) {
@@ -611,6 +611,10 @@
       results: [], total: 0, loading: false, loadingMore: false,
       error: null, tried: false, view: "list"
     },
+    discover: {
+      query: "", results: [], total: 0,
+      loading: false, loadingMore: false, error: null, tried: false, view: "grid"
+    },
     wall: { wallpaper: null, fit: "cover", blur: 0, dim: 40 },
     update: { info: null, version: "0.1.0", repo: null, enabled: true, checking: false, installing: false },
     theme: "dark",
@@ -769,15 +773,22 @@
   /* ==================== ВКЛАДКИ ==================== */
   function renderTab() {
     const body = $("#tab-body");
-    $$(".tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.tab));
     const meta = selected();
+    // без выбранной сборки вкладки, которым нужна сборка, показывают ленту
+    if (!meta && !["discover", "modrinth", "settings", "about"].includes(state.tab)) state.tab = "discover";
+    $$(".tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.tab));
 
-    if (!meta && !["settings", "about", "modrinth"].includes(state.tab)) {
-      body.innerHTML = `<div class="empty-state">Выбери сборку слева или создай новую</div>`;
-      return;
+    if (!meta) {
+      // Сборка не выбрана — в главном окне лента готовых сборок, ничего не
+      // подставляем сами: любую сборку пользователь выбирает осознанно.
+      if (state.tab === "modrinth") return renderModrinth();
+      if (state.tab === "settings") return renderSettings();
+      if (state.tab === "about") return renderAbout();
+      return renderDiscover();
     }
 
     switch (state.tab) {
+      case "discover": return renderDiscover();
       case "console": return renderConsole();
       case "files": return renderFiles();
       case "mods": return renderMods();
@@ -1197,6 +1208,9 @@
   /* ---------- Modrinth ---------- */
   const MR_PAGE = 24;
   let mrObserver = null;
+  /* лента готовых сборок в главном окне */
+  const DV_PAGE = 24;
+  let dvObserver = null;
 
   function renderModrinth() {
     const meta = selected();
@@ -1256,6 +1270,152 @@
     if (retry) retry.addEventListener("click", () => runSearch());
     watchMore();
     if (!cfg.tried && !cfg.loading && !cfg.error) runSearch();
+  }
+
+  /* ---------- готовые сборки в главном окне ---------- */
+  /**
+   * Лента модпаков с Modrinth: те же карточки, что во вкладке Modrinth,
+   * но без привязки к выбранной сборке и без единого автовыбора —
+   * пока пользователь сам не нажмёт «Установить», ничего не происходит.
+   */
+  function renderDiscover() {
+    const cfg = state.discover;
+    const view = cfg.view || "grid";
+    $("#tab-body").innerHTML = `
+      <div class="discover">
+        <div class="discover-head">
+          <div class="discover-titles">
+            <div class="discover-title">Готовые сборки</div>
+            <div class="discover-sub">Модпаки с Modrinth. Листай — лента догружается сама, ставится в один клик.</div>
+          </div>
+          <div class="discover-tools">
+            <label class="search">
+              <svg class="ic"><use href="#i-search"/></svg>
+              <input id="dv-query" type="text" placeholder="Найти сборку" spellcheck="false" value="${esc(cfg.query)}">
+            </label>
+            <div class="mr-view" title="Вид">
+              <button class="${view === "grid" ? "is-active" : ""}" data-dv-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
+              <button class="${view === "list" ? "is-active" : ""}" data-dv-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
+            </div>
+          </div>
+        </div>
+        <div class="modrinth-results ${view === "grid" ? "is-grid" : ""}" id="dv-results">${dvResultsHtml()}</div>
+      </div>`;
+
+    $("#dv-query").addEventListener("keydown", (event) => { if (event.key === "Enter") dvReset(); });
+    $$("#tab-body [data-dv-view]").forEach((btn) => btn.addEventListener("click", () => {
+      state.discover.view = btn.dataset.dvView;
+      renderDiscover();
+    }));
+    const retry = $("#dv-retry");
+    if (retry) retry.addEventListener("click", () => dvReset());
+    bindResultEvents();
+    dvWatch();
+    if (!cfg.tried && !cfg.loading && !cfg.error) dvReset();
+  }
+
+  function dvResultsHtml() {
+    const cfg = state.discover;
+    if (cfg.loading && !cfg.results.length) return `<div class="empty-state">Загружаем готовые сборки…</div>`;
+    if (cfg.error) {
+      return `<div class="empty-state" style="display:flex;flex-direction:column;align-items:center;gap:10px">
+        <div style="max-width:640px;text-align:left;white-space:pre-wrap;font-size:12px;color:var(--red)">${esc(cfg.error)}</div>
+        <button class="btn" id="dv-retry">Повторить</button>
+      </div>`;
+    }
+    if (!cfg.results.length) return `<div class="empty-state">Ничего не нашлось — попробуй другой запрос</div>`;
+    return `${cfg.results.map((hit) => cardHtml(hit, "pack")).join("")}<div class="mr-sentinel" id="dv-sentinel">${dvSentinelText()}</div>`;
+  }
+
+  function dvSentinelText() {
+    const cfg = state.discover;
+    if (cfg.loadingMore) return `<span class="mr-more-spinner"></span>Загружаем ещё…`;
+    if (cfg.results.length >= cfg.total) return `Показано всё: ${cfg.results.length}`;
+    return `Прокрути вниз — ещё ${Math.max(0, cfg.total - cfg.results.length)}`;
+  }
+
+  function dvUpdateSentinel() {
+    const sentinel = $("#dv-sentinel");
+    if (sentinel) sentinel.innerHTML = dvSentinelText();
+    const cfg = state.discover;
+    if (sentinel && !cfg.loadingMore && cfg.results.length >= cfg.total) {
+      if (dvObserver) { dvObserver.disconnect(); dvObserver = null; }
+    }
+  }
+
+  function dvWatch() {
+    if (dvObserver) { dvObserver.disconnect(); dvObserver = null; }
+    const sentinel = $("#dv-sentinel");
+    if (!sentinel) return;
+    dvObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) dvLoadMore();
+    }, { rootMargin: "240px" });
+    dvObserver.observe(sentinel);
+  }
+
+  async function dvLoadMore() {
+    const cfg = state.discover;
+    if (cfg.loading || cfg.loadingMore || cfg.error) return;
+    if (!cfg.results.length || cfg.results.length >= cfg.total) return;
+    cfg.loadingMore = true;
+    dvUpdateSentinel();
+    try {
+      const page = await api.search({
+        query: cfg.query,
+        projectType: "modpack",
+        mcVersion: null,
+        loader: null,
+        offset: cfg.results.length,
+        limit: DV_PAGE,
+        sort: "downloads"
+      });
+      const known = new Set(cfg.results.map((hit) => hit.project_id));
+      const fresh = (page.hits || []).filter((hit) => !known.has(hit.project_id));
+      cfg.results = cfg.results.concat(fresh);
+      cfg.total = page.total_hits || cfg.total;
+      const sentinel = $("#dv-sentinel");
+      if (sentinel && fresh.length) sentinel.insertAdjacentHTML("beforebegin", fresh.map((hit) => cardHtml(hit, "pack")).join(""));
+      bindResultEvents();
+      if (!fresh.length) cfg.total = cfg.results.length;
+    } catch (err) {
+      cfg.error = String(err);
+    }
+    cfg.loadingMore = false;
+    if (cfg.error) { renderDiscover(); return; }
+    dvUpdateSentinel();
+  }
+
+  async function dvReset() {
+    const input = $("#dv-query");
+    const cfg = state.discover;
+    cfg.query = input ? input.value : cfg.query;
+    cfg.loading = true;
+    cfg.loadingMore = false;
+    cfg.tried = true;
+    cfg.error = null;
+    cfg.results = [];
+    cfg.total = 0;
+    renderDiscover();
+    try {
+      const page = await api.search({
+        query: cfg.query,
+        projectType: "modpack",
+        mcVersion: null,
+        loader: null,
+        offset: 0,
+        limit: DV_PAGE,
+        sort: "downloads"
+      });
+      cfg.results = page.hits || [];
+      cfg.total = page.total_hits || cfg.results.length;
+      cfg.error = null;
+    } catch (err) {
+      cfg.results = [];
+      cfg.total = 0;
+      cfg.error = String(err);
+    }
+    cfg.loading = false;
+    if (state.tab === "discover" || !selected()) renderDiscover();
   }
 
   function resultsHtml() {
@@ -1356,15 +1516,16 @@
       if (btn.dataset.bound) return;
       btn.dataset.bound = "1";
       btn.addEventListener("click", () => {
-        const type = state.modrinth.type || "mod";
+        const type = btn.dataset.openType || state.modrinth.type || "mod";
         const url = type === "modpack" ? `https://modrinth.com/modpack/${btn.dataset.openPage}` : `https://modrinth.com/${type}/${btn.dataset.openPage}`;
         api.openUrl(url).catch((error) => toast(String(error), "err"));
       });
     });
   }
 
-  function cardHtml(hit) {
-    const isPack = state.modrinth.type === "modpack";
+  function cardHtml(hit, kind) {
+    const isPack = kind === "pack" || (!kind && state.modrinth.type === "modpack");
+    const openType = isPack ? "modpack" : (state.modrinth.type || "mod");
     return `<div class="card">
       <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : "MOD"}</div>
       <div class="card-body">
@@ -1379,7 +1540,7 @@
             ${isPack ? "Установить" : "Установить"}
           </button>
           <button class="btn btn-ghost" data-versions="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}" data-title="${esc(hit.title)}">Версии</button>
-          <button class="btn btn-ghost" data-open-page="${esc(hit.slug || hit.project_id)}">Страница</button>
+          <button class="btn btn-ghost" data-open-page="${esc(hit.slug || hit.project_id)}" data-open-type="${esc(openType)}">Страница</button>
         </div>
       </div>
     </div>`;
@@ -2324,7 +2485,6 @@
     }
     await loadInstanceIcons();
     renderSidebar();
-    if (!state.selectedId && state.instances.length) selectInstance(state.instances[0].id);
   }
 
   async function play() {
@@ -2790,8 +2950,9 @@
     await loadAccounts();
     bindFileDrop();
     await refreshInstances();
-    if (state.instances.length) selectInstance(state.instances[0].id);
-    else renderTab();
+    // ничего не выбираем автоматически: стартовый экран — готовые сборки
+    if (!state.selectedId) state.tab = "discover";
+    renderTab();
     try {
       await initUpdates();
       await attachBackendEvents();

@@ -155,14 +155,69 @@ pub async fn install(
         .download(&file.url, &archive, Some(file.size), None, true)
         .await?;
 
-    install_archive(
+    let mut meta = install_archive(
         modrinth,
         paths,
         &archive,
         Some(format!("https://modrinth.com/modpack/{}", version.project_id)),
         reporter,
     )
-    .await
+    .await?;
+
+    // Иконка сборки — та же картинка, что у проекта на Modrinth.
+    set_project_icon(modrinth, paths, &mut meta, &version.project_id).await;
+    Ok(meta)
+}
+
+/// Скачать иконку проекта Modrinth в папку сборки и прописать её в `meta.icon`.
+///
+/// Ошибки глотаем: сборка уже установлена, из-за картинки её ломать незачем.
+async fn set_project_icon(
+    modrinth: &Modrinth,
+    paths: &Paths,
+    meta: &mut InstanceMeta,
+    project_id: &str,
+) {
+    let Ok(project) = modrinth.project(project_id).await else {
+        return;
+    };
+    let Some(url) = project
+        .icon_url
+        .filter(|icon| !icon.trim().is_empty())
+    else {
+        return;
+    };
+    let extension = match url
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "jpg",
+        "webp" => "webp",
+        "gif" => "gif",
+        _ => "png",
+    };
+    let dir = paths.instance_dir(&meta.id);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let file_name = format!("icon.{extension}");
+    let dest = dir.join(&file_name);
+    if modrinth
+        .http()
+        .download(&url, &dest, None, None, false)
+        .await
+        .is_err()
+    {
+        return;
+    }
+    meta.icon = Some(file_name);
+    let _ = instances::save(paths, meta);
 }
 
 /// Установить уже скачанный `.mrpack` (локальный импорт).

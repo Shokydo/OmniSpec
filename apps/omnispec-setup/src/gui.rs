@@ -101,6 +101,10 @@ enum Screen {
     Done,
     AlreadyInstalled,
     Failed,
+    /// Подтверждение удаления (`uninstall.exe`).
+    UninstallAsk,
+    Uninstalling,
+    Uninstalled,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -130,19 +134,35 @@ struct Setup {
     error: Option<String>,
     reinstall: bool,
     spinner: usize,
+    /// Держать данные (java, сборки, миры) рядом с лаунчером.
+    portable: bool,
+    /// При удалении стереть ещё и сборки с настройками.
+    remove_data: bool,
+    uninstall_error: Option<String>,
 }
 
 impl Setup {
     fn new(reinstall: bool) -> Self {
-        let dir = common::install_dir();
+        Self::with_screen(reinstall, None)
+    }
+
+    /// Окно деинсталлятора: та же логика, но сразу экран удаления.
+    fn uninstall_mode(dir: PathBuf) -> Self {
+        let mut setup = Self::with_screen(true, Some(dir));
+        setup.screen = Screen::UninstallAsk;
+        setup
+    }
+
+    fn with_screen(reinstall: bool, forced_dir: Option<PathBuf>) -> Self {
+        let dir = forced_dir.unwrap_or_else(common::install_dir);
+        let installed = common::installed_in(&dir);
         Self {
             pick_dir: dir.clone(),
             pick_input: dir.display().to_string(),
             pick_dirs: Vec::new(),
             pick_error: None,
             picking: false,
-            dir,
-            screen: if !reinstall && common::installed_in(&common::install_dir()) {
+            screen: if !reinstall && installed {
                 Screen::AlreadyInstalled
             } else {
                 Screen::Offer
@@ -155,6 +175,11 @@ impl Setup {
             error: None,
             reinstall,
             spinner: 0,
+            // по умолчанию данные лежат рядом с лаунчером: папку указывают не зря
+            portable: true,
+            remove_data: false,
+            uninstall_error: None,
+            dir,
         }
     }
 
@@ -167,6 +192,7 @@ impl Setup {
             .collect();
 
         let dir = self.dir.clone();
+        let portable = self.portable;
         let (tx, rx) = channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
@@ -174,7 +200,7 @@ impl Setup {
             let mut report = move |event: common::Progress| {
                 let _ = sender.send(Msg::Progress(event));
             };
-            let result = common::install(&dir, &mut report);
+            let result = common::install(&dir, portable, &mut report);
             let _ = tx.send(Msg::Finished(result));
         });
     }
@@ -202,9 +228,15 @@ impl Setup {
                 }
                 Msg::Finished(result) => {
                     finished = true;
-                    match result {
-                        Ok(_) => self.screen = Screen::Done,
-                        Err(error) => {
+                    let removing = self.screen == Screen::Uninstalling;
+                    match (removing, result) {
+                        (true, Ok(_)) => self.screen = Screen::Uninstalled,
+                        (true, Err(error)) => {
+                            self.uninstall_error = Some(error);
+                            self.screen = Screen::Uninstalled;
+                        }
+                        (false, Ok(_)) => self.screen = Screen::Done,
+                        (false, Err(error)) => {
                             self.error = Some(error);
                             self.screen = Screen::Failed;
                         }
@@ -215,7 +247,7 @@ impl Setup {
         if finished {
             self.rx = None;
         }
-        if self.screen == Screen::Installing {
+        if self.screen == Screen::Installing || self.screen == Screen::Uninstalling {
             // анимация «…» и опрос фонового потока
             self.spinner = self.spinner.wrapping_add(1);
             ctx.request_repaint_after(Duration::from_millis(120));
@@ -503,17 +535,29 @@ impl Setup {
         self.key_value(ui, "Внутри:", &common::inside_text());
         self.blank(ui, 12.0);
         self.strong_line(ui, "  Что будет сделано:");
-        self.body_line(ui, "    1. лаунчер распакуется в папку пользователя (права админа не нужны)");
-        self.body_line(ui, "    2. на рабочем столе и в меню «Пуск» появятся ярлыки");
-        self.body_line(ui, "    3. при первом запуске лаунчер сам скачает Java и файлы игры");
+        self.body_line(ui, "    1. лаунчер распакуется ровно в эту папку (права админа не нужны)");
+        self.body_line(ui, "    2. рядом появится uninstall.exe — удалить можно в любой момент");
+        self.body_line(ui, "    3. на рабочем столе и в меню «Пуск» появятся ярлыки");
+        self.body_line(ui, "    4. при первом запуске лаунчер сам скачает Java и файлы игры");
         if self.dir.exists() && self.dir.join(APP_EXE).exists() {
             self.blank(ui, 8.0);
             self.strong_line(ui, "  В этой папке уже есть лаунчер: файл обновится, а сборки,");
             self.strong_line(ui, "  миры и настройки останутся на месте.");
             self.blank(ui, 8.0);
         }
-        self.body_line(ui, "    4. лаунчер запустится");
-        self.body_line(ui, "    5. обновляться он будет сам — из GitHub Releases");
+        self.body_line(ui, "    5. лаунчер запустится");
+        self.body_line(ui, "    6. обновляться он будет сам — из GitHub Releases");
+
+        self.blank(ui, 12.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if self.button(ui, if self.portable { "[x]" } else { "[ ]" }, false, true).clicked() {
+                self.portable = !self.portable;
+            }
+            ui.label(mono_color("данные рядом с лаунчером (портативно)", TEXT));
+        });
+        let data = common::data_dir(&self.dir, self.portable);
+        self.key_value(ui, "Данные:", &data.display().to_string());
 
         self.blank(ui, 14.0);
         self.rule(ui);
@@ -565,6 +609,8 @@ impl Setup {
         self.strong_line(ui, "  Установлено.");
         self.blank(ui, 8.0);
         self.key_value(ui, "Папка:", &self.dir.display().to_string());
+        self.key_value(ui, "Данные:", &common::data_dir(&self.dir, self.portable).display().to_string());
+        self.key_value(ui, "Удалить:", &self.dir.join(common::UNINST_EXE).display().to_string());
         self.blank(ui, 10.0);
         self.steps_block(ui);
         self.blank(ui, 14.0);
@@ -615,6 +661,9 @@ impl Setup {
                 self.screen = Screen::Offer;
                 self.pick_open();
             }
+            if self.button(ui, "Удалить", false, true).clicked() {
+                self.screen = Screen::UninstallAsk;
+            }
             if self.button(ui, "Закрыть", false, true).clicked() {
                 self.close(ctx);
             }
@@ -622,6 +671,93 @@ impl Setup {
         if !self.picking && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.close(ctx);
         }
+    }
+
+    fn uninstall_ask(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.blank(ui, 10.0);
+        self.strong_line(ui, &format!("  Удалить {APP_NAME}?"));
+        self.blank(ui, 8.0);
+        self.key_value(ui, "Удаляю из:", &self.dir.display().to_string());
+        let data = common::data_dir(&self.dir, self.dir.join(common::PORTABLE_FILE).exists());
+        self.key_value(ui, "Данные:", &data.display().to_string());
+        self.blank(ui, 10.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if self.button(ui, if self.remove_data { "[x]" } else { "[ ]" }, false, true).clicked() {
+                self.remove_data = !self.remove_data;
+            }
+            ui.label(mono_color("удалить ещё и сборки с настройками", TEXT));
+        });
+        self.blank(ui, 10.0);
+        self.body_line(ui, "  Файлы лаунчера и ярлыки убираются в любом случае.");
+        self.body_line(ui, "  Без этой галочки сборки и миры останутся — их можно");
+        self.body_line(ui, "  будет вернуть, поставив лаунчер заново.");
+        self.blank(ui, 14.0);
+        self.rule(ui);
+        self.blank(ui, 10.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            if self.button(ui, "Удалить", true, true).clicked() {
+                self.start_uninstall();
+            }
+            if self.button(ui, "Отмена", false, true).clicked() {
+                self.close(ctx);
+            }
+        });
+    }
+
+    fn uninstalling(&mut self, ui: &mut egui::Ui) {
+        self.blank(ui, 10.0);
+        self.key_value(ui, "Удаляю из:", &self.dir.display().to_string());
+        self.blank(ui, 14.0);
+        self.steps_block(ui);
+        self.blank(ui, 14.0);
+        self.rule(ui);
+        self.blank(ui, 10.0);
+        ui.label(mono_color("  Секунду…", DIM));
+    }
+
+    fn uninstalled(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.blank(ui, 10.0);
+        self.strong_line(ui, "  Удалено.");
+        self.blank(ui, 8.0);
+        if let Some(error) = &self.uninstall_error {
+            self.body_line(ui, &format!("  Замечание: {error}"));
+            self.blank(ui, 6.0);
+        }
+        self.body_line(ui, "  Если ставил через установщик — ярлыки тоже убраны.");
+        self.body_line(ui, "  Папка лаунчера удалена, файл uninstall.exe доудалится сам.");
+        self.blank(ui, 14.0);
+        self.rule(ui);
+        self.blank(ui, 10.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            if self.button(ui, "Закрыть", true, true).clicked() {
+                self.close(ctx);
+            }
+        });
+    }
+
+    fn start_uninstall(&mut self) {
+        self.screen = Screen::Uninstalling;
+        self.error = None;
+        self.uninstall_error = None;
+        self.steps = STEPS
+            .iter()
+            .map(|name| (StepState::Waiting, (*name).to_string()))
+            .collect();
+        let dir = self.dir.clone();
+        let remove_data = self.remove_data;
+        let (tx, rx) = channel();
+        self.rx = Some(rx);
+        std::thread::spawn(move || {
+            let sender = tx.clone();
+            let mut report = move |event: common::Progress| {
+                let _ = sender.send(Msg::Progress(event));
+            };
+            let result = common::uninstall(&dir, remove_data, &mut report).map(|_| dir.clone());
+            let _ = tx.send(Msg::Finished(result));
+        });
     }
 
     fn failed(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -665,6 +801,9 @@ impl eframe::App for Setup {
                     Screen::Done => self.done(ui, ctx),
                     Screen::AlreadyInstalled => self.already(ui, ctx),
                     Screen::Failed => self.failed(ui, ctx),
+                    Screen::UninstallAsk => self.uninstall_ask(ui, ctx),
+                    Screen::Uninstalling => self.uninstalling(ui),
+                    Screen::Uninstalled => self.uninstalled(ui, ctx),
                 });
             });
 
@@ -685,9 +824,18 @@ fn window_icon() -> Option<egui::IconData> {
 }
 
 pub fn run(reinstall: bool) -> eframe::Result {
+    run_with(reinstall, None)
+}
+
+/// Окно установщика; `uninstall_dir` не пустой — открывается деинсталлятор.
+pub fn run_with(reinstall: bool, uninstall_dir: Option<PathBuf>) -> eframe::Result {
+    let removing = uninstall_dir.is_some();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(format!("{APP_NAME} — установка"))
+            .with_title(format!(
+                "{APP_NAME} — {}",
+                if removing { "удаление" } else { "установка" }
+            ))
             .with_inner_size([880.0, 600.0])
             .with_min_inner_size([720.0, 520.0])
             .with_icon(window_icon().unwrap_or(egui::IconData {
@@ -704,7 +852,11 @@ pub fn run(reinstall: bool) -> eframe::Result {
         options,
         Box::new(move |cc| {
             install_style(&cc.egui_ctx);
-            Ok(Box::new(Setup::new(reinstall)))
+            let setup = match uninstall_dir {
+                Some(dir) => Setup::uninstall_mode(dir),
+                None => Setup::new(reinstall),
+            };
+            Ok(Box::new(setup))
         }),
     )
 }

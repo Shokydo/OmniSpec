@@ -164,17 +164,18 @@ pub fn run(reinstall: bool, assume_yes: bool, dir_override: Option<String>) {
     println!("  Внутри:            {}", common::inside_text());
     println!();
     line("  Что будет сделано:");
-    line("    1. лаунчер распакуется в папку пользователя (права админа не нужны)");
-    line("    2. на рабочем столе и в меню «Пуск» появятся ярлыки");
-    line("    3. при первом запуске лаунчер сам скачает Java и файлы игры");
+    line("    1. лаунчер распакуется ровно в эту папку (права админа не нужны)");
+    line("    2. рядом появится uninstall.exe — удалить можно в любой момент");
+    line("    3. на рабочем столе и в меню «Пуск» появятся ярлыки");
+    line("    4. при первом запуске лаунчер сам скачает Java и файлы игры");
     if dir.exists() {
         warn("");
         warn("  В папке уже есть лаунчер: файл обновится, а сборки, миры и");
         warn("  настройки (они лежат в %APPDATA%\\OmniSpec) останутся на месте.");
         warn("");
     }
-    line("    4. лаунчер запустится");
-    line("    5. обновляться он будет сам — из GitHub Releases");
+    line("    5. лаунчер запустится");
+    line("    6. обновляться он будет сам — из GitHub Releases");
     println!();
     rule();
     if !assume_yes && !ask_confirm() {
@@ -187,7 +188,8 @@ pub fn run(reinstall: bool, assume_yes: bool, dir_override: Option<String>) {
     println!();
 
     // Шаги печатаем по мере отчёта из common::install.
-    let mut closers: Vec<Option<Box<dyn FnOnce(&str)>>> = vec![None, None];
+    let mut closers: Vec<Option<Box<dyn FnOnce(&str)>>> =
+        common::STEPS.iter().map(|_| None).collect();
     let mut report = |event: common::Progress| match event {
         common::Progress::Begin { step } => {
             let label = common::STEPS[step];
@@ -208,7 +210,7 @@ pub fn run(reinstall: bool, assume_yes: bool, dir_override: Option<String>) {
             pause();
         }
     };
-    let exe = match common::install(&dir, &mut report) {
+    let exe = match common::install(&dir, true, &mut report) {
         Ok(path) => path,
         Err(_) => return,
     };
@@ -228,6 +230,17 @@ pub fn run(reinstall: bool, assume_yes: bool, dir_override: Option<String>) {
 }
 
 /// Тихая установка без вопросов (`--yes`) — для скриптов и проверок в CI.
+/// Данные остаются рядом с лаунчером.
 pub fn run_quiet(dir: &Path) -> Result<std::path::PathBuf, String> {
-    common::install(dir, &mut |_| {})
+    common::install(dir, true, &mut |_| {})
+}
+
+/// Тихая установка без портативного режима (данные в профиле пользователя).
+pub fn run_quiet_shared(dir: &Path) -> Result<std::path::PathBuf, String> {
+    common::install(dir, false, &mut |_| {})
+}
+
+/// Тихий деинсталлятор: `uninstall --yes` / `uninstall --yes --purge`.
+pub fn uninstall_quiet(dir: &Path, remove_data: bool) -> Result<(), String> {
+    common::uninstall(dir, remove_data, &mut |_| {})
 }
