@@ -675,6 +675,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Подмена + перезапуск на Unix: файл становится исполняемым и стартует.
+    #[cfg(unix)]
+    #[test]
+    fn apply_now_chmods_and_restarts() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("omnispec-apply-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("omnispec-app");
+        let new_binary = dir.join("new-OmniSpec");
+        let marker = dir.join("restarted.marker");
+
+        std::fs::write(&target, "#!/bin/sh\nexit 1\n").unwrap();
+        // Скачанный файл приходит без права на исполнение — как от GitHub.
+        std::fs::write(
+            &new_binary,
+            format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::metadata(&new_binary).unwrap().permissions().mode() & 0o111,
+            0,
+            "исходный файл не должен быть исполняемым"
+        );
+
+        apply_now(&new_binary, &target).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(400));
+
+        assert!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o111 != 0,
+            "после подмены файл должен быть исполняемым"
+        );
+        assert!(marker.exists(), "обновлённый лаунчер должен был запуститься");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn draft_and_empty_release_ignored() {
         let draft = Release {
