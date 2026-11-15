@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -659,7 +660,6 @@ async fn mod_icons(
     }))
     .buffer_unordered(6);
     {
-        use futures::StreamExt;
         while let Some((key, file, icon)) = stream.next().await {
             match icon {
                 Some(url) => {
