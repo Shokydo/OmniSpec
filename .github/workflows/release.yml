@@ -119,8 +119,9 @@ jobs:
             ## OmniSpec ${{ github.ref_name }}
 
             **Как установить:** два способа на выбор:
-            * `OmniSpec-Setup.exe` — консольный установщик: разложит лаунчер,
-              сделает ярлыки на рабочем столе и в «Пуск», запустит его;
+            * `OmniSpec-Setup.exe` — установщик с кнопками: покажет, что и куда
+              поставит, даст поменять папку установки, сделает ярлыки на рабочем
+              столе и в «Пуск» и запустит лаунчер;
             * `OmniSpec.exe` — портативная версия: скачал и запустил, ничего не ставится.
 
             Java и файлы Minecraft лаунчер скачает сам при первом запуске.
@@ -146,8 +147,10 @@ jobs:
       - name: Системные библиотеки Tauri
         run: |
           sudo apt-get update
+          # libwebkit2gtk — для лаунчера (Tauri), libx11/glutin — для окна установщика (egui)
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev librsvg2-dev patchelf
+            libjavascriptcoregtk-4.1-dev librsvg2-dev patchelf \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libwayland-dev
 
       - name: Сборка
         run: cargo build --release -p omnispec-app

@@ -3,7 +3,7 @@ name = "omnispec-setup"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Установщик OmniSpec — консольный, в стиле OmniPanel"
+description = "Установщик OmniSpec — окно с кнопками в стиле OmniPanel (и консольный режим)"
 
 [[bin]]
 name = "omnispec-setup"
@@ -12,6 +12,15 @@ path = "src/main.rs"
 [dependencies]
 omnispec-core = { path = "../../crates/omnispec-core" }
 tokio = { workspace = true }
+# Окно установщика рисуем сами (egui/eframe): тогда не нужны ни WebView2,
+# ни системные диалоги, а exe остаётся одним файлом.
+eframe = { version = "0.33", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "x11",
+    "wayland",
+] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
