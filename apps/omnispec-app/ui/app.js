@@ -41,6 +41,10 @@
     const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
     return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16) || 0);
   }
+  function rgbaOf(hex, alpha) {
+    const [r, g, b] = rgbOf(hex);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
   function toHex(values) {
     return "#" + values.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("");
   }
@@ -58,38 +62,105 @@
     return 0.2126 * r + 0.7152 * g + 0.0722 * b;
   }
 
-  /** Поставить тему: все переменные выводятся из пресета. */
+  /** Поставить тему: все переменные выводятся из пресета.
+   *  Градиентов нет — только плоские поверхности; поверхности строятся
+   *  шагами от --bg к --bg-5, чтобы «толщина» панелей была одинаковой
+   *  во всех темах. */
   function applyTheme(name) {
     const theme = THEMES[name] || THEMES.dark;
     const dark = luminance(theme.bg) < 0.4;
+    const step = dark ? theme.text : "#000000";
     const vars = {
       "--bg": theme.bg,
-      "--bg-elev": mix(theme.bg, theme.text, 0.04),
-      "--panel": theme.panel,
-      "--panel-2": mix(theme.panel, theme.text, 0.05),
-      "--panel-3": mix(theme.panel, theme.text, 0.1),
-      "--border": mix(theme.bg, theme.text, 0.13),
-      "--border-soft": mix(theme.bg, theme.text, 0.07),
-      "--border-strong": mix(theme.bg, theme.text, 0.22),
-      "--hover": mix(theme.bg, theme.text, 0.3),
+      "--bg-2": mix(theme.bg, step, dark ? 0.035 : 0.03),
+      "--bg-3": mix(theme.bg, step, dark ? 0.07 : 0.055),
+      "--bg-4": mix(theme.bg, step, dark ? 0.11 : 0.085),
+      "--bg-5": mix(theme.bg, step, dark ? 0.16 : 0.12),
+      "--line": mix(theme.bg, step, dark ? 0.13 : 0.12),
+      "--line-2": mix(theme.bg, step, dark ? 0.22 : 0.2),
+      "--line-3": mix(theme.bg, step, dark ? 0.32 : 0.3),
       "--text": theme.text,
-      "--text-dim": mix(theme.text, theme.bg, 0.38),
-      "--muted": mix(theme.text, theme.bg, 0.5),
+      "--dim": mix(theme.text, theme.bg, 0.42),
+      "--dim-2": mix(theme.text, theme.bg, 0.58),
       "--accent": theme.accent,
-      "--accent-2": mix(theme.accent, luminance(theme.accent) > 0.55 ? "#000000" : "#ffffff", 0.14),
+      "--accent-2": mix(theme.accent, dark ? "#ffffff" : "#000000", 0.14),
       "--accent-fg": luminance(theme.accent) > 0.55 ? "#0a0a0c" : "#ffffff",
+      "--accent-soft": dark ? "rgba(255,255,255,.07)" : "rgba(0,0,0,.05)",
       "--green": dark ? "#7ee787" : "#157347",
       "--red": dark ? "#ff7b72" : "#b42318",
       "--yellow": dark ? "#e3b341" : "#a2680e",
-      "--side-grad-1": mix(theme.bg, theme.text, 0.035),
-      "--side-grad-2": theme.bg,
-      "--top-grad-1": mix(theme.bg, theme.text, 0.05),
-      "--top-grad-2": mix(theme.bg, theme.text, 0.015),
-      "--console-bg": mix(theme.bg, theme.text, 0.012)
+      "--blue": dark ? "#79c0ff" : "#0a58ca",
+      "--console-bg": mix(theme.bg, dark ? "#000000" : step, dark ? 0.45 : 0.02)
     };
+    // старые имена — просто перекрываем теми же значениями
+    Object.assign(vars, {
+      "--bg-elev": vars["--bg-2"],
+      "--panel": vars["--bg-2"],
+      "--panel-2": vars["--bg-3"],
+      "--panel-3": vars["--bg-4"],
+      "--border": vars["--line"],
+      "--border-soft": vars["--line"],
+      "--border-strong": vars["--line-2"],
+      "--hover": vars["--line-3"],
+      "--text-dim": vars["--dim"],
+      "--muted": vars["--dim-2"]
+    });
+    // полупрозрачные поверхности — нужны, когда включены обои
+    vars["--bg-1a"] = rgbaOf(vars["--bg-2"], 0.94);
+    vars["--bg-2a"] = rgbaOf(vars["--bg-2"], 0.84);
+    vars["--bg-3a"] = rgbaOf(vars["--bg-3"], 0.88);
     for (const [key, value] of Object.entries(vars)) document.body.style.setProperty(key, value);
     document.body.dataset.theme = THEMES[name] ? name : "dark";
     return THEMES[name] ? name : "dark";
+  }
+
+  /* ==================== ОБОИ (фоны из OmniPanel) ==================== */
+  const WALLS = [
+    ["aurora", "Аврора"], ["waves", "Волны"], ["mountains", "Горы"], ["blobs", "Пятна"],
+    ["stripes", "Полосы"], ["grid", "Сетка"], ["dots", "Точки"], ["noise", "Шум"]
+  ];
+
+  function wallUrl(name) {
+    return name === "noise" ? "assets/wallpapers/noise.jpg" : `assets/wallpapers/${name}.png`;
+  }
+
+  /** Показать обои по настройкам (или по переданным значениям — для живого превью). */
+  function applyWallpaper(overrides = {}) {
+    const settings = state.settings || {};
+    const layer = $("#wall");
+    if (!layer) return;
+    const name = overrides.wallpaper !== undefined ? overrides.wallpaper : settings.wallpaper;
+    const fit = overrides.fit || settings.wallpaper_fit || "cover";
+    const blur = Number(overrides.blur ?? settings.wallpaper_blur ?? 0);
+    const dim = Number(overrides.dim ?? settings.wallpaper_dim ?? 40);
+    const known = name && WALLS.some(([id]) => id === name);
+    if (!known) {
+      layer.hidden = true;
+      layer.style.backgroundImage = "";
+      document.body.classList.remove("has-wall");
+      return;
+    }
+    layer.hidden = false;
+    layer.style.backgroundImage = `url("${wallUrl(name)}")`;
+    layer.style.backgroundSize = fit === "fill" ? "100% 100%" : fit === "contain" ? "contain" : fit === "tile" ? "auto" : "cover";
+    layer.style.backgroundRepeat = fit === "tile" ? "repeat" : "no-repeat";
+    layer.style.filter = blur ? `blur(${blur}px)` : "";
+    layer.style.transform = blur ? "scale(1.05)" : "";
+    layer.style.setProperty("--wall-dim", String(Math.min(80, Math.max(0, dim)) / 100));
+    document.body.classList.add("has-wall");
+  }
+
+  /* Иконки сборок: встроенный набор + своя картинка (если в icon лежит путь). */
+  const INSTANCE_ICONS = [
+    "i-cube", "i-star", "i-heart", "i-flame", "i-bolt", "i-gem", "i-shield", "i-leaf",
+    "i-crown", "i-house", "i-globe", "i-grid", "i-mod", "i-terminal", "i-folder", "i-download"
+  ];
+
+  function instanceIconHtml(meta) {
+    const icon = meta && meta.icon;
+    if (!icon) return esc(String((meta && meta.name) || "?").trim().charAt(0).toUpperCase());
+    if (INSTANCE_ICONS.includes(icon)) return `<svg class="ic"><use href="#${icon}"/></svg>`;
+    return `<img src="${esc(icon)}" alt="">`;
   }
 
   /* эффект от клика мышью — как в OmniPanel */
@@ -170,6 +241,7 @@
     versionInfo: () => invoke("version_info"),
     checkUpdate: () => invoke("check_update"),
     installUpdate: () => invoke("install_update"),
+    netCheck: () => invoke("net_check"),
     openUrl: (url) => invoke("open_url", { url })
   };
 
@@ -221,7 +293,7 @@
     launch: async () => ({ version_id: "demo", java: "java", memory_mb: 4096, args: [], instance_id: "demo", game_dir: "", natives_dir: "", classpath_entries: 0 }),
     stop: async () => null,
     running: async () => [],
-    search: async (q) => demoSearch(q),
+    search: async () => { throw new Error("нет связи с api.modrinth.com: error sending request (dns error) ← попытка подключиться к серверу не удалась"); },
     modrinthVersions: async () => [{ id: "v1", name: "1.0.0", version_number: "1.0.0", game_versions: ["1.21.4"], loaders: ["fabric"], files: [], dependencies: [] }],
     installMod: async (_i, projectId) => ({ installed: [`${projectId}-1.0.0.jar`], skipped: [] }),
     installModVersion: async () => ({ installed: ["mod.jar"], skipped: [] }),
@@ -247,6 +319,7 @@
     versionInfo: async () => ({ version: "0.1.0 (демо)", repo: "Shokydo/OmniSpec", enabled: true, platform: "windows / x86_64" }),
     checkUpdate: async () => DEMO_UPDATE,
     installUpdate: async () => { await new Promise((r) => setTimeout(r, 1500)); return DEMO_UPDATE; },
+    netCheck: async () => "демо-режим: связь не проверяется",
     openUrl: async (url) => { window.open(url, "_blank"); return null; },
     onProgress: () => Promise.resolve(),
     onLog: () => Promise.resolve(),
@@ -266,7 +339,8 @@
     logs: {},
     files: { path: "", entries: [], selected: null },
     mods: [],
-    modrinth: { query: "", type: "mod", results: [], loading: false },
+    modrinth: { query: "", type: "mod", results: [], loading: false, error: null, tried: false },
+    wall: { wallpaper: null, fit: "cover", blur: 0, dim: 40 },
     update: { info: null, version: "0.1.0", repo: null, enabled: true, checking: false, installing: false },
     theme: "dark",
     fx: "wave",
@@ -358,10 +432,9 @@
     }
 
     list.innerHTML = items.map((item) => {
-      const letter = (item.name || "?").trim().charAt(0).toUpperCase();
       const running = state.running.has(item.id);
       return `<div class="instance ${item.id === state.selectedId ? "is-active" : ""}" data-id="${esc(item.id)}">
-        <div class="instance-icon">${item.icon ? `<img src="${esc(item.icon)}" alt="">` : esc(letter)}</div>
+        <div class="instance-icon">${instanceIconHtml(item) || esc(letter)}</div>
         <div class="instance-body">
           <div class="instance-name">${esc(item.name)}</div>
           <div class="instance-sub">MC ${esc(item.mc_version)} · ${esc(loaderLabel(item.loader))}</div>
@@ -471,60 +544,276 @@
   }
 
   /* ---------- файлы ---------- */
-  async function renderFiles() {
-    $("#tab-body").innerHTML = `<div class="files-wrap"><div class="empty-state">Загрузка файлов…</div></div>`;
-    await loadDir(state.files.path);
+  /* ---------- файлы: менеджер в духе OmniPanel ----------
+   * Слева — дерево папок сборки (ленивое, раскрывается по клику),
+   * справа — хлебные крошки, список с колонками и статус-бар.
+   * Файл открывается вместо списка, с номерами строк.
+   */
+  const fm = {
+    path: "",
+    entries: [],
+    dirs: new Map(),     // путь -> [{ name, path }] (только папки)
+    expanded: new Set(),
+    selected: null,
+    preview: null,       // { path, text, error }
+    query: ""
+  };
+
+  function fmExt(name) {
+    const dot = String(name).lastIndexOf(".");
+    return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
   }
 
-  async function loadDir(path) {
-    state.files.path = path;
-    const entries = await api.listDir(state.selectedId, path).catch((err) => { toast(String(err), "err"); return []; });
-    entries.sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name));
-    state.files.entries = entries;
-    const crumbs = path ? path.split("/").filter(Boolean) : [];
-    const body = $("#tab-body");
-    body.innerHTML = `
-      <div class="files-wrap">
-        <div class="files-left">
-          <div class="files-toolbar">
-            <div class="crumbs">
-              <span class="crumb" data-path="">сборка</span>
-              ${crumbs.map((part, index) => `<span class="crumb" data-path="${esc(crumbs.slice(0, index + 1).join("/"))}">/ ${esc(part)}</span>`).join("")}
+  function fmKind(name) {
+    const ext = fmExt(name);
+    if (!ext) return "файл";
+    const groups = {
+      конфиг: ["json", "json5", "toml", "yaml", "yml", "properties", "cfg", "conf", "ini", "txt", "mcmeta", "snbt"],
+      код: ["js", "ts", "rs", "py", "sh", "bat", "cmd", "lua", "java"],
+      архив: ["jar", "zip", "mrpack", "7z", "rar"],
+      картинка: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"],
+      лог: ["log", "txt"]
+    };
+    for (const [kind, list] of Object.entries(groups)) if (list.includes(ext)) return kind;
+    return ext;
+  }
+
+  function fmIcon(name, isDir) {
+    if (isDir) return "i-folder";
+    const kind = fmKind(name);
+    if (kind === "архив") return "i-mod";
+    if (kind === "картинка") return "i-grid";
+    return "i-base";
+  }
+
+  function fmDate(seconds) {
+    if (!seconds) return "—";
+    const date = new Date(seconds * 1000);
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+
+  async function fmList(path) {
+    const entries = await api.listDir(state.selectedId, path)
+      .catch((err) => { toast(String(err), "err"); return []; });
+    return entries.sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name, "ru"));
+  }
+
+  async function fmDirs(path) {
+    if (!fm.dirs.has(path)) {
+      const entries = await fmList(path);
+      fm.dirs.set(path, entries.filter((entry) => entry.is_dir).map((entry) => ({ name: entry.name, path: entry.path })));
+    }
+    return fm.dirs.get(path);
+  }
+
+  async function fmTreeHtml(path, depth) {
+    const dirs = await fmDirs(path);
+    const term = fm.query.trim().toLowerCase();
+    let html = "";
+    for (const dir of dirs) {
+      if (term && !dir.name.toLowerCase().includes(term)) continue;
+      const open = fm.expanded.has(dir.path);
+      const active = fm.path === dir.path;
+      html += `<div class="fm-row${open ? " open" : ""}${active ? " active" : ""}" data-dir="${esc(dir.path)}" style="padding-left:${6 + depth * 12}px">
+        <span class="arrow" data-toggle="${esc(dir.path)}">▸</span>
+        <span class="ico"><svg class="ic" width="13" height="13"><use href="#i-folder"/></svg></span>
+        <span class="nm">${esc(dir.name)}</span>
+      </div>`;
+      if (open) html += await fmTreeHtml(dir.path, depth + 1);
+    }
+    return html;
+  }
+
+  async function fmRenderTree() {
+    const box = $("#fm-tree");
+    if (!box) return;
+    const html = await fmTreeHtml("", 0);
+    box.innerHTML = html || `<div class="fm-empty">${fm.query ? "Ничего не найдено" : "Папок нет"}</div>`;
+    $$(".fm-row", box).forEach((row) => {
+      const path = row.dataset.dir;
+      const arrow = $(".arrow", row);
+      if (arrow) {
+        arrow.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          if (fm.expanded.has(path)) fm.expanded.delete(path); else fm.expanded.add(path);
+          await fmRenderTree();
+        });
+      }
+      row.addEventListener("click", () => fmOpen(path));
+    });
+  }
+
+  function fmRenderCrumb() {
+    const box = $("#fm-crumb");
+    if (!box) return;
+    const meta = selected();
+    const parts = fm.path ? fm.path.split("/").filter(Boolean) : [];
+    const chips = [`<span class="c" data-crumb="">${esc(meta ? meta.name : "сборка")}</span>`];
+    parts.forEach((part, index) => {
+      const path = parts.slice(0, index + 1).join("/");
+      chips.push(`<span class="s">/</span><span class="c${index === parts.length - 1 ? " last" : ""}" data-crumb="${esc(path)}">${esc(part)}</span>`);
+    });
+    box.innerHTML = chips.join("");
+    $$(".c", box).forEach((chip) => chip.addEventListener("click", () => fmOpen(chip.dataset.crumb)));
+  }
+
+  function fmRenderList() {
+    const list = $("#fm-list");
+    if (!list) return;
+    const term = fm.query.trim().toLowerCase();
+    const rows = fm.entries.filter((entry) => !term || entry.name.toLowerCase().includes(term));
+    const items = rows.map((entry) => `
+      <div class="fm-item${fm.selected === entry.path ? " active" : ""}" data-path="${esc(entry.path)}" data-dir="${entry.is_dir}">
+        <span class="fname">
+          <span class="ico"><svg class="ic" width="13" height="13"><use href="#${fmIcon(entry.name, entry.is_dir)}"/></svg></span>
+          <span>${esc(entry.name)}</span>
+        </span>
+        <span class="fsize">${entry.is_dir ? "—" : humanSize(entry.size)}</span>
+        <span class="fdate">${entry.is_dir ? "—" : fmDate(entry.modified)}</span>
+      </div>`).join("");
+    list.innerHTML = `
+      <div class="fm-head"><span>Имя</span><span>Размер</span><span>Изменён</span></div>
+      ${items || `<div class="fm-empty">Папка пуста</div>`}`;
+    $$(".fm-item", list).forEach((row) => row.addEventListener("click", () => {
+      if (row.dataset.dir === "true") fmOpen(row.dataset.path);
+      else fmPreviewFile(row.dataset.path);
+    }));
+  }
+
+  function fmRenderView() {
+    const view = $("#fm-view");
+    if (!view) return;
+    const preview = fm.preview;
+    if (!preview) { view.hidden = true; return; }
+    view.hidden = false;
+    if (preview.error) {
+      view.innerHTML = `<div class="fm-empty">${esc(preview.error)}</div>`;
+      return;
+    }
+    const lines = preview.text.split("\n");
+    const gutter = lines.map((_, index) => index + 1).join("\n");
+    view.innerHTML = `<div class="fm-gutter">${gutter}</div><pre class="fm-pre">${esc(preview.text)}</pre>`;
+  }
+
+  function fmRenderStatus() {
+    const meta = selected();
+    const pathBox = $("#fm-path");
+    if (!pathBox) return;
+    const target = fm.selected || fm.path;
+    pathBox.textContent = target ? `${meta ? meta.name : "сборка"}/${target}` : `${meta ? meta.name : "сборка"}`;
+    const entry = fm.entries.find((item) => item.path === fm.selected);
+    $("#fm-kind").hidden = !entry;
+    if (entry) $("#fm-kind").textContent = fmKind(entry.name);
+    $("#fm-size").textContent = entry ? humanSize(entry.size) : `${fm.entries.length} объектов`;
+    const lines = fm.preview && !fm.preview.error ? fm.preview.text.split("\n").length : 0;
+    $("#fm-lines").textContent = lines ? `${lines} стр.` : "";
+  }
+
+  async function fmRefresh() {
+    if (!$("#fm-tree")) return;
+    const entries = await fmList(fm.path);
+    fm.entries = entries;
+    fm.dirs.set(fm.path, entries.filter((entry) => entry.is_dir).map((entry) => ({ name: entry.name, path: entry.path })));
+    await fmRenderTree();
+    fmRenderList();
+    fmRenderCrumb();
+    fmRenderStatus();
+  }
+
+  async function fmOpen(path) {
+    fm.path = path;
+    fm.selected = null;
+    fm.preview = null;
+    fm.expanded.add(path);
+    $("#fm-list").hidden = false;
+    const backButton = $("#fm-back");
+    if (backButton) backButton.hidden = true;
+    fmRenderView();
+    await fmRefresh();
+  }
+
+  async function fmPreviewFile(path) {
+    fm.selected = path;
+    fmRenderList();
+    const view = $("#fm-view");
+    const list = $("#fm-list");
+    if (view) { view.hidden = false; view.innerHTML = `<div class="fm-empty">Читаем файл…</div>`; }
+    if (list) list.hidden = true;
+    const back = $("#fm-back");
+    if (back) back.hidden = false;
+    try {
+      const text = await api.readFile(state.selectedId, path);
+      fm.preview = { path, text, error: null };
+    } catch (err) {
+      fm.preview = { path, text: "", error: String(err) };
+    }
+    fmRenderView();
+    fmRenderStatus();
+  }
+
+  async function renderFiles() {
+    fm.path = "";
+    fm.entries = [];
+    fm.dirs.clear();
+    fm.expanded.clear();
+    fm.selected = null;
+    fm.preview = null;
+    fm.query = "";
+    $("#tab-body").innerHTML = `
+      <div class="fm">
+        <aside class="fm-side">
+          <div class="fm-side-head">
+            <input class="filter" id="fm-search" placeholder="найти папку…" spellcheck="false">
+            <button class="btn-mini" id="fm-refresh" title="Обновить дерево">⟳</button>
+          </div>
+          <div class="fm-tree" id="fm-tree"><div class="fm-empty">Загрузка…</div></div>
+        </aside>
+        <div class="fm-main">
+          <div class="fm-bar">
+            <div class="fm-crumb" id="fm-crumb"></div>
+            <div class="right">
+              <button class="btn btn-small" id="fm-back" hidden>← К списку</button>
+              <button class="btn btn-small" id="fm-open-ext">Открыть папку</button>
+              <button class="btn btn-small" id="fm-reload">Обновить</button>
             </div>
-            <button class="icon-btn" id="files-refresh" title="Обновить"><svg class="ic"><use href="#i-refresh"/></svg></button>
           </div>
-          <div class="files-list" id="files-list">
-            ${path ? `<div class="file-row" data-open=".."><svg class="ic file-ico"><use href="#i-folder"/></svg><span class="fname">..</span></div>` : ""}
-            ${entries.map((entry) => `
-              <div class="file-row" data-open="${esc(entry.path)}" data-dir="${entry.is_dir}">
-                <svg class="ic file-ico"><use href="#${entry.is_dir ? "i-folder" : "i-base"}"/></svg>
-                <span class="fname">${esc(entry.name)}</span>
-                <span class="fsize">${entry.is_dir ? "" : humanSize(entry.size)}</span>
-              </div>`).join("")}
+          <div class="fm-list" id="fm-list"></div>
+          <div class="fm-view" id="fm-view" hidden></div>
+          <div class="fm-status">
+            <span id="fm-path">—</span>
+            <span class="spacer"></span>
+            <span id="fm-lines"></span>
+            <span class="fm-badge" id="fm-kind" hidden>—</span>
+            <span id="fm-size"></span>
           </div>
-        </div>
-        <div class="files-right">
-          <div class="file-preview-bar" id="file-preview-bar">Файл не выбран</div>
-          <pre class="file-preview" id="file-preview">Выбери файл слева</pre>
         </div>
       </div>`;
 
-    $("#files-refresh").addEventListener("click", () => loadDir(path));
-    $$(".crumb").forEach((crumb) => crumb.addEventListener("click", () => loadDir(crumb.dataset.path)));
-    $$(".file-row").forEach((row) => row.addEventListener("click", async () => {
-      const target = row.dataset.open;
-      if (target === "..") return loadDir(path.split("/").slice(0, -1).join("/"));
-      if (row.dataset.dir === "true") return loadDir(target);
-      $$(".file-row").forEach((item) => item.classList.remove("is-active"));
-      row.classList.add("is-active");
-      $("#file-preview-bar").textContent = target;
-      try {
-        const text = await api.readFile(state.selectedId, target);
-        $("#file-preview").textContent = text;
-      } catch (err) {
-        $("#file-preview").textContent = `Не удалось прочитать файл:\n${err}`;
-      }
-    }));
+    $("#fm-search").addEventListener("input", (event) => {
+      fm.query = event.target.value;
+      fmRenderTree();
+      fmRenderList();
+    });
+    $("#fm-refresh").addEventListener("click", async () => { fm.dirs.clear(); await fmRenderTree(); });
+    $("#fm-back").addEventListener("click", () => {
+      fm.preview = null;
+      fm.selected = null;
+      $("#fm-view").hidden = true;
+      $("#fm-list").hidden = false;
+      $("#fm-back").hidden = true;
+      fmRenderList();
+      fmRenderStatus();
+    });
+    $("#fm-reload").addEventListener("click", async () => { fm.dirs.clear(); await fmRefresh(); });
+    $("#fm-open-ext").addEventListener("click", () => {
+      const meta = selected();
+      if (!meta) return toast("Сборка не выбрана", "err");
+      const suffix = fm.path ? `/${fm.path}` : "";
+      api.openPath(`/instances/${meta.id}/minecraft${suffix}`).catch((error) => toast(String(error), "err"));
+    });
+
+    await fmRefresh();
   }
 
   /* ---------- моды ---------- */
@@ -662,21 +951,37 @@
           <button class="btn" id="mr-search" style="align-self:flex-end">Найти</button>
         </div>
         <div class="modrinth-results" id="mr-results">
-          ${cfg.loading ? `<div class="empty-state">Ищем…</div>` : cfg.results.length ? cfg.results.map(cardHtml).join("") : `<div class="empty-state">Введи запрос и нажми «Найти»</div>`}
+          ${cfg.loading
+            ? `<div class="empty-state">Ищем…</div>`
+            : cfg.error
+              ? `<div class="empty-state" style="display:flex;flex-direction:column;align-items:center;gap:10px">
+                   <div style="max-width:640px;text-align:left;white-space:pre-wrap;font-size:12px;color:var(--red)">${esc(cfg.error)}</div>
+                   <button class="btn" id="mr-retry">Повторить</button>
+                 </div>`
+              : cfg.results.length
+                ? cfg.results.map(cardHtml).join("")
+                : `<div class="empty-state">Введи запрос и нажми «Найти»</div>`}
         </div>
       </div>`;
 
     $("#mr-search").addEventListener("click", runSearch);
     $("#mr-query").addEventListener("keydown", (event) => { if (event.key === "Enter") runSearch(); });
     $("#mr-type").addEventListener("change", (event) => { state.modrinth.type = event.target.value; runSearch(); });
+    const retry = $("#mr-retry");
+    if (retry) retry.addEventListener("click", () => runSearch());
     $$("[data-install]").forEach((btn) => btn.addEventListener("click", () => installFromModrinth(btn.dataset.install, btn.dataset.kind)));
-    if (!cfg.results.length && !cfg.loading) runSearch();
+    $$("[data-open-page]").forEach((btn) => btn.addEventListener("click", () => {
+      const type = state.modrinth.type || "mod";
+      const url = type === "modpack" ? `https://modrinth.com/modpack/${btn.dataset.openPage}` : `https://modrinth.com/${type}/${btn.dataset.openPage}`;
+      api.openUrl(url).catch((error) => toast(String(error), "err"));
+    }));
+    if (!cfg.tried && !cfg.loading && !cfg.error) runSearch();
   }
 
   function cardHtml(hit) {
     const isPack = state.modrinth.type === "modpack";
     return `<div class="card">
-      <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="">` : "MOD"}</div>
+      <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : "MOD"}</div>
       <div class="card-body">
         <div class="card-title">${esc(hit.title)}</div>
         <div class="card-desc">${esc(hit.description)}</div>
@@ -697,6 +1002,8 @@
   async function runSearch() {
     state.modrinth.query = $("#mr-query") ? $("#mr-query").value : "";
     state.modrinth.loading = true;
+    state.modrinth.tried = true;
+    state.modrinth.error = null;
     renderModrinth();
     const meta = selected();
     try {
@@ -708,9 +1015,10 @@
         offset: 0
       });
       state.modrinth.results = result.hits || [];
+      state.modrinth.error = null;
     } catch (err) {
       state.modrinth.results = [];
-      toast(`Modrinth недоступен: ${err}`, "err");
+      state.modrinth.error = String(err);
     }
     state.modrinth.loading = false;
     renderModrinth();
@@ -742,6 +1050,12 @@
   async function renderSettings() {
     const settings = state.settings || {};
     const meta = selected();
+    state.wall = {
+      wallpaper: settings.wallpaper || null,
+      fit: settings.wallpaper_fit || "cover",
+      blur: Number(settings.wallpaper_blur ?? 0),
+      dim: Number(settings.wallpaper_dim ?? 40)
+    };
     const javas = await api.javas().catch(() => []);
     const info = await api.appInfo().catch(() => ({ home: "", version: "" }));
     $("#tab-body").innerHTML = `
@@ -782,6 +1096,33 @@
                 <div class="label">Эффект от клика</div>
                 <div class="chips" id="fx-chips">
                   ${Object.entries(FX_STYLES).map(([id, label]) => `<button class="chip ${state.fx === id ? "is-active" : ""}" data-fx="${id}">${label}</button>`).join("")}
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="label">Обои</div>
+                <div>
+                  <div class="wall-grid" id="wall-grid">
+                    <button class="wall-chip none ${!state.wall.wallpaper ? "is-active" : ""}" data-wall="">нет</button>
+                    ${WALLS.map(([id, label]) => `
+                      <button class="wall-chip ${state.wall.wallpaper === id ? "is-active" : ""}" data-wall="${id}" style="background-image:url('${wallUrl(id)}')" title="${esc(label)}"><span>${esc(label)}</span></button>`).join("")}
+                  </div>
+                  <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:10px">
+                    <div class="field">
+                      <label>Как показывать</label>
+                      <select class="select" id="wall-fit">
+                        ${[["cover", "Заполнить"], ["contain", "Вписать"], ["fill", "Растянуть"], ["tile", "Плиткой"]]
+                          .map(([value, label]) => `<option value="${value}" ${state.wall.fit === value ? "selected" : ""}>${label}</option>`).join("")}
+                      </select>
+                    </div>
+                    <div class="field" style="flex:1;min-width:170px">
+                      <label>Размытие</label>
+                      <div class="range"><input type="range" id="wall-blur" min="0" max="20" value="${state.wall.blur}"><span class="tag" id="wall-blur-value">${state.wall.blur}</span></div>
+                    </div>
+                    <div class="field" style="flex:1;min-width:170px">
+                      <label>Затемнение</label>
+                      <div class="range"><input type="range" id="wall-dim" min="0" max="80" value="${state.wall.dim}"><span class="tag" id="wall-dim-value">${state.wall.dim}%</span></div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -825,6 +1166,13 @@
                 <div><input class="input" id="set-inst-memory" type="number" min="512" step="256" style="width:160px" placeholder="как в общих" value="${meta.memory_mb ?? ""}"></div>
               </div>
               <div class="settings-row">
+                <div class="label">Иконка сборки</div>
+                <div class="icon-grid" id="inst-icons">
+                  <button class="icon-chip letter ${!meta.icon ? "is-active" : ""}" data-icon="" title="Первая буква">${esc(String(meta.name).trim().charAt(0).toUpperCase())}</button>
+                  ${INSTANCE_ICONS.map((icon) => `<button class="icon-chip ${meta.icon === icon ? "is-active" : ""}" data-icon="${icon}" title="${icon.replace("i-", "")}"><svg class="ic"><use href="#${icon}"/></svg></button>`).join("")}
+                </div>
+              </div>
+              <div class="settings-row">
                 <div class="label">Загрузчик</div>
                 <div class="muted" style="padding-top:7px">${esc(loaderLabel(meta.loader))} · профиль <span class="kbd">${esc(versionId(meta))}</span></div>
               </div>
@@ -834,6 +1182,23 @@
               </div>
             </div>
           </div>` : ""}
+
+          <div class="panel">
+            <div class="panel-head"><strong>Сеть и прокси</strong><span class="spacer"></span><span class="muted" style="font-size:11px">Modrinth · Mojang</span></div>
+            <div style="padding:14px;display:grid;gap:14px">
+              <div class="settings-row">
+                <div class="label">Прокси</div>
+                <div>
+                  <input class="input" style="width:100%" id="set-proxy" placeholder="http://127.0.0.1:8080 или socks5://…" value="${esc(settings.proxy || "")}" spellcheck="false">
+                  <div class="hint">Применяется после перезапуска лаунчера. Пусто — подключаться напрямую.</div>
+                </div>
+              </div>
+              <div class="settings-actions">
+                <button class="btn" id="net-check">Проверить связь с Modrinth</button>
+                <span class="muted" id="net-check-result" style="font-size:11px;align-self:center;max-width:520px"></span>
+              </div>
+            </div>
+          </div>
 
           <div class="panel">
             <div class="panel-head">
@@ -894,6 +1259,40 @@
       applyClickFx(state.fx);
       $$("#fx-chips .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
     }));
+    // ---------- обои ----------
+    const redrawWallChips = () => {
+      $$("#wall-grid .wall-chip").forEach((chip) => chip.classList.toggle("is-active", (chip.dataset.wall || null) === state.wall.wallpaper));
+    };
+    $$("#wall-grid .wall-chip").forEach((chip) => chip.addEventListener("click", () => {
+      state.wall.wallpaper = chip.dataset.wall || null;
+      redrawWallChips();
+      applyWallpaper(state.wall);
+    }));
+    $("#wall-fit").addEventListener("change", (event) => { state.wall.fit = event.target.value; applyWallpaper(state.wall); });
+    $("#wall-blur").addEventListener("input", (event) => {
+      state.wall.blur = Number(event.target.value);
+      $("#wall-blur-value").textContent = String(state.wall.blur);
+      applyWallpaper(state.wall);
+    });
+    $("#wall-dim").addEventListener("input", (event) => {
+      state.wall.dim = Number(event.target.value);
+      $("#wall-dim-value").textContent = `${state.wall.dim}%`;
+      applyWallpaper(state.wall);
+    });
+
+    // ---------- проверка связи ----------
+    $("#net-check").addEventListener("click", async () => {
+      const box = $("#net-check-result");
+      box.className = "muted";
+      box.textContent = "Проверяем…";
+      try {
+        box.textContent = await api.netCheck();
+      } catch (err) {
+        box.textContent = String(err);
+        box.className = "settings-note warn";
+      }
+    });
+
     $("#set-upd-enabled").addEventListener("click", (event) => event.target.classList.toggle("on"));
     $("#set-upd-pre").addEventListener("click", (event) => event.target.classList.toggle("on"));
     $("#upd-check-now").addEventListener("click", async () => {
@@ -913,7 +1312,12 @@
         update_prerelease: $("#set-upd-pre").classList.contains("on"),
         update_token: ($("#set-upd-token").value || "").trim() || null,
         theme: state.theme,
-        click_fx: state.fx
+        click_fx: state.fx,
+        proxy: ($("#set-proxy").value || "").trim() || null,
+        wallpaper: state.wall.wallpaper,
+        wallpaper_fit: state.wall.fit,
+        wallpaper_blur: state.wall.blur,
+        wallpaper_dim: state.wall.dim
       };
       try { await api.saveSettings(next); state.settings = next; toast("Настройки сохранены", "ok"); }
       catch (err) { toast(String(err), "err"); }
@@ -930,6 +1334,15 @@
           toast("Сборка удалена", "ok");
         } catch (err) { toast(String(err), "err"); }
       });
+      $$("#inst-icons .icon-chip").forEach((chip) => chip.addEventListener("click", async () => {
+        const icon = chip.dataset.icon || null;
+        $$("#inst-icons .icon-chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+        try {
+          await api.updateInstance({ ...meta, icon });
+          await refreshInstances();
+          toast(icon ? "Иконка сборки обновлена" : "Иконка сброшена к букве", "ok");
+        } catch (err) { toast(String(err), "err"); }
+      }));
       $("#set-inst-memory").addEventListener("change", async (event) => {
         const value = event.target.value ? Number(event.target.value) : null;
         await api.updateInstance({ ...meta, memory_mb: value }).catch((err) => toast(String(err), "err"));
@@ -1384,6 +1797,18 @@
   }
 
   /* ==================== СОБЫТИЯ ==================== */
+    // Ни один клик не должен уводить webview с интерфейса лаунчера:
+    // внешние ссылки открываем системным браузером, а не внутри окна.
+    document.addEventListener("click", (event) => {
+      const link = event.target.closest && event.target.closest("a[href]");
+      if (!link) return;
+      const href = link.getAttribute("href") || "";
+      if (href.startsWith("#") || href.startsWith("javascript:")) return;
+      event.preventDefault();
+      if (IS_APP) api.openUrl(href).catch((error) => toast(String(error), "err"));
+      else window.open(href, "_blank");
+    }, true);
+
   function bindEvents() {
     $$(".tab").forEach((tab) => tab.addEventListener("click", () => { state.tab = tab.dataset.tab; renderTab(); }));
     $("#btn-play").addEventListener("click", play);
@@ -1394,12 +1819,6 @@
     $("#btn-import").addEventListener("click", () => openAdd("modrinth"));
     // кнопка Modrinth убрана из тулбара — она живёт в модалке «Добавить существующую»
     $("#btn-folder").addEventListener("click", () => { const meta = selected(); if (meta) api.openPath(`/instances/${meta.id}/minecraft`).catch(() => {}); });
-    $("#btn-link").addEventListener("click", () => {
-      const meta = selected();
-      if (!meta) return;
-      if (meta.source_url) api.openUrl(meta.source_url).catch(() => {});
-      else toast("У этой сборки нет страницы");
-    });
     $("#btn-tab-settings").addEventListener("click", () => { state.tab = "settings"; renderTab(); });
     $("#btn-global-settings").addEventListener("click", () => { state.tab = "settings"; renderTab(); });
     $("#btn-settings-short").addEventListener("click", () => { state.tab = "settings"; renderTab(); });
@@ -1473,6 +1892,7 @@
     state.theme = applyTheme((state.settings && state.settings.theme) || "dark");
     state.fx = (state.settings && state.settings.click_fx) || "wave";
     applyClickFx(state.fx);
+    applyWallpaper();
     await refreshInstances();
     if (state.instances.length) selectInstance(state.instances[0].id);
     else renderTab();

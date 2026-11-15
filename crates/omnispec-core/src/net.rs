@@ -75,6 +75,10 @@ impl Reporter {
 #[derive(Clone)]
 pub struct Http {
     client: reqwest::Client,
+    /// Запасной клиент: только HTTP/1.1, без пула соединений.
+    /// Нужен, когда сеть/прокси/антивирус ломают HTTP/2 — самая частая причина
+    /// «error sending request» на Windows.
+    fallback: reqwest::Client,
 }
 
 impl Default for Http {
@@ -83,20 +87,69 @@ impl Default for Http {
     }
 }
 
+fn base_builder(proxy: Option<&str>) -> reqwest::ClientBuilder {
+    let mut builder = reqwest::Client::builder()
+        .user_agent(format!(
+            "{}/{} (+https://github.com/omnispec)",
+            crate::APP_NAME,
+            crate::APP_VERSION
+        ))
+        .connect_timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(300))
+        .pool_max_idle_per_host(32);
+    if let Some(proxy) = proxy.map(str::trim).filter(|value| !value.is_empty()) {
+        if let Ok(parsed) = reqwest::Proxy::all(proxy) {
+            builder = builder.proxy(parsed);
+        }
+    }
+    builder
+}
+
 impl Http {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .user_agent(format!(
-                "{}/{} (+https://github.com/omnispec)",
-                crate::APP_NAME,
-                crate::APP_VERSION
-            ))
-            .connect_timeout(Duration::from_secs(20))
-            .timeout(Duration::from_secs(300))
-            .pool_max_idle_per_host(32)
+        Self::with_proxy(None)
+    }
+
+    /// Клиент с необязательным прокси (`http://host:port`, `socks5://…`).
+    pub fn with_proxy(proxy: Option<&str>) -> Self {
+        let client = base_builder(proxy).build().unwrap_or_default();
+        let fallback = base_builder(proxy)
+            .http1_only()
+            .pool_max_idle_per_host(0)
+            .timeout(Duration::from_secs(120))
             .build()
             .unwrap_or_default();
-        Self { client }
+        Self { client, fallback }
+    }
+
+    /// GET с повторами: первая попытка обычная, дальше — запасной HTTP/1.1-клиент.
+    async fn send_get(&self, url: &str) -> Result<reqwest::Response> {
+        let mut last: Option<reqwest::Error> = None;
+        for attempt in 0..3u64 {
+            let client = if attempt == 0 { &self.client } else { &self.fallback };
+            match client.get(url).send().await {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    // повторяем только транспортные сбои: таймаут, обрыв, DNS
+                    let retriable = error.is_timeout() || error.is_connect() || error.is_request();
+                    last = Some(error);
+                    if !retriable {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(300 * (attempt + 1))).await;
+                }
+            }
+        }
+        match last {
+            Some(error) => Err(Error::http(url, error)),
+            None => Err(Error::Other(format!("не удалось выполнить запрос к {url}"))),
+        }
+    }
+
+    /// Проверка связи: возвращает HTTP-код или понятную ошибку.
+    pub async fn probe(&self, url: &str) -> Result<u16> {
+        let response = self.send_get(url).await?;
+        Ok(response.status().as_u16())
     }
 
     /// Доступ к внутреннему reqwest-клиенту (нужен для query-параметров Modrinth).
@@ -110,7 +163,7 @@ impl Http {
     }
 
     pub async fn get_text(&self, url: &str) -> Result<String> {
-        let response = self.client.get(url).send().await?;
+        let response = self.send_get(url).await?;
         let status = response.status();
         if !status.is_success() {
             return Err(Error::Other(format!("{url} → HTTP {status}")));

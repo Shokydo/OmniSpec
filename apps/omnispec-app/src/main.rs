@@ -459,6 +459,8 @@ struct FileEntry {
     is_dir: bool,
     size: u64,
     path: String,
+    /// Время изменения в секундах от эпохи — колонка «Изменён» в файловом менеджере.
+    modified: Option<u64>,
 }
 
 fn safe_join(base: &Path, relative: &str) -> Result<PathBuf, String> {
@@ -498,11 +500,17 @@ fn list_dir(
         } else {
             format!("{}/{}", sub.trim_end_matches('/'), name)
         };
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|delta| delta.as_secs());
         result.push(FileEntry {
             name,
             is_dir: meta.is_dir(),
             size: meta.len(),
             path: relative,
+            modified,
         });
     }
     result.sort_by(|a, b| a.name.cmp(&b.name));
@@ -655,6 +663,19 @@ async fn install_update(app: AppHandle, state: State<'_, AppState>) -> Result<Up
     Ok(info)
 }
 
+/// Проверка связи с Modrinth: короткий запрос и понятный результат для настроек.
+#[tauri::command]
+async fn net_check(state: State<'_, AppState>) -> Result<String, String> {
+    let url = "https://api.modrinth.com/v2/search?query=sodium&limit=1";
+    match state.http.probe(url).await {
+        Ok(status) if (200..300).contains(&status) => {
+            Ok(format!("связь есть — Modrinth ответил HTTP {status}"))
+        }
+        Ok(status) => Err(format!("Modrinth ответил HTTP {status}")),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 /// Открыть ссылку в системном браузере.
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
@@ -768,7 +789,7 @@ fn main() {
     let settings = Settings::load(&paths).unwrap_or_default();
     // Чистим хвосты прошлых обновлений (скачанные копии, помощники).
     update::cleanup(&paths, None);
-    let http = Http::new();
+    let http = Http::with_proxy(settings.proxy.as_deref());
 
     let state = AppState {
         modrinth: Modrinth::new(http.clone()),
@@ -813,6 +834,7 @@ fn main() {
             window_action,
             version_info,
             check_update,
+            net_check,
             install_update,
             open_url,
         ])

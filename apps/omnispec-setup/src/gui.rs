@@ -41,6 +41,57 @@ fn mono_color(text: impl Into<String>, color: Color32) -> RichText {
     mono(text).color(color)
 }
 
+
+/// Мелкая кнопка для окна выбора папки (быстрые места, «вверх», «перейти»).
+fn small_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(
+            RichText::new(label)
+                .font(FontId::monospace(FONT - 1.0))
+                .color(TEXT),
+        )
+        .min_size(egui::vec2(0.0, 26.0))
+        .fill(BTN_BG)
+        .stroke(Stroke::new(1.0_f32, LINE)),
+    )
+}
+
+/// Домашняя папка пользователя — без внешних крейтов, только переменные среды.
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+}
+
+/// Быстрые места в окне выбора папки: дом, рабочий стол, загрузки, диски.
+fn pick_places() -> Vec<(String, PathBuf)> {
+    let mut places: Vec<(String, PathBuf)> = Vec::new();
+    if let Some(home) = home_dir() {
+        places.push(("домашняя".to_string(), home.clone()));
+        for (label, folder) in [("рабочий стол", "Desktop"), ("загрузки", "Downloads")] {
+            let path = home.join(folder);
+            if path.is_dir() {
+                places.push((label.to_string(), path));
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        for letter in 'C'..='Z' {
+            let drive = PathBuf::from(format!("{letter}:\\"));
+            if drive.exists() {
+                places.push((format!("{letter}:"), drive));
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        places.push(("корень".to_string(), PathBuf::from("/")));
+        places.push(("usr/local".to_string(), PathBuf::from("/usr/local")));
+    }
+    places
+}
+
 /* ───────────────────────── состояние ───────────────────────── */
 
 #[derive(Clone, Copy, PartialEq)]
@@ -67,14 +118,17 @@ enum Msg {
 
 struct Setup {
     dir: PathBuf,
-    editing_path: bool,
-    path_input: String,
+    /// Открыт встроенный выбор папки установки.
+    picking: bool,
+    pick_dir: PathBuf,
+    pick_input: String,
+    pick_dirs: Vec<(String, PathBuf)>,
+    pick_error: Option<String>,
     screen: Screen,
     steps: Vec<(StepState, String)>,
     rx: Option<Receiver<Msg>>,
     error: Option<String>,
     reinstall: bool,
-    focus_input: bool,
     spinner: usize,
 }
 
@@ -82,9 +136,12 @@ impl Setup {
     fn new(reinstall: bool) -> Self {
         let dir = common::install_dir();
         Self {
-            path_input: dir.display().to_string(),
+            pick_dir: dir.clone(),
+            pick_input: dir.display().to_string(),
+            pick_dirs: Vec::new(),
+            pick_error: None,
+            picking: false,
             dir,
-            editing_path: false,
             screen: if !reinstall && common::installed_in(&common::install_dir()) {
                 Screen::AlreadyInstalled
             } else {
@@ -97,7 +154,6 @@ impl Setup {
             rx: None,
             error: None,
             reinstall,
-            focus_input: false,
             spinner: 0,
         }
     }
@@ -223,7 +279,8 @@ impl Setup {
         visuals.active.weak_bg_fill = active;
         visuals.active.bg_stroke = visuals.hovered.bg_stroke;
         let text = RichText::new(label).font(FontId::monospace(FONT)).color(text_color);
-        let mut button = egui::Button::new(text).min_size(egui::vec2(0.0, 32.0));
+        // одна ширина и высота у всех кнопок — ряд больше не «пляшет»
+        let mut button = egui::Button::new(text).min_size(egui::vec2(152.0, 34.0));
         if !enabled {
             button = button.sense(egui::Sense::hover());
         }
@@ -251,51 +308,178 @@ impl Setup {
     }
 
     fn path_row(&mut self, ui: &mut egui::Ui) {
-        if self.editing_path {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                ui.label(mono(format!("  {:<LABEL$}", "Куда установится:")));
-                let input = ui.add(
-                    egui::TextEdit::singleline(&mut self.path_input)
-                        .font(FontId::monospace(FONT))
-                        .desired_width(330.0)
-                        .text_color(TEXT),
-                );
-                if self.focus_input {
-                    input.request_focus();
-                    self.focus_input = false;
-                }
-                if self.button(ui, "готово", true, true).clicked() {
-                    self.apply_path();
-                }
-                if self.button(ui, "отмена", false, true).clicked() {
-                    self.editing_path = false;
-                    self.path_input = self.dir.display().to_string();
-                }
-            });
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(mono(format!("  {:<LABEL$}", "Куда установится:")));
+            ui.label(mono_color(self.dir.display().to_string(), TEXT));
+            if self.button(ui, "Выбрать папку", false, true).clicked() {
+                self.pick_open();
+            }
+        });
+    }
+
+    /* ───────────── выбор папки установки внутри установщика ───────────── */
+
+    fn pick_open(&mut self) {
+        self.picking = true;
+        self.pick_error = None;
+        // начинаем с текущего пути, а если его ещё нет — с домашней папки
+        let start = if self.dir.exists() {
+            self.dir.clone()
+        } else if let Some(home) = home_dir() {
+            home
         } else {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                ui.label(mono(format!("  {:<LABEL$}", "Куда установится:")));
-                ui.label(mono_color(self.dir.display().to_string(), TEXT));
-                if self.button(ui, "изменить путь", false, true).clicked() {
-                    self.editing_path = true;
-                    self.focus_input = true;
+            self.dir.clone()
+        };
+        self.pick_goto(start);
+    }
+
+    fn pick_goto(&mut self, path: PathBuf) {
+        self.pick_dir = path;
+        self.pick_input = self.pick_dir.display().to_string();
+        self.pick_reload();
+    }
+
+    fn pick_reload(&mut self) {
+        self.pick_dirs.clear();
+        self.pick_error = None;
+        match std::fs::read_dir(&self.pick_dir) {
+            Ok(read) => {
+                for entry in read.flatten() {
+                    let is_dir = entry.file_type().map(|file| file.is_dir()).unwrap_or(false);
+                    if !is_dir {
+                        continue;
+                    }
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    self.pick_dirs.push((name, entry.path()));
                 }
-            });
+                self.pick_dirs
+                    .sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+            }
+            Err(error) => self.pick_error = Some(error.to_string()),
         }
     }
 
-    fn apply_path(&mut self) {
-        let raw = self.path_input.trim();
-        if raw.is_empty() {
-            self.path_input = self.dir.display().to_string();
-            self.editing_path = false;
+    /// Окно выбора папки: список подпапок, быстрые места и ручной ввод пути.
+    fn picker(&mut self, ctx: &egui::Context) {
+        if !self.picking {
             return;
         }
-        self.dir = common::expand_path(raw);
-        self.path_input = self.dir.display().to_string();
-        self.editing_path = false;
+        let mut go: Option<PathBuf> = None;
+        let mut choose = false;
+        let mut cancel = false;
+        let places = pick_places();
+        let current = self.pick_dir.display().to_string();
+        let can_up = self.pick_dir.parent().is_some();
+
+        egui::Window::new("Куда установить OmniSpec")
+            .collapsible(false)
+            .resizable(false)
+            .default_width(700.0)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(mono_color("Выбери папку — лаунчер распакуется прямо в неё.", DIM));
+                self.blank(ui, 8.0);
+
+                // быстрые места: домашняя папка, рабочий стол, диски
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    for (label, path) in &places {
+                        if small_button(ui, label).clicked() {
+                            go = Some(path.clone());
+                        }
+                    }
+                });
+                self.blank(ui, 8.0);
+
+                // текущая папка и переход на уровень выше
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if small_button(ui, "↑ вверх").clicked() && can_up {
+                        if let Some(parent) = self.pick_dir.parent() {
+                            go = Some(parent.to_path_buf());
+                        }
+                    }
+                    ui.label(mono_color(current.clone(), TEXT));
+                });
+                self.blank(ui, 6.0);
+
+                // список подпапок
+                egui::Frame::NONE
+                    .fill(INPUT_BG)
+                    .stroke(Stroke::new(1.0_f32, LINE))
+                    .inner_margin(egui::Margin::same(6))
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(240.0)
+                            .show(ui, |ui| {
+                                if let Some(error) = &self.pick_error {
+                                    ui.label(mono_color(error.clone(), Color32::from_rgb(0xff, 0x8b, 0x7b)));
+                                } else if self.pick_dirs.is_empty() {
+                                    ui.label(mono_color("  подпапок нет", DIM2));
+                                }
+                                for (name, path) in &self.pick_dirs {
+                                    let label = format!("  [ ] {name}");
+                                    if ui
+                                        .add(
+                                            egui::Button::new(mono_color(label, TEXT))
+                                                .fill(Color32::TRANSPARENT)
+                                                .stroke(Stroke::new(0.0_f32, Color32::TRANSPARENT))
+                                                .min_size(egui::vec2(ui.available_width(), 24.0)),
+                                        )
+                                        .clicked()
+                                    {
+                                        go = Some(path.clone());
+                                    }
+                                }
+                            });
+                    });
+                self.blank(ui, 8.0);
+
+                // ручной ввод пути
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let input = ui.add(
+                        egui::TextEdit::singleline(&mut self.pick_input)
+                            .font(FontId::monospace(FONT))
+                            .desired_width(430.0)
+                            .text_color(TEXT),
+                    );
+                    let entered = input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if small_button(ui, "Перейти").clicked() || entered {
+                        go = Some(common::expand_path(self.pick_input.trim()));
+                    }
+                });
+
+                self.blank(ui, 10.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if self.button(ui, "Выбрать эту папку", true, true).clicked() {
+                        choose = true;
+                    }
+                    if self.button(ui, "Отмена", false, true).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+
+        if let Some(path) = go {
+            self.pick_goto(path);
+        }
+        if choose {
+            self.dir = self.pick_dir.clone();
+            self.pick_input = self.dir.display().to_string();
+            self.picking = false;
+        }
+        if cancel {
+            self.picking = false;
+        }
+        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.picking = false;
+        }
     }
 
     fn header(&self, ui: &mut egui::Ui) {
@@ -337,13 +521,12 @@ impl Setup {
 
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
-            let install = self.button(ui, "Установить", true, !self.editing_path);
+            let install = self.button(ui, "Установить", true, !self.picking);
             if install.clicked() {
                 self.start();
             }
-            if self.button(ui, "Изменить путь", false, true).clicked() {
-                self.editing_path = true;
-                self.focus_input = true;
+            if self.button(ui, "Выбрать папку", false, true).clicked() {
+                self.pick_open();
             }
             if self.button(ui, "Отмена", false, true).clicked() {
                 self.close(ctx);
@@ -352,7 +535,7 @@ impl Setup {
             ui.label(mono_color("Enter — установить,  Esc — отмена", DIM2));
         });
 
-        if !self.editing_path && ctx.input(|input| input.key_pressed(egui::Key::Enter)) {
+        if !self.picking && ctx.input(|input| input.key_pressed(egui::Key::Enter)) {
             self.start();
         }
         if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
@@ -430,14 +613,13 @@ impl Setup {
             if self.button(ui, "Изменить путь", false, true).clicked() {
                 self.reinstall = true;
                 self.screen = Screen::Offer;
-                self.editing_path = true;
-                self.focus_input = true;
+                self.pick_open();
             }
             if self.button(ui, "Закрыть", false, true).clicked() {
                 self.close(ctx);
             }
         });
-        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        if !self.picking && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.close(ctx);
         }
     }
@@ -485,6 +667,8 @@ impl eframe::App for Setup {
                     Screen::Failed => self.failed(ui, ctx),
                 });
             });
+
+        self.picker(ctx);
     }
 }
 

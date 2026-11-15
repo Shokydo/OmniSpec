@@ -34,6 +34,10 @@ fn default_click_fx() -> String {
     "wave".to_string()
 }
 
+fn default_wallpaper_fit() -> String {
+    "cover".to_string()
+}
+
 fn default_update_repo() -> Option<String> {
     Some("Shokydo/OmniSpec".to_string())
 }
@@ -67,6 +71,20 @@ pub struct Settings {
     pub hide_on_launch: bool,
     /// Последняя выбранная сборка.
     pub last_instance: Option<String>,
+
+    /* ---------- сеть ---------- */
+    /// Прокси для запросов к Modrinth/Mojang: `http://host:port` или `socks5://…`.
+    pub proxy: Option<String>,
+
+    /* ---------- оформление ---------- */
+    /// Обои: имя встроенных (`grid`, `aurora`, …) или путь к своему файлу.
+    pub wallpaper: Option<String>,
+    /// Как показывать обои: cover | contain | fill | tile.
+    pub wallpaper_fit: String,
+    /// Размытие обоев, 0–20.
+    pub wallpaper_blur: u8,
+    /// Затемнение обоев под интерфейсом, 0–80 %.
+    pub wallpaper_dim: u8,
 
     /* ---------- автообновление ---------- */
     /// Репозиторий GitHub с релизами: «владелец/репозиторий».
@@ -103,6 +121,11 @@ impl Default for Settings {
             enable_modrinth: default_true(),
             hide_on_launch: false,
             last_instance: None,
+            proxy: None,
+            wallpaper: None,
+            wallpaper_fit: default_wallpaper_fit(),
+            wallpaper_blur: 0,
+            wallpaper_dim: 40,
             update_repo: default_update_repo(),
             update_enabled: true,
             update_token: None,
