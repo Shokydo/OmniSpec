@@ -2732,3 +2732,24 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 .acc-field .input, .acc-pane .input { width: 100%; }
 .acc-actions { display: flex; gap: 8px; margin-top: auto; padding-top: 12px; }
 .acc-actions .btn { flex: 1 1 0; min-width: 132px; height: var(--h-sm); }
+
+/* --- группы настроек эффектов: «Трейсер за курсором» и «Эффект на экране» --- */
+.fx-group {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.fx-group + .fx-group { margin-top: 2px; }
+.fx-group-head {
+  display: flex; align-items: center; gap: 8px;
+  height: 42px; padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-4);
+}
+.fx-group-title {
+  font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text);
+}
+.fx-group-body { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
+.fx-group-body .prefs-section { margin: 0; }

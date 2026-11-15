@@ -301,6 +301,8 @@
     let ink = "#e8e8ee";
     // размер эффектов: настройка в процентах, влияет на все частицы
     let scale = 1;
+    // плотность: сколько частиц на экране (0.3–2)
+    let density = 1;
     let particles = [];
     let raf = 0;
     let last = 0;
@@ -326,11 +328,12 @@
 
     function count() {
       const area = width * height;
-      if (style === "flakes") return Math.max(24, Math.min(110, Math.round(area / 19000)));
-      if (style === "snow") return Math.max(30, Math.min(140, Math.round(area / 15000)));
-      if (style === "dust") return Math.max(40, Math.min(180, Math.round(area / 11000)));
-      if (style === "sticks") return Math.max(16, Math.min(70, Math.round(area / 26000)));
-      return Math.max(34, Math.min(170, Math.round(area / 12000)));
+      const mul = (value) => Math.max(4, Math.round(value * density));
+      if (style === "flakes") return mul(Math.max(24, Math.min(110, Math.round(area / 19000))));
+      if (style === "snow") return mul(Math.max(30, Math.min(140, Math.round(area / 15000))));
+      if (style === "dust") return mul(Math.max(40, Math.min(180, Math.round(area / 11000))));
+      if (style === "sticks") return mul(Math.max(16, Math.min(70, Math.round(area / 26000))));
+      return mul(Math.max(34, Math.min(170, Math.round(area / 12000))));
     }
 
     function spawn(anywhere = true) {
@@ -481,6 +484,13 @@
         if (style !== "off" && raf) build();
         return clean;
       },
+      /** Плотность частиц в процентах: 30–200. */
+      density: (percent) => {
+        const clean = Math.max(20, Math.min(300, Number(percent) || 100));
+        density = clean / 100;
+        if (style !== "off" && raf) build();
+        return clean;
+      },
       refreshInk: () => ambientInkRefresh && ambientInkRefresh(),
       apply: (name) => {
         style = AMBIENT_STYLES[name] ? name : "stars";
@@ -493,21 +503,33 @@
     };
   })();
 
-  /** Трейс за курсором: непрерывная кисть, которая сужается и гаснет к концу. */
+  /** Варианты трейса за курсором. */
+  const TRAIL_STYLES = {
+    line: "Линия",
+    brush: "Кисть",
+    glow: "Свечение",
+    sparks: "Искры"
+  };
+
+  /** Трейс за курсором: один канвас, четыре варианта, общий размер и длина следа. */
   const trailFx = (() => {
     const canvas = () => $("#trail");
-    // сколько живёт «хвост» и насколько он длинный в точках
-    const LIFE = 0.85;
-    const MAX_POINTS = 120;
+    const MAX_POINTS = 140;
+    // базовая жизнь точки в секундах; «длина следа» её умножает
+    const LIFE = 0.5;
     let ctx = null;
     let width = 0;
     let height = 0;
     let points = [];
     let raf = 0;
     let last = 0;
+    let lastMove = 0;
     let scale = 1;
+    let length = 1;
+    let style = "line";
     let enabled = true;
     let ink = "#e8e8ee";
+    let accent = "#ffffff";
 
     function resize() {
       const el = canvas();
@@ -519,11 +541,35 @@
       el.height = Math.round(height * dpr);
       ctx = el.getContext("2d");
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ink = getComputedStyle(document.body).getPropertyValue("--text").trim() || "#e8e8ee";
+      readInk();
     }
 
-    /** Ширина кисти у основания: 18 px при 100 %. */
-    const baseWidth = () => 18 * scale;
+    function readInk() {
+      const css = getComputedStyle(document.body);
+      ink = css.getPropertyValue("--text").trim() || "#e8e8ee";
+      accent = css.getPropertyValue("--accent").trim() || "#ffffff";
+    }
+
+    /** Толщина в пикселях при 100 % — у каждого варианта своя. */
+    function baseWidth() {
+      const base = style === "brush" ? 13 : style === "glow" ? 8 : style === "sparks" ? 3.5 : 4.5;
+      return base * scale;
+    }
+
+    /** Один гладкий путь по всем точкам: линия без разрывов и стыков. */
+    function tracePath(list) {
+      ctx.beginPath();
+      ctx.moveTo(list[0].x, list[0].y);
+      for (let i = 1; i < list.length; i += 1) {
+        const cur = list[i];
+        if (i < list.length - 1) {
+          const next = list[i + 1];
+          ctx.quadraticCurveTo(cur.x, cur.y, (cur.x + next.x) / 2, (cur.y + next.y) / 2);
+        } else {
+          ctx.lineTo(cur.x, cur.y);
+        }
+      }
+    }
 
     function step(now) {
       const el = canvas();
@@ -532,32 +578,67 @@
       last = now;
       ctx.clearRect(0, 0, width, height);
 
-      // точки стареют по времени: когда мышь стоит, хвост сам втягивается
-      for (const point of points) point.life -= dt / LIFE;
-      points = points.filter((point) => point.life > 0);
+      const life = LIFE * length;
+      for (const point of points) point.age += dt;
+      points = points.filter((point) => point.age < life);
 
       if (points.length > 1) {
-        const max = baseWidth();
+        const base = baseWidth();
+        // хвост гаснет целиком, а не по кусочкам — поэтому линия сплошная
+        const sinceMove = Math.max(0, (now - lastMove) / 1000);
+        const fade = Math.max(0, Math.min(1, 1 - sinceMove / (life * 1.8)));
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
-        ctx.strokeStyle = ink;
-        for (let i = 1; i < points.length; i += 1) {
-          const prev = points[i - 1];
-          const cur = points[i];
-          // k: 0 — самый старый кончик, 1 — самая свежая точка у курсора
-          const k = i / (points.length - 1);
-          const life = Math.min(prev.life, cur.life);
-          ctx.globalAlpha = Math.max(0, Math.min(0.75, life * (0.25 + 0.75 * k)));
-          ctx.lineWidth = Math.max(0.6, max * Math.pow(k, 1.35) * (0.35 + 0.65 * life));
-          ctx.beginPath();
-          ctx.moveTo(prev.x, prev.y);
-          // сглаживание: ведём кривую через середины отрезков
-          if (i < points.length - 1) {
-            const next = points[i + 1];
-            ctx.quadraticCurveTo(cur.x, cur.y, (cur.x + next.x) / 2, (cur.y + next.y) / 2);
-          } else {
+
+        if (style === "brush") {
+          // кисть: толщина сужается к хвосту, прозрачность одинаковая
+          ctx.strokeStyle = ink;
+          for (let i = 1; i < points.length; i += 1) {
+            const prev = points[i - 1];
+            const cur = points[i];
+            const k = i / (points.length - 1);
+            ctx.globalAlpha = 0.9 * fade;
+            ctx.lineWidth = Math.max(0.8, base * Math.pow(k, 1.2));
+            ctx.beginPath();
+            ctx.moveTo(prev.x, prev.y);
             ctx.lineTo(cur.x, cur.y);
+            ctx.stroke();
           }
+        } else if (style === "glow") {
+          const passes = [
+            { width: base * 3.2, alpha: 0.16 },
+            { width: base * 2.0, alpha: 0.3 },
+            { width: base * 0.7, alpha: 0.95 }
+          ];
+          tracePath(points);
+          passes.forEach((pass, index) => {
+            ctx.strokeStyle = index === passes.length - 1 ? ink : accent;
+            ctx.globalAlpha = pass.alpha * fade;
+            ctx.lineWidth = Math.max(1, pass.width);
+            ctx.stroke();
+          });
+        } else if (style === "sparks") {
+          ctx.strokeStyle = ink;
+          ctx.globalAlpha = 0.5 * fade;
+          ctx.lineWidth = Math.max(0.8, base);
+          tracePath(points);
+          ctx.stroke();
+          // искры вдоль линии
+          ctx.fillStyle = accent;
+          for (let i = 0; i < points.length; i += 5) {
+            const point = points[i];
+            const k = i / (points.length - 1);
+            ctx.globalAlpha = (0.25 + 0.65 * k) * fade;
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, Math.max(0.8, base * (0.5 + 0.8 * k)), 0, Math.PI * 2);
+            ctx.fill();
+          }
+        } else {
+          // «Линия»: одна сплошная тонкая линия, без ступенек по толщине
+          ctx.strokeStyle = ink;
+          ctx.globalAlpha = 0.85 * fade;
+          ctx.lineWidth = Math.max(1, base);
+          tracePath(points);
           ctx.stroke();
         }
         ctx.globalAlpha = 1;
@@ -587,14 +668,14 @@
     function push(event) {
       if (!enabled) return;
       const previous = points[points.length - 1];
-      // соседние пиксели не нужны: линия рисуется отрезками, а не точками
       if (previous) {
         const dx = event.clientX - previous.x;
         const dy = event.clientY - previous.y;
-        if (dx * dx + dy * dy < 4) { previous.life = 1; return; }
+        if (dx * dx + dy * dy < 2.25) return;
       }
-      points.push({ x: event.clientX, y: event.clientY, life: 1 });
+      points.push({ x: event.clientX, y: event.clientY, age: 0 });
       if (points.length > MAX_POINTS) points.splice(0, points.length - MAX_POINTS);
+      lastMove = performance.now();
       start();
     }
 
@@ -610,15 +691,24 @@
         return enabled;
       },
       isOn: () => enabled,
-      /** Размер кисти в процентах: 40–300, своя настройка. */
+      /** Вариант трейса: line | brush | glow | sparks. */
+      style: (name) => {
+        style = TRAIL_STYLES[name] ? name : "line";
+        return style;
+      },
+      /** Толщина кисти в процентах: 40–300. */
       size: (percent) => {
         const clean = Math.max(40, Math.min(300, Number(percent) || 100));
         scale = clean / 100;
         return clean;
       },
-      refreshInk: () => {
-        ink = getComputedStyle(document.body).getPropertyValue("--text").trim() || "#e8e8ee";
-      }
+      /** Длина следа в процентах: 40–300. */
+      length: (percent) => {
+        const clean = Math.max(40, Math.min(300, Number(percent) || 100));
+        length = clean / 100;
+        return clean;
+      },
+      refreshInk: readInk
     };
   })();
 
@@ -640,6 +730,19 @@
     const clean = trailFx.size(percent);
     state.trailSize = clean;
     return clean;
+  }
+
+  /** Длина следа трейса в процентах. */
+  function applyTrailLength(percent) {
+    const clean = trailFx.length(percent);
+    state.trailLength = clean;
+    return clean;
+  }
+
+  /** Вариант трейса: линия, кисть, свечение, искры. */
+  function applyTrailStyle(name) {
+    state.trailStyle = trailFx.style(name);
+    return state.trailStyle;
   }
 
   /** Трейс за курсором: вкл/выкл. */
@@ -4745,6 +4848,7 @@
   function prefsFx() {
     const ambientOn = (state.ambient || "stars") !== "off";
     const trailOn = state.trail !== false;
+    const trailStyle = state.trailStyle || "line";
     return `
       <div class="prefs-section">
         <div class="prefs-label">Эффект от клика</div>
@@ -4752,155 +4856,99 @@
           ${Object.entries(FX_STYLES).map(([id, label]) => `<button class="chip ${state.fx === id ? "is-active" : ""}" data-fx="${id}">${label}</button>`).join("")}
         </div>
       </div>
-      <div class="prefs-section">
-        <div class="prefs-row-head">
-          <span class="prefs-label">Фоновая анимация</span>
+
+      <!-- группа: трейсер за курсором -->
+      <div class="fx-group">
+        <div class="fx-group-head">
+          <span class="fx-group-title">Трейсер за курсором</span>
+          <div class="spacer"></div>
+          <button class="switch ${trailOn ? "on" : ""}" id="set-trail"></button>
+        </div>
+        <div class="fx-group-body">
+          <div class="prefs-section">
+            <div class="prefs-label">Вариант</div>
+            <div class="chips" id="trail-chips">
+              ${Object.entries(TRAIL_STYLES).map(([id, label]) => `<button class="chip ${trailStyle === id ? "is-active" : ""}" data-trail-style="${id}">${label}</button>`).join("")}
+            </div>
+          </div>
+          <div class="prefs-section">
+            <div class="prefs-row-head">
+              <span class="prefs-label">Толщина</span>
+              <div class="spacer"></div>
+              <span class="mono" id="trail-size-value">${Number(state.trailSize) || 100}%</span>
+            </div>
+            <div class="range">
+              <input type="range" id="set-trail-size" min="40" max="300" step="10" value="${Number(state.trailSize) || 100}" ${trailOn ? "" : "disabled"}>
+              <span class="muted" style="font-size:11px">тонкий</span>
+              <div class="spacer"></div>
+              <span class="muted" style="font-size:11px">широкий</span>
+            </div>
+          </div>
+          <div class="prefs-section">
+            <div class="prefs-row-head">
+              <span class="prefs-label">Длина следа</span>
+              <div class="spacer"></div>
+              <span class="mono" id="trail-length-value">${Number(state.trailLength) || 100}%</span>
+            </div>
+            <div class="range">
+              <input type="range" id="set-trail-length" min="40" max="300" step="10" value="${Number(state.trailLength) || 100}" ${trailOn ? "" : "disabled"}>
+              <span class="muted" style="font-size:11px">короткий</span>
+              <div class="spacer"></div>
+              <span class="muted" style="font-size:11px">длинный</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- группа: эффект на экране -->
+      <div class="fx-group">
+        <div class="fx-group-head">
+          <span class="fx-group-title">Эффект на экране</span>
           <div class="spacer"></div>
           <button class="switch ${ambientOn ? "on" : ""}" id="set-ambient"></button>
         </div>
-        <div class="chips" id="ambient-chips">
-          ${Object.entries(AMBIENT_STYLES).filter(([id]) => id !== "off").map(([id, label]) => `<button class="chip ${(state.ambient || "stars") === id ? "is-active" : ""}" data-ambient="${id}">${label}</button>`).join("")}
-        </div>
-      </div>
-      <div class="prefs-section">
-        <div class="prefs-row-head">
-          <span class="prefs-label">Трейс за курсором</span>
-          <div class="spacer"></div>
-          <button class="switch ${state.trail !== false ? "on" : ""}" id="set-trail"></button>
-        </div>
-      </div>
-      <div class="prefs-section">
-        <div class="prefs-row-head">
-          <span class="prefs-label">Размер эффектов</span>
-          <div class="spacer"></div>
-          <span class="mono" id="fx-size-value">${Number(state.effectSize) || 100}%</span>
-        </div>
-        <div class="range">
-          <input type="range" id="set-fx-size" min="60" max="220" step="10" value="${Number(state.effectSize) || 100}">
-          <span class="muted" style="font-size:11px">маленькие</span>
-          <div class="spacer"></div>
-          <span class="muted" style="font-size:11px">крупные</span>
-        </div>
-      </div>
-      <div class="prefs-section">
-        <div class="prefs-row-head">
-          <span class="prefs-label">Размер трейса</span>
-          <div class="spacer"></div>
-          <span class="mono" id="trail-size-value">${Number(state.trailSize) || 100}%</span>
-        </div>
-        <div class="range">
-          <input type="range" id="set-trail-size" min="40" max="300" step="10" value="${Number(state.trailSize) || 100}" ${trailOn ? "" : "disabled"}>
-          <span class="muted" style="font-size:11px">тонкая кисть</span>
-          <div class="spacer"></div>
-          <span class="muted" style="font-size:11px">широкая</span>
-        </div>
-      </div>`;
-  }
-
-  function prefsSound(settings) {
-    return `
-      <div class="prefs-section">
-        <div class="prefs-label">Звуковые эффекты</div>
-        <div class="prefs-rows">
-          <div class="settings-row">
-            <div class="label">Звуки интерфейса</div>
-            <div><div class="switch-row"><button class="switch ${state.sound.on ? "on" : ""}" id="set-sound"></button><span class="muted">щелчки и переключатели</span></div></div>
+        <div class="fx-group-body">
+          <div class="prefs-section">
+            <div class="prefs-label">Что падает</div>
+            <div class="chips" id="ambient-chips">
+              ${Object.entries(AMBIENT_STYLES).filter(([id]) => id !== "off").map(([id, label]) => `<button class="chip ${(state.ambient || "stars") === id ? "is-active" : ""}" data-ambient="${id}">${label}</button>`).join("")}
+            </div>
           </div>
-          <div class="settings-row">
-            <div class="label">Громкость</div>
+          <div class="prefs-section">
+            <div class="prefs-row-head">
+              <span class="prefs-label">Размер частиц</span>
+              <div class="spacer"></div>
+              <span class="mono" id="fx-size-value">${Number(state.effectSize) || 100}%</span>
+            </div>
             <div class="range">
-              <input type="range" id="set-sound-volume" min="0" max="100" step="5" value="${state.sound.volume}">
-              <span class="tag" id="set-sound-volume-value">${state.sound.volume}%</span>
+              <input type="range" id="set-fx-size" min="60" max="220" step="10" value="${Number(state.effectSize) || 100}">
+              <span class="muted" style="font-size:11px">маленькие</span>
+              <div class="spacer"></div>
+              <span class="muted" style="font-size:11px">крупные</span>
             </div>
           </div>
-        </div>
-      </div>
-      <div class="prefs-section">
-        <div class="prefs-label">Вариант звука</div>
-        <div class="chips" id="sound-style-chips">
-          ${Object.entries(SOUND_STYLES).map(([id, label]) => `<button class="chip ${(state.sound.style || "soft") === id ? "is-active" : ""}" data-sound-style="${id}">${label}</button>`).join("")}
-        </div>
-      </div>
-      <div class="prefs-section">
-        <div class="prefs-label">Проверка</div>
-        <div class="settings-actions">
-          <button class="btn" id="sound-test">Прослушать все</button>
-        </div>
-      </div>`;
-  }
-
-  function prefsGame(settings) {
-    return `
-      <div class="prefs-section">
-        <div class="prefs-label">Память и Java</div>
-        <div class="prefs-rows">
-          <div class="settings-row">
-            <div class="label">Память по умолчанию, МБ</div>
+          <div class="prefs-section">
+            <div class="prefs-row-head">
+              <span class="prefs-label">Количество</span>
+              <div class="spacer"></div>
+              <span class="mono" id="dens-value">${Number(state.ambientDensity) || 100}%</span>
+            </div>
             <div class="range">
-              <input type="range" id="set-memory" min="1024" max="16384" step="512" value="${settings.memory_mb || 4096}">
-              <span class="tag" id="set-memory-value">${settings.memory_mb || 4096} МБ</span>
+              <input type="range" id="set-density" min="30" max="200" step="10" value="${Number(state.ambientDensity) || 100}">
+              <span class="muted" style="font-size:11px">редко</span>
+              <div class="spacer"></div>
+              <span class="muted" style="font-size:11px">густо</span>
             </div>
-          </div>
-          <div class="settings-row">
-            <div class="label">Java (новая)</div>
-            <div class="flex-row">
-              <input class="input grow" id="set-java" placeholder="автоматически" value="${esc(settings.java_path || "")}" spellcheck="false">
-              <button class="btn" id="set-java-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать…</button>
-            </div>
-          </div>
-          <div class="settings-row">
-            <div class="label">Java 8 (для версий до 1.17)</div>
-            <div class="flex-row">
-              <input class="input grow" id="set-java-legacy" placeholder="автоматически" value="${esc(settings.java_path_legacy || "")}" spellcheck="false">
-              <button class="btn" id="set-java-legacy-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать…</button>
-            </div>
-          </div>
-          <div class="settings-row">
-            <div class="label">Найденные Java</div>
-            <div class="java-list" id="java-found"><span class="muted">поиск…</span></div>
-          </div>
-          <div class="settings-row">
-            <div class="label">JVM-аргументы</div>
-            <div><input class="input" style="width:100%" id="set-jvm" value="${esc(settings.jvm_args || "")}" spellcheck="false"></div>
-          </div>
-          <div class="settings-row">
-            <div class="label">Автоскачивание Java</div>
-            <div><div class="switch-row"><button class="switch ${settings.auto_java ? "on" : ""}" id="set-auto-java"></button><span class="muted">если подходящей Java нет</span></div></div>
           </div>
         </div>
       </div>`;
   }
 
-  function prefsUpdates(settings) {
-    return `
-      <div class="prefs-section">
-        <div class="prefs-label">Откуда обновляться</div>
-        <div class="prefs-rows">
-          <div class="settings-row">
-            <div class="label">Репозиторий GitHub</div>
-            <div><input class="input" style="width:100%" id="set-upd-repo" value="${esc(settings.update_repo || "")}" placeholder="владелец/репозиторий" spellcheck="false"></div>
-          </div>
-          <div class="settings-row">
-            <div class="label">Токен (если репозиторий приватный)</div>
-            <div><input class="input" style="width:100%" id="set-upd-token" value="${esc(settings.update_token || "")}" placeholder="необязательно" spellcheck="false"></div>
-          </div>
-          <div class="settings-row">
-            <div class="label">Проверять обновления</div>
-            <div><div class="switch-row"><button class="switch ${settings.update_enabled !== false ? "on" : ""}" id="set-upd-enabled"></button></div></div>
-          </div>
-          <div class="settings-row">
-            <div class="label">Авто-обновление при запуске</div>
-            <div><div class="switch-row"><button class="switch ${settings.update_auto !== false ? "on" : ""}" id="set-upd-auto"></button></div></div>
-          </div>
-          <div class="settings-row">
-            <div class="label">Бета-версии</div>
-            <div><div class="switch-row"><button class="switch ${settings.update_prerelease ? "on" : ""}" id="set-upd-pre"></button></div></div>
-          </div>
-        </div>
-        <div class="settings-actions">
-          <button class="btn" id="upd-check-now">Проверить сейчас</button>
-        </div>
-      </div>`;
+  /** Плотность частиц: сколько их на экране, в процентах. */
+  function applyDensity(percent) {
+    const clean = ambient.density(percent);
+    state.ambientDensity = clean;
+    return clean;
   }
 
   /* обработчики для всех категорий сразу — их немного */
@@ -4969,8 +5017,10 @@
       const on = !(state.trail !== false);
       applyTrail(on);
       trailSwitch.classList.toggle("on", on);
-      const slider = $("#set-trail-size");
-      if (slider) slider.disabled = !on;
+      ["#set-trail-size", "#set-trail-length"].forEach((selector) => {
+        const slider = $(selector);
+        if (slider) slider.disabled = !on;
+      });
       state.settings = { ...(state.settings || {}), trail: on };
       api.saveSettings(state.settings).catch(() => {});
     });
@@ -4983,6 +5033,36 @@
       });
       fxSize.addEventListener("change", () => {
         state.settings = { ...(state.settings || {}), effect_size: applyEffectSize(fxSize.value) };
+        api.saveSettings(state.settings).catch(() => {});
+      });
+    }
+    $$("#trail-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
+      applyTrailStyle(chip.dataset.trailStyle);
+      $$("#trail-chips .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+      state.settings = { ...(state.settings || {}), trail_style: state.trailStyle };
+      api.saveSettings(state.settings).catch(() => {});
+    }));
+    const trailLength = $("#set-trail-length");
+    if (trailLength) {
+      trailLength.addEventListener("input", () => {
+        const value = applyTrailLength(trailLength.value);
+        const label = $("#trail-length-value");
+        if (label) label.textContent = `${value}%`;
+      });
+      trailLength.addEventListener("change", () => {
+        state.settings = { ...(state.settings || {}), trail_length: applyTrailLength(trailLength.value) };
+        api.saveSettings(state.settings).catch(() => {});
+      });
+    }
+    const densityInput = $("#set-density");
+    if (densityInput) {
+      densityInput.addEventListener("input", () => {
+        const value = applyDensity(densityInput.value);
+        const label = $("#dens-value");
+        if (label) label.textContent = `${value}%`;
+      });
+      densityInput.addEventListener("change", () => {
+        state.settings = { ...(state.settings || {}), ambient_density: applyDensity(densityInput.value) };
         api.saveSettings(state.settings).catch(() => {});
       });
     }
@@ -5200,6 +5280,9 @@
       ambient: state.ambient || "stars",
       effect_size: Number(state.effectSize) || 100,
       trail_size: Number(state.trailSize) || 100,
+      trail_style: state.trailStyle || "line",
+      trail_length: Number(state.trailLength) || 100,
+      ambient_density: Number(state.ambientDensity) || 100,
       trail: state.trail !== false,
       feed_grid: feedGridLevel(),
       wallpaper: state.wall.wallpaper,
@@ -6571,6 +6654,9 @@
     applyAmbient((state.settings && state.settings.ambient) || "stars");
     applyEffectSize((state.settings && state.settings.effect_size) || 100);
     applyTrailSize((state.settings && state.settings.trail_size) || 100);
+    applyTrailLength((state.settings && state.settings.trail_length) || 100);
+    applyTrailStyle((state.settings && state.settings.trail_style) || "line");
+    applyDensity((state.settings && state.settings.ambient_density) || 100);
     applyTrail(!state.settings || state.settings.trail !== false);
     applyShape((state.settings && state.settings.shape) || "soft");
     applyUiScale((state.settings && state.settings.ui_scale) || 100);

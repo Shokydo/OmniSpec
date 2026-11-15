@@ -56,6 +56,21 @@ fn default_trail_size() -> u8 {
     100
 }
 
+/// Вариант трейса за курсором.
+fn default_trail_style() -> String {
+    "line".to_string()
+}
+
+/// Длина следа трейса в процентах.
+fn default_trail_length() -> u8 {
+    100
+}
+
+/// Плотность частиц на экране в процентах.
+fn default_ambient_density() -> u8 {
+    100
+}
+
 fn default_ambient() -> String {
     "stars".to_string()
 }
@@ -207,6 +222,15 @@ pub struct Settings {
     /// Размер кисти трейса в процентах: 40–300.
     #[serde(default = "default_trail_size")]
     pub trail_size: u8,
+    /// Вариант трейса: line | brush | glow | sparks.
+    #[serde(default = "default_trail_style")]
+    pub trail_style: String,
+    /// Длина следа трейса в процентах: 40–300.
+    #[serde(default = "default_trail_length")]
+    pub trail_length: u8,
+    /// Плотность частиц на экране: 30–200 %.
+    #[serde(default = "default_ambient_density")]
+    pub ambient_density: u8,
 }
 
 /// Категория сборок: обычная «папка» в списке слева.
@@ -282,6 +306,9 @@ impl Default for Settings {
             effect_size: default_effect_size(),
             trail: default_true_trail(),
             trail_size: default_trail_size(),
+            trail_style: default_trail_style(),
+            trail_length: default_trail_length(),
+            ambient_density: default_ambient_density(),
         }
     }
 }
