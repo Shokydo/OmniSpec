@@ -2536,3 +2536,19 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 /* строка с иконками занимает всю ширину, кнопки под ней одинаковые */
 .settings-row.is-wide { grid-column: 1 / -1; }
 .settings-row.is-wide .settings-actions > .btn { flex: 0 0 220px; min-width: 0; justify-content: center; }
+
+/* ==================== ЭТАП 15 ==================== */
+
+/* --- фоновая анимация: звёзды / пыль / палочки / снег --- */
+.ambient {
+  position: fixed; inset: 0;
+  width: 100%; height: 100%;
+  z-index: 2;
+  pointer-events: none;
+  opacity: .8;
+}
+/* --- версия в шапке теперь просто текст --- */
+.tb-meta #tb-version { font-size: 11px; color: var(--dim-2); }
+
+/* --- чипы вариантов звука --- */
+#sound-style-chips .chip { min-width: 104px; }

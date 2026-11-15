@@ -39,6 +39,9 @@
   const CUSTOM_THEME_DEFAULT = { bg: "#0b0d12", accent: "#7aa2f7", text: "#e6e9ef" };
   const FX_STYLES = { wave: "Волна", dot: "Точка", ring: "Кольцо", cross: "Крест", off: "Выкл" };
 
+  /** Фоновая анимация: звёздочки, пыль, палочки, снег. */
+  const AMBIENT_STYLES = { stars: "Звёзды", dust: "Пыль", sticks: "Палочки", snow: "Снег", off: "Выкл" };
+
   function rgbOf(hex) {
     const clean = String(hex || "#000").replace("#", "");
     const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
@@ -82,6 +85,9 @@
     }
     return THEMES[name] || THEMES.dark;
   }
+
+  /** Сюда движок частиц кладёт пересчёт цвета (тема меняется раньше его создания). */
+  let ambientInkRefresh = null;
 
   function applyTheme(name) {
     const theme = themeOf(name);
@@ -129,6 +135,8 @@
     for (const [key, value] of Object.entries(vars)) document.body.style.setProperty(key, value);
     const valid = name === "custom" || Boolean(THEMES[name]);
     document.body.dataset.theme = valid ? name : "dark";
+    // частицы фона подстраиваются под тему: тёмные на светлой, светлые на тёмной
+    if (ambientInkRefresh) ambientInkRefresh();
     return valid ? name : "dark";
   }
 
@@ -175,9 +183,58 @@
     return state.shape;
   }
 
+  /** Варианты звука интерфейса: от совсем мягких до стеклянных и низких. */
+  const SOUND_STYLES = {
+    soft: "Мягкий",
+    classic: "Классический",
+    glass: "Стекло",
+    wood: "Дерево",
+    deep: "Глубокий"
+  };
+
   /* Короткие звуки интерфейса на WebAudio — без файлов и зависимостей. */
   const sfx = (() => {
     let ctx = null;
+
+    // параметры под каждый стиль: частота, уход частоты, длина, громкость, форма волны
+    const TONES = {
+      soft: {
+        click: { freq: 480, to: 420, dur: 0.1, gain: 0.028, type: "sine" },
+        toggle: { freq: 620, to: 560, dur: 0.11, gain: 0.026, type: "sine" },
+        open: { freq: 540, to: 660, dur: 0.13, gain: 0.024, type: "sine" },
+        success: { freq: 520, to: 780, dur: 0.16, gain: 0.028, type: "sine" },
+        error: { freq: 300, to: 220, dur: 0.18, gain: 0.034, type: "sine" }
+      },
+      classic: {
+        click: { freq: 520, to: 520, dur: 0.045, gain: 0.05, type: "triangle" },
+        toggle: { freq: 760, to: 700, dur: 0.05, gain: 0.045, type: "sine" },
+        open: { freq: 640, to: 640, dur: 0.06, gain: 0.04, type: "sine" },
+        success: { freq: 680, to: 900, dur: 0.09, gain: 0.045, type: "sine" },
+        error: { freq: 240, to: 200, dur: 0.12, gain: 0.06, type: "sawtooth" }
+      },
+      glass: {
+        click: { freq: 1180, to: 1320, dur: 0.07, gain: 0.022, type: "sine" },
+        toggle: { freq: 1480, to: 1240, dur: 0.08, gain: 0.02, type: "sine" },
+        open: { freq: 900, to: 1180, dur: 0.1, gain: 0.02, type: "sine" },
+        success: { freq: 1040, to: 1560, dur: 0.14, gain: 0.022, type: "sine" },
+        error: { freq: 420, to: 320, dur: 0.14, gain: 0.028, type: "triangle" }
+      },
+      wood: {
+        click: { freq: 190, to: 150, dur: 0.06, gain: 0.05, type: "triangle" },
+        toggle: { freq: 240, to: 190, dur: 0.07, gain: 0.045, type: "triangle" },
+        open: { freq: 300, to: 240, dur: 0.08, gain: 0.04, type: "triangle" },
+        success: { freq: 260, to: 380, dur: 0.12, gain: 0.045, type: "triangle" },
+        error: { freq: 140, to: 110, dur: 0.16, gain: 0.05, type: "sawtooth" }
+      },
+      deep: {
+        click: { freq: 140, to: 120, dur: 0.12, gain: 0.05, type: "sine" },
+        toggle: { freq: 180, to: 150, dur: 0.13, gain: 0.045, type: "sine" },
+        open: { freq: 220, to: 180, dur: 0.16, gain: 0.04, type: "sine" },
+        success: { freq: 200, to: 300, dur: 0.2, gain: 0.045, type: "sine" },
+        error: { freq: 110, to: 80, dur: 0.22, gain: 0.05, type: "triangle" }
+      }
+    };
+
     function ensure() {
       if (!state.sound || !state.sound.on) return null;
       if (!ctx) {
@@ -188,28 +245,220 @@
       if (ctx.state === "suspended") ctx.resume().catch(() => {});
       return ctx;
     }
-    function blip(freq, duration = 0.05, gain = 0.04, type = "sine") {
+
+    function style() {
+      const id = (state.sound && state.sound.style) || "soft";
+      return TONES[id] ? id : "soft";
+    }
+
+    /** Мягкий тон с плавной атакой и спадом — без щелчков и «пилы» на слух. */
+    function play(name) {
       const audio = ensure();
       if (!audio) return;
       const volume = Math.max(0, Math.min(100, Number(state.sound.volume ?? 60))) / 100;
       if (volume <= 0) return;
+      const preset = TONES[style()][name] || TONES[style()].click;
+      const now = audio.currentTime;
       const osc = audio.createOscillator();
       const amp = audio.createGain();
-      osc.type = type;
-      osc.frequency.value = freq;
-      amp.gain.value = gain * volume;
-      amp.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + duration);
+      osc.type = preset.type;
+      osc.frequency.setValueAtTime(preset.freq, now);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(40, preset.to), now + preset.dur);
+      // атака 12 мс и плавный спад: так звук выходит мягким, а не резким
+      amp.gain.setValueAtTime(0.0001, now);
+      amp.gain.exponentialRampToValueAtTime(Math.max(0.0002, preset.gain * volume), now + 0.012);
+      amp.gain.exponentialRampToValueAtTime(0.0001, now + preset.dur);
       osc.connect(amp).connect(audio.destination);
-      osc.start();
-      osc.stop(audio.currentTime + duration);
+      osc.start(now);
+      osc.stop(now + preset.dur + 0.02);
     }
+
     return {
-      click: () => blip(520, 0.045, 0.05, "triangle"),
-      toggle: (on) => blip(on ? 760 : 400, 0.05, 0.045, "sine"),
-      open: () => blip(640, 0.06, 0.04, "sine"),
-      error: () => blip(240, 0.12, 0.06, "sawtooth")
+      click: () => play("click"),
+      toggle: () => play("toggle"),
+      open: () => play("open"),
+      success: () => play("success"),
+      error: () => play("error"),
+      /** Прослушать все события выбранного стиля. */
+      demo: async () => {
+        const events = ["click", "toggle", "open", "success", "error"];
+        for (const name of events) {
+          play(name);
+          await new Promise((resolve) => setTimeout(resolve, 260));
+        }
+      }
     };
   })();
+
+  /** Фоновые частицы на канвасе: без картинок и без градиентов. */
+  const ambient = (() => {
+    const canvas = () => $("#ambient");
+    let ctx = null;
+    let width = 0;
+    let height = 0;
+    let style = "stars";
+    let ink = "#e8e8ee";
+    let particles = [];
+    let raf = 0;
+    let last = 0;
+
+    const rand = (min, max) => min + Math.random() * (max - min);
+
+    function resize() {
+      const el = canvas();
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      // у канваса внутри body с масштабом интерфейса ширина в CSS-пикселях
+      width = Math.max(1, Math.round(el.clientWidth || rect.width));
+      height = Math.max(1, Math.round(el.clientHeight || rect.height));
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      el.width = Math.round(width * dpr);
+      el.height = Math.round(height * dpr);
+      ctx = el.getContext("2d");
+      if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // цвет частиц берём из темы: на светлой теме они тёмные, на тёмной — светлые
+      const textColor = getComputedStyle(document.body).getPropertyValue("--text").trim();
+      ink = textColor || "#e8e8ee";
+    }
+
+    function count() {
+      const area = width * height;
+      if (style === "snow") return Math.max(30, Math.min(140, Math.round(area / 15000)));
+      if (style === "dust") return Math.max(40, Math.min(180, Math.round(area / 11000)));
+      if (style === "sticks") return Math.max(16, Math.min(70, Math.round(area / 26000)));
+      return Math.max(34, Math.min(170, Math.round(area / 12000)));
+    }
+
+    function spawn(anywhere = true) {
+      const y = anywhere ? rand(0, height) : -rand(4, 40);
+      const base = { x: rand(0, width), y, alpha: rand(0.25, 0.8), phase: rand(0, Math.PI * 2) };
+      if (style === "dust") {
+        return { ...base, y: anywhere ? rand(0, height) : height + rand(2, 30), r: rand(0.6, 1.7), vy: -rand(6, 22), drift: rand(-6, 6), kind: "dot" };
+      }
+      if (style === "sticks") {
+        return { ...base, r: rand(0.6, 1.1), h: rand(7, 16), vy: rand(14, 34), spin: rand(-1.4, 1.4), rot: rand(0, Math.PI), drift: rand(-8, 8), kind: "stick" };
+      }
+      if (style === "snow") {
+        return { ...base, r: rand(0.9, 2.3), vy: rand(7, 20), drift: rand(-10, 10), sway: rand(0.4, 1.4), kind: "dot" };
+      }
+      // звёзды: часть — четырёхлучевые искры, остальные — точки
+      return { ...base, r: rand(0.6, 1.9), vy: rand(5, 18), drift: rand(-6, 6), spark: Math.random() < 0.12, kind: "star" };
+    }
+
+    function build() {
+      particles = Array.from({ length: count() }, () => spawn(true));
+    }
+
+    function drawStar(p, time) {
+      const twinkle = 0.6 + 0.4 * Math.sin(time * 1.7 + p.phase);
+      ctx.globalAlpha = p.alpha * twinkle;
+      ctx.fillStyle = ink;
+      if (p.spark) {
+        // четырёхлучевая звёздочка: два тонких луча и светлое ядро
+        const arm = p.r * 2.6;
+        ctx.globalAlpha = p.alpha * twinkle * 0.7;
+        ctx.fillRect(p.x - 0.4, p.y - arm, 0.8, arm * 2);
+        ctx.fillRect(p.x - arm, p.y - 0.4, arm * 2, 0.8);
+        ctx.globalAlpha = p.alpha * twinkle;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r * 0.85, 0, Math.PI * 2);
+        ctx.fill();
+        return;
+      }
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawDot(p) {
+      ctx.globalAlpha = p.alpha * 0.8;
+      ctx.fillStyle = ink;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawStick(p) {
+      ctx.save();
+      ctx.globalAlpha = p.alpha * 0.7;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = ink;
+      ctx.fillRect(-p.r / 2, -p.h / 2, p.r, p.h);
+      ctx.restore();
+    }
+
+    function step(now) {
+      if (!ctx) { raf = 0; return; }
+      const dt = Math.min(0.05, (now - (last || now)) / 1000);
+      last = now;
+      ctx.clearRect(0, 0, width, height);
+      const time = now / 1000;
+      for (let i = 0; i < particles.length; i += 1) {
+        const p = particles[i];
+        p.y += p.vy * dt;
+        p.x += (p.drift || 0) * dt;
+        if (p.kind === "stick") p.rot += p.spin * dt;
+        if (p.kind === "dot" && p.sway) p.x += Math.sin(time * p.sway + p.phase) * 6 * dt;
+        const gone = p.vy > 0 ? p.y > height + 40 : p.y < -40;
+        if (gone || p.x < -60 || p.x > width + 60) { particles[i] = spawn(false); continue; }
+        if (p.kind === "star") drawStar(p, time);
+        else if (p.kind === "stick") drawStick(p);
+        else drawDot(p);
+      }
+      ctx.globalAlpha = 1;
+      raf = requestAnimationFrame(step);
+    }
+
+    function start() {
+      const el = canvas();
+      if (!el) return;
+      if (style === "off") { stop(); return; }
+      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) { stop(); return; }
+      el.hidden = false;
+      resize();
+      build();
+      if (!raf) { last = 0; raf = requestAnimationFrame(step); }
+    }
+
+    function stop() {
+      const el = canvas();
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      last = 0;
+      if (ctx) ctx.clearRect(0, 0, width, height);
+      if (el) el.hidden = true;
+    }
+
+    window.addEventListener("resize", () => {
+      if (style === "off" || !raf) return;
+      resize();
+      build();
+    });
+
+    ambientInkRefresh = () => {
+      const textColor = getComputedStyle(document.body).getPropertyValue("--text").trim();
+      if (textColor) ink = textColor;
+    };
+
+    return {
+      refreshInk: () => ambientInkRefresh && ambientInkRefresh(),
+      apply: (name) => {
+        style = AMBIENT_STYLES[name] ? name : "stars";
+        document.body.dataset.ambient = style;
+        if (style === "off") stop();
+        else start();
+        return style;
+      },
+      current: () => style
+    };
+  })();
+
+  /** Включение/выключение фоновой анимации из настроек. */
+  function applyAmbient(name) {
+    state.ambient = ambient.apply(name);
+    return state.ambient;
+  }
 
   function wallUrl(name) {
     return name === "noise" ? "assets/wallpapers/noise.jpg" : `assets/wallpapers/${name}.png`;
@@ -1592,10 +1841,14 @@
     const meta = selected();
     renderSidebar();
     $("#tb-name").textContent = meta ? meta.name : "OmniSpec";
-    $("#tb-version").textContent = meta ? `MC ${meta.mc_version} · ${loaderLabel(meta.loader)}` : "—";
-    const pill = $("#loader-pill");
-    pill.hidden = !meta;
-    pill.textContent = meta ? loaderLabel(meta.loader) : "";
+    // версия видна текстом; менять её — на странице сборки
+    const versionLabel = $("#tb-version");
+    const versionSep = $("#tb-version-sep");
+    if (versionLabel) {
+      versionLabel.textContent = meta ? `MC ${meta.mc_version} · ${loaderLabel(meta.loader)}` : "";
+      versionLabel.hidden = !meta;
+    }
+    if (versionSep) versionSep.hidden = !meta;
     const menu = $("#btn-build-menu");
     if (menu) menu.hidden = !meta;
     renderBuildIcon(meta);
@@ -3749,12 +4002,24 @@
   }
 
   function prefsFx() {
+    const ambientOn = (state.ambient || "stars") !== "off";
     return `
       <div class="prefs-section">
         <div class="prefs-label">Эффект от клика</div>
         <div class="chips" id="fx-chips">
           ${Object.entries(FX_STYLES).map(([id, label]) => `<button class="chip ${state.fx === id ? "is-active" : ""}" data-fx="${id}">${label}</button>`).join("")}
         </div>
+      </div>
+      <div class="prefs-section">
+        <div class="prefs-row-head">
+          <span class="prefs-label">Фоновая анимация</span>
+          <div class="spacer"></div>
+          <button class="switch ${ambientOn ? "on" : ""}" id="set-ambient"></button>
+        </div>
+        <div class="chips" id="ambient-chips">
+          ${Object.entries(AMBIENT_STYLES).filter(([id]) => id !== "off").map(([id, label]) => `<button class="chip ${(state.ambient || "stars") === id ? "is-active" : ""}" data-ambient="${id}">${label}</button>`).join("")}
+        </div>
+        <div class="settings-note">Падающие звёздочки, пыль и палочки поверх окна — как в главном меню игры. Выключается переключателем или сохраняется в настройках.</div>
       </div>`;
   }
 
@@ -3777,9 +4042,16 @@
         </div>
       </div>
       <div class="prefs-section">
+        <div class="prefs-label">Вариант звука</div>
+        <div class="chips" id="sound-style-chips">
+          ${Object.entries(SOUND_STYLES).map(([id, label]) => `<button class="chip ${(state.sound.style || "soft") === id ? "is-active" : ""}" data-sound-style="${id}">${label}</button>`).join("")}
+        </div>
+        <div class="settings-note">«Мягкий» — приглушённые синусоиды, «Стекло» — высокие и тонкие, «Дерево» и «Глубокий» — низкие.</div>
+      </div>
+      <div class="prefs-section">
         <div class="prefs-label">Проверка</div>
         <div class="settings-actions">
-          <button class="btn" id="sound-test">Прослушать</button>
+          <button class="btn" id="sound-test">Прослушать все</button>
         </div>
       </div>`;
   }
@@ -3914,6 +4186,23 @@
     bindColor("bg", "theme-bg");
     bindColor("accent", "theme-accent");
     bindColor("text", "theme-text");
+    const ambientSwitch = $("#set-ambient");
+    if (ambientSwitch) ambientSwitch.addEventListener("click", () => {
+      const on = !(state.ambient && state.ambient !== "off");
+      applyAmbient(on ? (state.ambient && state.ambient !== "off" ? state.ambient : "stars") : "off");
+      ambientSwitch.classList.toggle("on", on);
+      $$("#ambient-chips .chip").forEach((el) => el.classList.toggle("is-active", on && el.dataset.ambient === state.ambient));
+      state.settings = { ...(state.settings || {}), ambient: state.ambient };
+      api.saveSettings(state.settings).catch(() => {});
+    });
+    $$("#ambient-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
+      applyAmbient(chip.dataset.ambient);
+      $$("#ambient-chips .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+      const sw = $("#set-ambient");
+      if (sw) sw.classList.add("on");
+      state.settings = { ...(state.settings || {}), ambient: state.ambient };
+      api.saveSettings(state.settings).catch(() => {});
+    }));
     $$("#fx-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
       state.fx = chip.dataset.fx;
       applyClickFx(state.fx);
@@ -3948,7 +4237,7 @@
     if (soundSwitch) soundSwitch.addEventListener("click", () => {
       state.sound.on = !state.sound.on;
       soundSwitch.classList.toggle("on", state.sound.on);
-      if (state.sound.on) sfx.toggle(true);
+      if (state.sound.on) sfx.toggle();
     });
     const soundVolume = $("#set-sound-volume");
     if (soundVolume) soundVolume.addEventListener("input", (event) => {
@@ -3957,7 +4246,14 @@
     });
     if (soundVolume) soundVolume.addEventListener("change", () => sfx.click());
     const soundTest = $("#sound-test");
-    if (soundTest) soundTest.addEventListener("click", () => { sfx.open(); setTimeout(() => sfx.toggle(true), 120); });
+    if (soundTest) soundTest.addEventListener("click", () => { sfx.demo(); });
+    $$("#sound-style-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
+      state.sound.style = chip.dataset.soundStyle;
+      $$("#sound-style-chips .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+      sfx.click();
+      state.settings = { ...(state.settings || {}), sound_style: state.sound.style };
+      api.saveSettings(state.settings).catch(() => {});
+    }));
 
     $$("#prefs-body [data-wall]").forEach((chip) => chip.addEventListener("click", async () => {
       const picked = chip.dataset.wall || null;
@@ -4051,8 +4347,9 @@
       applyShape("soft");
       state.fx = "wave";
       applyClickFx(state.fx);
+      applyAmbient("stars");
       state.wall = { wallpaper: null, fit: "cover", blur: 0, dim: 40, recent: [] };
-      state.sound = { on: true, volume: 60 };
+      state.sound = { on: true, volume: 60, style: "soft" };
       applyWallpaper(state.wall);
       persistWallpaper();
       renderPrefs();
@@ -4084,7 +4381,9 @@
       ui_scale: Number(state.uiScale) || 100,
       sound_fx: state.sound.on,
       sound_volume: state.sound.volume,
+      sound_style: state.sound.style || "soft",
       click_fx: state.fx,
+      ambient: state.ambient || "stars",
       wallpaper: state.wall.wallpaper,
       wallpaper_fit: state.wall.fit,
       wallpaper_blur: state.wall.blur,
@@ -5230,14 +5529,12 @@
     on("[data-close-acc]", "click", () => { $("#modal-account").hidden = true; });
     on("[data-close-versions]", "click", () => { $("#modal-versions").hidden = true; });
     // Версия в шапке кликабельна и ведёт на смену версии.
-    on("#loader-pill", "click", () => { if (selected()) openVersionChange(); });
     on("#btn-build-menu", "click", (event) => {
       const meta = selected();
       if (!meta) return;
       const rect = event.currentTarget.getBoundingClientRect();
       openInstanceMenu(rect.left, rect.bottom + 4, meta);
     });
-    on("#tb-version", "click", () => { if (selected()) openVersionChange(); });
     on("#mcver-apply", "click", () => applyVersionChange());
     $$("[data-close-mcver]").forEach((el) => el.addEventListener("click", () => { $("#modal-mcver").hidden = true; }));
     const mcverModal = $("#modal-mcver");
@@ -5351,11 +5648,13 @@
     state.theme = applyTheme((state.settings && state.settings.theme) || "dark");
     state.fx = (state.settings && state.settings.click_fx) || "wave";
     applyClickFx(state.fx);
+    applyAmbient((state.settings && state.settings.ambient) || "stars");
     applyShape((state.settings && state.settings.shape) || "soft");
     applyUiScale((state.settings && state.settings.ui_scale) || 100);
     state.sound = {
       on: state.settings && state.settings.sound_fx !== false,
-      volume: Number((state.settings && state.settings.sound_volume) ?? 60)
+      volume: Number((state.settings && state.settings.sound_volume) ?? 60),
+      style: (state.settings && SOUND_STYLES[state.settings.sound_style] && state.settings.sound_style) || "soft"
     };
     // обои: тот же выбор, что был в прошлый раз (иначе каждый старт — «свой фон»)
     state.wall = {

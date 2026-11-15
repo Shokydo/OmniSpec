@@ -54,6 +54,9 @@
 
 <div class="wall" id="wall" hidden></div>
 
+<!-- фоновая анимация: звёзды, пыль, палочки, снег -->
+<canvas class="ambient" id="ambient" hidden aria-hidden="true"></canvas>
+
 <div class="app">
   <!-- ============ ШАПКА НА ВСЮ ШИРИНУ ============ -->
   <header class="titlebar" data-tauri-drag-region>
@@ -121,11 +124,10 @@
           <div class="tb-meta">
             <span class="dot" id="tb-dot"></span>
             <span id="tb-status">сборка не выбрана</span>
-            <span class="sep">·</span>
-            <button id="tb-version" class="muted tb-version" title="Сменить версию">—</button>
+            <span class="sep" id="tb-version-sep" hidden>·</span>
+            <span class="muted" id="tb-version" hidden></span>
           </div>
         </div>
-        <button class="pill pill-btn" id="loader-pill" title="Сменить версию" hidden></button>
         <button class="icon-btn" id="btn-build-menu" title="Ещё" hidden><svg class="ic"><use href="#i-dots"/></svg></button>
       </div>
       <div class="toolbar-right">

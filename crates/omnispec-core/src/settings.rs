@@ -34,6 +34,14 @@ fn default_ui_scale() -> u32 {
     100
 }
 
+fn default_ambient() -> String {
+    "stars".to_string()
+}
+
+fn default_sound_style() -> String {
+    "soft".to_string()
+}
+
 fn default_click_fx() -> String {
     "wave".to_string()
 }
@@ -156,6 +164,12 @@ pub struct Settings {
     /// Масштаб интерфейса в процентах: 80, 90, 100, 110, 125, 150.
     #[serde(default = "default_ui_scale")]
     pub ui_scale: u32,
+    /// Фоновая анимация: stars | dust | sticks | snow | off.
+    #[serde(default = "default_ambient")]
+    pub ambient: String,
+    /// Вариант звука интерфейса: soft | classic | glass | wood | deep.
+    #[serde(default = "default_sound_style")]
+    pub sound_style: String,
 }
 
 /// Категория сборок: обычная «папка» в списке слева.
@@ -224,6 +238,8 @@ impl Default for Settings {
             theme_text: None,
             click_fx: default_click_fx(),
             ui_scale: default_ui_scale(),
+            ambient: default_ambient(),
+            sound_style: default_sound_style(),
         }
     }
 }
