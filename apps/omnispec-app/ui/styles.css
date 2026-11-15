@@ -1226,9 +1226,9 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
   color: var(--text);
   font-weight: 600;
 }
-.prefs-body { overflow-y: auto; padding: 14px; display: grid; gap: 16px; align-content: start; }
-/* грид тянет строки по высоте окна — секции не должны сжиматься */
-.prefs-body > * { min-height: max-content; align-self: start; }
+.prefs-body { overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
+/* флекс-колонка: секции всегда во всю высоту содержимого и не режутся */
+.prefs-body > * { flex: 0 0 auto; min-height: max-content; }
 .prefs-section {
   border: 1px solid var(--line-1);
   border-radius: var(--r);
@@ -1304,6 +1304,14 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
 .modrinth-results.is-grid .card-actions { margin-top: auto; }
 /* кнопки одного ряда — одного размера (правило интерфейса) */
 .modrinth-results.is-grid .card-actions .btn { flex: 1 1 0; min-width: 0; padding: 0 6px; }
+
+/* В режиме окна плитки становятся узкими и третья кнопка («ссылка») вылезала
+   за карточку. Карточка — контейнер: в узкой плитке кнопка ссылки убирается,
+   остаются «скачать» и «версии», они всегда влезают. */
+.modrinth-results.is-grid .card { container-type: inline-size; }
+.modrinth-results.is-grid .card-actions { flex-wrap: nowrap; overflow: hidden; }
+.modrinth-results.is-grid .card-actions .card-icon-btn { flex: 0 0 auto; }
+
 
 /* переключатель «список / плитка» */
 .mr-view {
@@ -2741,9 +2749,9 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
   border-radius: var(--r-md);
   background: var(--bg-3);
   overflow: hidden;
-  /* грид настроек сжимает строки под высоту окна — группа не должна резаться */
+  /* ширина — во всю панель, высота — по содержимому */
+  width: 100%;
   min-height: max-content;
-  align-self: start;
 }
 .fx-group + .fx-group { margin-top: 2px; }
 .fx-group-head {
@@ -2762,3 +2770,10 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 /* цвет и прозрачность эффектов: палитра + подпись + «как в теме» */
 .fx-group-body .color-field { width: 100%; }
 .fx-group-body .color-field .btn { margin-left: auto; }
+
+/* ---------- узкие плитки: третья кнопка («ссылка») не влезала ----------
+   Карточка — контейнер: как только плитка становится узкой (режим окна,
+   много колонок), кнопка ссылки убирается и кнопки перестают съезжать. */
+@container (max-width: 150px) {
+  .card-actions .card-icon-btn[data-open-page] { display: none; }
+}
