@@ -1073,12 +1073,13 @@ fn main() {
     update::cleanup(&paths, None);
     let http = Http::with_proxy(settings.proxy.as_deref());
 
-    let startup_file = std::env::args()
+    // имя не `startup_file`: иначе локальная переменная перекрывает команду в generate_handler!
+    let startup_path = std::env::args()
         .skip(1)
         .find(|arg| !arg.starts_with('-') && std::path::Path::new(arg).exists());
     let state = AppState {
         modrinth: Modrinth::new(http.clone()),
-        startup_file,
+        startup_file: startup_path,
         accounts: Mutex::new(AccountStore::load(&paths)),
         paths,
         http,
