@@ -4,9 +4,10 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>OmniSpec</title>
+<link rel="icon" href="favicon.png" />
 <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body data-theme="dark">
 <svg style="display:none" aria-hidden="true">
   <symbol id="i-cube" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7l-9-5Zm0 2.3 6.5 3.6L12 11.5 5.5 7.9 12 4.3ZM5 9.6l6 3.3v6.6l-6-3.3V9.6Zm8 9.9v-6.6l6-3.3v6.6l-6 3.3Z"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><path d="M10.5 3a7.5 7.5 0 1 0 4.6 13.4l4.2 4.3 1.4-1.4-4.2-4.3A7.5 7.5 0 0 0 10.5 3Zm0 2a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11Z"/></symbol>
@@ -35,7 +36,7 @@
   <!-- ============ SIDEBAR ============ -->
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-logo"><svg class="ic"><use href="#i-cube"/></svg></div>
+      <div class="brand-logo"><img src="assets/logo.png" alt="OmniSpec" draggable="false" /></div>
       <div class="brand-text">
         <div class="brand-name">OmniSpec</div>
         <div class="brand-sub">ЛАУНЧЕР</div>
@@ -80,7 +81,7 @@
   <main class="main">
     <header class="titlebar" data-tauri-drag-region>
       <div class="tb-left" data-tauri-drag-region>
-        <div class="tb-icon" id="tb-icon"><svg class="ic"><use href="#i-base"/></svg></div>
+        <div class="tb-icon" id="tb-icon"><img src="assets/logo.png" alt="" draggable="false" /></div>
         <div class="tb-titles" data-tauri-drag-region>
           <div class="tb-name" id="tb-name">OmniSpec</div>
           <div class="tb-meta" data-tauri-drag-region>
@@ -107,7 +108,6 @@
         <button class="pill update-pill" id="btn-update" hidden>
           <span class="update-dot"></span><span id="btn-update-text">Обновление</span>
         </button>
-        <button class="icon-btn lg" id="btn-modrinth" title="Modrinth"><svg class="ic"><use href="#i-globe"/></svg></button>
         <button class="icon-btn lg" id="btn-folder" title="Открыть папку сборки"><svg class="ic"><use href="#i-folder"/></svg></button>
         <button class="icon-btn lg" id="btn-link" title="Ссылка на сборку"><svg class="ic"><use href="#i-link"/></svg></button>
         <button class="btn btn-play" id="btn-play"><svg class="ic"><use href="#i-play"/></svg><span>Играть</span></button>
@@ -156,6 +156,28 @@
   </div>
 </div>
 
+<!-- ============ МОДАЛКА «ДОБАВИТЬ СУЩЕСТВУЮЩУЮ» ============ -->
+<div class="modal-backdrop" id="modal-add" hidden>
+  <div class="modal" style="width:min(700px,94vw)">
+    <header class="modal-head">
+      <h2>Добавить существующую</h2>
+      <button class="icon-btn" data-close-add><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="modal-tabs" id="add-tabs">
+      <button class="mtab is-active" data-amode="modrinth">Из Modrinth</button>
+      <button class="mtab" data-amode="file">Файл .mrpack</button>
+      <button class="mtab" data-amode="link">Ссылка</button>
+    </div>
+    <div class="modal-body" id="add-body"></div>
+    <footer class="modal-foot">
+      <span class="hint" id="add-hint"></span>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" data-close-add>Отмена</button>
+      <button class="btn btn-primary" id="add-submit">Добавить</button>
+    </footer>
+  </div>
+</div>
+
 <!-- ============ МОДАЛКА ОБНОВЛЕНИЯ ============ -->
 <div class="modal-backdrop" id="modal-update" hidden>
   <div class="modal" style="width:min(640px,92vw)">
@@ -185,6 +207,7 @@
   </div>
 </div>
 
+<div class="fx-layer" id="fx-layer"></div>
 <div class="toasts" id="toasts"></div>
 <script src="app.js"></script>
 </body>

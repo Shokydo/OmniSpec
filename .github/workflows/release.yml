@@ -42,11 +42,28 @@ jobs:
       - name: Сборка
         run: cargo build --release -p omnispec-app
 
+      - name: Собрать установщик (консольный, как в OmniPanel)
+        shell: pwsh
+        run: |
+          $env:OMNISPEC_SETUP_PAYLOAD = "target/release/omnispec-app.exe"
+          cargo build --release -p omnispec-setup
+          if ($LASTEXITCODE -ne 0) { throw "установщик не собрался" }
+          # в установщик вшит exe лаунчера — проверяем, что он не пустой
+          $setup = Get-Item target/release/omnispec-setup.exe
+          $app = Get-Item target/release/omnispec-app.exe
+          if ($setup.Length -lt $app.Length) {
+            throw "установщик меньше лаунчера — полезная нагрузка не вшилась"
+          }
+          "Установщик: $([math]::Round($setup.Length / 1MB, 1)) МБ (лаунчер $([math]::Round($app.Length / 1MB, 1)) МБ)"
+
       - name: Подготовить артефакты
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/omnispec-app.exe dist/OmniSpec.exe
+          Copy-Item target/release/omnispec-setup.exe "dist/OmniSpec-Установка.exe"
+          $hash = (Get-FileHash "dist/OmniSpec-Установка.exe" -Algorithm SHA256).Hash.ToLower()
+          "$hash  OmniSpec-Установка.exe" | Out-File -Encoding ascii "dist/OmniSpec-Установка.exe.sha256"
           $hash = (Get-FileHash dist/OmniSpec.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  OmniSpec.exe" | Out-File -Encoding ascii dist/OmniSpec.exe.sha256
           $size = [math]::Round((Get-Item dist/OmniSpec.exe).Length / 1MB, 1)
@@ -58,12 +75,18 @@ jobs:
           files: |
             dist/OmniSpec.exe
             dist/OmniSpec.exe.sha256
+            dist/OmniSpec-Установка.exe
+            dist/OmniSpec-Установка.exe.sha256
           generate_release_notes: true
           make_latest: true
           body: |
             ## OmniSpec ${{ github.ref_name }}
 
-            **Как установить:** скачай `OmniSpec.exe` и запусти. Больше ничего не нужно —
+            **Как установить:** два способа на выбор:
+            * `OmniSpec-Установка.exe` — консольный установщик: разложит лаунчер,
+              сделает ярлыки на рабочем столе и в «Пуск», запустит его;
+            * `OmniSpec.exe` — портативная версия: скачал и запустил, ничего не ставится.
+
             Java и файлы Minecraft лаунчер скачает сам при первом запуске.
 
             **Обновления:** лаунчер сам проверяет этот репозиторий и предлагает обновиться.
@@ -93,12 +116,18 @@ jobs:
       - name: Сборка
         run: cargo build --release -p omnispec-app
 
+      - name: Собрать установщик
+        run: |
+          OMNISPEC_SETUP_PAYLOAD=target/release/omnispec-app cargo build --release -p omnispec-setup
+
       - name: Подготовить артефакты
         run: |
           mkdir -p dist
           cp target/release/omnispec-app dist/OmniSpec
-          chmod +x dist/OmniSpec
+          cp target/release/omnispec-setup dist/omnispec-setup
+          chmod +x dist/OmniSpec dist/omnispec-setup
           sha256sum dist/OmniSpec | sed 's|dist/||' > dist/OmniSpec.sha256
+          sha256sum dist/omnispec-setup | sed 's|dist/||' > dist/omnispec-setup.sha256
 
       - name: Добавить файлы в релиз
         uses: softprops/action-gh-release@v2
@@ -106,5 +135,7 @@ jobs:
           files: |
             dist/OmniSpec
             dist/OmniSpec.sha256
+            dist/omnispec-setup
+            dist/omnispec-setup.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

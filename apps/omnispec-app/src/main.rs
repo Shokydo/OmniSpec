@@ -391,9 +391,57 @@ async fn install_modpack(
     version_id: String,
 ) -> Result<InstanceMeta, String> {
     let reporter = reporter_for(&app, "modpack");
-    let as_path = PathBuf::from(&version_id);
+    let source = version_id.trim().to_string();
+
+    // 1) локальный файл .mrpack
+    let as_path = PathBuf::from(&source);
     if as_path.exists() {
         return mrpack::install_archive(&state.modrinth, &state.paths, &as_path, None, &reporter)
+            .await
+            .map_err(err);
+    }
+
+    // 2) ссылка: страница модпака на Modrinth или прямой файл .mrpack
+    if source.starts_with("http://") || source.starts_with("https://") {
+        if source.to_lowercase().contains("modrinth.com") && !source.contains(".mrpack") {
+            let slug = source
+                .split('/')
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .skip_while(|part| !part.contains("modrinth.com"))
+                .nth(2)
+                .map(|slug| slug.split(['?', '#']).next().unwrap_or(slug).to_string())
+                .ok_or_else(|| "не понял ссылку — нужна вида modrinth.com/modpack/<название>".to_string())?;
+            let versions = state.modrinth.modpack_versions(&slug).await.map_err(err)?;
+            let version = versions
+                .into_iter()
+                .next()
+                .ok_or_else(|| format!("у модпака «{slug}» нет версий"))?;
+            return mrpack::install(&state.modrinth, &state.paths, &version, &reporter)
+                .await
+                .map_err(err);
+        }
+
+        let name = source
+            .split('/')
+            .last()
+            .unwrap_or("pack.mrpack")
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("pack.mrpack");
+        let file_name = if name.to_lowercase().ends_with(".mrpack") {
+            name.to_string()
+        } else {
+            format!("{name}.mrpack")
+        };
+        let temp = state.paths.cache().join(&file_name);
+        state
+            .http
+            .download(&source, &temp, None, None, false)
+            .await
+            .map_err(err)?;
+        return mrpack::install_archive(&state.modrinth, &state.paths, &temp, None, &reporter)
             .await
             .map_err(err);
     }

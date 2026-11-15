@@ -26,6 +26,14 @@ fn default_true() -> bool {
     true
 }
 /// Репозиторий обновлений по умолчанию.
+fn default_theme() -> String {
+    "dark".to_string()
+}
+
+fn default_click_fx() -> String {
+    "wave".to_string()
+}
+
 fn default_update_repo() -> Option<String> {
     Some("Shokydo/OmniSpec".to_string())
 }
@@ -69,6 +77,14 @@ pub struct Settings {
     pub update_token: Option<String>,
     /// Учитывать бета-версии (prerelease).
     pub update_prerelease: bool,
+
+    /* ---------- оформление ---------- */
+    /// Тема интерфейса (id пресета из OmniPanel: dark, navy, light, …).
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// Эффект от клика: wave | dot | ring | cross | off.
+    #[serde(default = "default_click_fx")]
+    pub click_fx: String,
 }
 
 impl Default for Settings {
@@ -91,6 +107,8 @@ impl Default for Settings {
             update_enabled: true,
             update_token: None,
             update_prerelease: false,
+            theme: default_theme(),
+            click_fx: default_click_fx(),
         }
     }
 }

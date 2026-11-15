@@ -10,6 +10,108 @@
   const IS_APP = Boolean(TAURI);
   const invoke = IS_APP ? TAURI.core.invoke : null;
 
+
+  /* ==================== ОФОРМЛЕНИЕ (движок тем из OmniPanel) ====================
+   * Пресеты повторяют палитру OmniPanel (ui/app.js → THEMES). Из четырёх цветов
+   * (фон / панель / текст / акцент) выводятся все переменные интерфейса, поэтому
+   * тема перекрашивает сайдбар, шапку, вкладки, модалки и консоль целиком.
+   */
+  const THEMES = {
+    dark:     { label: "Тёмная",   bg: "#070708", panel: "#141417", text: "#ececee", accent: "#ffffff" },
+    graphite: { label: "Графит",   bg: "#0f0f10", panel: "#19191b", text: "#ededed", accent: "#c9c9cf" },
+    contrast: { label: "Контраст", bg: "#000000", panel: "#131313", text: "#ffffff", accent: "#ffffff" },
+    gray:     { label: "Серая",    bg: "#22262b", panel: "#31373e", text: "#dfe3e8", accent: "#ffffff" },
+    navy:     { label: "Ночь",     bg: "#0a0d14", panel: "#121722", text: "#e6ebf5", accent: "#6ea8fe" },
+    ocean:    { label: "Океан",    bg: "#08100f", panel: "#111c1b", text: "#e3f1ef", accent: "#4fc3b5" },
+    forest:   { label: "Лес",      bg: "#0b110d", panel: "#131b15", text: "#e6efe8", accent: "#63c98a" },
+    amethyst: { label: "Аметист",  bg: "#0d0a14", panel: "#171225", text: "#ece9f6", accent: "#a78bfa" },
+    sunset:   { label: "Закат",    bg: "#120c10", panel: "#1d1419", text: "#f4e9ee", accent: "#f08a6c" },
+    ember:    { label: "Уголь",    bg: "#0d0c0a", panel: "#171614", text: "#f0efe9", accent: "#d9a13b" },
+    steel:    { label: "Сталь",    bg: "#0c1013", panel: "#151b20", text: "#e4edf2", accent: "#8fb8cc" },
+    light:    { label: "Светлая",  bg: "#f4f5f7", panel: "#ffffff", text: "#1a1c20", accent: "#111111" },
+    paper:    { label: "Бумага",   bg: "#f6f4ef", panel: "#ffffff", text: "#1b1a17", accent: "#111111" },
+    snow:     { label: "Снег",     bg: "#eef2f7", panel: "#ffffff", text: "#141a22", accent: "#1f6feb" },
+    mint:     { label: "Мята",     bg: "#eef5f1", panel: "#ffffff", text: "#12211a", accent: "#12855b" },
+    sand:     { label: "Песок",    bg: "#f5f1e8", panel: "#fffdf8", text: "#211d16", accent: "#a9743a" }
+  };
+  const FX_STYLES = { wave: "Волна", dot: "Точка", ring: "Кольцо", cross: "Крест", off: "Выкл" };
+
+  function rgbOf(hex) {
+    const clean = String(hex || "#000").replace("#", "");
+    const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
+    return [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16) || 0);
+  }
+  function toHex(values) {
+    return "#" + values.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("");
+  }
+  /** Смешать два цвета: t=0 → a, t=1 → b. */
+  function mix(a, b, t) {
+    const ca = rgbOf(a), cb = rgbOf(b);
+    return toHex(ca.map((v, i) => v + (cb[i] - v) * t));
+  }
+  /** Насколько цвет светлый (0..1) — чтобы понять, тёмная тема или светлая. */
+  function luminance(hex) {
+    const [r, g, b] = rgbOf(hex).map((v) => {
+      const c = v / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
+  /** Поставить тему: все переменные выводятся из пресета. */
+  function applyTheme(name) {
+    const theme = THEMES[name] || THEMES.dark;
+    const dark = luminance(theme.bg) < 0.4;
+    const vars = {
+      "--bg": theme.bg,
+      "--bg-elev": mix(theme.bg, theme.text, 0.04),
+      "--panel": theme.panel,
+      "--panel-2": mix(theme.panel, theme.text, 0.05),
+      "--panel-3": mix(theme.panel, theme.text, 0.1),
+      "--border": mix(theme.bg, theme.text, 0.13),
+      "--border-soft": mix(theme.bg, theme.text, 0.07),
+      "--border-strong": mix(theme.bg, theme.text, 0.22),
+      "--hover": mix(theme.bg, theme.text, 0.3),
+      "--text": theme.text,
+      "--text-dim": mix(theme.text, theme.bg, 0.38),
+      "--muted": mix(theme.text, theme.bg, 0.5),
+      "--accent": theme.accent,
+      "--accent-2": mix(theme.accent, luminance(theme.accent) > 0.55 ? "#000000" : "#ffffff", 0.14),
+      "--accent-fg": luminance(theme.accent) > 0.55 ? "#0a0a0c" : "#ffffff",
+      "--green": dark ? "#7ee787" : "#157347",
+      "--red": dark ? "#ff7b72" : "#b42318",
+      "--yellow": dark ? "#e3b341" : "#a2680e",
+      "--side-grad-1": mix(theme.bg, theme.text, 0.035),
+      "--side-grad-2": theme.bg,
+      "--top-grad-1": mix(theme.bg, theme.text, 0.05),
+      "--top-grad-2": mix(theme.bg, theme.text, 0.015),
+      "--console-bg": mix(theme.bg, theme.text, 0.012)
+    };
+    for (const [key, value] of Object.entries(vars)) document.body.style.setProperty(key, value);
+    document.body.dataset.theme = THEMES[name] ? name : "dark";
+    return THEMES[name] ? name : "dark";
+  }
+
+  /* эффект от клика мышью — как в OmniPanel */
+  function applyClickFx(style) {
+    document.body.dataset.fx = FX_STYLES[style] ? style : "wave";
+    document.body.classList.toggle("no-fx", (FX_STYLES[style] ? style : "wave") === "off");
+  }
+  function initClickFx() {
+    const layer = $("#fx-layer");
+    if (!layer) return;
+    window.addEventListener("pointerdown", (event) => {
+      const style = document.body.dataset.fx || "wave";
+      if (style === "off" || document.body.classList.contains("no-fx")) return;
+      const effect = document.createElement("span");
+      effect.className = `cfx cfx-${style}`;
+      effect.style.left = `${event.clientX}px`;
+      effect.style.top = `${event.clientY}px`;
+      layer.appendChild(effect);
+      setTimeout(() => effect.remove(), 700);
+    }, true);
+  }
+
   /* ==================== ДЕМО-ДАННЫЕ ==================== */
   const now = Math.floor(Date.now() / 1000);
   const DEMO = {
@@ -19,7 +121,7 @@
       { id: "vanya-vanilla", name: "Ванилла 1.20.1", mc_version: "1.20.1", loader: { type: "vanilla" }, icon: null, created: now - 86400 * 3, last_played: null, playtime_secs: 0, memory_mb: null, java_path: null, jvm_args: null, notes: "", source: "manual", source_url: null, version_override: null },
       { id: "cobblemon", name: "Cobblemon", mc_version: "1.21.1", loader: { type: "fabric", version: "0.16.5" }, icon: null, created: now - 86400 * 40, last_played: now - 86400 * 5, playtime_secs: 5400, memory_mb: null, java_path: null, jvm_args: null, notes: "", source: "modrinth", source_url: null, version_override: null }
     ],
-    settings: { username: "Player", java_path: null, memory_mb: 4096, jvm_args: "-XX:+UseG1GC", game_args: "", auto_java: true, show_snapshots: false, verify_hashes: false, language: "ru", keep_console_open: false, enable_modrinth: true, hide_on_launch: false, last_instance: null, update_repo: "Shokydo/OmniSpec", update_enabled: true, update_token: null, update_prerelease: false },
+    settings: { username: "Player", java_path: null, memory_mb: 4096, jvm_args: "-XX:+UseG1GC", game_args: "", auto_java: true, show_snapshots: false, verify_hashes: false, language: "ru", keep_console_open: false, enable_modrinth: true, hide_on_launch: false, last_instance: null, update_repo: "Shokydo/OmniSpec", update_enabled: true, update_token: null, update_prerelease: false, theme: "dark", click_fx: "wave" },
     versions: ["1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21", "1.20.6", "1.20.4", "1.20.1", "1.19.4", "1.18.2", "1.16.5", "1.12.2", "1.8.9"].map((id) => ({ id, type: "release", url: "", release_time: null })),
     demoLogs: [
       "[12:01:14] [main/INFO]: OmniSpec 0.1.0 — лаунчер готов к работе",
@@ -166,6 +268,9 @@
     mods: [],
     modrinth: { query: "", type: "mod", results: [], loading: false },
     update: { info: null, version: "0.1.0", repo: null, enabled: true, checking: false, installing: false },
+    theme: "dark",
+    fx: "wave",
+    add: { mode: "modrinth", query: "", packs: [], selected: null, path: "", url: "", loading: false },
     create: { mode: "manual", name: "", mc: "", loader: "fabric", loaderVersion: "", versions: [], loaderVersionsList: [], packQuery: "", packs: [], selectedPack: null }
   };
 
@@ -657,6 +762,32 @@
           </div>
 
           <div class="panel">
+            <div class="panel-head">
+              <strong>Оформление</strong>
+              <span class="badge" id="theme-badge">${esc((THEMES[state.theme] || THEMES.dark).label)}</span>
+              <div class="spacer"></div>
+              <span class="muted" style="font-size:11px">как в OmniPanel</span>
+            </div>
+            <div style="padding:14px;display:grid;gap:14px">
+              <div class="theme-grid" id="theme-grid">
+                ${Object.entries(THEMES).map(([id, theme]) => `
+                  <button class="theme-chip ${state.theme === id ? "is-active" : ""}" data-theme-id="${id}" title="${esc(theme.label)}">
+                    <span class="theme-swatch" style="background:${theme.bg};border-color:${theme.panel}">
+                      <span style="position:absolute;left:3px;top:3px;width:12px;height:12px;border-radius:4px;background:${theme.accent}"></span>
+                    </span>
+                    <span class="theme-name">${esc(theme.label)}</span>
+                  </button>`).join("")}
+              </div>
+              <div class="settings-row">
+                <div class="label">Эффект от клика</div>
+                <div class="chips" id="fx-chips">
+                  ${Object.entries(FX_STYLES).map(([id, label]) => `<button class="chip ${state.fx === id ? "is-active" : ""}" data-fx="${id}">${label}</button>`).join("")}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
             <div class="panel-head"><strong>Java и память</strong></div>
             <div style="padding:14px;display:grid;gap:14px">
               <div class="settings-row">
@@ -752,6 +883,17 @@
     $("#set-memory").addEventListener("input", (event) => { $("#set-memory-value").textContent = `${event.target.value} МБ`; });
     $("#set-auto-java").addEventListener("click", (event) => event.target.classList.toggle("on"));
     $("#set-open-data").addEventListener("click", () => api.openPath("").catch(() => {}));
+    $$("#theme-grid .theme-chip").forEach((chip) => chip.addEventListener("click", () => {
+      state.theme = applyTheme(chip.dataset.themeId);
+      $$("#theme-grid .theme-chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+      const badge = $("#theme-badge");
+      if (badge) badge.textContent = (THEMES[state.theme] || THEMES.dark).label;
+    }));
+    $$("#fx-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
+      state.fx = chip.dataset.fx;
+      applyClickFx(state.fx);
+      $$("#fx-chips .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+    }));
     $("#set-upd-enabled").addEventListener("click", (event) => event.target.classList.toggle("on"));
     $("#set-upd-pre").addEventListener("click", (event) => event.target.classList.toggle("on"));
     $("#upd-check-now").addEventListener("click", async () => {
@@ -769,7 +911,9 @@
         update_repo: ($("#set-upd-repo").value || "").trim() || null,
         update_enabled: $("#set-upd-enabled").classList.contains("on"),
         update_prerelease: $("#set-upd-pre").classList.contains("on"),
-        update_token: ($("#set-upd-token").value || "").trim() || null
+        update_token: ($("#set-upd-token").value || "").trim() || null,
+        theme: state.theme,
+        click_fx: state.fx
       };
       try { await api.saveSettings(next); state.settings = next; toast("Настройки сохранены", "ok"); }
       catch (err) { toast(String(err), "err"); }
@@ -963,6 +1107,149 @@
     } catch (err) { toast(String(err), "err"); }
   }
 
+  /* ==================== МОДАЛКА «ДОБАВИТЬ СУЩЕСТВУЮЩУЮ» ====================
+   * Сюда переехала кнопка Modrinth: добавить готовую сборку можно тремя путями —
+   * поиском модпака на Modrinth, локальным .mrpack или ссылкой.
+   */
+  function openAdd(mode = "modrinth") {
+    state.add = { mode, query: "", packs: [], selected: null, path: "", url: "", loading: false };
+    $("#modal-add").hidden = false;
+    renderAdd();
+    if (mode === "modrinth" && !state.add.packs.length) searchAddPacks("");
+  }
+
+  function renderAdd() {
+    const cfg = state.add;
+    $$("#add-tabs .mtab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.amode === cfg.mode));
+    const body = $("#add-body");
+
+    if (cfg.mode === "modrinth") {
+      body.innerHTML = `
+        <div class="form-grid">
+          <div class="field">
+            <label>Поиск модпака на Modrinth</label>
+            <div style="display:flex;gap:8px">
+              <input class="input grow" id="add-query" value="${esc(cfg.query)}" placeholder="fabulously optimized, cobblemon, all the mods…" spellcheck="false">
+              <button class="btn" id="add-search">Найти</button>
+            </div>
+          </div>
+          <div class="add-list">
+            ${cfg.packs.length
+              ? cfg.packs.map((pack) => `
+                <div class="pack-row ${cfg.selected && cfg.selected.project_id === pack.project_id ? "is-active" : ""}" data-pack="${esc(pack.project_id)}">
+                  <div class="card-icon" style="width:34px;height:34px;border-radius:7px">${pack.icon_url ? `<img src="${esc(pack.icon_url)}" alt="">` : "P"}</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="item-title">${esc(pack.title)}</div>
+                    <div class="item-sub">${esc((pack.description || "").slice(0, 92))}</div>
+                  </div>
+                  <span class="tag">${(pack.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
+                </div>`).join("")
+              : `<div class="add-empty">${cfg.loading ? "Ищем модпаки…" : "Ничего не найдено — попробуй другой запрос"}</div>`}
+          </div>
+          <div class="hint" style="color:var(--muted);font-size:11.5px">
+            Ставится последняя версия модпака со всеми модами, конфигами и нужной версией загрузчика.
+          </div>
+        </div>`;
+      $("#add-search").addEventListener("click", () => searchAddPacks($("#add-query").value));
+      $("#add-query").addEventListener("keydown", (event) => {
+        if (event.key === "Enter") searchAddPacks(event.target.value);
+      });
+      $$("[data-pack]", body).forEach((row) => row.addEventListener("click", () => {
+        cfg.selected = cfg.packs.find((pack) => pack.project_id === row.dataset.pack) || null;
+        renderAdd();
+      }));
+    } else if (cfg.mode === "file") {
+      body.innerHTML = `
+        <div class="form-grid">
+          <div class="field">
+            <label>Путь к файлу .mrpack</label>
+            <input class="input" id="add-path" value="${esc(cfg.path)}" placeholder="C:\\Users\\Иван\\Downloads\\pack.mrpack" spellcheck="false">
+          </div>
+          <div class="hint" style="color:var(--muted);font-size:11.5px">
+            Подойдёт любой модпак в формате Modrinth (.mrpack) — лаунчер развернёт его в отдельную сборку.
+          </div>
+        </div>`;
+      $("#add-path").addEventListener("input", (event) => { cfg.path = event.target.value; });
+      $("#add-path").addEventListener("keydown", (event) => { if (event.key === "Enter") submitAdd(); });
+      setTimeout(() => { const el = $("#add-path"); if (el) el.focus(); }, 30);
+    } else {
+      body.innerHTML = `
+        <div class="form-grid">
+          <div class="field">
+            <label>Ссылка на модпак</label>
+            <input class="input" id="add-url" value="${esc(cfg.url)}" placeholder="https://modrinth.com/modpack/fabulously-optimized или ссылка на .mrpack" spellcheck="false">
+          </div>
+          <div class="hint" style="color:var(--muted);font-size:11.5px">
+            Понимает ссылки на страницу модпака Modrinth и прямые ссылки на файл .mrpack.
+          </div>
+        </div>`;
+      $("#add-url").addEventListener("input", (event) => { cfg.url = event.target.value; });
+      $("#add-url").addEventListener("keydown", (event) => { if (event.key === "Enter") submitAdd(); });
+      setTimeout(() => { const el = $("#add-url"); if (el) el.focus(); }, 30);
+    }
+
+    $("#add-hint").textContent = cfg.mode === "modrinth"
+      ? (cfg.selected ? cfg.selected.title : "выбери модпак")
+      : (cfg.mode === "file" ? "файл .mrpack" : "ссылка");
+    $("#add-submit").textContent = cfg.mode === "modrinth" ? "Установить" : "Добавить";
+  }
+
+  async function searchAddPacks(query) {
+    const cfg = state.add;
+    cfg.query = query || "";
+    cfg.loading = true;
+    renderAdd();
+    try {
+      const result = await api.search({ query: cfg.query, projectType: "modpack", mcVersion: null, loader: null, offset: 0 });
+      cfg.packs = result.hits || [];
+      if (cfg.selected) cfg.selected = cfg.packs.find((pack) => pack.project_id === cfg.selected.project_id) || null;
+    } catch (err) {
+      cfg.packs = [];
+      toast(`Modrinth недоступен: ${err}`, "err");
+    } finally {
+      cfg.loading = false;
+      renderAdd();
+    }
+  }
+
+  async function submitAdd() {
+    const cfg = state.add;
+    const submit = $("#add-submit");
+    let source = "";
+    if (cfg.mode === "modrinth") {
+      if (!cfg.selected) return toast("Выбери модпак", "err");
+      source = "";
+    } else if (cfg.mode === "file") {
+      source = cfg.path.trim();
+      if (!source) return toast("Укажи путь к файлу .mrpack", "err");
+    } else {
+      source = cfg.url.trim();
+      if (!source) return toast("Вставь ссылку", "err");
+    }
+
+    submit.disabled = true;
+    const label = submit.textContent;
+    submit.textContent = "Устанавливаем…";
+    try {
+      let target = source;
+      if (cfg.mode === "modrinth") {
+        const versions = await api.modrinthVersions(cfg.selected.project_id, null, null);
+        if (!versions.length) throw new Error("у этого модпака нет версий");
+        target = versions[0].id;
+      }
+      const meta = await api.installModpack(target);
+      $("#modal-add").hidden = true;
+      await refreshInstances();
+      selectInstance(meta.id);
+      toast(`Сборка «${meta.name}» добавлена`, "ok");
+    } catch (err) {
+      toast(`Не удалось добавить: ${err}`, "err");
+    } finally {
+      submit.disabled = false;
+      submit.textContent = label;
+    }
+  }
+
   /* ==================== МОДАЛКА СОЗДАНИЯ ==================== */
   async function openCreate() {
     state.create = { mode: "manual", name: "", mc: "", loader: "fabric", loaderVersion: "", versions: [], loaderVersionsList: [], packQuery: "", packs: [], selectedPack: null };
@@ -1104,13 +1391,8 @@
     $("#btn-restart").addEventListener("click", async () => { await stopGame(); setTimeout(play, 800); });
     $("#btn-start-all").addEventListener("click", play);
     $("#btn-create").addEventListener("click", openCreate);
-    $("#btn-import").addEventListener("click", () => {
-      const path = window.prompt("Путь к файлу модпака .mrpack (или ссылка на Modrinth)");
-      if (!path) return;
-      api.installModpack(path).then(async (meta) => { await refreshInstances(); selectInstance(meta.id); toast("Импортировано", "ok"); })
-        .catch((err) => toast(String(err), "err"));
-    });
-    $("#btn-modrinth").addEventListener("click", () => { state.tab = "modrinth"; renderTab(); });
+    $("#btn-import").addEventListener("click", () => openAdd("modrinth"));
+    // кнопка Modrinth убрана из тулбара — она живёт в модалке «Добавить существующую»
     $("#btn-folder").addEventListener("click", () => { const meta = selected(); if (meta) api.openPath(`/instances/${meta.id}/minecraft`).catch(() => {}); });
     $("#btn-link").addEventListener("click", () => {
       const meta = selected();
@@ -1131,6 +1413,10 @@
     $$("[data-win]").forEach((btn) => btn.addEventListener("click", () => api.window(btn.dataset.win).catch(() => {})));
     $$("[data-close-modal]").forEach((btn) => btn.addEventListener("click", () => { $("#modal-create").hidden = true; }));
     $$("[data-close-update]").forEach((btn) => btn.addEventListener("click", () => { $("#modal-update").hidden = true; }));
+    $$("[data-close-add]").forEach((btn) => btn.addEventListener("click", () => { $("#modal-add").hidden = true; }));
+    $("#add-submit").addEventListener("click", submitAdd);
+    $$("#add-tabs .mtab").forEach((tab) => tab.addEventListener("click", () => { state.add.mode = tab.dataset.amode; renderAdd(); }));
+    $("#modal-add").addEventListener("mousedown", (event) => { if (event.target.id === "modal-add") $("#modal-add").hidden = true; });
     $("#modal-update").addEventListener("mousedown", (event) => { if (event.target.id === "modal-update") $("#modal-update").hidden = true; });
     $("#btn-update").addEventListener("click", openUpdateModal);
     $("#upd-install").addEventListener("click", installUpdate);
@@ -1145,7 +1431,7 @@
     document.addEventListener("keydown", (event) => {
       if (event.ctrlKey && event.key.toLowerCase() === "r") { event.preventDefault(); refreshInstances(); }
       if (event.ctrlKey && event.key.toLowerCase() === "l") { event.preventDefault(); state.logs[state.selectedId] = []; renderLogs(state.selectedId); }
-      if (event.key === "Escape") $("#modal-create").hidden = true;
+      if (event.key === "Escape") { $("#modal-create").hidden = true; $("#modal-add").hidden = true; }
       if (event.key === "Enter" && !event.target.matches("input, select, textarea") && $("#modal-create").hidden) play();
     });
   }
@@ -1179,9 +1465,14 @@
 
   async function init() {
     bindEvents();
+    initClickFx();
     try {
       state.settings = await api.settings();
     } catch { state.settings = { ...DEMO.settings }; }
+    // Оформление из settings.json (как prefs в OmniPanel): тема и эффект клика.
+    state.theme = applyTheme((state.settings && state.settings.theme) || "dark");
+    state.fx = (state.settings && state.settings.click_fx) || "wave";
+    applyClickFx(state.fx);
     await refreshInstances();
     if (state.instances.length) selectInstance(state.instances[0].id);
     else renderTab();
