@@ -329,7 +329,8 @@ async fn search_modrinth(
     mc_version: Option<String>,
     loader: Option<String>,
     offset: Option<u32>,
-    /// Сортировка Modrinth: relevance | downloads | follows | newest | updated.
+    // Сортировка Modrinth: relevance | downloads | follows | newest | updated
+    // (в параметрах команды doc-комментарии Rust не разрешает).
     sort: Option<String>,
     limit: Option<u32>,
 ) -> Result<omnispec_core::modrinth::SearchResults, String> {
