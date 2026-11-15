@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OmniSpec — лаунчер Minecraft для сборок, модов и двух аккаунтов</title>
-<meta name="description" content="OmniSpec — лаунчер Minecraft на Rust: сборки и категории, моды с Modrinth и CurseForge, лицензия через Microsoft и офлайн-ник, темы, CSS-конструктор интерфейса и обои. Установщик и портативная версия для Windows 10/11.">
+<meta name="description" content="OmniSpec — лаунчер Minecraft на Rust: сборки и динамические категории, моды с Modrinth и CurseForge, визуальный редактор интерфейса, лицензия через Microsoft и офлайн-ник, темы и обои. Установщик и портативная версия для Windows 10/11.">
 <meta name="theme-color" content="#08080a">
 <meta property="og:type" content="website">
-<meta property="og:title" content="OmniSpec — лаунчер Minecraft с CSS-темами">
-<meta property="og:description" content="Сборки, моды с Modrinth и CurseForge, лицензия и офлайн-аккаунты, конструктор раскладки и пользовательские CSS-темы. Установщик и портативная версия для Windows 10/11.">
+<meta property="og:title" content="OmniSpec — лаунчер Minecraft с визуальным редактором">
+<meta property="og:description" content="Сборки, динамические категории, моды с Modrinth и CurseForge, лицензия и офлайн-аккаунты, визуальный редактор интерфейса и пользовательские CSS-темы. Установщик и портативная версия для Windows 10/11.">
 <meta property="og:url" content="{{URL_SITE}}">
 <meta property="og:image" content="{{URL_SITE}}og.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -59,8 +59,8 @@ setTimeout(function () { document.documentElement.classList.remove("js-boot"); }
   <p class="lead">
     Сборки с папками и своими настройками, моды, ресурспаки и шейдеры прямо с Modrinth
     и CurseForge, лицензия через Microsoft и обычный офлайн-ник. Написан на Rust, интерфейс — плотный
-    моно-панель без градиентов и лишних кликов. А ещё его можно перестроить под себя: раскладка блоков,
-    живой CSS-редактор и темы, которыми можно делиться.
+    моно-панель без градиентов и лишних кликов. А ещё его можно перестроить под себя: визуальный холст с перетаскиванием
+    отдельных элементов, свободными координатами, размерами и стилями, живой CSS-редактор и темы, которыми можно делиться.
   </p>
   <div class="cta">
     <a class="btn btn-primary btn-lg" href="{{URL_SETUP}}">
@@ -128,18 +128,28 @@ setTimeout(function () { document.documentElement.classList.remove("js-boot"); }
       </div>
       <div class="card">
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z"/></svg></div>
-        <h3>Конструктор интерфейса</h3>
-        <p>Настрой порядок и видимость блоков, перенеси сайдбар вправо или влево, задай его ширину и отрегулируй density, padding и gap — layout сохранится.</p>
+        <h3>Визуальный редактор</h3>
+        <p>Перетаскивай отдельные элементы на холсте, меняй свободную позицию, размеры, отступы, радиус, варианты и видимость. Пресеты OmniSpec, Prism Launcher, Modrinth и полностью кастомный режим сохраняются без пользовательского JavaScript.</p>
       </div>
       <div class="card">
         <div class="ico"><svg viewBox="0 0 24 24"><path d="m8.7 5.3-6 6 6 6 1.4-1.4-4.6-4.6 4.6-4.6-1.4-1.4Zm6.6 0-1.4 1.4 4.6 4.6-4.6 4.6 1.4 1.4 6-6-6-6ZM13.1 3.7l-4 16.6 1.9.5 4-16.6-1.9-.5Z"/></svg></div>
         <h3>CSS-темы</h3>
-        <p>Пиши CSS с живым предпросмотром, используй стабильные селекторы <b>data-os</b>, выбирай пресеты и экспортируй тему в <b>.omtheme</b>.</p>
+        <p>Пиши CSS с живым предпросмотром, используй стабильные селекторы <b>data-os</b>, выбирай пресеты и экспортируй тему в <b>.omtheme</b>. JavaScript и <b>@import</b> отключены.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 2c1.2 0 2.6 2.3 3.1 5.5H8.9C9.4 7.3 10.8 5 12 5ZM5.2 11h2.7c-.1 1-.1 2 0 3H5.2a7 7 0 0 1 0-3Zm10.1 0H18a7 7 0 0 1 0 3h-2.7c.1-1 .1-2 0-3Z"/></svg></div>
+        <h3>Динамические категории</h3>
+        <p>Сборки автоматически попадают в представления по одной или нескольким версиям Minecraft, серверному типу, loader/ядру, источнику, названию и другой метаинформации.</p>
       </div>
       <div class="card">
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M13.6 2 4.8 13.6h5.4l-1.8 8.4 8.8-11.6h-5.4l1.8-8.4Z"/></svg></div>
         <h3>Быстрый запуск</h3>
         <p>Проверка файлов, поиск Java и разбор профиля не повторяются каждый раз — повторный запуск сборки идёт заметно быстрее.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 4h16v2H4V4Zm0 7h16v2H4v-2Zm0 7h16v2H4v-2Z"/></svg></div>
+        <h3>Каталог без кнопки «Ещё»</h3>
+        <p>Раздел «Загрузить» подгружает следующие результаты автоматически при прокрутке, показывает состояние ожидания и даёт повторить неудачную страницу.</p>
       </div>
       <div class="card">
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 4V1L7 6l5 5V7a5 5 0 1 1-4.6 7h-2A7 7 0 1 0 12 4Z"/></svg></div>
@@ -159,8 +169,8 @@ setTimeout(function () { document.documentElement.classList.remove("js-boot"); }
     </div>
     <div class="gallery">
       <figure class="gal">
-        <img src="{{A:customizer}}" alt="Конструктор OmniSpec: CSS с живым предпросмотром, layout, sidebar и импорт тем" width="1600" height="1000">
-        <figcaption>Конструктор: CSS с живым предпросмотром, layout, sidebar и импорт/экспорт тем</figcaption>
+        <img src="{{A:customizer}}" alt="Визуальный редактор OmniSpec: холст, перетаскивание элементов, размеры, стили и импорт тем" width="1600" height="1000">
+        <figcaption>Визуальный редактор: холст с отдельными элементами, пресеты, размеры, стили и импорт/экспорт тем</figcaption>
       </figure>
       <figure class="gal">
         <img src="{{A:home}}" alt="Главная страница: недавние сборки, добавление сборки и лента готовых сборок" width="1600" height="1000">
