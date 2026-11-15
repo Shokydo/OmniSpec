@@ -38,6 +38,10 @@ fn default_ui_scale() -> u32 {
     100
 }
 
+fn default_feed_grid() -> u8 {
+    2
+}
+
 fn default_ambient() -> String {
     "stars".to_string()
 }
@@ -177,6 +181,9 @@ pub struct Settings {
     /// Вариант звука интерфейса: soft | classic | glass | wood | deep.
     #[serde(default = "default_sound_style")]
     pub sound_style: String,
+    /// Размер плиток в «Готовых сборках»: 1 — мелкие (12 в ряд), 2 — обычные (6), 3 — крупные (4).
+    #[serde(default = "default_feed_grid")]
+    pub feed_grid: u8,
 }
 
 /// Категория сборок: обычная «папка» в списке слева.
@@ -248,6 +255,7 @@ impl Default for Settings {
             ui_scale: default_ui_scale(),
             ambient: default_ambient(),
             sound_style: default_sound_style(),
+            feed_grid: default_feed_grid(),
         }
     }
 }

@@ -966,7 +966,7 @@ input[type="range"] {
 }
 
 /* ═══════════════════ эффект клика ═══════════════════ */
-.fx-layer { position: fixed; inset: 0; z-index: 45; pointer-events: none; overflow: hidden; }
+.fx-layer { position: fixed; inset: 0; z-index: 5001; pointer-events: none; overflow: hidden; }
 .cfx {
   position: absolute; display: block; pointer-events: none;
   transform: translate(-50%, -50%); border-radius: 50%;
@@ -2543,7 +2543,8 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 .ambient {
   position: fixed; inset: 0;
   width: 100%; height: 100%;
-  z-index: 2;
+  /* эффекты — самый верхний слой: видно и над окнами, и над диалогами; клики проходят сквозь */
+  z-index: 5000;
   pointer-events: none;
   opacity: .8;
 }
@@ -2566,3 +2567,106 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 .cat-head:hover .cat-act { opacity: .85; }
 .cat-head .cat-act:hover { opacity: 1; background: var(--bg-5); color: var(--text); }
 .cat-head .spacer { flex: 1 1 auto; }
+
+/* ==================== ЭТАП 17 ==================== */
+
+/* «Готовые сборки»: поиск по центру и шире, справа — вид и размер плиток */
+.home-feed-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 560px) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--gap);
+  flex-wrap: nowrap;
+}
+.home-feed-head .home-title { min-width: 0; }
+.home-search { width: 100%; max-width: 560px; height: var(--h-sm); margin: 0; justify-self: center; }
+.home-search input { font-size: 12px; }
+.home-tools { justify-self: end; }
+
+/* ползунок размера плиток: 1 — 12 в ряд, 2 — 6, 3 — 4 */
+.feed-size {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: var(--h-sm); padding: 0 10px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--bg-3); color: var(--dim-2);
+}
+.feed-size .ic { width: 12px; height: 12px; flex: none; }
+.feed-size input[type="range"] { width: 68px; height: 16px; margin: 0; }
+.feed-size .mono { min-width: 8px; text-align: center; font-size: 11px; color: var(--text); }
+.feed-size:hover { border-color: var(--line-3); color: var(--text); }
+
+.modrinth-results.is-grid.feed-grid-1 { grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; }
+.modrinth-results.is-grid.feed-grid-2 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+/* в плитке карточка открывается кликом — кнопка «Страница» только мешает узким карточкам */
+.modrinth-results.is-grid .card-actions [data-open-page] { display: none; }
+.modrinth-results.is-grid .card-actions .btn { font-size: 11px; padding: 0 6px; }
+.modrinth-results.is-grid.feed-grid-3 { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+/* мелкие плитки: карточка компактнее, но кнопки того же размера */
+.modrinth-results.is-grid.feed-grid-1 .card { padding: 6px; gap: 5px; }
+.modrinth-results.is-grid.feed-grid-1 .card-title { font-size: 11px; }
+.modrinth-results.is-grid.feed-grid-1 .card-desc,
+.modrinth-results.is-grid.feed-grid-1 .card-meta { display: none; }
+.modrinth-results.is-grid.feed-grid-1 .card-actions .btn { padding: 0 4px; font-size: 10.5px; }
+@media (max-width: 1180px) {
+  .modrinth-results.is-grid.feed-grid-1 { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  .modrinth-results.is-grid.feed-grid-2 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .modrinth-results.is-grid.feed-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .home-feed-head { grid-template-columns: minmax(0, 1fr) minmax(180px, 420px) minmax(0, 1fr); }
+}
+
+/* ---------- живая строка импорта: спиннер, этап, процент ---------- */
+.imp-live {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: 10px var(--pad) 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--bg-3);
+}
+.imp-spinner {
+  width: 14px; height: 14px; flex: none; margin-top: 2px;
+  border: 1.6px solid var(--line-3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: impSpin .8s linear infinite;
+}
+@keyframes impSpin { to { transform: rotate(360deg); } }
+.imp-live-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.imp-live-row { display: flex; align-items: baseline; gap: 10px; }
+.imp-live-title { font-size: 12px; font-weight: 600; color: var(--text); }
+.imp-live-percent { margin-left: auto; font-size: 11px; color: var(--accent); }
+.imp-live-text { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-live-bar { height: 4px; border-radius: 999px; background: var(--bg-5); overflow: hidden; }
+.imp-live-fill { height: 100%; background: var(--accent); transition: width .25s ease; }
+.imp-live-fill.is-idle { animation: impIndeterminate 1.2s ease-in-out infinite; opacity: .6; }
+@keyframes impIndeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* ---------- плащи аккаунта ---------- */
+.cape-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.cape-card {
+  width: 96px; padding: 8px 6px 6px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--bg-2); cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.cape-card:hover { border-color: var(--line-3); background: var(--bg-3); }
+.cape-card.is-active { border-color: var(--accent); background: var(--bg-3); }
+.cape-thumb {
+  width: 52px; height: 84px; flex: none;
+  border-radius: var(--r-xs);
+  background: var(--bg-4);
+  image-rendering: pixelated;
+}
+.cape-thumb-off { display: grid; place-items: center; color: var(--dim-2); }
+.cape-thumb-off .ic { width: 16px; height: 16px; }
+.cape-name {
+  font-size: 10.5px; line-height: 1.3; color: var(--dim);
+  text-align: center; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cape-card.is-active .cape-name { color: var(--text); }
+.cape-note { font-size: 11px; color: var(--dim-2); align-self: center; }

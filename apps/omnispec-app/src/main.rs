@@ -1159,6 +1159,114 @@ async fn account_skin(state: State<'_, AppState>) -> Result<Value, String> {
     Ok(json!({"licensed": true, "variant": variant, "data_url": data_url}))
 }
 
+/// Плащи аккаунта: список с картинками-превью (PNG в data-URL) и отметкой активного.
+#[tauri::command]
+async fn account_capes(state: State<'_, AppState>) -> Result<Value, String> {
+    let settings = state.settings.lock().await.clone();
+    let account = current_account(&state, &settings).await?;
+    if account.kind != "microsoft" || account.access_token.is_empty() {
+        return Ok(json!({"licensed": false, "capes": []}));
+    }
+    let profile: Value = state
+        .http
+        .inner()
+        .get("https://api.minecraftservices.com/minecraft/profile")
+        .header("Authorization", format!("Bearer {}", account.access_token))
+        .send()
+        .await
+        .map_err(|error| format!("не удалось получить список плащей: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("не удалось прочитать список плащей: {error}"))?;
+
+    let capes = profile
+        .get("capes")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for cape in capes {
+        let id = cape
+            .get("id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+        let alias = cape
+            .get("alias")
+            .and_then(|value| value.as_str())
+            .unwrap_or("Плащ")
+            .to_string();
+        let active = cape
+            .get("state")
+            .and_then(|value| value.as_str())
+            .map(|value| value == "ACTIVE")
+            .unwrap_or(false);
+        let url = cape
+            .get("url")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string());
+        let mut data_url = Value::Null;
+        if let Some(url) = url {
+            if let Ok(response) = state.http.inner().get(&url).send().await {
+                if let Ok(bytes) = response.bytes().await {
+                    data_url = json!(format!(
+                        "data:image/png;base64,{}",
+                        base64_encode(&bytes)
+                    ));
+                }
+            }
+        }
+        out.push(json!({
+            "id": id,
+            "alias": alias,
+            "active": active,
+            "data_url": data_url
+        }));
+    }
+    Ok(json!({"licensed": true, "capes": out}))
+}
+
+/// Включить плащ (`cape_id`) или выключить все плащи (`None`).
+#[tauri::command]
+async fn set_cape(state: State<'_, AppState>, cape_id: Option<String>) -> Result<Value, String> {
+    let settings = state.settings.lock().await.clone();
+    let account = current_account(&state, &settings).await?;
+    if account.kind != "microsoft" || account.access_token.is_empty() {
+        return Err("плащи есть только у лицензионного аккаунта".into());
+    }
+    let url = "https://api.minecraftservices.com/minecraft/profile/capes/active";
+    let request = match cape_id {
+        Some(id) => state
+            .http
+            .inner()
+            .put(url)
+            .header("Authorization", format!("Bearer {}", account.access_token))
+            .json(&json!({ "capeId": id })),
+        None => state
+            .http
+            .inner()
+            .delete(url)
+            .header("Authorization", format!("Bearer {}", account.access_token)),
+    };
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("не удалось изменить плащ: {error}"))?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(json!({ "ok": true }));
+    }
+    let text = response.text().await.unwrap_or_default();
+    let message = if text.contains("does not own cape") {
+        "на аккаунте нет такого плаща".to_string()
+    } else if status.as_u16() == 401 {
+        "вход в Microsoft устарел — зайди в аккаунт заново".to_string()
+    } else {
+        format!("Mojang не принял запрос ({status})")
+    };
+    Err(message)
+}
+
 /// Смена скина пресетом: загружаем PNG в Mojang (только лицензия).
 #[tauri::command]
 async fn apply_skin(
@@ -1806,6 +1914,8 @@ fn main() {
             modrinth_versions,
             modrinth_project,
             account_skin,
+            account_capes,
+            set_cape,
             apply_skin,
             save_skin_png,
             image_data_url,

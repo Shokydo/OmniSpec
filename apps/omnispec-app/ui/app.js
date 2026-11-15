@@ -414,7 +414,8 @@
       const el = canvas();
       if (!el) return;
       if (style === "off") { stop(); return; }
-      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) { stop(); return; }
+      // системную настройку «меньше анимации» не слушаем: эффекты включаются
+      // только вручную в настройках, и если включены — они должны быть видны
       el.hidden = false;
       resize();
       build();
@@ -488,6 +489,110 @@
     layer.style.transform = blur ? "scale(1.05)" : "";
     layer.style.setProperty("--wall-dim", String(Math.min(80, Math.max(0, dim)) / 100));
     document.body.classList.add("has-wall");
+  }
+
+  /** Свои цвета сохраняем сразу — тема не теряется при перезапуске. */
+  function saveCustomTheme() {
+    state.settings = {
+      ...(state.settings || {}),
+      theme: "custom",
+      theme_bg: state.customTheme.bg,
+      theme_accent: state.customTheme.accent,
+      theme_text: state.customTheme.text
+    };
+    api.saveSettings(state.settings).catch(() => {});
+  }
+
+  /* ==================== ЦВЕТА ИЗ ФОНА ==================== */
+  /** Картинка текущих обоев (свой фон — data-URL, штатный — файл из assets). */
+  function wallpaperSrc() {
+    const wallpaper = state.wall && state.wall.wallpaper;
+    if (wallpaper === "custom") return state.customWall || null;
+    if (wallpaper && WALLS.some(([id]) => id === wallpaper)) return wallUrl(wallpaper);
+    return null;
+  }
+
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("картинка не открылась"));
+      image.src = src;
+    });
+  }
+
+  let paletteCache = { src: "", palette: null };
+
+  /** Палитра обоев: фон = затемнённый средний цвет, акцент = самый насыщенный. */
+  async function wallpaperPalette() {
+    const src = wallpaperSrc();
+    if (!src) return null;
+    if (paletteCache.src === src && paletteCache.palette) return paletteCache.palette;
+    let image;
+    try {
+      image = await loadImage(src);
+    } catch (error) {
+      return null;
+    }
+    const palette = paletteFromImage(image);
+    if (palette) paletteCache = { src, palette };
+    return palette;
+  }
+
+  /** Из готовой картинки — три цвета темы (подбор «под фон»). */
+  function paletteFromImage(image) {
+    const size = 64;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = Math.round(size * 0.62);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    let data;
+    try {
+      data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    } catch (error) {
+      return null; // канвас «испачкан» чужим доменом — берём обычную пипетку
+    }
+    let rs = 0;
+    let gs = 0;
+    let bs = 0;
+    let count = 0;
+    let best = null;
+    let bestScore = -1;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 200) continue;
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      rs += r; gs += g; bs += b; count += 1;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const saturation = max === 0 ? 0 : (max - min) / max;
+      const light = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+      const score = saturation * (0.4 + Math.min(light, 0.85));
+      if (score > bestScore) { bestScore = score; best = [r, g, b]; }
+    }
+    if (!count) return null;
+    const average = toHex([rs / count, gs / count, bs / count]);
+    const dark = luminance(average) < 0.42;
+    const bg = dark ? mix(average, "#070709", 0.72) : mix(average, "#ffffff", 0.78);
+    // серый «самый насыщенный» — плохой акцент: подмешиваем цвет обоев
+    const boost = (hex, amount) => {
+      const [r, g, b] = rgbOf(hex);
+      const grey = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      return toHex([r, g, b].map((value) => value + (value - grey) * amount));
+    };
+    let accent = best ? toHex(best) : average;
+    const [ar, ag, ab] = rgbOf(accent);
+    const accentMax = Math.max(ar, ag, ab);
+    const accentSat = accentMax === 0 ? 0 : (accentMax - Math.min(ar, ag, ab)) / accentMax;
+    if (accentSat < 0.3) accent = boost(average, 1.8);
+    if (Math.abs(luminance(accent) - luminance(bg)) < 0.22) {
+      accent = mix(accent, dark ? "#ffffff" : "#000000", 0.45);
+    }
+    const text = mix(dark ? "#f2f2f5" : "#0e0e11", average, 0.1);
+    return { bg, accent, text };
   }
 
   /* Иконки сборок: встроенный набор + своя картинка (если в icon лежит путь). */
@@ -876,14 +981,27 @@
 
   /* ==================== ФАЙЛЫ: ПЕРЕТАСКИВАНИЕ И .MRPACK ==================== */
   async function installMrpackPath(path, categoryId = null) {
+    const file = String(path).split(/[\\/]/).pop() || String(path);
     try {
-      toast("Разворачиваем модпак…");
+      // показываем, что идёт импорт: строка на главной + полоса снизу
+      state.home = state.home || { query: "", results: [], view: "grid", extSelected: new Set() };
+      state.home.busy = true;
+      state.home.status = `копируем «${file}» в лаунчер…`;
+      if (state.tab === "discover") renderDiscover();
+      toast(`Импортируем «${file}»…`);
       const meta = await api.installModpack(path);
       if (categoryId) await moveInstanceToCategory(meta.id, categoryId);
       await refreshInstances();
       selectInstance(meta.id);
       toast(`Сборка «${meta.name}» установлена`, "ok");
-    } catch (err) { toast(String(err), "err"); }
+    } catch (err) {
+      toast(String(err), "err");
+    } finally {
+      state.home.busy = false;
+      state.home.status = "";
+      setProgress(null);
+      if (state.tab === "discover") renderDiscover();
+    }
   }
 
   async function handleDroppedFiles(paths) {
@@ -1018,6 +1136,27 @@
     return demoSkinCache;
   }
 
+  /** Демо-плащ 64×32: та же раскладка, что у настоящей текстуры (спина — 1..11 × 1..17). */
+  function demoCapeDataUrl(kind = "migrator") {
+    const palette = {
+      migrator: ["#c8c8d0", "#8d8d99", "#e04b4b"],
+      vanilla: ["#6f6f78", "#4b4b52", "#9a9aa2"],
+      founders: ["#d8b25a", "#8a6a22", "#f0d68a"]
+    }[kind] || ["#c8c8d0", "#8d8d99", "#e04b4b"];
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 32;
+    const ctx = canvas.getContext("2d");
+    const paint = (x, y, w, h, color) => { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); };
+    paint(0, 0, 64, 32, palette[0]);
+    paint(1, 1, 10, 16, palette[0]);
+    paint(12, 1, 10, 16, palette[1]);
+    paint(1, 1, 10, 3, palette[2]);
+    paint(3, 6, 6, 4, palette[1]);
+    paint(1, 13, 10, 1, palette[2]);
+    return canvas.toDataURL("image/png");
+  }
+
   /** Демо-прогресс: событие за событием, чтобы полоса процессов была видна. */
   let demoProgressCb = null;
   async function demoProgress(stage, detail) {
@@ -1111,6 +1250,8 @@
     customWallpaper: () => invoke("custom_wallpaper"),
     modrinthProject: (projectId) => invoke("modrinth_project", { projectId }),
     accountSkin: () => invoke("account_skin"),
+    accountCapes: () => invoke("account_capes"),
+    setCape: (capeId) => invoke("set_cape", { capeId }),
     applySkin: (path, variant) => invoke("apply_skin", { path, variant }),
     saveSkinPng: (dataUrl, name) => invoke("save_skin_png", { dataUrl, name }),
     imageDataUrl: (path) => invoke("image_data_url", { path }),
@@ -1170,6 +1311,21 @@
     accountSkin: async () => {
       const active = DEMO.accounts.find((a) => a.uuid === DEMO.active);
       return { licensed: Boolean(active && active.kind === "microsoft"), variant: "classic", data_url: demoSkinDataUrl() };
+    },
+    accountCapes: async () => {
+      const active = DEMO.accounts.find((a) => a.uuid === DEMO.active);
+      const licensed = Boolean(active && active.kind === "microsoft");
+      if (!licensed) return { licensed: false, capes: [] };
+      const list = DEMO.capes || (DEMO.capes = [
+        { id: "demo-cape-migrator", alias: "Migrator", active: true, data_url: demoCapeDataUrl("migrator") },
+        { id: "demo-cape-vanilla", alias: "Vanilla", active: false, data_url: demoCapeDataUrl("vanilla") },
+        { id: "demo-cape-founders", alias: "Founder's Cape", active: false, data_url: demoCapeDataUrl("founders") }
+      ]);
+      return { licensed: true, capes: list.map((cape) => ({ ...cape })) };
+    },
+    setCape: async (capeId) => {
+      (DEMO.capes || []).forEach((cape) => { cape.active = capeId ? cape.id === capeId : false; });
+      return { ok: true };
     },
     applySkin: async () => ({ ok: true }),
     saveSkinPng: async () => "demo/skins/preset.png",
@@ -1742,6 +1898,8 @@
   async function toggleCategory(id) {
     const categories = categoriesOf().map((category) =>
       category.id === id ? { ...category, collapsed: !category.collapsed } : category);
+    // сначала фиксируем новое состояние, иначе список рисуется по старому и «прыгает»
+    state.settings = { ...(state.settings || {}), categories };
     renderSidebar();
     await saveCategories(categories);
   }
@@ -1907,8 +2065,37 @@
     return { percent, text: total > 0 ? `${detail} · ${percent}%` : detail };
   }
 
+  /** Живая полоса импорта: обновляем текст и процент без полной перерисовки. */
+  function updateImportLive() {
+    const payload = state.progress;
+    const stage = payload ? String(payload.stage || "") : "";
+    const importing = Boolean(state.home && state.home.busy) || Boolean(payload && IMPORT_STAGES.includes(stage));
+    const live = $("#imp-live");
+    if (!importing) {
+      if (live) live.remove();
+      return;
+    }
+    if (!live) {
+      if (state.tab === "discover" && !state.modalOpen) renderDiscover();
+      return;
+    }
+    const info = payload ? progressInfo(payload) : null;
+    const title = $("#imp-live-title");
+    if (title) title.textContent = importTitle(stage);
+    const text = $("#imp-live-text");
+    if (text && info) text.textContent = info.text;
+    const fill = $("#imp-live-fill");
+    if (fill && info && info.total) {
+      fill.classList.remove("is-idle");
+      fill.style.width = `${info.percent}%`;
+    }
+    const percent = $("#imp-live-percent");
+    if (percent) percent.textContent = info && info.total ? `${info.percent}%` : "";
+  }
+
   /** Полоса процессов на главной: видна всё время импорта/распаковки. */
   function renderImpProgress() {
+    updateImportLive();
     const box = $("#imp-progress");
     if (!box) return;
     const payload = state.progress;
@@ -1929,8 +2116,14 @@
     box.hidden = false;
     const percent = payload.total > 0 ? Math.min(100, Math.round((payload.done / payload.total) * 100)) : 0;
     $("#progress-fill").style.width = `${percent}%`;
-    const stageNames = { version: "версия", libraries: "библиотеки", assets: "ресурсы", java: "Java", mods: "моды", modpack: "модпак", loader: "загрузчик", launch: "запуск" };
-    $("#progress-text").textContent = `${stageNames[payload.stage] || payload.stage}: ${payload.detail || ""}`.slice(0, 70);
+    const stageNames = {
+      version: "версия", libraries: "библиотеки", assets: "ресурсы", java: "Java",
+      mods: "моды", modpack: "модпак", loader: "загрузчик", launch: "запуск",
+      import: "импорт", copy: "копирование", unzip: "распаковка"
+    };
+    const importStage = ["import", "copy", "unzip", "modpack"].includes(payload.stage);
+    const prefix = importStage ? "Импорт сборки" : (stageNames[payload.stage] || payload.stage);
+    $("#progress-text").textContent = `${prefix}: ${payload.detail || ""}`.slice(0, 74);
     if (payload.stage === "update") {
       const modal = $("#modal-update");
       if (modal && !modal.hidden) {
@@ -2537,6 +2730,39 @@
   }
 
   /** Панель импорта на главной: файл .mrpack/.zip, лаунчеры (с галочками), ссылка. */
+  /** Этапы, во время которых сборка реально копируется в лаунчер. */
+  const IMPORT_STAGES = ["import", "copy", "unzip", "modpack", "loader"];
+
+  /** Заголовок живой строки: сборка копируется в лаунчер или уже ставится. */
+  function importTitle(stage) {
+    if (!stage || ["import", "copy", "unzip", "modpack"].includes(stage)) return "Сборка копируется в лаунчер";
+    return "Идёт установка сборки";
+  }
+
+  /** Живая полоса импорта: спиннер + что сейчас делается + процент. */
+  function importLiveHtml() {
+    const cfg = state.home || {};
+    const payload = state.progress;
+    const stage = payload ? String(payload.stage || "") : "";
+    const importing = Boolean(cfg.busy) || Boolean(payload && IMPORT_STAGES.includes(stage));
+    if (!importing) return "";
+    const info = payload ? progressInfo(payload) : null;
+    const title = importTitle(stage);
+    const text = (cfg.busy && cfg.status) || (info && info.text) || "копируем файлы в папку лаунчера…";
+    const percent = info ? info.percent : 0;
+    return `<div class="imp-live" id="imp-live">
+      <span class="imp-spinner"></span>
+      <div class="imp-live-main">
+        <div class="imp-live-row">
+          <span class="imp-live-title" id="imp-live-title">${esc(title)}</span>
+          <span class="mono imp-live-percent" id="imp-live-percent">${info && info.total ? `${percent}%` : ""}</span>
+        </div>
+        <div class="imp-live-text mono" id="imp-live-text">${esc(text)}</div>
+        <div class="imp-live-bar"><div class="imp-live-fill ${info && info.total ? "" : "is-idle"}" id="imp-live-fill" style="width:${info && info.total ? percent : 100}%"></div></div>
+      </div>
+    </div>`;
+  }
+
   function homeImportHtml() {
     const cfg = state.home;
     const parts = [];
@@ -2617,18 +2843,27 @@
     }
 
     const open = Boolean(cfg.open) || Boolean(cfg.zipPath) || Boolean(cfg.extOpen);
-    return `<section class="home-import ${cfg.busy ? "is-busy" : ""} ${open ? "is-open" : ""}">
-      <button class="imp-head imp-toggle" id="imp-toggle" aria-expanded="${open ? "true" : "false"}">
+    return `<section class="home-import ${cfg.busy ? "is-busy" : ""} ${open || cfg.busy ? "is-open" : ""}">
+      <button class="imp-head imp-toggle" id="imp-toggle" aria-expanded="${open || cfg.busy ? "true" : "false"}">
         <svg class="ic imp-chev"><use href="#i-chev"/></svg>
         <span class="home-title">Добавить сборку</span>
         <span class="home-sub">${esc(cfg.status || "файл модпака, другой лаунчер или ссылка")}</span>
       </button>
+      ${importLiveHtml()}
       <div class="imp-body">${parts.join("")}</div>
-      <div class="imp-progress" id="imp-progress" hidden>
-        <div class="progress-bar"><div class="progress-fill" id="imp-progress-fill"></div></div>
-        <span class="imp-progress-text mono" id="imp-progress-text"></span>
-      </div>
     </section>`;
+  }
+
+  /** Размер плиток в «Готовых сборках»: 1 — 12 в ряд, 2 — 6 (по умолчанию), 3 — 4. */
+  function feedGridLevel() {
+    const level = Number(state.settings && state.settings.feed_grid);
+    return level === 1 || level === 2 || level === 3 ? level : 2;
+  }
+
+  function setFeedGridLevel(level) {
+    const clean = level === 1 || level === 3 ? level : 2;
+    state.settings = { ...(state.settings || {}), feed_grid: clean };
+    api.saveSettings(state.settings).catch(() => {});
   }
 
   function renderDiscover() {
@@ -2643,18 +2878,23 @@
           ${homeImportHtml()}
           <div class="home-feed-head">
             <div class="home-title">Готовые сборки</div>
+            <label class="search home-search">
+              <svg class="ic"><use href="#i-search"/></svg>
+              <input id="dv-query" type="text" placeholder="Найти сборку" spellcheck="false" value="${esc(cfg.query)}">
+            </label>
             <div class="home-tools">
-              <label class="search">
-                <svg class="ic"><use href="#i-search"/></svg>
-                <input id="dv-query" type="text" placeholder="Найти сборку" spellcheck="false" value="${esc(cfg.query)}">
-              </label>
               <div class="mr-view" title="Вид">
                 <button class="${view === "grid" ? "is-active" : ""}" data-dv-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
                 <button class="${view === "list" ? "is-active" : ""}" data-dv-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
               </div>
+              <label class="feed-size" title="Размер плиток: 1 — мелкие, 2 — обычные, 3 — крупные">
+                <svg class="ic"><use href="#i-grid"/></svg>
+                <input type="range" id="feed-size" min="1" max="3" step="1" value="${feedGridLevel()}" aria-label="Размер плиток">
+                <span class="mono" id="feed-size-val">${feedGridLevel()}</span>
+              </label>
             </div>
           </div>
-          <div class="modrinth-results ${view === "grid" ? "is-grid" : ""}" id="dv-results">${dvResultsHtml()}</div>
+          <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${feedGridLevel()}` : ""}" id="dv-results">${dvResultsHtml()}</div>
         </div>
       </div>`;
 
@@ -2668,6 +2908,20 @@
       state.discover.view = btn.dataset.dvView;
       renderDiscover();
     }));
+    const feedSize = $("#feed-size");
+    if (feedSize) {
+      feedSize.addEventListener("input", () => {
+        const level = Number(feedSize.value) || 2;
+        const label = $("#feed-size-val");
+        if (label) label.textContent = String(level);
+        const results = $("#dv-results");
+        if (results) {
+          results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
+          results.classList.add(`feed-grid-${level}`);
+        }
+        setFeedGridLevel(level);
+      });
+    }
     bindHomeImport();
     const retry = $("#dv-retry");
     if (retry) retry.addEventListener("click", () => dvReset());
@@ -3766,6 +4020,10 @@
     refreshAccountSkin().then(() => {
       if (!$("#modal-prefs").hidden && prefsCategory === "profile") renderPrefs();
     });
+    capeState().loading = true;
+    refreshAccountCapes().then(() => {
+      if (!$("#modal-prefs").hidden && prefsCategory === "profile") renderPrefs();
+    });
     modal.hidden = false;
     renderPrefsAccountCard();
     renderPrefs();
@@ -3794,6 +4052,7 @@
     bindPrefs();
     if (prefsCategory === "profile") {
       bindPrefsProfile();
+      bindCapes();
       bindSkin();
     }
   }
@@ -3842,10 +4101,11 @@
                 <button class="btn btn-small" data-acc="remove">Выйти</button>
               </div>
             </div>
-            <div class="muted profile-note">${active.kind === "microsoft" ? "Лицензия" : "Офлайн-аккаунт"}</div>`
+`
             : `<div class="profile-card is-empty"><span class="muted">Аккаунта пока нет</span></div>`}
         </section>
       </div>
+      ${capeSectionHtml()}
       ${skinSectionHtml()}`;
   }
 
@@ -3914,7 +4174,11 @@
       </div>
       ${custom ? `
       <div class="prefs-section" id="custom-theme">
-        <div class="prefs-label">Своя тема</div>
+        <div class="prefs-label-row">
+          <span class="prefs-label">Своя тема</span>
+          <div class="spacer"></div>
+          <button class="btn btn-small" id="theme-from-wall"><svg class="ic"><use href="#i-image"/></svg>Цвета из фона</button>
+        </div>
         ${colorRow({ id: "theme-bg", label: "Фон", value: own.bg })}
         ${colorRow({ id: "theme-accent", label: "Акцент", value: own.accent })}
         ${colorRow({ id: "theme-text", label: "Текст", value: own.text })}
@@ -4141,25 +4405,45 @@
       const input = $(`#${id}`);
       if (!input) return;
       const apply = (value) => {
-        state.customTheme[key] = value;
-        input.value = value;
+        if (!/^#[0-9a-f]{6}$/i.test(String(value))) return;
+        state.customTheme[key] = String(value).toLowerCase();
+        input.value = state.customTheme[key];
         const hex = $(`#${id}-hex`);
-        if (hex) hex.textContent = value;
-        applyTheme("custom");
+        if (hex) hex.textContent = state.customTheme[key];
+        state.theme = applyTheme("custom");
+        saveCustomTheme();
       };
       input.addEventListener("input", () => apply(input.value));
       const pick = $(`#${id}-pick`);
       if (pick) pick.addEventListener("click", async () => {
-        if (!window.EyeDropper) { input.click(); return; }
-        try {
-          const result = await new window.EyeDropper().open();
-          apply(String(result.sRGBHex || "").toLowerCase());
-        } catch (error) { /* отменили выбор */ }
+        // главное назначение кнопки — цвет ПОД ФОН: берём палитру обоев
+        const palette = await wallpaperPalette();
+        if (palette && palette[key]) { apply(palette[key]); return; }
+        // обоев нет (или картинка недоступна) — обычная пипетка
+        if (window.EyeDropper) {
+          try {
+            const result = await new window.EyeDropper().open();
+            const value = String(result.sRGBHex || "").toLowerCase();
+            if (value) apply(value);
+            return;
+          } catch (error) { /* отменили выбор — открываем обычный выбор цвета */ }
+        }
+        input.click();
       });
     };
     bindColor("bg", "theme-bg");
     bindColor("accent", "theme-accent");
     bindColor("text", "theme-text");
+    const fromWall = $("#theme-from-wall");
+    if (fromWall) fromWall.addEventListener("click", async () => {
+      const palette = await wallpaperPalette();
+      if (!palette) { toast("Сначала выбери фон", "err"); return; }
+      state.customTheme = { ...state.customTheme, ...palette };
+      state.theme = applyTheme("custom");
+      saveCustomTheme();
+      renderPrefs();
+      toast("Цвета взяты из фона", "ok");
+    });
     const ambientSwitch = $("#set-ambient");
     if (ambientSwitch) ambientSwitch.addEventListener("click", () => {
       const on = !(state.ambient && state.ambient !== "off");
@@ -4360,6 +4644,7 @@
       sound_style: state.sound.style || "soft",
       click_fx: state.fx,
       ambient: state.ambient || "stars",
+      feed_grid: feedGridLevel(),
       wallpaper: state.wall.wallpaper,
       wallpaper_fit: state.wall.fit,
       wallpaper_blur: state.wall.blur,
@@ -4604,6 +4889,97 @@
           </div>
         </div>
       </section>`;
+  }
+
+  /* ==================== ПЛАЩИ АККАУНТА ==================== */
+  function capeState() {
+    if (!state.capes) state.capes = { licensed: false, list: [], loading: false, error: "" };
+    return state.capes;
+  }
+
+  /** Спина плаща из текстуры 64×32 в миниатюру. */
+  function paintCapeThumb(canvas, src) {
+    if (!canvas || !src) return;
+    const image = new Image();
+    image.onload = () => {
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(image, 1, 1, 10, 16, 0, 0, canvas.width, canvas.height);
+    };
+    image.src = src;
+  }
+
+  function capeSectionHtml() {
+    const capes = capeState();
+    const licensed = Boolean(capes.licensed);
+    const list = capes.list || [];
+    const activeId = (list.find((cape) => cape.active) || {}).id || "";
+    const cards = list.map((cape) => `
+      <button class="cape-card ${cape.id === activeId ? "is-active" : ""}" data-cape-id="${esc(cape.id)}" title="${esc(cape.alias)}">
+        <canvas class="cape-thumb" width="52" height="84" data-cape-src="${esc(cape.data_url || "")}"></canvas>
+        <span class="cape-name">${esc(cape.alias)}</span>
+      </button>`).join("");
+    return `
+      <section class="prefs-section cape-section">
+        <div class="prefs-label-row">
+          <span class="prefs-label">Плащ аккаунта</span>
+          <div class="spacer"></div>
+          <span class="tag ${licensed ? "green" : ""}">${licensed ? "лицензия" : "только лицензия"}</span>
+          <button class="icon-btn" id="cape-refresh" title="Обновить плащи"><svg class="ic"><use href="#i-refresh"/></svg></button>
+        </div>
+        <div class="cape-list">
+          <button class="cape-card cape-off ${activeId ? "" : "is-active"}" data-cape-id="" title="Снять плащ">
+            <span class="cape-thumb cape-thumb-off"><svg class="ic"><use href="#i-minus"/></svg></span>
+            <span class="cape-name">Без плаща</span>
+          </button>
+          ${cards}
+          ${!licensed ? `<div class="cape-note">Плащи есть только у лицензионного аккаунта.</div>`
+            : (!list.length && !capes.loading ? `<div class="cape-note">${capes.error ? esc(capes.error) : "У аккаунта нет плащей."}</div>` : "")}
+          ${capes.loading ? `<div class="cape-note">Загружаем плащи…</div>` : ""}
+        </div>
+      </section>`;
+  }
+
+  /** Плащи подгружаем при открытии профиля. */
+  async function refreshAccountCapes() {
+    const capes = capeState();
+    capes.loading = true;
+    const info = await api.accountCapes().catch((error) => {
+      capes.error = String(error || "");
+      return null;
+    });
+    capes.loading = false;
+    if (!info) return;
+    capes.licensed = Boolean(info.licensed);
+    capes.list = info.capes || [];
+    capes.error = "";
+  }
+
+  function bindCapes() {
+    const thumbs = $$(".cape-thumb[data-cape-src]");
+    thumbs.forEach((canvas) => paintCapeThumb(canvas, canvas.dataset.capeSrc));
+    const refresh = $("#cape-refresh");
+    if (refresh) refresh.addEventListener("click", async () => {
+      await refreshAccountCapes();
+      renderPrefs();
+      toast("Список плащей обновлён", "ok");
+    });
+    $$(".cape-card", $(".cape-section") || document).forEach((card) => card.addEventListener("click", async () => {
+      const id = card.dataset.capeId || null;
+      const capes = capeState();
+      const current = (capes.list.find((cape) => cape.active) || {}).id || "";
+      if ((id || "") === current) return;
+      try {
+        await api.setCape(id);
+        capes.list.forEach((cape) => { cape.active = id ? cape.id === id : false; });
+        renderPrefs();
+        toast(id ? "Плащ включён" : "Плащ выключен", "ok");
+      } catch (error) {
+        toast(String(error), "err");
+      }
+    }));
   }
 
   /** PNG-скин → offscreen-канвас 64×64 для рендера. */
@@ -5680,6 +6056,9 @@
       /* демо-режим без бэкенда — тихо */
     }
   }
+
+  // отладочный мостик для автотестов интерфейса (Playwright): не влияет на работу лаунчера
+  window.omnispecDebug = { state, paletteFromImage, wallpaperPalette, feedGridLevel };
 
   init();
 })();
