@@ -34,6 +34,9 @@
     mint:     { label: "Мята",     bg: "#eef5f1", panel: "#ffffff", text: "#12211a", accent: "#12855b" },
     sand:     { label: "Песок",    bg: "#f5f1e8", panel: "#fffdf8", text: "#211d16", accent: "#a9743a" }
   };
+  /* Своя тема («кастом»): пользователь задаёт три цвета, остальные поверхности
+   * движок выводит сам — ровно как для пресетов. */
+  const CUSTOM_THEME_DEFAULT = { bg: "#0b0d12", accent: "#7aa2f7", text: "#e6e9ef" };
   const FX_STYLES = { wave: "Волна", dot: "Точка", ring: "Кольцо", cross: "Крест", off: "Выкл" };
 
   function rgbOf(hex) {
@@ -66,8 +69,22 @@
    *  Градиентов нет — только плоские поверхности; поверхности строятся
    *  шагами от --bg к --bg-5, чтобы «толщина» панелей была одинаковой
    *  во всех темах. */
+  /** Тема по id: пресет из THEMES или собранный вручную «кастом». */
+  function themeOf(name) {
+    if (name === "custom") {
+      const own = state.customTheme || {};
+      return {
+        label: "Кастом",
+        bg: own.bg || CUSTOM_THEME_DEFAULT.bg,
+        accent: own.accent || CUSTOM_THEME_DEFAULT.accent,
+        text: own.text || CUSTOM_THEME_DEFAULT.text
+      };
+    }
+    return THEMES[name] || THEMES.dark;
+  }
+
   function applyTheme(name) {
-    const theme = THEMES[name] || THEMES.dark;
+    const theme = themeOf(name);
     const dark = luminance(theme.bg) < 0.4;
     const step = dark ? theme.text : "#000000";
     const vars = {
@@ -110,8 +127,9 @@
     vars["--bg-2a"] = rgbaOf(vars["--bg-2"], 0.84);
     vars["--bg-3a"] = rgbaOf(vars["--bg-3"], 0.88);
     for (const [key, value] of Object.entries(vars)) document.body.style.setProperty(key, value);
-    document.body.dataset.theme = THEMES[name] ? name : "dark";
-    return THEMES[name] ? name : "dark";
+    const valid = name === "custom" || Boolean(THEMES[name]);
+    document.body.dataset.theme = valid ? name : "dark";
+    return valid ? name : "dark";
   }
 
   /* ==================== ОБОИ (фоны из OmniPanel) ==================== */
@@ -219,6 +237,21 @@
     }
     if (icon && INSTANCE_ICONS.includes(icon)) return `<svg class="ic"><use href="#${icon}"/></svg>`;
     return esc(String((meta && meta.name) || "?").trim().charAt(0).toUpperCase());
+  }
+
+  /** Иконка в шапке сборки берётся у самой сборки, а не у лаунчера. */
+  function renderBuildIcon(meta) {
+    const box = $("#tb-icon");
+    if (!box) return;
+    if (!meta) {
+      box.classList.remove("is-letter");
+      box.innerHTML = `<img src="assets/logo.png" alt="" draggable="false">`;
+      return;
+    }
+    const html = instanceIconHtml(meta);
+    const letter = !isImageIcon(meta.icon) && !(meta.icon && INSTANCE_ICONS.includes(meta.icon));
+    box.classList.toggle("is-letter", letter);
+    box.innerHTML = letter ? `<span class="tb-letter">${esc(html)}</span>` : html;
   }
 
   /** Подтянуть картинки-иконки сборок (webview не читает локальные пути). */
@@ -552,12 +585,17 @@
 
   const demoSearch = (q) => ({
     hits: [
+      { project_id: "rp-complementary", title: "Complementary Reimagined", description: "Сочный ресурспак с мягким светом и чистыми текстурами.", icon_url: null, categories: ["16x", "realistic"], downloads: 15420000, author: "EminGT", project_type: "resourcepack", slug: "complementary-reimagined" },
+      { project_id: "rp-fresh", title: "Fresh Animations", description: "Живые анимации мобов без потери ванильного стиля.", icon_url: null, categories: ["16x", "tweaks"], downloads: 9120000, author: "FreshLX", project_type: "resourcepack", slug: "fresh-animations" },
+      { project_id: "sh-bsl", title: "BSL Shaders", description: "Мягкие тени, объёмный свет и красивое небо для слабых ПК.", icon_url: null, categories: ["shaders", "atmosphere"], downloads: 20100000, author: "capttatsu", project_type: "shader", slug: "bsl-shaders" },
+      { project_id: "sh-complementary", title: "Complementary Shaders", description: "Сбалансированные шейдеры: вода, тени и свечение.", icon_url: null, categories: ["shaders", "fantasy"], downloads: 18300000, author: "EminGT", project_type: "shader", slug: "complementary-shaders" },
       { project_id: "AANobbMI", title: "Sodium", description: "Современный движок рендера: больше FPS, меньше фризов.", icon_url: null, categories: ["fabric", "optimization"], downloads: 252141115, author: "jellysquid3", project_type: "mod", slug: "sodium" },
       { project_id: "gvQqBUqZ", title: "Lithium", description: "Оптимизация игровой логики без изменения поведения игры.", icon_url: null, categories: ["fabric", "optimization"], downloads: 106922325, author: "jellysquid3", project_type: "mod", slug: "lithium" },
       { project_id: "YL57xq9U", title: "Iris Shaders", description: "Шейдеры для Fabric с поддержкой OptiFine-паков.", icon_url: null, categories: ["fabric", "shaders"], downloads: 88568147, author: "coderbot", project_type: "mod", slug: "iris" },
       { project_id: "mOgUt4GM", title: "Mod Menu", description: "Список модов и настройки прямо в игре.", icon_url: null, categories: ["fabric", "utility"], downloads: 60000000, author: "Prospector", project_type: "mod", slug: "modmenu" }
-    ].filter((hit) => !q || hit.title.toLowerCase().includes(String(q.query || "").toLowerCase())),
-    total_hits: 4, offset: 0, limit: 20
+    ].filter((hit) => !q || hit.title.toLowerCase().includes(String(q.query || "").toLowerCase()))
+      .filter((hit) => !q || !q.projectType || hit.project_type === q.projectType),
+    total_hits: 8, offset: 0, limit: 20
   });
 
   const demoApi = {
@@ -579,8 +617,15 @@
     stop: async () => null,
     running: async () => [],
     search: async (q) => {
-      const base = demoSearch(q).hits;
-      const seed = ["Sodium", "Lithium", "Iris Shaders", "Mod Menu", "Fabric API", "Cloth Config", "Indium", "FerriteCore", "Krypton", "LazyDFU", "Starlight", "C2ME", "Entity Culling", "Dynamic FPS", "Reese's Sodium Options", "Zoomify", "AppleSkin", "Jade", "Roughly Enough Items", "Continuity", "Controlling", "BetterF3", "ImmediatelyFast", "No Chat Reports"];
+      const type = (q && q.projectType) || "mod";
+      // демо-выдача никогда не смешивает типы: ресурспаки отдельно, шейдеры отдельно
+      const base = demoSearch({ query: q && q.query, projectType: type }).hits;
+      const SEEDS = {
+        mod: ["Sodium", "Lithium", "Iris Shaders", "Mod Menu", "Fabric API", "Cloth Config", "Indium", "FerriteCore", "Krypton", "LazyDFU", "Starlight", "C2ME", "Entity Culling", "Dynamic FPS", "Reese's Sodium Options", "Zoomify", "AppleSkin", "Jade", "Roughly Enough Items", "Continuity", "Controlling", "BetterF3", "ImmediatelyFast", "No Chat Reports"],
+        resourcepack: ["Complementary Reimagined", "Fresh Animations", "Stay True", "Sodium Reforged", "Better Leaves", "Visual Waxed", "Bushy Leaves", "Motschen's Better Leaves"],
+        shader: ["BSL Shaders", "Complementary Shaders", "MakeUp Ultra Fast", "Sildur's Vibrant", "Rethinking Voxels", "Nostalgia Shaders", "Aurora's Shaders", "Photon Shaders"]
+      };
+      const seed = SEEDS[type] || SEEDS.mod;
       const all = [];
       for (let page = 0; page < 3; page += 1) {
         seed.forEach((name, index) => {
@@ -742,6 +787,7 @@
     wall: { wallpaper: null, fit: "cover", blur: 0, dim: 40 },
     update: { info: null, version: "0.1.0", repo: null, enabled: true, checking: false, installing: false },
     theme: "dark",
+    customTheme: { ...CUSTOM_THEME_DEFAULT },
     fx: "wave",
     shape: "soft",
     customWall: null,
@@ -867,6 +913,7 @@
     pill.textContent = meta ? loaderLabel(meta.loader) : "";
     const menu = $("#btn-build-menu");
     if (menu) menu.hidden = !meta;
+    renderBuildIcon(meta);
     const pathbar = $("#build-path");
     if (pathbar) {
       pathbar.hidden = !meta;
@@ -1427,13 +1474,13 @@
               ${mcOptions.map((value) => `<option value="${esc(value)}" ${cfg.mc === value ? "selected" : ""}>${esc(value)}</option>`).join("")}
             </select>
           </div>
-          <div class="field">
+          ${cfg.type === "mod" ? `<div class="field">
             <label>Загрузчик</label>
             <select class="select" id="mr-loader">
               <option value="">любой</option>
               ${Object.entries(LOADER_NAMES).map(([value, label]) => `<option value="${value}" ${cfg.loader === value ? "selected" : ""}>${label}</option>`).join("")}
             </select>
-          </div>
+          </div>` : ""}
           <button class="btn" id="mr-search" style="align-self:flex-end">Найти</button>
           <div class="mr-view" style="align-self:flex-end" title="Вид списка">
             <button class="${view === "list" ? "is-active" : ""}" data-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
@@ -1449,7 +1496,8 @@
     $("#mr-query").addEventListener("keydown", (event) => { if (event.key === "Enter") runSearch(); });
     $("#mr-type").addEventListener("change", (event) => { state.modrinth.type = event.target.value; runSearch(); });
     $("#mr-mc").addEventListener("change", (event) => { state.modrinth.mc = event.target.value; runSearch(); });
-    $("#mr-loader").addEventListener("change", (event) => { state.modrinth.loader = event.target.value; runSearch(); });
+    const loaderSelect = $("#mr-loader");
+    if (loaderSelect) loaderSelect.addEventListener("change", (event) => { state.modrinth.loader = event.target.value; runSearch(); });
     $$("#tab-body [data-view]").forEach((btn) => btn.addEventListener("click", () => {
       state.modrinth.view = btn.dataset.view;
       renderModrinth();
@@ -1467,29 +1515,63 @@
    * но без привязки к выбранной сборке и без единого автовыбора —
    * пока пользователь сам не нажмёт «Установить», ничего не происходит.
    */
+  /** Главная страница: свои сборки + создание/импорт + лента готовых сборок. */
+  function homeInstanceHtml(meta) {
+    const running = state.running.has(meta.id);
+    const icon = instanceIconHtml(meta);
+    const letter = !isImageIcon(meta.icon) && !(meta.icon && INSTANCE_ICONS.includes(meta.icon));
+    return `<button class="home-card ${meta.id === state.selectedId ? "is-active" : ""}" data-home-id="${esc(meta.id)}">
+      <span class="home-card-icon ${letter ? "is-letter" : ""}">${letter ? `<span class="card-letter">${esc(icon)}</span>` : icon}</span>
+      <span class="home-card-body">
+        <span class="home-card-name">${esc(meta.name)}</span>
+        <span class="home-card-sub">MC ${esc(meta.mc_version)} · ${esc(loaderLabel(meta.loader))}</span>
+      </span>
+      ${running ? '<span class="home-card-dot" title="Запущена"></span>' : ""}
+    </button>`;
+  }
+
   function renderDiscover() {
     const cfg = state.discover;
     const view = cfg.view || "grid";
+    const instances = state.instances || [];
     $("#tab-body").innerHTML = `
-      <div class="discover">
-        <div class="discover-head">
-          <div class="discover-titles">
-            <div class="discover-title">Готовые сборки</div>
+      <div class="home">
+        <div class="home-head">
+          <div class="home-titles">
+            <div class="home-title">Сборки</div>
+            <div class="home-sub">${instances.length ? `${instances.length} ${instances.length === 1 ? "сборка" : instances.length < 5 ? "сборки" : "сборок"} — своя папка, моды, миры` : "Пока пусто: создай сборку или добавь уже готовую"}</div>
           </div>
-          <div class="discover-tools">
-            <label class="search">
-              <svg class="ic"><use href="#i-search"/></svg>
-              <input id="dv-query" type="text" placeholder="Найти сборку" spellcheck="false" value="${esc(cfg.query)}">
-            </label>
-            <div class="mr-view" title="Вид">
-              <button class="${view === "grid" ? "is-active" : ""}" data-dv-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
-              <button class="${view === "list" ? "is-active" : ""}" data-dv-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
-            </div>
+          <div class="home-actions">
+            <button class="btn" id="home-import"><svg class="ic"><use href="#i-folder"/></svg>Добавить существующую</button>
+            <button class="btn btn-primary" id="home-create"><svg class="ic"><use href="#i-plus"/></svg>Создать сборку</button>
           </div>
         </div>
-        <div class="modrinth-results ${view === "grid" ? "is-grid" : ""}" id="dv-results">${dvResultsHtml()}</div>
+        <div class="home-scroll" id="home-scroll">
+          ${instances.length ? `<div class="home-grid">${instances.map(homeInstanceHtml).join("")}</div>` : ""}
+          <div class="home-feed-head">
+            <div class="home-title">Готовые сборки</div>
+            <div class="home-tools">
+              <label class="search">
+                <svg class="ic"><use href="#i-search"/></svg>
+                <input id="dv-query" type="text" placeholder="Найти сборку" spellcheck="false" value="${esc(cfg.query)}">
+              </label>
+              <div class="mr-view" title="Вид">
+                <button class="${view === "grid" ? "is-active" : ""}" data-dv-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
+                <button class="${view === "list" ? "is-active" : ""}" data-dv-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
+              </div>
+            </div>
+          </div>
+          <div class="modrinth-results ${view === "grid" ? "is-grid" : ""}" id="dv-results">${dvResultsHtml()}</div>
+        </div>
       </div>`;
 
+    $$("#tab-body [data-home-id]").forEach((card) => card.addEventListener("click", () => {
+      selectInstance(card.dataset.homeId);
+      state.tab = "console";
+      renderTab();
+    }));
+    $("#home-create").addEventListener("click", openCreate);
+    $("#home-import").addEventListener("click", () => openAdd("modrinth"));
     $("#dv-query").addEventListener("keydown", (event) => { if (event.key === "Enter") dvReset(); });
     $$("#tab-body [data-dv-view]").forEach((btn) => btn.addEventListener("click", () => {
       state.discover.view = btn.dataset.dvView;
@@ -1683,7 +1765,9 @@
       query: cfg.query,
       projectType: cfg.type,
       mcVersion: cfg.mc || (meta ? meta.mc_version : null),
-      loader: cfg.loader || (meta && meta.loader ? meta.loader.type : null),
+      // у ресурспаков и шейдеров нет тега загрузчика — иначе Modrinth
+      // возвращал моды с категорией fabric
+      loader: cfg.type === "mod" ? (cfg.loader || (meta && meta.loader ? meta.loader.type : null)) : null,
       offset: offset || 0,
       limit: MR_PAGE
     };
@@ -2317,13 +2401,44 @@
     if (prefsCategory === "profile") bindPrefsProfile();
   }
 
-  /** Профиль: слева активный аккаунт, справа список всех аккаунтов. */
+  /** Профиль: слева список аккаунтов, справа — активный. */
   function prefsProfile() {
     const accounts = (state.accounts && state.accounts.accounts) || [];
     const activeId = (state.accounts && state.accounts.active) || (accounts[0] && accounts[0].uuid);
     const active = accounts.find((item) => item.uuid === activeId) || null;
     return `
       <div class="profile-grid">
+        <section class="prefs-section">
+          <div class="prefs-label-row">
+            <span class="prefs-label">Аккаунты</span>
+            <div class="spacer"></div>
+            <button class="btn btn-small" data-acc="add-offline">Пиратка</button>
+            <button class="btn btn-small btn-primary" data-acc="add-ms">Лицензия</button>
+          </div>
+          <div class="profile-list">
+            ${accounts.map((account) => `
+              <div class="profile-row ${account.uuid === activeId ? "is-active" : ""}" data-uuid="${esc(account.uuid)}">
+                ${avatarHtml(account)}
+                <div class="acc-main">
+                  <div class="acc-name">${esc(account.username)}</div>
+                  <div class="acc-sub">${esc(kindLabel(account.kind))}</div>
+                </div>
+                ${account.uuid === activeId
+                  ? '<span class="tag green">активный</span>'
+                  : '<button class="btn btn-small" data-acc="pick">Выбрать</button>'}
+                ${account.kind === "microsoft" ? "" : `<button class="icon-btn" data-acc="rename-one" title="Изменить ник"><svg class="ic"><use href="#i-pencil"/></svg></button>`}
+                <button class="icon-btn" data-acc="remove-one" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
+              </div>`).join("")}
+            <button class="profile-row profile-row-add" data-acc="add-any">
+              <span class="acc-avatar"><svg class="ic"><use href="#i-plus"/></svg></span>
+              <span class="acc-main">
+                <span class="acc-name">Добавить аккаунт</span>
+                <span class="acc-sub">лицензия или офлайн-ник</span>
+              </span>
+            </button>
+          </div>
+        </section>
+
         <section class="prefs-section profile-active">
           <div class="prefs-label">Аккаунт</div>
           ${active ? `
@@ -2343,30 +2458,6 @@
               : "Офлайн-аккаунт: подходит для серверов без проверки лицензии."}</div>`
             : `<div class="profile-card is-empty"><span class="muted">Аккаунта пока нет</span></div>`}
         </section>
-
-        <section class="prefs-section">
-          <div class="prefs-label-row">
-            <span class="prefs-label">Аккаунты</span>
-            <div class="spacer"></div>
-            <button class="btn btn-small" data-acc="add-offline">Пиратка</button>
-            <button class="btn btn-small btn-primary" data-acc="add-ms">Лицензия</button>
-          </div>
-          <div class="profile-list">
-            ${accounts.length ? accounts.map((account) => `
-              <div class="profile-row ${account.uuid === activeId ? "is-active" : ""}" data-uuid="${esc(account.uuid)}">
-                ${avatarHtml(account)}
-                <div class="acc-main">
-                  <div class="acc-name">${esc(account.username)}</div>
-                  <div class="acc-sub">${esc(kindLabel(account.kind))}</div>
-                </div>
-                ${account.uuid === activeId
-                  ? '<span class="tag green">активный</span>'
-                  : '<button class="btn btn-small" data-acc="pick">Выбрать</button>'}
-                ${account.kind === "microsoft" ? "" : `<button class="icon-btn" data-acc="rename-one" title="Изменить ник"><svg class="ic"><use href="#i-pencil"/></svg></button>`}
-                <button class="icon-btn" data-acc="remove-one" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
-              </div>`).join("") : `<div class="muted" style="font-size:12px">Список пуст — добавь аккаунт справа сверху.</div>`}
-          </div>
-        </section>
       </div>`;
   }
 
@@ -2380,6 +2471,7 @@
       const act = el.dataset.acc;
       const row = el.closest("[data-uuid]");
       const account = row ? byUuid(row.dataset.uuid) : active;
+      if (act === "add-any") return openAccounts();
       if (act === "add-offline" || act === "add-ms") {
         openAccounts();
         return;
@@ -2396,7 +2488,21 @@
     }));
   }
 
+  /** Строка своей темы: цвет + подпись + кнопка подбора пипеткой. */
+  function colorRow({ id, label, value }) {
+    return `<div class="settings-row">
+      <span class="label">${label}</span>
+      <div class="color-field">
+        <input type="color" id="${id}" value="${esc(value)}" aria-label="${label}">
+        <span class="color-hex" id="${id}-hex">${esc(value)}</span>
+        <button class="btn btn-small" id="${id}-pick"><svg class="ic"><use href="#i-eyedrop"/></svg>Подобрать</button>
+      </div>
+    </div>`;
+  }
+
   function prefsLook(settings) {
+    const own = state.customTheme;
+    const custom = state.theme === "custom";
     return `
       <div class="prefs-section">
         <div class="prefs-label">Тема оформления</div>
@@ -2409,8 +2515,23 @@
               </span>
               <span class="theme-name">${esc(theme.label)}</span>
             </button>`).join("")}
+          <button class="theme-chip ${custom ? "is-active" : ""}" data-theme-id="custom" title="Своя тема">
+            <span class="theme-swatch" style="background:${own.bg}">
+              <span class="theme-band" style="background:${own.bg}"></span>
+              <span class="theme-accent" style="background:${own.accent}"></span>
+            </span>
+            <span class="theme-name">Кастом</span>
+          </button>
         </div>
       </div>
+      ${custom ? `
+      <div class="prefs-section" id="custom-theme">
+        <div class="prefs-label">Своя тема</div>
+        ${colorRow({ id: "theme-bg", label: "Фон", value: own.bg })}
+        ${colorRow({ id: "theme-accent", label: "Акцент", value: own.accent })}
+        ${colorRow({ id: "theme-text", label: "Текст", value: own.text })}
+        <div class="settings-note">Остальные поверхности, рамки и приглушённый текст выводятся из этих трёх цветов.</div>
+      </div>` : ""}
       <div class="prefs-section">
         <div class="prefs-label">Форма элементов</div>
         <div class="chips" id="shape-chips">
@@ -2623,8 +2744,32 @@
 
     $$("#theme-grid .theme-chip").forEach((chip) => chip.addEventListener("click", () => {
       state.theme = applyTheme(chip.dataset.themeId);
-      $$("#theme-grid .theme-chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+      renderPrefs();
     }));
+    // свои цвета: ползунки цвета + пипетка
+    const bindColor = (key, id) => {
+      const input = $(`#${id}`);
+      if (!input) return;
+      const apply = (value) => {
+        state.customTheme[key] = value;
+        input.value = value;
+        const hex = $(`#${id}-hex`);
+        if (hex) hex.textContent = value;
+        applyTheme("custom");
+      };
+      input.addEventListener("input", () => apply(input.value));
+      const pick = $(`#${id}-pick`);
+      if (pick) pick.addEventListener("click", async () => {
+        if (!window.EyeDropper) { input.click(); return; }
+        try {
+          const result = await new window.EyeDropper().open();
+          apply(String(result.sRGBHex || "").toLowerCase());
+        } catch (error) { /* отменили выбор */ }
+      });
+    };
+    bindColor("bg", "theme-bg");
+    bindColor("accent", "theme-accent");
+    bindColor("text", "theme-text");
     $$("#fx-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
       state.fx = chip.dataset.fx;
       applyClickFx(state.fx);
@@ -2773,6 +2918,9 @@
       update_enabled: flag("#set-upd-enabled", settings.update_enabled),
       update_prerelease: flag("#set-upd-pre", settings.update_prerelease),
       theme: state.theme,
+      theme_bg: state.customTheme.bg,
+      theme_accent: state.customTheme.accent,
+      theme_text: state.customTheme.text,
       shape: state.shape,
       sound_fx: state.sound.on,
       sound_volume: state.sound.volume,
@@ -3082,6 +3230,7 @@
     }
     await loadInstanceIcons();
     renderSidebar();
+    renderBuildIcon(selected());
   }
 
   async function play() {
@@ -3734,6 +3883,7 @@
     on("#btn-play", "click", play);
     on("#btn-stop", "click", stopGame);
     on("#btn-restart", "click", async () => { await stopGame(); setTimeout(play, 800); });
+    on("#btn-home", "click", () => selectInstance(null));
     on("#btn-create", "click", openCreate);
     on("#btn-import", "click", () => openAdd("modrinth"));
 
@@ -3888,6 +4038,11 @@
       state.settings = await api.settings();
     } catch { state.settings = { ...DEMO.settings }; }
     // Оформление из settings.json (как prefs в OmniPanel): тема и эффект клика.
+    state.customTheme = {
+      bg: (state.settings && state.settings.theme_bg) || CUSTOM_THEME_DEFAULT.bg,
+      accent: (state.settings && state.settings.theme_accent) || CUSTOM_THEME_DEFAULT.accent,
+      text: (state.settings && state.settings.theme_text) || CUSTOM_THEME_DEFAULT.text
+    };
     state.theme = applyTheme((state.settings && state.settings.theme) || "dark");
     state.fx = (state.settings && state.settings.click_fx) || "wave";
     applyClickFx(state.fx);

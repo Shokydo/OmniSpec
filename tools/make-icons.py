@@ -12,20 +12,22 @@
 
 Раньше мелкие размеры кропились (лицо «в упор») — на панели задач это
 выглядело как зум. Теперь наоборот: картинка вписывается с полями, чтобы
-иконка дышала и не липла к краям.
+иконка дышала и не липла к краям. Края скруглены (не круг) — как у иконок
+в панели задач Windows 11 и в самом интерфейсе.
 """
 
 from pathlib import Path
 
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "apps" / "omnispec-app"
 SOURCE = APP / "icon-source.jpg"
 # сколько места занимает картинка внутри квадрата иконки
-SCALE_TINY = 0.84          # 16–32 px: поля поменьше — иконка не «теряется» в панели задач
-SCALE_SMALL = 0.90         # 33–64 px
-SCALE_LARGE = 0.96         # всё, что крупнее
+SCALE_TINY = 0.90          # 16–32 px: поля поменьше — иконка не «теряется» в панели задач
+SCALE_SMALL = 0.95         # 33–64 px
+SCALE_LARGE = 1.00         # всё, что крупнее
+CORNER = 0.24              # радиус скругления, доля от размера иконки
 
 
 def scale_for(size: int) -> float:
@@ -55,6 +57,12 @@ def render(master: Image.Image, size: int) -> Image.Image:
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     offset = (size - inner) // 2
     canvas.paste(image.convert("RGBA"), (offset, offset))
+    # скругление: маска рисуется в 4× и уменьшается — края без «лестницы»
+    mask = Image.new("L", (size * 4, size * 4), 0)
+    draw = ImageDraw.Draw(mask)
+    radius = max(1, int(round(size * CORNER))) * 4
+    draw.rounded_rectangle([0, 0, size * 4 - 1, size * 4 - 1], radius=radius, fill=255)
+    canvas.putalpha(mask.resize((size, size), Image.LANCZOS))
     return canvas
 
 

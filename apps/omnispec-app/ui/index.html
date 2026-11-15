@@ -47,6 +47,7 @@
   <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6.4 9.4 5.6 5.6 5.6-5.6 1.4 1.4L12 17.8 5 10.8l1.4-1.4Z"/></symbol>
   <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 3v2H5v14h5v2H3V3h7Zm4.6 5.3L19.3 13l-4.7 4.7-1.4-1.4 2.3-2.3H8v-2h7.5l-2.3-2.3 1.4-1.4Z"/></symbol>
   <symbol id="i-user" viewBox="0 0 24 24"><path d="M12 3a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Zm0 9c4.4 0 8 2.3 8 5.2V21H4v-1.8C4 16.3 7.6 14 12 14Z"/></symbol>
+  <symbol id="i-eyedrop" viewBox="0 0 24 24"><path d="M16.6 2.6a2.5 2.5 0 0 1 3.5 0l1.3 1.3a2.5 2.5 0 0 1 0 3.5l-1.6 1.6-4.8-4.8 1.6-1.6ZM13.6 5.6 15 7l-8.4 8.4-.6 2.9-2.9.6.6-2.9L13.6 5.6Z"/></symbol>
   <symbol id="i-base" viewBox="0 0 24 24"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Zm0 2.2 5.6 2.8L12 10.8 6.4 8 12 5.2Z"/></symbol>
 </svg>
 
@@ -55,16 +56,7 @@
 <div class="app">
   <!-- ============ SIDEBAR ============ -->
   <aside class="sidebar">
-    <div class="brand">
-      <div class="brand-logo"><img src="assets/logo.png" alt="OmniSpec" draggable="false" /></div>
-      <div class="brand-text">
-        <div class="brand-name">OmniSpec</div>
-        <div class="brand-sub" id="brand-sub">профиль</div>
-      </div>
-      <button class="icon-btn" id="btn-global-settings" title="Настройки"><svg class="ic"><use href="#i-settings"/></svg></button>
-    </div>
-
-    <!-- профиль: активный аккаунт + выпадающий список всех аккаунтов -->
+    <!-- слева сверху — только профиль: активный аккаунт + выпадающий список -->
     <button class="account-chip" id="account-chip" aria-haspopup="true" aria-expanded="false">
       <span class="acc-avatar" id="account-chip-avatar"><svg class="ic"><use href="#i-user"/></svg></span>
       <span class="acc-main">
@@ -78,6 +70,7 @@
       <span class="section-title">СБОРКИ</span>
       <span class="badge" id="instances-count">0</span>
       <div class="spacer"></div>
+      <button class="icon-btn" id="btn-home" title="Главная"><svg class="ic"><use href="#i-house"/></svg></button>
       <button class="icon-btn" id="btn-grid" title="Вид"><svg class="ic"><use href="#i-grid"/></svg></button>
       <button class="icon-btn" id="btn-sort" title="Сортировка"><svg class="ic"><use href="#i-sort"/></svg></button>
     </div>
@@ -90,11 +83,6 @@
     <div class="instance-list" id="instance-list"></div>
 
     <div class="sidebar-foot">
-      <div class="btn-row">
-        <button class="btn btn-primary" id="btn-create"><svg class="ic"><use href="#i-plus"/></svg>Создать сборку</button>
-      </div>
-      <button class="btn btn-ghost" id="btn-import">+ Добавить существующую</button>
-
       <div class="active-row">
         <span class="muted">Запущено</span>
         <span id="active-count">0/0</span>
@@ -107,7 +95,6 @@
     <header class="titlebar" data-tauri-drag-region>
       <div class="tb-left" data-tauri-drag-region>
         <div class="tb-logo"><img src="assets/logo.png" alt="" draggable="false" /></div>
-        <span class="tb-brand">OmniSpec</span>
       </div>
       <div class="tb-center" data-tauri-drag-region id="tb-center">OmniSpec — лаунчер Minecraft</div>
       <div class="tb-right">
@@ -150,7 +137,7 @@
     </div>
 
     <nav class="tabs" id="tabs">
-      <button class="tab" data-tab="discover">Готовые сборки</button>
+      <button class="tab" data-tab="discover">Главная</button>
       <button class="tab is-active" data-tab="console">Консоль</button>
       <button class="tab" data-tab="files">Файлы</button>
       <button class="tab" data-tab="mods">Моды <span class="tab-badge" id="badge-mods" hidden>0</span></button>

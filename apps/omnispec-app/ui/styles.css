@@ -1860,3 +1860,186 @@ input, select, textarea, button { font-family: inherit; }
 .settings-row .flex-row, .settings-row .input, .settings-row .select { min-width: 0; }
 .settings-wrap { max-width: 100%; }
 .settings-row .flex-row > .btn { padding: 0 10px; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ЭТАП 9: главная страница, профиль в шапке, кастомная тема
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ---------- слева сверху только профиль: блок во всю ширину, к краю ---------- */
+.sidebar { padding: 0 10px 10px; }
+.account-chip {
+  width: calc(100% + 20px);
+  height: 54px;
+  margin: 0 -10px 10px;
+  padding: 0 12px;
+  gap: 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+.account-chip:hover { background: var(--bg-3); border-color: var(--line); }
+.account-chip .acc-avatar { width: 30px; height: 30px; border-radius: var(--r-sm); }
+.account-chip .acc-name { font-size: 12.5px; }
+.account-chip .acc-kind { font-size: 10px; letter-spacing: .2px; }
+body.has-wall .account-chip { background: var(--bg-3a); }
+.sidebar-foot { padding-top: 8px; }
+.sidebar-foot .btn { display: none; }
+
+/* иконка приложения в шапке окна: крупнее и круглее */
+.tb-logo {
+  width: 28px; height: 28px; flex: none;
+  border-radius: 9px; overflow: hidden;
+  display: grid; place-items: center;
+  background: var(--bg-3); border: 1px solid var(--line-2);
+}
+.tb-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.tb-left { gap: 8px; }
+
+/* иконка выбранной сборки в шапке сборки */
+.build-head .tb-icon { width: 28px; height: 28px; border-radius: 8px; }
+.build-head .tb-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.build-head .tb-icon .ic { width: 16px; height: 16px; color: var(--dim); }
+.build-head .tb-icon .tb-letter {
+  font-size: 12px; font-weight: 700; color: var(--dim);
+  letter-spacing: .3px; line-height: 1;
+}
+
+/* ---------- строка пути при включённом фоне: читаемая подложка ---------- */
+body.has-wall .build-path {
+  background: var(--bg-1a);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line-2);
+  color: var(--dim);
+}
+body.has-wall .toolbar,
+body.has-wall .tabs,
+body.has-wall .account-chip,
+body.has-wall .home-head,
+body.has-wall .home-feed-head {
+  background: var(--bg-1a);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+/* ---------- главная страница ---------- */
+.home { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.home-head {
+  flex: none;
+  display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap;
+  padding: var(--pad);
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+}
+.home-titles { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 3px; }
+.home-title { font-size: 13px; font-weight: 600; letter-spacing: .2px; color: var(--text); }
+.home-sub { font-size: 11px; color: var(--dim-2); }
+.home-actions { display: flex; align-items: center; gap: 6px; }
+.home-actions .btn { padding: 0 12px; min-width: 200px; justify-content: center; }
+
+.home-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.home-grid {
+  display: grid; gap: 8px;
+  padding: var(--pad);
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+}
+.home-card {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px; min-height: 52px;
+  text-align: left;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.home-card:hover { background: var(--bg-3); border-color: var(--line-2); }
+.home-card.is-active { border-color: var(--line-3); background: var(--bg-3); }
+.home-card-icon {
+  width: 34px; height: 34px; flex: none;
+  display: grid; place-items: center;
+  border-radius: var(--r-sm); overflow: hidden;
+  background: var(--bg-4); border: 1px solid var(--line-2);
+  color: var(--dim);
+}
+.home-card-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.home-card-icon .ic { width: 17px; height: 17px; }
+.home-card-icon .card-letter { font-size: 14px; font-weight: 700; }
+.home-card-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.home-card-name {
+  font-size: 12px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.home-card-sub { font-size: 10.5px; color: var(--dim-2); }
+.home-card-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex: none; }
+
+.home-feed-head {
+  display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap;
+  padding: 12px var(--pad) 0;
+  border-top: 1px solid var(--line);
+  margin-top: 2px;
+}
+.home-feed-head .home-title { flex: 1; min-width: 120px; }
+.home-tools { display: flex; align-items: center; gap: var(--gap); }
+.home-tools .search { width: 240px; height: var(--h-sm); margin-bottom: 0; }
+.home .modrinth-results { flex: none; min-height: 0; overflow: visible; padding-top: 10px; }
+body.has-wall .home-head, body.has-wall .home-feed-head { background: transparent; }
+
+/* ---------- профиль: строка «Добавить аккаунт» в размер обычной ---------- */
+.profile-list { display: flex; flex-direction: column; gap: 2px; }
+.profile-row-add {
+  width: 100%;
+  min-height: 42px;
+  margin-top: 4px;
+  border: 1px dashed var(--line-2);
+  background: transparent;
+  color: var(--dim-2);
+  text-align: left;
+}
+.profile-row-add:hover { border-color: var(--line-3); color: var(--text); background: var(--bg-3); }
+.profile-row-add .acc-name { color: var(--text); }
+.profile-row-add .acc-avatar { display: grid; place-items: center; }
+.profile-row-add .acc-avatar .ic { width: 13px; height: 13px; }
+
+/* иконки-кнопки в строке аккаунта: строго по центру */
+.profile-row .icon-btn,
+.acc-row .icon-btn {
+  display: grid; place-items: center;
+  width: 24px; height: 24px; flex: none;
+  padding: 0; border: 0; background: transparent;
+}
+.profile-row .icon-btn .ic,
+.acc-row .icon-btn .ic { width: 14px; height: 14px; display: block; }
+.profile-row .icon-btn:hover, .acc-row .icon-btn:hover { background: var(--bg-5); }
+
+/* ---------- кнопки-сегменты во всю ширину (как в OmniPanel) ---------- */
+.prefs-body .chips { display: flex; flex-wrap: nowrap; gap: 6px; width: 100%; }
+.prefs-body .chips .chip {
+  flex: 1 1 0; min-width: 0; height: var(--h);
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.prefs-body .theme-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+.prefs-label-row .btn { flex: 0 0 auto; min-width: 92px; justify-content: center; }
+.profile-active .profile-card { align-items: flex-start; flex-wrap: wrap; }
+.profile-active .profile-card-actions { width: 100%; }
+.profile-active .profile-card-actions .btn { flex: 1 1 0; }
+
+/* ---------- своя тема: выбор цвета ---------- */
+.color-field { display: flex; align-items: center; gap: 8px; }
+.color-field input[type="color"] {
+  width: 40px; height: var(--h-sm); flex: none;
+  padding: 2px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.color-field input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.color-field input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 4px; }
+.color-hex {
+  font-size: 11.5px; color: var(--dim);
+  min-width: 74px;
+  font-variant-numeric: tabular-nums;
+}
+.color-field .btn { flex: 0 0 auto; }

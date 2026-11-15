@@ -126,9 +126,18 @@ pub struct Settings {
     #[serde(default = "default_sound_volume")]
     pub sound_volume: u8,
 
-    /// Тема интерфейса (id пресета из OmniPanel: dark, navy, light, …).
+    /// Тема интерфейса (id пресета из OmniPanel: dark, navy, light, … + custom).
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Своя тема: цвет фона (только для theme = "custom").
+    #[serde(default)]
+    pub theme_bg: Option<String>,
+    /// Своя тема: цвет акцента.
+    #[serde(default)]
+    pub theme_accent: Option<String>,
+    /// Своя тема: цвет текста.
+    #[serde(default)]
+    pub theme_text: Option<String>,
     /// Эффект от клика: wave | dot | ring | cross | off.
     #[serde(default = "default_click_fx")]
     pub click_fx: String,
@@ -167,6 +176,9 @@ impl Default for Settings {
             sound_fx: true,
             sound_volume: default_sound_volume(),
             theme: default_theme(),
+            theme_bg: None,
+            theme_accent: None,
+            theme_text: None,
             click_fx: default_click_fx(),
         }
     }

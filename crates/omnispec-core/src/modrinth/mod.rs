@@ -36,9 +36,14 @@ impl Modrinth {
         if !query.project_type.trim().is_empty() {
             facets.push(vec![format!("project_type:{}", query.project_type)]);
         }
-        if let Some(loader) = &query.loader {
-            if !loader.trim().is_empty() && loader != "vanilla" {
-                facets.push(vec![format!("categories:{loader}")]);
+        // загрузчик (fabric/forge/…) имеет смысл только для модов и модпаков:
+        // у ресурспаков и шейдеров такого тега нет, и фильтр по нему возвращал моды
+        let loader_matters = matches!(query.project_type.trim(), "" | "mod" | "modpack");
+        if loader_matters {
+            if let Some(loader) = &query.loader {
+                if !loader.trim().is_empty() && loader != "vanilla" {
+                    facets.push(vec![format!("categories:{loader}")]);
+                }
             }
         }
         if let Some(game_version) = &query.game_version {
