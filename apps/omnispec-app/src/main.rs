@@ -1037,6 +1037,65 @@ fn open_in_file_manager(target: &Path) -> Result<(), String> {
     }
 }
 
+/// Свой фон: копируем картинку в данные лаунчера и запоминаем имя файла.
+#[tauri::command]
+fn set_custom_wallpaper(state: State<'_, AppState>, path: String) -> Result<Settings, String> {
+    let source = PathBuf::from(&path);
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+        return Err("подойдёт PNG, JPG или WebP".into());
+    }
+    let folder = state.paths.root.join("wallpapers");
+    std::fs::create_dir_all(&folder).map_err(err)?;
+    // старый свой фон убираем, чтобы не копился мусор
+    if let Ok(entries) = std::fs::read_dir(&folder) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("custom.") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    let file_name = format!("custom.{extension}");
+    std::fs::copy(&source, folder.join(&file_name))
+        .map_err(|error| format!("не скопировалась картинка: {error}"))?;
+
+    let mut settings = Settings::load(&state.paths).map_err(err)?;
+    settings.custom_wallpaper = Some(file_name);
+    settings.wallpaper = Some("custom".into());
+    settings.save(&state.paths).map_err(err)?;
+    Ok(settings)
+}
+
+/// Свой фон в виде data-URL (webview не читает локальные пути).
+#[tauri::command]
+fn custom_wallpaper(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let settings = Settings::load(&state.paths).map_err(err)?;
+    let Some(name) = settings.custom_wallpaper else {
+        return Ok(None);
+    };
+    let path = state.paths.root.join("wallpapers").join(&name);
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Ok(None);
+    };
+    let mime = match name.rsplit('.').next().unwrap_or("png").to_lowercase().as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        _ => "image/png",
+    };
+    Ok(Some(format!("data:{mime};base64,{}", base64_encode(&bytes))))
+}
+
+/// Где лежит сборка — строка «папка: …» в главном окне.
+#[tauri::command]
+fn instance_path(state: State<'_, AppState>, instance_id: String) -> Result<String, String> {
+    Ok(state.paths.instance_dir(&instance_id).display().to_string())
+}
+
 #[tauri::command]
 fn window_action(window: tauri::WebviewWindow, action: String) -> Result<(), String> {
     match action.as_str() {
@@ -1049,6 +1108,10 @@ fn window_action(window: tauri::WebviewWindow, action: String) -> Result<(), Str
             }
         }
         "close" => window.close(),
+        "fullscreen" => {
+            let full = window.is_fullscreen().unwrap_or(false);
+            window.set_fullscreen(!full)
+        }
         other => return Err(format!("неизвестное действие окна: {other}")),
     }
     .map_err(err)
@@ -1125,6 +1188,9 @@ fn main() {
             list_java,
             open_path,
             window_action,
+            set_custom_wallpaper,
+            custom_wallpaper,
+            instance_path,
             version_info,
             check_update,
             net_check,

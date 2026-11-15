@@ -81,6 +81,16 @@ pub async fn prepare(
     {
         effective_settings.java_path = Some(java_path.clone());
     }
+    // Для версий до 1.17 нужна Java 8: у неё свой путь в настройках.
+    if effective_settings.java_path.is_none() && resolved.java_major <= 8 {
+        if let Some(legacy) = effective_settings
+            .java_path_legacy
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            effective_settings.java_path = Some(legacy.clone());
+        }
+    }
     let java_install = java::find_java(
         http,
         paths,

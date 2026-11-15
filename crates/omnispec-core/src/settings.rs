@@ -38,6 +38,15 @@ fn default_wallpaper_fit() -> String {
     "cover".to_string()
 }
 
+/// Форма элементов интерфейса — как «ФОРМА ЭЛЕМЕНТОВ» в OmniPanel.
+fn default_shape() -> String {
+    "soft".to_string()
+}
+
+fn default_sound_volume() -> u8 {
+    60
+}
+
 fn default_update_repo() -> Option<String> {
     Some("Shokydo/OmniSpec".to_string())
 }
@@ -49,6 +58,8 @@ pub struct Settings {
     pub username: String,
     /// Путь к java(.exe). `None` — искать автоматически.
     pub java_path: Option<String>,
+    /// Отдельный путь к старой Java 8 — она нужна версиям игры до 1.17.
+    pub java_path_legacy: Option<String>,
     /// Выделенная память по умолчанию, МБ.
     pub memory_mb: u32,
     /// Дополнительные JVM-аргументы (как в Prism: «JVM arguments»).
@@ -115,6 +126,7 @@ impl Default for Settings {
         Self {
             username: default_username(),
             java_path: None,
+            java_path_legacy: None,
             memory_mb: default_memory(),
             jvm_args: default_jvm_args(),
             game_args: default_game_args(),
@@ -137,6 +149,10 @@ impl Default for Settings {
             update_enabled: true,
             update_token: None,
             update_prerelease: false,
+            shape: default_shape(),
+            custom_wallpaper: None,
+            sound_fx: true,
+            sound_volume: default_sound_volume(),
             theme: default_theme(),
             click_fx: default_click_fx(),
         }

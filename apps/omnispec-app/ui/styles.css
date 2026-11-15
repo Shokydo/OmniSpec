@@ -728,6 +728,42 @@ input, select, textarea { font: inherit; color: inherit; }
 .card-actions { display: flex; gap: 5px; margin-top: auto; padding-top: 7px; }
 .card-actions .btn { height: var(--h-sm); font-size: 11.5px; }
 
+/* ==================== ФОРМА ЭЛЕМЕНТОВ (как в OmniPanel) ==================== */
+body[data-shape="square"] { --r-xs: 0px; --r-sm: 0px; --r: 0px; --r-lg: 0px; }
+body[data-shape="soft"] { --r-xs: 4px; --r-sm: 6px; --r: 8px; --r-lg: 10px; }
+body[data-shape="rounded"] { --r-xs: 8px; --r-sm: 12px; --r: 16px; --r-lg: 20px; }
+body[data-shape="pill"] { --r-xs: 999px; --r-sm: 999px; --r: 999px; --r-lg: 999px; }
+
+/* ==================== СВОЙ ФОН, JAVA, ПУТЬ СБОРКИ ==================== */
+.wall-own { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.wall-own .wall-chip { width: 120px; height: 62px; }
+.java-list { display: flex; flex-wrap: wrap; gap: 5px; padding-top: 4px; }
+.link-chip {
+  height: var(--h-xs); padding: 0 8px;
+  font-size: 11px; color: var(--dim);
+  background: var(--bg-3); border: 1px solid var(--line);
+  border-radius: var(--r-xs); cursor: pointer;
+}
+.link-chip:hover { color: var(--text); border-color: var(--line-2); }
+
+.build-path {
+  flex: none;
+  display: flex; align-items: center; gap: 7px;
+  height: 26px; padding: 0 var(--pad);
+  background: var(--bg-2); border-bottom: 1px solid var(--line);
+  font-size: 11px; color: var(--dim-2);
+}
+.build-path .ic { width: 12px; height: 12px; }
+.build-path span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.build-path .icon-btn { width: 20px; height: 20px; }
+body.has-wall .build-path { background: transparent; }
+
+/* иконки приложения — крупнее в шапке и сайдбаре */
+.brand-logo { width: 34px; height: 34px; }
+.brand-logo img { width: 100%; height: 100%; object-fit: contain; }
+.tb-icon { width: 26px; height: 26px; }
+.tb-icon img { width: 100%; height: 100%; object-fit: contain; }
+
 /* ==================== ГОТОВЫЕ СБОРКИ В ГЛАВНОМ ОКНЕ ==================== */
 .discover { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .discover-head {
@@ -1251,7 +1287,10 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
   align-content: start;
 }
 .modrinth-results.is-grid .card { flex-direction: column; gap: 8px; }
-.modrinth-results.is-grid .card-icon { width: 100%; height: 96px; border-radius: var(--r-sm); }
+.modrinth-results.is-grid .card-icon {
+  width: 100%; height: auto; aspect-ratio: 1 / 1;
+  border-radius: var(--r-sm);
+}
 .modrinth-results.is-grid .card-body { width: 100%; }
 .modrinth-results.is-grid .card-desc {
   display: -webkit-box;
@@ -1452,3 +1491,34 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
 .flex-row > .input,
 .flex-row > .select { flex: 1 1 auto; min-width: 0; width: auto; }
 .flex-row > .btn { flex: 0 0 auto; }
+
+/* ==================== КАРТОЧКИ ТЕМ (как в OmniPanel) ==================== */
+.theme-grid .theme-chip {
+  display: flex; flex-direction: column; align-items: stretch; gap: 0;
+  height: auto; min-width: 0;
+  padding: 0; overflow: hidden;
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.theme-grid .theme-chip:hover { background: var(--bg-2); border-color: var(--line-2); }
+.theme-grid .theme-swatch {
+  position: relative; display: block; height: 44px; width: 100%;
+  border: 0; border-bottom: 1px solid var(--line);
+}
+.theme-grid .theme-band {
+  position: absolute; left: 10px; top: 10px; width: 52%; height: 8px;
+  border-radius: var(--r-xs);
+}
+.theme-grid .theme-accent {
+  position: absolute; right: 10px; top: 10px; width: 22%; height: 8px;
+  border-radius: var(--r-xs);
+}
+.theme-grid .theme-name {
+  display: block; padding: 6px 8px; text-align: center;
+  font-size: 11px; color: var(--dim); background: var(--bg-3);
+}
+.theme-grid .theme-chip.is-active { border-color: var(--text); }
+.theme-grid .theme-chip.is-active .theme-name { color: var(--text); }
+.theme-grid { grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
+
+

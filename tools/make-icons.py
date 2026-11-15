@@ -23,9 +23,9 @@ ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "apps" / "omnispec-app"
 SOURCE = APP / "icon-source.jpg"
 # сколько места занимает картинка внутри квадрата иконки
-SCALE_TINY = 0.74          # 16–32 px: сильнее поля, иначе лицо «в упор»
-SCALE_SMALL = 0.80         # 33–64 px
-SCALE_LARGE = 0.88         # всё, что крупнее
+SCALE_TINY = 0.84          # 16–32 px: поля поменьше — иконка не «теряется» в панели задач
+SCALE_SMALL = 0.90         # 33–64 px
+SCALE_LARGE = 0.96         # всё, что крупнее
 
 
 def scale_for(size: int) -> float:

@@ -131,9 +131,13 @@
         <button class="icon-btn lg" id="btn-restart" title="Перезапустить"><svg class="ic"><use href="#i-restart"/></svg></button>
         <button class="btn btn-play" id="btn-play"><svg class="ic"><use href="#i-play"/></svg><span>Играть</span></button>
         <button class="btn btn-stop" id="btn-stop" title="Остановить"><svg class="ic"><use href="#i-stop"/></svg><span>Стоп</span></button>
-        <button class="icon-btn lg" id="btn-tab-settings" title="Настройки этой сборки"><svg class="ic"><use href="#i-sliders"/></svg></button>
         <button class="icon-btn lg accent" id="btn-launcher-settings" title="Настройки лаунчера"><svg class="ic"><use href="#i-settings"/></svg></button>
       </div>
+    </div>
+
+    <div class="build-path" id="build-path" hidden>
+      <svg class="ic"><use href="#i-folder"/></svg><span>папка сборки</span>
+      <button class="icon-btn" id="build-path-copy" title="Скопировать путь"><svg class="ic"><use href="#i-copy"/></svg></button>
     </div>
 
     <nav class="tabs" id="tabs">
@@ -145,7 +149,6 @@
       <button class="tab" data-tab="worlds">Миры</button>
       <button class="tab" data-tab="modrinth">Modrinth</button>
       <button class="tab" data-tab="settings">Сборка</button>
-      <button class="tab" data-tab="about">О лаунчере</button>
       <div class="tabs-fill"></div>
       <div class="progress" id="progress" hidden>
         <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
@@ -236,8 +239,9 @@
   <div class="modal prefs-box">
     <header class="modal-head">
       <h2>Настройки лаунчера</h2>
+      <button class="btn btn-ghost" id="prefs-reset">Сбросить всё</button>
       <div class="spacer"></div>
-      <button class="btn btn-primary" id="prefs-save">Сохранить</button>
+      <button class="btn btn-primary" id="prefs-save">Готово</button>
       <button class="icon-btn" data-close-prefs title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
     </header>
     <div class="prefs">

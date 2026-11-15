@@ -120,6 +120,57 @@
     ["stripes", "Полосы"], ["grid", "Сетка"], ["dots", "Точки"], ["noise", "Шум"]
   ];
 
+  /* Форма элементов — как «ФОРМА ЭЛЕМЕНТОВ» в OmniPanel. */
+  const SHAPES = [
+    ["square", "Квадратные"],
+    ["soft", "Мягкие"],
+    ["rounded", "Закруглённые"],
+    ["pill", "Таблетки"]
+  ];
+
+  function applyShape(name) {
+    const known = SHAPES.some(([id]) => id === name);
+    state.shape = known ? name : "soft";
+    document.body.dataset.shape = state.shape;
+    return state.shape;
+  }
+
+  /* Короткие звуки интерфейса на WebAudio — без файлов и зависимостей. */
+  const sfx = (() => {
+    let ctx = null;
+    function ensure() {
+      if (!state.sound || !state.sound.on) return null;
+      if (!ctx) {
+        const Ctor = window.AudioContext || window.webkitAudioContext;
+        if (!Ctor) return null;
+        ctx = new Ctor();
+      }
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      return ctx;
+    }
+    function blip(freq, duration = 0.05, gain = 0.04, type = "sine") {
+      const audio = ensure();
+      if (!audio) return;
+      const volume = Math.max(0, Math.min(100, Number(state.sound.volume ?? 60))) / 100;
+      if (volume <= 0) return;
+      const osc = audio.createOscillator();
+      const amp = audio.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      amp.gain.value = gain * volume;
+      amp.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + duration);
+      osc.connect(amp).connect(audio.destination);
+      osc.start();
+      osc.stop(audio.currentTime + duration);
+    }
+    return {
+      click: () => blip(520, 0.045, 0.05, "triangle"),
+      toggle: (on) => blip(on ? 760 : 400, 0.05, 0.045, "sine"),
+      open: () => blip(640, 0.06, 0.04, "sine"),
+      error: () => blip(240, 0.12, 0.06, "sawtooth")
+    };
+  })();
+
   function wallUrl(name) {
     return name === "noise" ? "assets/wallpapers/noise.jpg" : `assets/wallpapers/${name}.png`;
   }
@@ -133,7 +184,7 @@
     const fit = overrides.fit || settings.wallpaper_fit || "cover";
     const blur = Number(overrides.blur ?? settings.wallpaper_blur ?? 0);
     const dim = Number(overrides.dim ?? settings.wallpaper_dim ?? 40);
-    const known = name && WALLS.some(([id]) => id === name);
+    const known = name === "custom" ? Boolean(state.customWall) : name && WALLS.some(([id]) => id === name);
     if (!known) {
       layer.hidden = true;
       layer.style.backgroundImage = "";
@@ -141,7 +192,7 @@
       return;
     }
     layer.hidden = false;
-    layer.style.backgroundImage = `url("${wallUrl(name)}")`;
+    layer.style.backgroundImage = `url("${name === "custom" ? state.customWall : wallUrl(name)}")`;
     layer.style.backgroundSize = fit === "fill" ? "100% 100%" : fit === "contain" ? "contain" : fit === "tile" ? "auto" : "cover";
     layer.style.backgroundRepeat = fit === "tile" ? "repeat" : "no-repeat";
     layer.style.filter = blur ? `blur(${blur}px)` : "";
@@ -373,6 +424,7 @@
     const layer = $("#fx-layer");
     if (!layer) return;
     window.addEventListener("pointerdown", (event) => {
+      if (event.target.closest("button, .instance, .tab, .theme-chip, .chip, .wall-chip")) sfx.click();
       const style = document.body.dataset.fx || "wave";
       if (style === "off" || document.body.classList.contains("no-fx")) return;
       const effect = document.createElement("span");
@@ -460,6 +512,9 @@
     instanceIcon: (instanceId) => invoke("instance_icon", { instanceId }),
     copyInstanceFile: (instanceId, path, sub) => invoke("copy_instance_file", { instanceId, path, sub }),
     startupFile: () => invoke("startup_file"),
+    setCustomWallpaper: (path) => invoke("set_custom_wallpaper", { path }),
+    customWallpaper: () => invoke("custom_wallpaper"),
+    instancePath: (instanceId) => invoke("instance_path", { instanceId }),
     openUrl: (url) => invoke("open_url", { url })
   };
 
@@ -585,6 +640,9 @@
     instanceIcon: async () => null,
     copyInstanceFile: async (_id, path) => String(path).split(/[\\/]/).pop(),
     startupFile: async () => null,
+    setCustomWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
+    customWallpaper: async () => null,
+    instancePath: async (id) => `demo/instances/${id}`,
     openUrl: async (url) => { window.open(url, "_blank"); return null; },
     onProgress: () => Promise.resolve(),
     onLog: () => Promise.resolve(),
@@ -619,6 +677,9 @@
     update: { info: null, version: "0.1.0", repo: null, enabled: true, checking: false, installing: false },
     theme: "dark",
     fx: "wave",
+    shape: "soft",
+    customWall: null,
+    sound: { on: true, volume: 60 },
     add: { mode: "modrinth", query: "", packs: [], selected: null, path: "", url: "", loading: false },
     create: { mode: "manual", name: "", mc: "", loader: "fabric", loaderVersion: "", versions: [], loaderVersionsList: [], packQuery: "", packs: [], selectedPack: null }
   };
@@ -680,7 +741,7 @@
     consoleEl.innerHTML = "";
     list.forEach((entry, index) => appendLogLine(index, entry));
     if (!list.length) {
-      consoleEl.innerHTML = `<div class="empty-state">Выбери сборку и нажми «Играть» — лог появится здесь</div>`;
+      consoleEl.innerHTML = `<div class="empty-state">Лог пуст</div>`;
     }
   }
 
@@ -737,6 +798,15 @@
     const pill = $("#loader-pill");
     pill.hidden = !meta;
     pill.textContent = meta ? loaderLabel(meta.loader) : "";
+    const pathbar = $("#build-path");
+    if (pathbar) {
+      pathbar.hidden = !meta;
+      if (meta) {
+        api.instancePath(meta.id)
+          .then((path) => { pathbar.querySelector("span").textContent = path; })
+          .catch(() => { pathbar.querySelector("span").textContent = "папка сборки"; });
+      }
+    }
     updateStatus();
     renderTab();
   }
@@ -775,7 +845,7 @@
     const body = $("#tab-body");
     const meta = selected();
     // без выбранной сборки вкладки, которым нужна сборка, показывают ленту
-    if (!meta && !["discover", "modrinth", "settings", "about"].includes(state.tab)) state.tab = "discover";
+    if (!meta && !["discover", "modrinth", "settings"].includes(state.tab)) state.tab = "discover";
     $$(".tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.tab));
 
     if (!meta) {
@@ -783,7 +853,6 @@
       // подставляем сами: любую сборку пользователь выбирает осознанно.
       if (state.tab === "modrinth") return renderModrinth();
       if (state.tab === "settings") return renderSettings();
-      if (state.tab === "about") return renderAbout();
       return renderDiscover();
     }
 
@@ -796,7 +865,6 @@
       case "worlds": return renderWorlds();
       case "modrinth": return renderModrinth();
       case "settings": return renderSettings();
-      case "about": return renderAbout();
     }
   }
 
@@ -1286,7 +1354,6 @@
         <div class="discover-head">
           <div class="discover-titles">
             <div class="discover-title">Готовые сборки</div>
-            <div class="discover-sub">Модпаки с Modrinth. Листай — лента догружается сама, ставится в один клик.</div>
           </div>
           <div class="discover-tools">
             <label class="search">
@@ -1752,7 +1819,6 @@
           <label>Ник в игре (3–16 символов, латиница, цифры, «_»)</label>
           <input class="input" id="acc-username" placeholder="Steve" spellcheck="false" autocomplete="off">
         </div>
-        <div class="settings-note">Лицензия не нужна: UUID считается из ника, как в самой игре.</div>
         <div class="modal-actions">
           <button class="btn btn-ghost" data-back>Назад</button>
           <button class="btn btn-primary" id="acc-add-offline">Добавить</button>
@@ -1873,12 +1939,12 @@
   /* ==================== НАСТРОЙКИ ЛАУНЧЕРА (по категориям) ==================== */
   const PREFS = [
     { id: "look", label: "Оформление" },
-    { id: "wall", label: "Обои" },
+    { id: "wall", label: "Фон" },
     { id: "fx", label: "Эффекты" },
+    { id: "sound", label: "Звуки" },
     { id: "game", label: "Игра и Java" },
     { id: "net", label: "Сеть" },
-    { id: "updates", label: "Обновления" },
-    { id: "about", label: "О лаунчере" }
+    { id: "updates", label: "Обновления" }
   ];
   let prefsCategory = "look";
 
@@ -1917,22 +1983,29 @@
     if (prefsCategory === "game") body.innerHTML = prefsGame(settings);
     if (prefsCategory === "net") body.innerHTML = prefsNet(settings);
     if (prefsCategory === "updates") body.innerHTML = prefsUpdates(settings);
-    if (prefsCategory === "about") body.innerHTML = prefsAbout();
+    if (prefsCategory === "sound") body.innerHTML = prefsSound(settings);
     bindPrefs();
   }
 
   function prefsLook(settings) {
     return `
       <div class="prefs-section">
-        <div class="prefs-label">Тема</div>
+        <div class="prefs-label">Тема оформления</div>
         <div class="theme-grid" id="theme-grid">
           ${Object.entries(THEMES).map(([id, theme]) => `
             <button class="theme-chip ${state.theme === id ? "is-active" : ""}" data-theme-id="${id}" title="${esc(theme.label)}">
-              <span class="theme-swatch" style="background:${theme.bg};border-color:${theme.panel}">
-                <span style="position:absolute;left:3px;top:3px;width:12px;height:12px;border-radius:4px;background:${theme.accent}"></span>
+              <span class="theme-swatch" style="background:${theme.bg}">
+                <span class="theme-band" style="background:${theme.panel}"></span>
+                <span class="theme-accent" style="background:${theme.accent}"></span>
               </span>
               <span class="theme-name">${esc(theme.label)}</span>
             </button>`).join("")}
+        </div>
+      </div>
+      <div class="prefs-section">
+        <div class="prefs-label">Форма элементов</div>
+        <div class="chips" id="shape-chips">
+          ${SHAPES.map(([id, label]) => `<button class="chip ${state.shape === id ? "is-active" : ""}" data-shape="${id}">${label}</button>`).join("")}
         </div>
       </div>`;
   }
@@ -1959,6 +2032,13 @@
           <span class="prefs-label">Обои</span>
           <div class="spacer"></div>
           <button class="wall-none ${!state.wall.wallpaper ? "is-active" : ""}" data-wall="">Убрать фон</button>
+        </div>
+        <div class="wall-own">
+          <button class="wall-chip ${state.wall.wallpaper === "custom" ? "is-active" : ""}" data-wall="custom"
+                  ${state.customWall ? `style="background-image:url('${state.customWall}')"` : ""}>
+            <span>${state.customWall ? "Свой фон" : "Свой фон…"}</span>
+          </button>
+          <button class="btn" id="wall-pick">${state.customWall ? "Заменить картинку…" : "Выбрать картинку…"}</button>
         </div>
         ${groups.map((group) => `
           <div class="wall-group">
@@ -1990,9 +2070,7 @@
             <div class="range"><input type="range" id="wall-dim" min="0" max="80" value="${state.wall.dim}"><span class="tag" id="wall-dim-value">${state.wall.dim}%</span></div>
           </div>
         </div>
-        <div class="settings-note" style="margin-bottom:0">
-          История обоев хранится в настройках: последние шесть выбранных всегда под рукой.
-        </div>
+
       </div>`;
   }
 
@@ -2002,6 +2080,32 @@
         <div class="prefs-label">Эффект от клика</div>
         <div class="chips" id="fx-chips">
           ${Object.entries(FX_STYLES).map(([id, label]) => `<button class="chip ${state.fx === id ? "is-active" : ""}" data-fx="${id}">${label}</button>`).join("")}
+        </div>
+      </div>`;
+  }
+
+  function prefsSound(settings) {
+    return `
+      <div class="prefs-section">
+        <div class="prefs-label">Звуковые эффекты</div>
+        <div class="prefs-rows">
+          <div class="settings-row">
+            <div class="label">Звуки интерфейса</div>
+            <div><div class="switch-row"><button class="switch ${state.sound.on ? "on" : ""}" id="set-sound"></button><span class="muted">щелчки и переключатели</span></div></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Громкость</div>
+            <div class="range">
+              <input type="range" id="set-sound-volume" min="0" max="100" step="5" value="${state.sound.volume}">
+              <span class="tag" id="set-sound-volume-value">${state.sound.volume}%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="prefs-section">
+        <div class="prefs-label">Проверка</div>
+        <div class="settings-actions">
+          <button class="btn" id="sound-test">Прослушать</button>
         </div>
       </div>`;
   }
@@ -2019,14 +2123,22 @@
             </div>
           </div>
           <div class="settings-row">
-            <div class="label">Путь к Java</div>
-            <div>
-              <div class="flex-row">
-                <input class="input grow" id="set-java" placeholder="автоматически (рекомендуется)" value="${esc(settings.java_path || "")}" spellcheck="false">
-                <button class="btn" id="set-java-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать…</button>
-              </div>
-              <div class="hint" id="set-java-hint">ищем установленные Java…</div>
+            <div class="label">Java (новая)</div>
+            <div class="flex-row">
+              <input class="input grow" id="set-java" placeholder="автоматически" value="${esc(settings.java_path || "")}" spellcheck="false">
+              <button class="btn" id="set-java-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать…</button>
             </div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Java 8 (для версий до 1.17)</div>
+            <div class="flex-row">
+              <input class="input grow" id="set-java-legacy" placeholder="автоматически" value="${esc(settings.java_path_legacy || "")}" spellcheck="false">
+              <button class="btn" id="set-java-legacy-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать…</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Найденные Java</div>
+            <div class="java-list" id="java-found"><span class="muted">поиск…</span></div>
           </div>
           <div class="settings-row">
             <div class="label">JVM-аргументы</div>
@@ -2096,18 +2208,6 @@
       </div>`;
   }
 
-  function prefsAbout() {
-    return `
-      <div class="prefs-section">
-        <div class="prefs-label">OmniSpec</div>
-        <div class="about-list" style="padding-left:0;margin:0;list-style:none">
-          <div>Версия: <span id="prefs-version" class="kbd">—</span></div>
-          <div style="margin-top:6px">Сборки, моды и модпаки с Modrinth, автоматическая Java, офлайн и лицензионные аккаунты.</div>
-          <div style="margin-top:6px"><button class="btn" id="prefs-open-data">Открыть папку данных</button></div>
-        </div>
-      </div>`;
-  }
-
   /* обработчики для всех категорий сразу — их немного */
   function bindPrefs() {
     const settings = state.settings || {};
@@ -2121,6 +2221,37 @@
       applyClickFx(state.fx);
       $$("#fx-chips .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
     }));
+    $$("#shape-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
+      applyShape(chip.dataset.shape);
+      $$("#shape-chips .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+    }));
+    const wallPick = $("#wall-pick");
+    if (wallPick) wallPick.addEventListener("click", async () => {
+      const path = await api.pickFile("Свой фон", ["png", "jpg", "jpeg", "webp"]).catch(() => null);
+      if (!path) return;
+      try {
+        const updated = await api.setCustomWallpaper(path);
+        state.settings = updated;
+        state.customWall = await api.customWallpaper().catch(() => null);
+        state.wall.wallpaper = "custom";
+        applyWallpaper(state.wall);
+        renderPrefs();
+      } catch (err) { toast(String(err), "err"); }
+    });
+    const soundSwitch = $("#set-sound");
+    if (soundSwitch) soundSwitch.addEventListener("click", () => {
+      state.sound.on = !state.sound.on;
+      soundSwitch.classList.toggle("on", state.sound.on);
+      if (state.sound.on) sfx.toggle(true);
+    });
+    const soundVolume = $("#set-sound-volume");
+    if (soundVolume) soundVolume.addEventListener("input", (event) => {
+      state.sound.volume = Number(event.target.value);
+      $("#set-sound-volume-value").textContent = `${state.sound.volume}%`;
+    });
+    if (soundVolume) soundVolume.addEventListener("change", () => sfx.click());
+    const soundTest = $("#sound-test");
+    if (soundTest) soundTest.addEventListener("click", () => { sfx.open(); setTimeout(() => sfx.toggle(true), 120); });
 
     $$("#prefs-body [data-wall]").forEach((chip) => chip.addEventListener("click", () => {
       const picked = chip.dataset.wall || null;
@@ -2180,18 +2311,39 @@
       const picked = await api.pickFile("Выбери java.exe / javaw.exe / java", ["exe", ""]).catch(() => null);
       if (picked) { $("#set-java").value = picked; toast("Путь к Java выбран — не забудь сохранить", "ok"); }
     });
-    const javaHint = $("#set-java-hint");
-    if (javaHint) {
+    const javaLegacyPick = $("#set-java-legacy-pick");
+    if (javaLegacyPick) javaLegacyPick.addEventListener("click", async () => {
+      const picked = await api.pickFile("Java 8 (для старых версий)", ["exe", ""]).catch(() => null);
+      if (picked) $("#set-java-legacy").value = picked;
+    });
+    const javaFound = $("#java-found");
+    if (javaFound) {
       api.javas().then((list) => {
-        javaHint.textContent = list.length
-          ? `Найдено: ${list.map((item) => `Java ${item.major}`).join(", ")}`
-          : "не найдено — лаунчер скачает рантайм Mojang";
-      }).catch(() => { javaHint.textContent = ""; });
+        javaFound.innerHTML = list.length
+          ? list.map((item) => `<button class="link-chip" data-java="${esc(item.path)}">Java ${item.major}</button>`).join("")
+          : `<span class="muted">не найдено</span>`;
+        $$("#java-found [data-java]").forEach((chip) => chip.addEventListener("click", () => {
+          const target = $("#set-java");
+          if (target) target.value = chip.dataset.java;
+        }));
+      }).catch(() => { javaFound.innerHTML = ""; });
     }
 
     // сохранение общих настроек
     const save = $("#prefs-save");
     if (save) save.addEventListener("click", saveLauncherSettings);
+    const reset = $("#prefs-reset");
+    if (reset) reset.addEventListener("click", () => {
+      if (!confirm("Сбросить оформление, фон, звук и Java к значениям по умолчанию?")) return;
+      state.theme = applyTheme("dark");
+      applyShape("soft");
+      state.fx = "wave";
+      applyClickFx(state.fx);
+      state.wall = { wallpaper: null, fit: "cover", blur: 0, dim: 40, recent: [] };
+      state.sound = { on: true, volume: 60 };
+      applyWallpaper(state.wall);
+      renderPrefs();
+    });
   }
 
   async function saveLauncherSettings() {
@@ -2202,6 +2354,7 @@
       ...settings,
       memory_mb: value("#set-memory") !== undefined ? Number(value("#set-memory")) : settings.memory_mb,
       java_path: value("#set-java") !== undefined ? (value("#set-java").trim() || null) : settings.java_path,
+      java_path_legacy: value("#set-java-legacy") !== undefined ? (value("#set-java-legacy").trim() || null) : settings.java_path_legacy,
       jvm_args: value("#set-jvm") !== undefined ? value("#set-jvm") : settings.jvm_args,
       auto_java: flag("#set-auto-java", settings.auto_java),
       proxy: value("#set-proxy") !== undefined ? (value("#set-proxy").trim() || null) : settings.proxy,
@@ -2211,6 +2364,9 @@
       update_enabled: flag("#set-upd-enabled", settings.update_enabled),
       update_prerelease: flag("#set-upd-pre", settings.update_prerelease),
       theme: state.theme,
+      shape: state.shape,
+      sound_fx: state.sound.on,
+      sound_volume: state.sound.volume,
       click_fx: state.fx,
       wallpaper: state.wall.wallpaper,
       wallpaper_fit: state.wall.fit,
@@ -2270,13 +2426,20 @@
               </div>
               <div class="settings-row">
                 <div class="label">Память, МБ</div>
-                <div><input class="input" id="inst-memory" type="number" min="512" step="256" style="width:160px" placeholder="как в общих (${state.settings && state.settings.memory_mb || 4096})" value="${meta.memory_mb ?? ""}"></div>
+                <div class="range">
+                  <input type="range" id="inst-memory" min="512" max="32768" step="256" value="${meta.memory_mb ?? ((state.settings && state.settings.memory_mb) || 4096)}">
+                  <span class="tag" id="inst-memory-value">${meta.memory_mb ?? ((state.settings && state.settings.memory_mb) || 4096)} МБ</span>
+                </div>
               </div>
               <div class="settings-row">
                 <div class="label">Java для этой сборки</div>
-                <div>
-                  <input class="input" id="inst-java" style="width:100%" placeholder="как в общих" value="${esc(meta.java_path || "")}" spellcheck="false">
-                  <div class="hint">Найдено: ${javas.length ? javas.map((item) => `Java ${item.major}`).join(", ") : "нет"}</div>
+                <div class="flex-row">
+                  <select class="select grow" id="inst-java">
+                    <option value="" ${!meta.java_path ? "selected" : ""}>автоматически</option>
+                    ${javas.map((item) => `<option value="${esc(item.path)}" ${meta.java_path === item.path ? "selected" : ""}>Java ${item.major} — ${esc(item.path)}</option>`).join("")}
+                    ${meta.java_path && !javas.some((item) => item.path === meta.java_path) ? `<option value="${esc(meta.java_path)}" selected>${esc(meta.java_path)}</option>` : ""}
+                  </select>
+                  <button class="btn" id="inst-java-pick"><svg class="ic"><use href="#i-folder"/></svg>Файл…</button>
                 </div>
               </div>
               <div class="settings-row">
@@ -2302,7 +2465,6 @@
           <div class="panel">
             <div class="panel-head"><strong>Лаунчер</strong><div class="spacer"></div><span class="muted" style="font-size:11px">общие настройки</span></div>
             <div style="padding:14px">
-              <div class="settings-note">Тема, обои, Java по умолчанию, сеть и обновления — в настройках лаунчера.</div>
               <div class="settings-actions">
                 <button class="btn" id="open-launcher-prefs">Настройки лаунчера</button>
               </div>
@@ -2315,6 +2477,21 @@
       $$("#inst-icons .icon-chip").forEach((el) => el.classList.toggle("is-active", el === chip));
     }));
     $("#open-launcher-prefs").addEventListener("click", () => openPrefs());
+    const memorySlider = $("#inst-memory");
+    if (memorySlider) memorySlider.addEventListener("input", (event) => {
+      $("#inst-memory-value").textContent = `${event.target.value} МБ`;
+    });
+    const javaPick = $("#inst-java-pick");
+    if (javaPick) javaPick.addEventListener("click", async () => {
+      const picked = await api.pickFile("Java для сборки", ["exe", ""]).catch(() => null);
+      if (!picked) return;
+      const select = $("#inst-java");
+      const option = document.createElement("option");
+      option.value = picked;
+      option.textContent = picked;
+      option.selected = true;
+      select.appendChild(option);
+    });
     const iconFile = $("#inst-icon-file");
     if (iconFile) iconFile.addEventListener("click", async () => {
       const path = await api.pickFile("Иконка сборки", ["png", "jpg", "jpeg", "webp"]).catch(() => null);
@@ -2369,26 +2546,6 @@
       case "neoforge": return `neoforge-${loader.version}`;
       default: return meta.mc_version;
     }
-  }
-
-  function renderAbout() {
-    $("#tab-body").innerHTML = `
-      <div class="about-wrap">
-        <div class="about-card">
-          <h3>OmniSpec 0.1.0</h3>
-          <p>Лаунчер Minecraft для нелицензионных аккаунтов: свои сборки, моды и модпаки с Modrinth, автоматическая Java и запуск «в один клик». Написан на Rust (ядро) + Tauri (интерфейс).</p>
-          <ul class="about-list">
-            <li>Офлайн-аккаунты, UUID как в игре</li>
-            <li>Vanilla, Fabric, Quilt, Forge, NeoForge</li>
-            <li>Установка модов и модпаков (.mrpack) с Modrinth</li>
-            <li>Скачивание рантайма Java с серверов Mojang</li>
-            <li>Отдельная папка и настройки для каждой сборки</li>
-          </ul>
-          <p style="margin-top:12px">
-            <span class="kbd">Ctrl+R</span> обновить список · <span class="kbd">Ctrl+L</span> очистить консоль · <span class="kbd">Enter</span> играть
-          </p>
-        </div>
-      </div>`;
   }
 
   /* ==================== ОБНОВЛЕНИЯ ==================== */
@@ -2845,6 +3002,12 @@
     on("#btn-launcher-settings", "click", () => openPrefs());
     on("#btn-global-settings", "click", () => openPrefs());
     on("[data-close-prefs]", "click", () => { $("#modal-prefs").hidden = true; });
+    on("#build-path-copy", "click", async () => {
+      const text = ($("#build-path span") || {}).textContent || "";
+      if (!text) return;
+      try { await navigator.clipboard.writeText(text); toast("Путь скопирован", "ok"); }
+      catch { toast("Не удалось скопировать", "err"); }
+    });
     on("[data-close-acc]", "click", () => { $("#modal-account").hidden = true; });
     on("[data-close-versions]", "click", () => { $("#modal-versions").hidden = true; });
     on("[data-close-prompt]", "click", () => { const modal = $("#modal-prompt"); if (modal) modal.hidden = true; });
@@ -2856,7 +3019,6 @@
     if (accModal) accModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-account") accModal.hidden = true; });
 
     on("#btn-folder", "click", () => { const meta = selected(); if (meta) api.openPath(`/instances/${meta.id}/minecraft`).catch(() => {}); });
-    on("#btn-tab-settings", "click", () => { state.tab = "settings"; renderTab(); });
     on("#btn-grid", "click", () => toast("Сетка появится в следующей версии"));
     on("#btn-sort", "click", () => {
       state.instances.sort((a, b) => a.name.localeCompare(b.name));
@@ -2905,6 +3067,11 @@
         if (prompt) prompt.hidden = true;
         closeCtxMenu();
       }
+      if (event.key === "F11") {
+        event.preventDefault();
+        api.window("fullscreen").catch(() => {});
+        return;
+      }
       if (event.key === "Enter" && !event.target.matches("input, select, textarea") && $("#modal-create").hidden) play();
     });
   }
@@ -2946,6 +3113,14 @@
     state.theme = applyTheme((state.settings && state.settings.theme) || "dark");
     state.fx = (state.settings && state.settings.click_fx) || "wave";
     applyClickFx(state.fx);
+    applyShape((state.settings && state.settings.shape) || "soft");
+    state.sound = {
+      on: state.settings && state.settings.sound_fx !== false,
+      volume: Number((state.settings && state.settings.sound_volume) ?? 60)
+    };
+    if (state.settings && state.settings.wallpaper === "custom") {
+      state.customWall = await api.customWallpaper().catch(() => null);
+    }
     applyWallpaper();
     await loadAccounts();
     bindFileDrop();
@@ -2969,7 +3144,7 @@
       } catch (error) { /* без аргументов — обычный запуск */ }
     }
     if (!IS_APP) {
-      toast("Демо-режим: интерфейс без бэкенда. Запусти cargo run — заработает всё.", "");
+      /* демо-режим без бэкенда — тихо */
     }
   }
 
