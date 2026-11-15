@@ -56,6 +56,36 @@ jobs:
           }
           "Установщик: $([math]::Round($setup.Length / 1MB, 1)) МБ (лаунчер $([math]::Round($app.Length / 1MB, 1)) МБ)"
 
+      - name: Проверка иконки установщика
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          $exe = (Resolve-Path target/release/omnispec-setup.exe).Path
+          $info = (Get-Item $exe).VersionInfo
+          if ($info.ProductName -ne "OmniSpec") {
+            throw "в OmniSpec-Setup.exe нет секции ресурсов (ProductName='$($info.ProductName)')"
+          }
+          $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($exe)
+          if ($null -eq $icon) { throw "у OmniSpec-Setup.exe нет иконки" }
+          $got = $icon.ToBitmap()
+          $got.Save("$PWD/setup-icon.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          # сверяем с тем, что нарисовал tools/make-icons.py
+          $want = [System.Drawing.Bitmap]::FromFile((Resolve-Path "apps/omnispec-app/icons/32x32.png").Path)
+          if ($got.Width -ne $want.Width -or $got.Height -ne $want.Height) {
+            throw "иконка $($got.Width)x$($got.Height), ожидалась $($want.Width)x$($want.Height)"
+          }
+          $diff = 0.0
+          for ($y = 0; $y -lt $got.Height; $y++) {
+            for ($x = 0; $x -lt $got.Width; $x++) {
+              $a = $got.GetPixel($x, $y); $b = $want.GetPixel($x, $y)
+              $diff += [math]::Abs($a.R - $b.R) + [math]::Abs($a.G - $b.G) + [math]::Abs($a.B - $b.B)
+            }
+          }
+          $diff = $diff / ($got.Width * $got.Height * 3)
+          "Среднее расхождение с icons/32x32.png: $([math]::Round($diff, 2))"
+          if ($diff -gt 12) { throw "иконка в установщике не совпадает с icons/32x32.png ($diff)" }
+          "Иконка на установщике: $($got.Width)x$($got.Height), FileVersion=$($info.FileVersion)"
+
       - name: Подготовить артефакты
         shell: pwsh
         run: |
@@ -68,6 +98,12 @@ jobs:
           "$hash  OmniSpec.exe" | Out-File -Encoding ascii dist/OmniSpec.exe.sha256
           $size = [math]::Round((Get-Item dist/OmniSpec.exe).Length / 1MB, 1)
           "Готово: OmniSpec.exe ($size МБ), sha256=$hash"
+
+      - name: Иконка установщика (для проверки глазами)
+        uses: actions/upload-artifact@v4
+        with:
+          name: setup-icon
+          path: setup-icon.png
 
       - name: Публикация релиза
         uses: softprops/action-gh-release@v2
