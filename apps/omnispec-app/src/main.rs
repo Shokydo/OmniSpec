@@ -24,6 +24,7 @@ use omnispec_core::game::launch::LaunchPlan;
 use omnispec_core::instances::{self, CreateInstanceRequest, InstanceMeta};
 use omnispec_core::loaders::{self, LoaderOption};
 use omnispec_core::modrinth::{install as modrinth_install, mrpack, Modrinth, SearchQuery};
+use omnispec_core::curseforge::{install as curseforge_install, CurseForge};
 use omnispec_core::net::{Http, Reporter};
 use omnispec_core::paths::Paths;
 use omnispec_core::settings::Settings;
@@ -38,6 +39,7 @@ struct AppState {
     accounts: Mutex<AccountStore>,
     http: Http,
     modrinth: Modrinth,
+    curseforge: CurseForge,
     settings: Mutex<Settings>,
     running: Arc<Mutex<HashMap<String, ChildHandle>>>,
 }
@@ -444,6 +446,88 @@ async fn modrinth_project(
     project_id: String,
 ) -> Result<omnispec_core::modrinth::Project, String> {
     state.modrinth.project(&project_id).await.map_err(err)
+}
+
+/* ==================== CURSEFORGE ==================== */
+
+/// Поиск на CurseForge: та же структура ответа, что у Modrinth, — поэтому
+/// интерфейс рисует обе площадки одинаковыми карточками.
+#[tauri::command]
+async fn search_curseforge(
+    state: State<'_, AppState>,
+    query: String,
+    project_type: String,
+    mc_version: Option<String>,
+    loader: Option<String>,
+    offset: Option<u32>,
+    sort: Option<String>,
+    limit: Option<u32>,
+) -> Result<omnispec_core::modrinth::SearchResults, String> {
+    state
+        .curseforge
+        .search(&SearchQuery {
+            query,
+            project_type,
+            game_version: mc_version,
+            loader,
+            categories: Vec::new(),
+            limit: limit.unwrap_or(24),
+            offset: offset.unwrap_or(0),
+            sort: sort.unwrap_or_else(|| "downloads".into()),
+        })
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+async fn curseforge_versions(
+    state: State<'_, AppState>,
+    project_id: String,
+    mc_version: Option<String>,
+    loader: Option<String>,
+) -> Result<Vec<omnispec_core::modrinth::Version>, String> {
+    state
+        .curseforge
+        .files(&project_id, mc_version.as_deref(), loader.as_deref())
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+async fn curseforge_project(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<omnispec_core::modrinth::Project, String> {
+    state.curseforge.project(&project_id).await.map_err(err)
+}
+
+/// Есть ли ключ CurseForge: без него вкладка честно скажет об этом.
+#[tauri::command]
+fn curseforge_ready(state: State<'_, AppState>) -> bool {
+    state.curseforge.has_key()
+}
+
+/// Поставить проект с CurseForge: `file_id` — если версия выбрана вручную.
+#[tauri::command]
+async fn install_curseforge(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    instance_id: String,
+    project_id: String,
+    file_id: Option<String>,
+) -> Result<curseforge_install::InstallOutcome, String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let reporter = reporter_for(&app, &instance_id);
+    curseforge_install::install(
+        &state.curseforge,
+        &state.paths,
+        &meta,
+        &project_id,
+        file_id.as_deref(),
+        &reporter,
+    )
+    .await
+    .map_err(err)
 }
 
 #[tauri::command]
@@ -2406,6 +2490,7 @@ fn main() {
         .find(|arg| !arg.starts_with('-') && std::path::Path::new(arg).exists());
     let state = AppState {
         modrinth: Modrinth::new(http.clone()),
+        curseforge: CurseForge::new(http.clone()),
         startup_file: startup_path,
         accounts: Mutex::new(AccountStore::load(&paths)),
         paths,
@@ -2445,6 +2530,11 @@ fn main() {
             search_modrinth,
             modrinth_versions,
             modrinth_project,
+            search_curseforge,
+            curseforge_versions,
+            curseforge_project,
+            curseforge_ready,
+            install_curseforge,
             account_skin,
             account_capes,
             set_cape,

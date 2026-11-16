@@ -593,3 +593,43 @@ section { padding: 56px 0; }
   font-size: 11px;
   line-height: 1.7;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Фон и появление блоков.
+     · сетка — канвас в 1px-линиях, медленно уезжает вбок;
+     · снежинки — те же, что в лаунчере: падают, качаются, тают у края;
+     · блоки появляются при прокрутке (IntersectionObserver).
+   Ни одного градиента: только линии и альфа-канал.
+   ═══════════════════════════════════════════════════════════════ */
+
+.fx-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+main, .ftr { position: relative; z-index: 1; }
+
+.hdr { z-index: 50; }
+
+/* появление блоков */
+.reveal {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity .55s cubic-bezier(.2, .7, .3, 1), transform .55s cubic-bezier(.2, .7, .3, 1);
+}
+
+.reveal.in { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; transition: none; }
+  html { scroll-behavior: auto; }
+}
+
+@media (max-width: 760px) {
+  .fx-layer { opacity: .75; }
+}

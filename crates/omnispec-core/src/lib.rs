@@ -6,6 +6,7 @@
 pub mod accounts;
 pub mod auth;
 pub mod content;
+pub mod curseforge;
 pub mod error;
 pub mod game;
 pub mod instances;

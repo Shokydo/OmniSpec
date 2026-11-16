@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OmniSpec — лаунчер Minecraft для сборок, модов и двух аккаунтов</title>
-<meta name="description" content="OmniSpec — лаунчер Minecraft на Rust: сборки и категории, моды с Modrinth, лицензия через Microsoft и офлайн-ник, 16 тем, обои, эффекты. Установщик и портативная версия для Windows 10/11.">
+<meta name="description" content="OmniSpec — лаунчер Minecraft на Rust: сборки и категории, моды с Modrinth и CurseForge, лицензия через Microsoft и офлайн-ник, 16 тем, обои, эффекты. Установщик и портативная версия для Windows 10/11.">
 <meta name="theme-color" content="#08080a">
 <meta property="og:type" content="website">
 <meta property="og:title" content="OmniSpec — лаунчер Minecraft">
-<meta property="og:description" content="Сборки, моды с Modrinth, лицензия и офлайн-аккаунты. Установщик и портативная версия для Windows 10/11.">
+<meta property="og:description" content="Сборки, моды с Modrinth и CurseForge, лицензия и офлайн-аккаунты. Установщик и портативная версия для Windows 10/11.">
 <meta property="og:url" content="{{URL_SITE}}">
 <meta property="og:image" content="{{URL_SITE}}og.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -18,6 +18,9 @@
 </style>
 </head>
 <body>
+
+<canvas class="fx-layer" id="fx-grid" aria-hidden="true"></canvas>
+<canvas class="fx-layer" id="fx-snow" aria-hidden="true"></canvas>
 
 <header class="hdr">
   <div class="wrap hdr-in">
@@ -50,8 +53,8 @@
   <span class="eyebrow"><span class="dot"></span> версия <b>{{VERSION}}</b> · {{DATE}} · Windows 10/11</span>
   <h1>Лаунчер Minecraft,<br>который не мешает играть</h1>
   <p class="lead">
-    Сборки с папками и своими настройками, моды, ресурспаки и шейдеры прямо с Modrinth,
-    лицензия через Microsoft и обычный офлайн-ник. Написан на Rust, интерфейс — плотный
+    Сборки с папками и своими настройками, моды, ресурспаки и шейдеры прямо с Modrinth
+    и CurseForge, лицензия через Microsoft и обычный офлайн-ник. Написан на Rust, интерфейс — плотный
     моно-панель без градиентов и лишних кликов.
   </p>
   <div class="cta">
@@ -95,8 +98,8 @@
       </div>
       <div class="card">
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 2c1.2 0 2.6 2.3 3.1 5.5H8.9C9.4 7.3 10.8 5 12 5ZM5.2 11h2.7c-.1 1-.1 2 0 3H5.2a7 7 0 0 1 0-3Zm3.7 0h6.2c.1 1 .1 2 0 3H8.9c-.1-1-.1-2 0-3Zm7.2 0h2.7a7 7 0 0 1 0 3h-2.7c.1-1 .1-2 0-3ZM12 19c-1.2 0-2.6-2.3-3.1-5.5h6.2C14.6 16.7 13.2 19 12 19Z"/></svg></div>
-        <h3>Modrinth внутри</h3>
-        <p>Бесконечная лента, вид списком и плиткой, выбор версии под свою сборку и автодокачка обязательных зависимостей.</p>
+        <h3>Modrinth и CurseForge</h3>
+        <p>Две площадки в одном окне: бесконечная лента с догрузкой, вид списком и плиткой, выбор версии под свою сборку и автодокачка обязательных зависимостей.</p>
       </div>
       <div class="card">
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Zm0 9c4.4 0 8 2.3 8 5.2V21H4v-1.8C4 16.3 7.6 14 12 14Z"/></svg></div>
@@ -149,6 +152,10 @@
         <figcaption>Modrinth: поиск, фильтры по версии и загрузчику, список или плитка</figcaption>
       </figure>
       <figure class="gal">
+        <img src="{{A:curseforge}}" alt="Вкладка CurseForge: сетка модов, фильтры и подгрузка при прокрутке" width="1600" height="1000">
+        <figcaption>CurseForge: та же сетка и панели, свои сортировка, версия игры и загрузчик</figcaption>
+      </figure>
+      <figure class="gal">
         <img src="{{A:files}}" alt="Файловый менеджер сборки" width="1600" height="1000">
         <figcaption>Файлы сборки: дерево, размеры, даты и свои действия в заголовке</figcaption>
       </figure>
@@ -186,7 +193,7 @@
       </div>
       <div class="card">
         <h3>Чего пока нет</h3>
-        <p>CurseForge: для поиска нужен API-ключ, поэтому моды и модпаки берутся с Modrinth. Всё остальное — сборки, моды, ресурспаки, шейдеры, миры — работает.</p>
+        <p>Каталога модпаков CurseForge: сборки ставятся из <b>.mrpack</b> с Modrinth, файлом или импортом. Моды, ресурспаки и шейдеры с CurseForge работают наравне с Modrinth.</p>
       </div>
     </div>
   </div>
@@ -307,8 +314,8 @@
         <p>Нет. Настройки, сборки, миры и время игры остаются; окно первого запуска после обновления не возвращается.</p>
       </details>
       <details>
-        <summary>Что с CurseForge?</summary>
-        <p>Пока не поддерживается: их API требует ключ, который нельзя публиковать. Всё остальное — Modrinth, локальные файлы, импорт из других лаунчеров — работает.</p>
+        <summary>CurseForge поддерживается?</summary>
+        <p>Да, это второй источник рядом с Modrinth: та же сетка, те же панели, фильтры по версии игры и загрузчику, выбор версии и докачка зависимостей. Ключ уже вшит в лаунчер. Не подключён только <b>каталог модпаков</b> CurseForge — сборки ставятся из <b>.mrpack</b>, файлом или импортом из другого лаунчера.</p>
       </details>
     </div>
   </div>

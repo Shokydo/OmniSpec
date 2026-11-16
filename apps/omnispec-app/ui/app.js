@@ -1899,6 +1899,11 @@
     setCustomWallpaper: (path) => invoke("set_custom_wallpaper", { path }),
     customWallpaper: () => invoke("custom_wallpaper"),
     modrinthProject: (projectId) => invoke("modrinth_project", { projectId }),
+    searchCurseforge: (q) => invoke("search_curseforge", q),
+    curseforgeVersions: (projectId, mc, loader) => invoke("curseforge_versions", { projectId, mcVersion: mc, loader }),
+    curseforgeProject: (projectId) => invoke("curseforge_project", { projectId }),
+    curseforgeReady: () => invoke("curseforge_ready"),
+    installCurseforge: (instanceId, projectId, fileId) => invoke("install_curseforge", { instanceId, projectId, fileId: fileId || null }),
     accountSkin: () => invoke("account_skin"),
     accountCapes: () => invoke("account_capes"),
     setCape: (capeId) => invoke("set_cape", { capeId }),
@@ -1958,6 +1963,71 @@
     deleteInstance: async (id) => { DEMO.instances = DEMO.instances.filter((i) => i.id !== id); return null; },
     updateInstance: async (meta) => { const i = DEMO.instances.findIndex((x) => x.id === meta.id); if (i >= 0) DEMO.instances[i] = meta; return null; },
     modrinthProject: async (projectId) => demoProject(projectId),
+    curseforgeReady: async () => true,
+    curseforgeProject: async (projectId) => ({
+      id: projectId, slug: "create", title: "Create", project_type: "mod",
+      description: "Механизмы, шестерни и автоматизация на паровой тяге.",
+      body: "Create — большой технический мод: вращение, шестерни, конвейеры, поезда и сотни декоративных блоков. Всё собирается в игре и показывается в «Пончике» — встроенном справочнике.",
+      categories: ["technology", "neoforge", "fabric"], downloads: 221384500, followers: 0,
+      icon_url: null, source_url: null, issues_url: null, wiki_url: null, discord_url: null,
+      game_versions: ["1.21.1", "1.20.1"], loaders: ["neoforge", "fabric"], gallery: [], license: null
+    }),
+    searchCurseforge: async (q) => {
+      const SEED = [
+        ["Create", "Механизмы, шестерни и автоматизация на паровой тяге."],
+        ["Just Enough Items", "Все рецепты и предметы в одном окне."],
+        ["JourneyMap", "Карта мира в реальном времени с миникартой."],
+        ["Better Combat", "Плавные анимации боя и стойки оружия."],
+        ["Farmer's Delight", "Новая еда, готовка на костре и ножи."],
+        ["Alex's Mobs", "Больше 90 мобов со своим поведением."],
+        ["Terralith", "Переработанная генерация мира без новых блоков."],
+        ["Supplementaries", "Полезные мелочи: верёвки, знамёна, таблички."],
+        ["Applied Energistics 2", "Цифровое хранилище предметов и авто-крафт."],
+        ["Mekanism", "Технологии: руды, энергия, телепорты."],
+        ["Twilight Forest", "Целое измерение с боссами и прогрессией."],
+        ["Biomes O' Plenty", "Десятки новых биомов и деревьев."],
+        ["Storage Drawers", "Ящики с отображением предметов."],
+        ["Refined Storage", "Сетевое хранилище на дисках."],
+        ["Botania", "Магия на цветах и мане."],
+        ["Immersive Engineering", "Мультиблочные механизмы и провода."],
+        ["Macaw's Bridges", "Мосты и переходы из любого материала."],
+        ["Chipped", "Сотни декоративных вариантов блоков."],
+        ["Structory", "Новые структуры в ванильном стиле."],
+        ["Waystones", "Телепорт между деревнями и башнями."],
+        ["Simply Swords", "Оружие в стиле RPG с эффектами."],
+        ["Farmers Respite", "Чай, кофе и новые напитки."],
+        ["Entity Culling", "Не рисует то, что не видно за стенами."],
+        ["Clumps", "Склеивает сферы опыта в одну."]
+      ];
+      const type = (q && q.projectType) || "mod";
+      const all = [];
+      for (let page = 0; page < 2; page += 1) {
+        SEED.forEach(([name, description], index) => {
+          all.push({
+            project_id: `cf-${page}-${index}`,
+            project_type: type,
+            slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+            author: "curseforge",
+            title: page ? `${name} ${page + 1}` : name,
+            description,
+            categories: ["technology", "neoforge"],
+            versions: ["1.21.1"],
+            downloads: 221384500 - index * 3141592 - page * 777777,
+            follows: 0,
+            icon_url: null
+          });
+        });
+      }
+      const offset = (q && q.offset) || 0;
+      const limit = (q && q.limit) || 24;
+      return { hits: all.slice(offset, offset + limit), offset, limit, total_hits: all.length };
+    },
+    curseforgeVersions: async () => ([
+      { id: "cf-file-1", project_id: "cf", name: "create-1.21.1-6.0.4.jar", version_number: "create-1.21.1-6.0.4.jar", version_type: "release", game_versions: ["1.21.1"], loaders: ["neoforge"], date_published: "2026-10-02T12:00:00Z", files: [], dependencies: [] },
+      { id: "cf-file-2", project_id: "cf", name: "create-1.21.1-6.0.2.jar", version_number: "create-1.21.1-6.0.2.jar", version_type: "release", game_versions: ["1.21.1"], loaders: ["neoforge"], date_published: "2026-08-19T12:00:00Z", files: [], dependencies: [] },
+      { id: "cf-file-3", project_id: "cf", name: "create-1.20.1-0.5.1.f.jar", version_number: "create-1.20.1-0.5.1.f.jar", version_type: "beta", game_versions: ["1.20.1"], loaders: ["forge"], date_published: "2025-11-05T12:00:00Z", files: [], dependencies: [] }
+    ]),
+    installCurseforge: async (_i, projectId, fileId) => ({ installed: [`${fileId || projectId}.jar`], skipped: [] }),
     accountSkin: async () => {
       const active = DEMO.accounts.find((a) => a.uuid === DEMO.active);
       return { licensed: Boolean(active && active.kind === "microsoft"), variant: "classic", data_url: demoSkinDataUrl() };
@@ -2233,6 +2303,11 @@
       query: "", type: "mod", mc: "", loader: "",
       results: [], total: 0, loading: false, loadingMore: false,
       error: null, tried: false, view: "list"
+    },
+    curseforge: {
+      query: "", type: "mod", mc: "", loader: "", sort: "downloads",
+      results: [], total: 0, loading: false, loadingMore: false,
+      error: null, tried: false, view: "grid"
     },
     discover: {
       query: "", results: [], total: 0,
@@ -3144,6 +3219,7 @@
       case "shaders": return renderContent("shader");
       case "worlds": return renderWorlds();
       case "modrinth": return renderModrinth();
+      case "curseforge": return renderCurseForge();
       case "settings": return renderSettings();
     }
   }
@@ -5280,6 +5356,416 @@
       toast(outcome.installed.length ? `Установлено: ${outcome.installed.join(", ")}` : "Уже установлено", "ok");
       if (state.tab === "modrinth") renderTab();
     } catch (err) { toast(String(err), "err"); }
+  }
+
+/* ==================== CURSEFORGE ==================== */
+
+  const CF_PAGE = 24;
+  let cfObserver = null;
+
+  /** Размер плитки во вкладке CurseForge: 1 → 12, 2 → 9, 3 → 6 в ряд. */
+  function cfGridLevel() {
+    const level = Number(state.settings && state.settings.cf_grid);
+    return level === 1 || level === 2 || level === 3 ? level : 2;
+  }
+
+  function cfColumns(level = cfGridLevel()) {
+    return level === 1 ? 12 : level === 3 ? 6 : 9;
+  }
+
+  /** Куда ведёт страница проекта на curseforge.com. */
+  function cfPath(projectType) {
+    if (projectType === "resourcepack") return "texture-packs";
+    if (projectType === "shader") return "shaders";
+    if (projectType === "modpack") return "modpacks";
+    return "mc-mods";
+  }
+
+  const CF_SORTS = [["downloads", "По загрузкам"], ["updated", "Обновлённые"], ["newest", "Новые"], ["follows", "Популярные"]];
+
+  function renderCurseForge() {
+    const meta = selected();
+    const cfg = state.curseforge;
+    const view = cfg.view || "grid";
+    const types = [["mod", "Моды"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
+    const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
+    $("#tab-body").innerHTML = `
+      <div class="modrinth-wrap">
+        <div class="modrinth-filters">
+          <div class="field" style="flex:1;min-width:220px">
+            <label>Поиск на CurseForge</label>
+            <input class="input grow" id="cf-query" placeholder="create, jei, journeyMap…" value="${esc(cfg.query)}" spellcheck="false">
+          </div>
+          <div class="field">
+            <label>Тип</label>
+            <select class="select" id="cf-type">
+              ${types.map(([value, label]) => `<option value="${value}" ${cfg.type === value ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field">
+            <label>Версия игры</label>
+            <select class="select" id="cf-mc">
+              <option value="">любая</option>
+              ${mcOptions.map((value) => `<option value="${esc(value)}" ${cfg.mc === value ? "selected" : ""}>${esc(value)}</option>`).join("")}
+            </select>
+          </div>
+          ${cfg.type === "mod" ? `<div class="field">
+            <label>Загрузчик</label>
+            <select class="select" id="cf-loader">
+              <option value="">любой</option>
+              ${Object.entries(LOADER_NAMES).map(([value, label]) => `<option value="${value}" ${cfg.loader === value ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </div>` : ""}
+          <div class="field">
+            <label>Сортировка</label>
+            <select class="select" id="cf-sort">
+              ${CF_SORTS.map(([value, label]) => `<option value="${value}" ${cfg.sort === value ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </div>
+          <button class="btn" id="cf-search" style="align-self:flex-end">Найти</button>
+          <div class="mr-view" style="align-self:flex-end" title="Вид">
+            <button class="${view === "grid" ? "is-active" : ""}" data-cf-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
+            <button class="${view === "list" ? "is-active" : ""}" data-cf-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
+          </div>
+          <label class="feed-size" style="align-self:flex-end" title="Размер плитки: 1 — 12 в ряд, 2 — 9 в ряд, 3 — 6 в ряд">
+            <svg class="ic"><use href="#i-grid"/></svg>
+            <input type="range" id="cf-size" min="1" max="3" step="1" value="${cfGridLevel()}" aria-label="Размер плитки">
+            <span class="mono" id="cf-size-val">${cfGridLevel()}</span>
+          </label>
+        </div>
+        <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${cfGridLevel()}` : ""}" id="cf-results" style="--feed-cols:${cfColumns()}">
+          ${cfResultsHtml()}
+        </div>
+      </div>`;
+
+    $("#cf-search").addEventListener("click", () => cfRunSearch());
+    $("#cf-query").addEventListener("keydown", (event) => { if (event.key === "Enter") cfRunSearch(); });
+    $("#cf-type").addEventListener("change", (event) => { state.curseforge.type = event.target.value; cfRunSearch(); });
+    $("#cf-mc").addEventListener("change", (event) => { state.curseforge.mc = event.target.value; cfRunSearch(); });
+    $("#cf-sort").addEventListener("change", (event) => { state.curseforge.sort = event.target.value; cfRunSearch(); });
+    const loaderSelect = $("#cf-loader");
+    if (loaderSelect) loaderSelect.addEventListener("change", (event) => { state.curseforge.loader = event.target.value; cfRunSearch(); });
+    $$("#tab-body [data-cf-view]").forEach((btn) => btn.addEventListener("click", () => {
+      state.curseforge.view = btn.dataset.cfView;
+      renderCurseForge();
+    }));
+    const cfSize = $("#cf-size");
+    if (cfSize) {
+      cfSize.addEventListener("input", () => {
+        const level = Number(cfSize.value) || 2;
+        const label = $("#cf-size-val");
+        if (label) label.textContent = String(level);
+        const results = $("#cf-results");
+        if (results) {
+          results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
+          results.classList.add(`feed-grid-${level}`);
+          results.style.setProperty("--feed-cols", String(cfColumns(level)));
+        }
+        state.settings = { ...(state.settings || {}), cf_grid: level };
+        api.saveSettings(state.settings).catch(() => {});
+      });
+    }
+    bindCfEvents();
+    const retry = $("#cf-retry");
+    if (retry) retry.addEventListener("click", () => cfRunSearch());
+    cfWatchMore();
+    if (!cfg.tried && !cfg.loading && !cfg.error) cfRunSearch();
+  }
+
+  function cfResultsHtml() {
+    const cfg = state.curseforge;
+    if (cfg.loading && !cfg.results.length) return `<div class="empty-state">Ищем на CurseForge…</div>`;
+    if (cfg.error) {
+      return `<div class="empty-state" style="display:flex;flex-direction:column;align-items:center;gap:10px">
+        <div style="max-width:640px;text-align:left;white-space:pre-wrap;font-size:12px;color:var(--red)">${esc(cfg.error)}</div>
+        <button class="btn" id="cf-retry">Повторить</button>
+      </div>`;
+    }
+    if (!cfg.results.length) return `<div class="empty-state">Введи запрос и нажми «Найти»</div>`;
+    return `${cfg.results.map(cfCardHtml).join("")}<div class="mr-sentinel" id="cf-sentinel">${cfSentinelText()}</div>`;
+  }
+
+  function cfSentinelText() {
+    const cfg = state.curseforge;
+    if (cfg.loadingMore) return `<span class="mr-more-spinner"></span>Загружаем ещё…`;
+    if (cfg.results.length >= cfg.total) return `Показано всё: ${cfg.results.length}`;
+    return `Прокрути вниз — ещё ${Math.max(0, cfg.total - cfg.results.length)}`;
+  }
+
+  function cfWatchMore() {
+    if (cfObserver) { cfObserver.disconnect(); cfObserver = null; }
+    const sentinel = $("#cf-sentinel");
+    if (!sentinel) return;
+    cfObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) cfLoadMore();
+    }, { rootMargin: "200px" });
+    cfObserver.observe(sentinel);
+  }
+
+  function cfUpdateSentinel() {
+    const sentinel = $("#cf-sentinel");
+    if (sentinel) sentinel.innerHTML = cfSentinelText();
+    const cfg = state.curseforge;
+    if (sentinel && !cfg.loadingMore && cfg.results.length >= cfg.total) {
+      if (cfObserver) { cfObserver.disconnect(); cfObserver = null; }
+    }
+  }
+
+  async function cfLoadMore() {
+    const cfg = state.curseforge;
+    if (cfg.loading || cfg.loadingMore || cfg.error) return;
+    if (!cfg.results.length || cfg.results.length >= cfg.total) return;
+    cfg.loadingMore = true;
+    cfUpdateSentinel();
+    try {
+      const page = await api.searchCurseforge(cfSearchQuery(cfg.results.length));
+      const known = new Set(cfg.results.map((hit) => hit.project_id));
+      const fresh = (page.hits || []).filter((hit) => !known.has(hit.project_id));
+      cfg.results = cfg.results.concat(fresh);
+      cfg.total = page.total_hits || cfg.total;
+      const container = $("#cf-results");
+      if (container && fresh.length) {
+        const sentinel = $("#cf-sentinel");
+        const html = fresh.map(cfCardHtml).join("");
+        if (sentinel) sentinel.insertAdjacentHTML("beforebegin", html);
+        else container.insertAdjacentHTML("beforeend", html);
+        bindCfEvents();
+      }
+      if (!fresh.length) cfg.total = cfg.results.length;
+    } catch (err) {
+      cfg.error = String(err);
+      cfg.loadingMore = false;
+      renderCurseForge();
+      return;
+    }
+    cfg.loadingMore = false;
+    cfUpdateSentinel();
+  }
+
+  function cfSearchQuery(offset) {
+    const cfg = state.curseforge;
+    const meta = selected();
+    return {
+      query: cfg.query,
+      projectType: cfg.type,
+      mcVersion: cfg.mc || (meta ? meta.mc_version : null),
+      loader: cfg.type === "mod" ? (cfg.loader || (meta && meta.loader ? meta.loader.type : null)) : null,
+      offset: offset || 0,
+      limit: CF_PAGE,
+      sort: cfg.sort || "downloads"
+    };
+  }
+
+  function cfCardHtml(hit) {
+    const openType = state.curseforge.type || "mod";
+    return `<div class="card" data-cf-project="${esc(hit.project_id)}" data-cf-slug="${esc(hit.slug || hit.project_id)}" data-cf-title="${esc(hit.title)}">
+      <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
+      <div class="card-body">
+        <div class="card-title">${esc(hit.title)}</div>
+        <div class="card-desc">${esc(hit.description)}</div>
+        <div class="card-meta">
+          <span class="tag">curseforge</span>
+          ${(hit.categories || []).slice(0, 2).map((cat) => `<span class="tag">${esc(cat)}</span>`).join("")}
+          <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
+        </div>
+        <div class="card-actions">
+          <button class="icon-btn card-icon-btn is-primary" data-cf-install="${esc(hit.project_id)}" title="Скачать и установить" aria-label="Скачать">
+            <svg class="ic"><use href="#i-download"/></svg>
+          </button>
+          <button class="icon-btn card-icon-btn" data-cf-versions="${esc(hit.project_id)}" data-cf-title="${esc(hit.title)}" title="Версии" aria-label="Версии">
+            <svg class="ic"><use href="#i-list"/></svg>
+          </button>
+          <button class="icon-btn card-icon-btn" data-cf-page="${esc(hit.slug || hit.project_id)}" data-cf-type="${esc(openType)}" title="Страница проекта" aria-label="Страница">
+            <svg class="ic"><use href="#i-link"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function bindCfEvents() {
+    $$(".card[data-cf-project]").forEach((card) => {
+      if (card.dataset.cfBound) return;
+      card.dataset.cfBound = "1";
+      card.addEventListener("click", (event) => {
+        if (event.target.closest("button")) return;
+        openCfProjectModal(card.dataset.cfProject, card.dataset.cfTitle, card.dataset.cfSlug);
+      });
+    });
+    $$("[data-cf-install]").forEach((btn) => {
+      if (btn.dataset.cfBound) return;
+      btn.dataset.cfBound = "1";
+      btn.addEventListener("click", () => installFromCurseForge(btn.dataset.cfInstall, btn));
+    });
+    $$("[data-cf-versions]").forEach((btn) => {
+      if (btn.dataset.cfBound) return;
+      btn.dataset.cfBound = "1";
+      btn.addEventListener("click", () => openCfVersions(btn.dataset.cfVersions, btn.dataset.cfTitle));
+    });
+    $$("[data-cf-page]").forEach((btn) => {
+      if (btn.dataset.cfBound) return;
+      btn.dataset.cfBound = "1";
+      btn.addEventListener("click", () => {
+        const type = btn.dataset.cfType || state.curseforge.type || "mod";
+        api.openUrl(`https://www.curseforge.com/minecraft/${cfPath(type)}/${btn.dataset.cfPage}`)
+          .catch((error) => toast(String(error), "err"));
+      });
+    });
+  }
+
+  async function cfRunSearch() {
+    if ($("#cf-query")) state.curseforge.query = $("#cf-query").value;
+    if ($("#cf-mc")) state.curseforge.mc = $("#cf-mc").value;
+    if ($("#cf-loader")) state.curseforge.loader = $("#cf-loader").value;
+    const cfg = state.curseforge;
+    cfg.loading = true;
+    cfg.loadingMore = false;
+    cfg.tried = true;
+    cfg.error = null;
+    cfg.results = [];
+    cfg.total = 0;
+    renderCurseForge();
+    try {
+      const page = await api.searchCurseforge(cfSearchQuery(0));
+      state.curseforge.results = page.hits || [];
+      state.curseforge.total = page.total_hits || state.curseforge.results.length;
+      state.curseforge.error = null;
+    } catch (err) {
+      state.curseforge.results = [];
+      state.curseforge.total = 0;
+      state.curseforge.error = String(err);
+    }
+    state.curseforge.loading = false;
+    renderCurseForge();
+  }
+
+  async function installFromCurseForge(projectId, btn) {
+    const meta = selected();
+    if (!meta) return toast("Сначала выбери сборку", "err");
+    if (btn) { btn.disabled = true; }
+    try {
+      const outcome = await api.installCurseforge(meta.id, projectId, null);
+      toast(
+        outcome.installed.length
+          ? `Установлено: ${outcome.installed.join(", ")}`
+          : `Уже установлено${outcome.skipped.length ? `: ${outcome.skipped.join(", ")}` : ""}`,
+        "ok"
+      );
+      if (state.tab === "curseforge") renderCurseForge();
+    } catch (err) {
+      toast(String(err), "err");
+    } finally {
+      if (btn) { btn.disabled = false; }
+    }
+  }
+
+  async function openCfProjectModal(projectId, title, slug) {
+    const modal = $("#modal-project");
+    if (!modal) return;
+    $("#proj-title").textContent = title || "Проект";
+    const body = $("#proj-body");
+    body.innerHTML = `<div class="empty-state">Загружаем сведения с CurseForge…</div>`;
+    modal.hidden = false;
+
+    let project = null;
+    try {
+      project = await api.curseforgeProject(projectId);
+    } catch (err) {
+      body.innerHTML = `<div class="proj-empty" style="color:var(--red)">Не удалось получить сведения: ${esc(String(err))}</div>`;
+    }
+
+    const projectType = (project && project.project_type) || state.curseforge.type || "mod";
+    const slugOrId = (project && (project.slug || project.id)) || slug || projectId;
+    const siteUrl = `https://www.curseforge.com/minecraft/${cfPath(projectType)}/${slugOrId}`;
+
+    if (project) {
+      const shots = (project.gallery || []).map((shot) => (typeof shot === "string" ? shot : shot && shot.url)).filter(Boolean);
+      const tags = (project.categories || []).slice(0, 8);
+      const loads = (project.downloads || 0).toLocaleString("ru-RU");
+      const desc = plainDescription(project.body) || project.description || "";
+      body.innerHTML = `
+        <div class="proj-top">
+          <div class="proj-icon">${project.icon_url
+            ? `<img src="${esc(project.icon_url)}" alt="" />`
+            : `<span class="card-letter">${esc(String(project.title || title || "?").charAt(0).toUpperCase())}</span>`}</div>
+          <div class="proj-head">
+            <div class="proj-title">${esc(project.title || title || "")}</div>
+            <div class="proj-sub">${esc(project.description || "")}</div>
+            <div class="proj-sub">${loads} загрузок${(project.loaders || []).length ? ` · ${esc(project.loaders.join(", "))}` : ""}</div>
+          </div>
+        </div>
+        ${tags.length ? `<div class="proj-tags">${tags.map((tag) => `<span class="tag">${esc(tag)}</span>`).join("")}</div>` : ""}
+        ${shots.length ? `<div class="proj-gallery">${shots.slice(0, 6).map((url) => `
+          <div class="proj-shot"><img src="${esc(url)}" alt="" loading="lazy" /></div>`).join("")}</div>` : ""}
+        ${desc ? `<div class="proj-desc">${esc(desc)}</div>` : `<div class="proj-empty">Описание пустое — смотри страницу проекта.</div>`}`;
+    }
+
+    $("#proj-site").onclick = () => api.openUrl(siteUrl).catch((error) => toast(String(error), "err"));
+    $("#proj-versions").onclick = () => {
+      modal.hidden = true;
+      openCfVersions(projectId, title || (project && project.title) || "Версии");
+    };
+    const installBtn = $("#proj-install");
+    installBtn.disabled = !project;
+    installBtn.onclick = () => {
+      modal.hidden = true;
+      installFromCurseForge(projectId);
+    };
+  }
+
+  async function openCfVersions(projectId, title) {
+    const modal = $("#modal-versions");
+    if (!modal) return;
+    modal.hidden = false;
+    $("#ver-title").textContent = `${title || "Версии"} — выбор версии`;
+    $("#ver-body").innerHTML = `<div class="empty-state">Загружаем файлы с CurseForge…</div>`;
+    const meta = selected();
+    const mc = state.curseforge.mc || (meta ? meta.mc_version : null);
+    const loader = state.curseforge.loader || (meta && meta.loader ? meta.loader.type : null);
+    let versions = [];
+    try {
+      versions = await api.curseforgeVersions(projectId, mc, loader);
+    } catch (err) {
+      $("#ver-body").innerHTML = `<div class="empty-state" style="color:var(--red)">${esc(String(err))}</div>`;
+      return;
+    }
+    if (!versions.length) {
+      $("#ver-body").innerHTML = `<div class="empty-state">Подходящих файлов нет${mc ? ` (MC ${esc(mc)}${loader ? `, ${esc(loader)}` : ""})` : ""}.</div>`;
+      return;
+    }
+    $("#ver-body").innerHTML = `
+      <div class="ver-list">
+        ${versions.slice(0, 60).map((version) => `
+          <div class="ver-row">
+            <div class="ver-main">
+              <div class="ver-name">${esc(version.name || version.version_number)}</div>
+              <div class="ver-meta">
+                <span class="tag">${esc(version.version_number)}</span>
+                ${(version.game_versions || []).slice(0, 3).map((gv) => `<span class="tag">${esc(gv)}</span>`).join("")}
+                ${(version.loaders || []).slice(0, 2).map((ld) => `<span class="tag">${esc(ld)}</span>`).join("")}
+              </div>
+            </div>
+            <span class="ver-date">${(version.date_published || "").slice(0, 10)}</span>
+            <button class="btn btn-primary" data-cf-install-version="${esc(version.id)}">Установить</button>
+          </div>`).join("")}
+      </div>`;
+    $$("[data-cf-install-version]").forEach((btn) => btn.addEventListener("click", () => installCfFile(projectId, btn.dataset.cfInstallVersion, btn)));
+  }
+
+  async function installCfFile(projectId, fileId, btn) {
+    const meta = selected();
+    if (!meta) return toast("Сначала выбери сборку", "err");
+    if (btn) { btn.disabled = true; btn.textContent = "Ставим…"; }
+    const modal = $("#modal-versions");
+    try {
+      const outcome = await api.installCurseforge(meta.id, projectId, fileId);
+      toast(outcome.installed.length ? `Установлено: ${outcome.installed.join(", ")}` : "Уже установлено", "ok");
+      if (modal) modal.hidden = true;
+      if (state.tab === "curseforge") renderCurseForge();
+    } catch (err) {
+      toast(String(err), "err");
+      if (btn) { btn.disabled = false; btn.textContent = "Установить"; }
+    }
   }
 
   /* ==================== АККАУНТЫ ==================== */
