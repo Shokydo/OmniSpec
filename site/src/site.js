@@ -83,6 +83,8 @@
   }
 
   /* ── фон: частицы, сетка и снежинки ───────────────────────── */
+  // Фон живёт всегда. Системная настройка «уменьшить движение» лишь делает его
+  // спокойнее (реже кадры и меньше частиц), но не превращает в статичную картинку.
   var reduceMotion = window.matchMedia
     ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
     : false;
@@ -123,20 +125,20 @@
     countNarrow: 56,
     distance: 150,
     distanceNarrow: 118,
-    speed: 1.2,
+    speed: 1.6,
     cursorRadius: 220,
     strength: 55,
     lineOp: 0.34,
     cursor: "grab+attract",
     // связи «дышат» — как в пресете «Живой плексус»
-    linkPulse: 55,
+    linkPulse: 70,
     linkPulseSpeed: 1.2,
     dotPulse: 60,
     // собственное течение: точки не замирают, даже когда курсор далеко
-    swirl: 0.07,
+    swirl: 0.1,
     swirlSpeed: 0.28,
     maxSpeed: 4,
-    dotAlpha: 0.7
+    dotAlpha: 0.75
   };
 
   function drawPlexus() {
@@ -261,10 +263,14 @@
       pointer.y = -9999;
     }, { passive: true });
 
-    if (reduceMotion) { paint(0); return; }
     var started = performance.now();
+    var lastPaint = 0;
     function frame(now) {
-      paint((now - started) / 1000);
+      // в «спокойном» режиме — 20 кадров в секунду вместо 60
+      if (!reduceMotion || now - lastPaint > 50) {
+        lastPaint = now;
+        paint((now - started) / 1000);
+      }
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
@@ -300,7 +306,6 @@
       }
     }
 
-    if (reduceMotion) { paint(0); return; }
     var start = performance.now();
     var last = 0;
     function frame(now) {
@@ -390,7 +395,6 @@
     seed();
     window.addEventListener("resize", seed, { passive: true });
 
-    if (reduceMotion) { paint(0, 0); return; }
     var last = performance.now();
     function frame(now) {
       var dt = Math.min(0.05, (now - last) / 1000);
@@ -412,7 +416,7 @@
     var nodes = Array.prototype.slice.call(document.querySelectorAll(selector));
     if (!nodes.length) return;
 
-    if (reduceMotion || !("IntersectionObserver" in window)) {
+    if (!("IntersectionObserver" in window)) {
       nodes.forEach(function (node) { node.classList.add("reveal", "in"); });
       return;
     }
