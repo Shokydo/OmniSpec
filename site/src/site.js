@@ -495,6 +495,9 @@
         });
     }
 
+    // классы расставлены — показываем main; спрятанное состояние уже посчитано
+    document.documentElement.classList.remove("js-boot");
+
     if (!queue.length) return;
 
     function show(item) {
@@ -504,9 +507,9 @@
       window.setTimeout(function () { item.node.style.willChange = ""; }, item.delay + 1600);
     }
 
-    /* Следим не за самим элементом, а за его коробкой-родителем: у элементов
-       с clip-path нулевая видимая площадь, и IntersectionObserver считает их
-       непересекающимися — анимация бы не запустилась никогда. */
+    /* Следим за коробкой-родителем, а не за самим элементом: так появление
+       запускается синхронно для всей группы (ячейка и её текст), даже если сам
+       элемент сейчас прозрачный. */
     function anchorOf(item) {
       var node = item.node;
       while (node) {

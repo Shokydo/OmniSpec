@@ -616,78 +616,73 @@ main, .ftr { position: relative; z-index: 1; }
 
 .hdr { z-index: 50; }
 
-/* ── появление: окна, ячейки, текст ───────────────────────────────
-   окна раскрываются сверху вниз (clip-path), ячейки встают волной по
-   диагонали, текст проявляется слева направо — как набор в консоли.
+/* ── появление: прозрачность + небольшое увеличение ───────────────
+   один и тот же эффект для окон, ячеек и текста: элемент проявляется из
+   прозрачности и слегка «подъезжает» масштабом 0.97 → 1. Разница только в
+   задержке: ячейки идут волной по диагонали, текст — за своей карточкой.
    Классы ставит site.js: без скриптов страница просто видна целиком. */
 
-/* окно: створка едет вниз, картинка внутри чуть отъезжает */
-.rv-win {
-  clip-path: inset(0 0 100% 0);
-  transition: clip-path .7s cubic-bezier(.22, .72, .24, 1);
+/* пока site.js не расставил классы, main придерживается — иначе первый кадр
+   успевает показать весь контент и появление выглядит как мигание */
+.js-boot main { visibility: hidden; }
+
+.rv-win,
+.rv-cell,
+.rv-text,
+.rv-fade {
+  opacity: 0;
+  transform: scale(.97);
+  transform-origin: 50% 50%;
+  transition: opacity .48s cubic-bezier(.22, .72, .24, 1),
+              transform .62s cubic-bezier(.22, .72, .24, 1),
+              border-color .2s linear;
   transition-delay: var(--d, 0ms);
 }
 
-.rv-win.in { clip-path: inset(0 0 -1px 0); }
+.rv-win.in,
+.rv-cell.in,
+.rv-text.in,
+.rv-fade.in {
+  opacity: 1;
+  transform: none;
+}
+
+/* спрятать — мгновенно, проявлять — плавно: переход считается только в .in,
+   иначе класс .in успевает добавиться до первого кадра и анимация не играет */
+.rv-win:not(.in),
+.rv-cell:not(.in),
+.rv-text:not(.in),
+.rv-fade:not(.in),
+h1 .w:not(.in) {
+  transition: none;
+}
+
+/* окно проявляется целиком, картинка внутри увеличивается чуть заметнее:
+   сам .frame/.gal при прокрутке смещает параллакс, поэтому масштаб — на img */
+.rv-win {
+  transform: none;
+}
 
 .rv-win img {
-  transform: scale(1.045);
-  transform-origin: 50% 0;
-  transition: transform 1.25s cubic-bezier(.22, .72, .24, 1);
+  transform: scale(.965);
+  transform-origin: 50% 50%;
+  transition: transform .68s cubic-bezier(.22, .72, .24, 1);
   transition-delay: var(--d, 0ms);
 }
 
 .rv-win.in img { transform: none; }
 
-.rv-win .frame-cap,
-.rv-win figcaption {
-  opacity: 0;
-  transition: opacity .45s linear;
-  transition-delay: calc(var(--d, 0ms) + 240ms);
+.rv-win:not(.in) img {
+  transition: none;
 }
 
-.rv-win.in .frame-cap,
-.rv-win.in figcaption { opacity: 1; }
-
-/* ячейка: всплывает и чуть «доезжает» масштабом */
-.rv-cell {
-  opacity: 0;
-  transform: translateY(15px) scale(.985);
-  transition: opacity .5s cubic-bezier(.22, .72, .24, 1),
-              transform .55s cubic-bezier(.22, .72, .24, 1),
-              border-color .2s linear;
-  transition-delay: var(--d, 0ms);
-}
-
-.rv-cell.in { opacity: 1; transform: none; }
-
-/* текст: маска открывается вправо, будто строка дописывается */
-.rv-text {
-  clip-path: inset(-4px 100% -4px 0);
-  transition: clip-path .62s cubic-bezier(.3, .85, .3, 1);
-  transition-delay: var(--d, 0ms);
-}
-
-.rv-text.in { clip-path: inset(-4px -4px -4px 0); }
-
-/* короткие инлайн-элементы: мягкое всплытие */
-.rv-fade {
-  opacity: 0;
-  transform: translateY(10px);
-  transition: opacity .5s cubic-bezier(.22, .72, .24, 1),
-              transform .5s cubic-bezier(.22, .72, .24, 1);
-  transition-delay: var(--d, 0ms);
-}
-
-.rv-fade.in { opacity: 1; transform: none; }
-
-/* заголовок первого экрана: слова поднимаются по очереди */
+/* заголовок первого экрана: слова проявляются по очереди, тем же эффектом */
 h1 .w {
   display: inline-block;
   opacity: 0;
-  transform: translateY(.42em);
-  transition: opacity .5s cubic-bezier(.22, .72, .24, 1),
-              transform .62s cubic-bezier(.22, .72, .24, 1);
+  transform: scale(.94);
+  transition: opacity .45s cubic-bezier(.22, .72, .24, 1),
+              transform .55s cubic-bezier(.22, .72, .24, 1);
   transition-delay: var(--d, 0ms);
 }
 
@@ -721,7 +716,6 @@ h1 .w.in { opacity: 1; transform: none; }
 @media (prefers-reduced-motion: reduce) {
   /* фон и появление работают всегда; тут гасим только «лишнее» движение */
   .nav-mark { display: none; }
-  .rv-win img { transform: none; }
   .hdr { transition: none; }
   html { scroll-behavior: auto; }
 }
