@@ -2146,14 +2146,6 @@
     if (!logFlushRaf) logFlushRaf = requestAnimationFrame(flushLog);
   }
 
-  function appendLogLine(index, entry) {
-    const consoleEl = $("#console-out");
-    if (!consoleEl) return;
-    const empty = consoleEl.querySelector(".empty-state");
-    if (empty) empty.remove();
-    consoleEl.appendChild(logLineNode(index, entry));
-  }
-
   /** Отрисовка консоли: хвост лога, поиск по всему логу, «показать ещё» сверху. */
   function renderLogs(instanceId, options = {}) {
     const consoleEl = $("#console-out");
