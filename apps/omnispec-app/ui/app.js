@@ -157,6 +157,9 @@
 
   const UI_SCALES = [80, 90, 100, 110, 125, 150];
 
+  /** Трейс при первом запуске: искры, тонкие, короткий хвост, почти прозрачные. */
+  const TRAIL_DEFAULTS = { style: "sparks", size: 50, length: 20, opacity: 15 };
+
   /** Масштаб интерфейса как «размер интерфейса» в Minecraft / zoom в Discord. */
   function applyUiScale(value) {
     const scale = Math.min(150, Math.max(70, Number(value) || 100));
@@ -4952,7 +4955,10 @@
   function prefsFx() {
     const ambientOn = (state.ambient || "stars") !== "off";
     const trailOn = state.trail !== false;
-    const trailStyle = state.trailStyle || "line";
+    const trailStyle = state.trailStyle || TRAIL_DEFAULTS.style;
+    const trailSize = Number(state.trailSize) || TRAIL_DEFAULTS.size;
+    const trailLength = Number(state.trailLength) || TRAIL_DEFAULTS.length;
+    const trailOpacity = Number(state.trailOpacity) || TRAIL_DEFAULTS.opacity;
     return `
       <div class="prefs-section">
         <div class="prefs-label">Эффект от клика</div>
@@ -4979,10 +4985,10 @@
             <div class="prefs-row-head">
               <span class="prefs-label">Толщина</span>
               <div class="spacer"></div>
-              <span class="mono" id="trail-size-value">${Number(state.trailSize) || 100}%</span>
+              <span class="mono" id="trail-size-value">${trailSize}%</span>
             </div>
             <div class="range">
-              <input type="range" id="set-trail-size" min="10" max="300" step="10" value="${Number(state.trailSize) || 100}" ${trailOn ? "" : "disabled"}>
+              <input type="range" id="set-trail-size" min="10" max="300" step="10" value="${trailSize}" ${trailOn ? "" : "disabled"}>
               <span class="muted" style="font-size:11px">тонкий</span>
               <div class="spacer"></div>
               <span class="muted" style="font-size:11px">широкий</span>
@@ -4992,10 +4998,10 @@
             <div class="prefs-row-head">
               <span class="prefs-label">Длина следа</span>
               <div class="spacer"></div>
-              <span class="mono" id="trail-length-value">${Number(state.trailLength) || 100}%</span>
+              <span class="mono" id="trail-length-value">${trailLength}%</span>
             </div>
             <div class="range">
-              <input type="range" id="set-trail-length" min="10" max="300" step="10" value="${Number(state.trailLength) || 100}" ${trailOn ? "" : "disabled"}>
+              <input type="range" id="set-trail-length" min="10" max="300" step="10" value="${trailLength}" ${trailOn ? "" : "disabled"}>
               <span class="muted" style="font-size:11px">короткий</span>
               <div class="spacer"></div>
               <span class="muted" style="font-size:11px">длинный</span>
@@ -5005,10 +5011,10 @@
             <div class="prefs-row-head">
               <span class="prefs-label">Прозрачность</span>
               <div class="spacer"></div>
-              <span class="mono" id="trail-opacity-value">${Number(state.trailOpacity) || 100}%</span>
+              <span class="mono" id="trail-opacity-value">${trailOpacity}%</span>
             </div>
             <div class="range">
-              <input type="range" id="set-trail-opacity" min="5" max="100" step="5" value="${Number(state.trailOpacity) || 100}">
+              <input type="range" id="set-trail-opacity" min="5" max="100" step="5" value="${trailOpacity}">
               <span class="muted" style="font-size:11px">прозрачный</span>
               <div class="spacer"></div>
               <span class="muted" style="font-size:11px">плотный</span>
@@ -5180,18 +5186,26 @@
   }
 
   function prefsUpdates(settings) {
+    const version = (state.update && state.update.version) || "—";
+    const platform = (state.update && state.update.platform) || "";
     return `
       <div class="prefs-section">
-        <div class="prefs-label">Откуда обновляться</div>
+        <div class="prefs-label">Версия лаунчера</div>
+        <div class="settings-rows">
+          <div class="settings-row">
+            <div class="label">OmniSpec</div>
+            <div><span class="kbd mono" id="upd-version">${esc(version)}</span></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Платформа</div>
+            <div><span class="muted" id="upd-platform">${esc(platform || "—")}</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="prefs-section">
+        <div class="prefs-label">Обновления</div>
         <div class="prefs-rows">
-          <div class="settings-row">
-            <div class="label">Репозиторий GitHub</div>
-            <div><input class="input" style="width:100%" id="set-upd-repo" value="${esc(settings.update_repo || "")}" placeholder="владелец/репозиторий" spellcheck="false"></div>
-          </div>
-          <div class="settings-row">
-            <div class="label">Токен (если репозиторий приватный)</div>
-            <div><input class="input" style="width:100%" id="set-upd-token" value="${esc(settings.update_token || "")}" placeholder="необязательно" spellcheck="false"></div>
-          </div>
           <div class="settings-row">
             <div class="label">Проверять обновления</div>
             <div><div class="switch-row"><button class="switch ${settings.update_enabled !== false ? "on" : ""}" id="set-upd-enabled"></button></div></div>
@@ -5206,6 +5220,7 @@
           </div>
         </div>
         <div class="settings-actions">
+          <button class="btn" id="upd-open-repo">Открыть репозиторий</button>
           <button class="btn" id="upd-check-now">Проверить сейчас</button>
         </div>
       </div>`;
@@ -5504,6 +5519,22 @@
       const info = await checkUpdates(false);
       if (info) { $("#modal-prefs").hidden = true; $("#modal-update").hidden = false; }
     });
+    const openRepo = $("#upd-open-repo");
+    if (openRepo) openRepo.addEventListener("click", () => {
+      const slug = (state.settings && state.settings.update_repo) || "Shokydo/OmniSpec";
+      api.openUrl(`https://github.com/${slug}`).catch((error) => toast(String(error), "err"));
+    });
+    if ($("#upd-version")) {
+      api.versionInfo().then((info) => {
+        const box = $("#upd-version");
+        if (!box || !info) return;
+        state.update.version = info.version || state.update.version;
+        state.update.platform = info.platform || state.update.platform;
+        box.textContent = state.update.version || "—";
+        const plat = $("#upd-platform");
+        if (plat) plat.textContent = state.update.platform || "—";
+      }).catch(() => {});
+    }
     const openData = $("#prefs-open-data");
     if (openData) openData.addEventListener("click", () => api.openPath("").catch(() => {}));
     if ($("#prefs-version")) {
@@ -5559,8 +5590,6 @@
     bindField("#set-jvm", "jvm_args");
     bindField("#set-java", "java_path", { trim: true });
     bindField("#set-java-legacy", "java_path_legacy", { trim: true });
-    bindField("#set-upd-repo", "update_repo", { trim: true });
-    bindField("#set-upd-token", "update_token", { trim: true });
     // тумблеры: слушаем после их собственных обработчиков, чтобы взять новое состояние
     const autoJavaToggle = $("#set-auto-java");
     if (autoJavaToggle) autoJavaToggle.addEventListener("click", () => commit({ auto_java: autoJavaToggle.classList.contains("on") }));
@@ -5612,8 +5641,6 @@
       auto_java: flag("#set-auto-java", settings.auto_java),
       proxy: value("#set-proxy") !== undefined ? (value("#set-proxy").trim() || null) : settings.proxy,
       ms_client_id: value("#set-ms-client") !== undefined ? (value("#set-ms-client").trim() || null) : settings.ms_client_id,
-      update_repo: value("#set-upd-repo") !== undefined ? (value("#set-upd-repo").trim() || null) : settings.update_repo,
-      update_token: value("#set-upd-token") !== undefined ? (value("#set-upd-token").trim() || null) : settings.update_token,
       update_enabled: flag("#set-upd-enabled", settings.update_enabled),
       update_auto: flag("#set-upd-auto", settings.update_auto),
       update_prerelease: flag("#set-upd-pre", settings.update_prerelease),
@@ -5629,11 +5656,11 @@
       click_fx: state.fx,
       ambient: state.ambient || "stars",
       effect_size: Number(state.effectSize) || 100,
-      trail_size: Number(state.trailSize) || 100,
-      trail_style: state.trailStyle || "line",
-      trail_length: Number(state.trailLength) || 100,
+      trail_size: Number(state.trailSize) || TRAIL_DEFAULTS.size,
+      trail_style: state.trailStyle || TRAIL_DEFAULTS.style,
+      trail_length: Number(state.trailLength) || TRAIL_DEFAULTS.length,
       ambient_density: Number(state.ambientDensity) || 100,
-      trail_opacity: Number(state.trailOpacity) || 100,
+      trail_opacity: Number(state.trailOpacity) || TRAIL_DEFAULTS.opacity,
       trail_color: state.trailColor || null,
       ambient_opacity: Number(state.ambientOpacity) || 80,
       ambient_color: state.ambientColor || null,
@@ -7223,12 +7250,33 @@
     applyClickFx(state.fx);
     applyAmbient((state.settings && state.settings.ambient) || "stars");
     applyEffectSize((state.settings && state.settings.effect_size) || 100);
-    applyTrailSize((state.settings && state.settings.trail_size) || 100);
-    applyTrailLength((state.settings && state.settings.trail_length) || 100);
-    applyTrailStyle((state.settings && state.settings.trail_style) || "line");
+    applyTrailSize((state.settings && state.settings.trail_size) || TRAIL_DEFAULTS.size);
+    applyTrailLength((state.settings && state.settings.trail_length) || TRAIL_DEFAULTS.length);
+    applyTrailStyle((state.settings && state.settings.trail_style) || TRAIL_DEFAULTS.style);
     applyDensity((state.settings && state.settings.ambient_density) || 100);
-    applyTrailOpacity((state.settings && state.settings.trail_opacity) || 100);
+    applyTrailOpacity((state.settings && state.settings.trail_opacity) || TRAIL_DEFAULTS.opacity);
     applyTrailColor((state.settings && state.settings.trail_color) || null);
+    // трейс ещё не трогали (или это первый запуск) — ставим новый вид по умолчанию: искры
+    const storedTrail = state.settings || {};
+    const untouchedTrail = (!storedTrail.trail_style || storedTrail.trail_style === "line")
+      && Number(storedTrail.trail_size || 100) === 100
+      && Number(storedTrail.trail_length || 100) === 100
+      && Number(storedTrail.trail_opacity || 100) === 100;
+    if (untouchedTrail) {
+      applyTrailStyle(TRAIL_DEFAULTS.style);
+      applyTrailSize(TRAIL_DEFAULTS.size);
+      applyTrailLength(TRAIL_DEFAULTS.length);
+      applyTrailOpacity(TRAIL_DEFAULTS.opacity);
+      state.settings = {
+        ...(state.settings || {}),
+        trail: true,
+        trail_style: TRAIL_DEFAULTS.style,
+        trail_size: TRAIL_DEFAULTS.size,
+        trail_length: TRAIL_DEFAULTS.length,
+        trail_opacity: TRAIL_DEFAULTS.opacity
+      };
+      api.saveSettings(state.settings).catch(() => {});
+    }
     applyAmbientOpacity((state.settings && state.settings.ambient_opacity) ?? 80);
     applyAmbientColor((state.settings && state.settings.ambient_color) || null);
     applyTrail(!state.settings || state.settings.trail !== false);
