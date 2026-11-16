@@ -407,36 +407,174 @@
   }
 
   /** Блоки появляются при прокрутке, друг за другом внутри своего ряда. */
-  function revealBlocks() {
-    var selector = [
-      ".sec-head", ".card", ".gal", ".step", ".rel", ".dl-card", ".note",
-      ".code", ".faq details", ".split > div", ".eyebrow", "h1", ".lead",
-      ".cta", ".meta-row", ".frame", ".search", ".day"
+  /**
+   * Появление интерфейса: окна раскрываются сверху вниз, ячейки встают
+   * волной по диагонали, текст проявляется слева направо, как набор в консоли.
+   * Базовые классы ставятся сразу (элемент спрятан), а `.in` — когда он
+   * доходит до экрана; поэтому переход всегда проигрывается, а без скриптов
+   * страница просто видна целиком.
+   */
+  function motionReveal() {
+    var WINDOWS = ".frame, .gal";
+    var CELLS = ".card, .dl-card, .step, .note, .rel, .day, .search, .faq details";
+    var TEXTS = [
+      ".lead", ".kicker", ".sec-head h2", ".sec-head p", ".list li", ".code",
+      ".faq summary", ".faq p", ".card h3", ".card p", ".step h3", ".step p",
+      ".dl-card h3", ".dl-card p", ".note p", ".day h3"
     ].join(",");
-    var nodes = Array.prototype.slice.call(document.querySelectorAll(selector));
-    if (!nodes.length) return;
+    var FADES = ".eyebrow, .cta, .meta-row, .tag";
 
-    if (!("IntersectionObserver" in window)) {
-      nodes.forEach(function (node) { node.classList.add("reveal", "in"); });
-      return;
+    function list(selector) {
+      return Array.prototype.slice.call(document.querySelectorAll(selector));
     }
 
-    nodes.forEach(function (node) { node.classList.add("reveal"); });
+    var queue = [];
+    var byNode = new Map();
 
-    var observer = new IntersectionObserver(function (entries) {
+    function push(node, cls, delay) {
+      if (byNode.has(node)) { byNode.get(node).delay = delay; return; }
+      var item = { node: node, cls: cls, delay: delay };
+      queue.push(item);
+      byNode.set(node, item);
+      node.classList.add(cls);
+      node.dataset.revealDelay = delay;
+    }
+
+    /** насколько поздно элемент встаёт в своей сетке: волна по диагонали */
+    function wave(node, stepRow, stepCol, cap) {
+      var parent = node.parentNode;
+      if (!parent) return 0;
+      var tops = [];
+      var lefts = [];
+      Array.prototype.slice.call(parent.children).forEach(function (item) {
+        var t = Math.round(item.offsetTop);
+        var l = Math.round(item.offsetLeft);
+        if (tops.indexOf(t) < 0) tops.push(t);
+        if (lefts.indexOf(l) < 0) lefts.push(l);
+      });
+      tops.sort(function (a, b) { return a - b; });
+      lefts.sort(function (a, b) { return a - b; });
+      var row = tops.indexOf(Math.round(node.offsetTop));
+      var col = lefts.indexOf(Math.round(node.offsetLeft));
+      return Math.min(cap, Math.max(0, row) * stepRow + Math.max(0, col) * stepCol);
+    }
+
+    /** текст ждёт свою карточку/окно: сначала встаёт коробка, потом строка */
+    function parentDelay(node) {
+      var box = node.parentNode;
+      while (box && box !== document.body) {
+        if (byNode.has(box)) return byNode.get(box).delay + 120;
+        box = box.parentNode;
+      }
+      return 0;
+    }
+
+    list(WINDOWS).forEach(function (node) { push(node, "rv-win", wave(node, 70, 90, 460)); });
+    list(CELLS).forEach(function (node) { push(node, "rv-cell", wave(node, 45, 65, 520)); });
+    list(TEXTS).forEach(function (node) {
+      var delay = parentDelay(node);
+      if (!delay && node.parentNode) {
+        // заголовок раздела: надзаголовок → h2 → пояснение идут лесенкой,
+        // даже если их общая коробка не анимируется
+        var sibs = Array.prototype.slice.call(node.parentNode.children).filter(function (item) {
+          return item.matches && item.matches(TEXTS);
+        });
+        delay = Math.max(0, sibs.indexOf(node)) * 70;
+      }
+      push(node, "rv-text", delay);
+    });
+    list(FADES).forEach(function (node) { push(node, "rv-fade", parentDelay(node)); });
+
+    /* первый экран: своя очередь, чтобы появление читалось как вступление */
+    var hero = document.querySelector(".hero");
+    if (hero) {
+      [[".eyebrow", 40], [".lead", 470], [".cta", 620], [".meta-row", 710], [".frame", 790]]
+        .forEach(function (pair) {
+          var node = hero.querySelector(pair[0]);
+          if (node) push(node, byNode.has(node) ? byNode.get(node).cls : "rv-fade", pair[1]);
+        });
+    }
+
+    if (!queue.length) return;
+
+    function show(item) {
+      item.node.style.setProperty("--d", item.delay + "ms");
+      item.node.style.willChange = "opacity, transform";
+      item.node.classList.add("in");
+      window.setTimeout(function () { item.node.style.willChange = ""; }, item.delay + 1600);
+    }
+
+    /* Следим не за самим элементом, а за его коробкой-родителем: у элементов
+       с clip-path нулевая видимая площадь, и IntersectionObserver считает их
+       непересекающимися — анимация бы не запустилась никогда. */
+    function anchorOf(item) {
+      var node = item.node;
+      while (node) {
+        var clipped = node.classList.contains("rv-win") || node.classList.contains("rv-text");
+        if (!clipped) return node;
+        node = node.parentElement;
+      }
+      return item.node;
+    }
+
+    if (!("IntersectionObserver" in window)) {
+      queue.forEach(show);
+    } else {
+      var groups = new Map();
+      queue.forEach(function (item) {
+        var anchor = anchorOf(item);
+        if (!groups.has(anchor)) groups.set(anchor, []);
+        groups.get(anchor).push(item);
+      });
+
+      var observer = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          observer.unobserve(entry.target);
+          (groups.get(entry.target) || []).forEach(show);
+        });
+      }, { rootMargin: "0px 0px -6% 0px", threshold: 0.02 });
+
+      groups.forEach(function (items, anchor) { observer.observe(anchor); });
+    }
+
+    /* заголовок первого экрана — по словам */
+    var title = document.querySelector("h1");
+    if (!title || title.querySelector(".w")) return;
+
+    var words = [];
+    Array.prototype.slice.call(title.childNodes).forEach(function (part) {
+      if (part.nodeType !== 3) return;
+      var frag = document.createDocumentFragment();
+      part.textContent.split(/(\s+)/).forEach(function (chunk) {
+        if (!chunk) return;
+        if (/^\s+$/.test(chunk)) { frag.appendChild(document.createTextNode(chunk)); return; }
+        var span = document.createElement("span");
+        span.className = "w";
+        span.textContent = chunk;
+        frag.appendChild(span);
+        words.push(span);
+      });
+      title.replaceChild(frag, part);
+    });
+
+    words.forEach(function (word, index) {
+      word.style.setProperty("--d", 130 + index * 60 + "ms");
+    });
+
+    function showTitle() {
+      words.forEach(function (word) { word.classList.add("in"); });
+    }
+
+    if (!("IntersectionObserver" in window)) { showTitle(); return; }
+    var titleObserver = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) {
         if (!entry.isIntersecting) return;
-        var node = entry.target;
-        var siblings = node.parentNode ? Array.prototype.slice.call(node.parentNode.children) : [];
-        var index = siblings.indexOf(node);
-        var delay = Math.min(220, Math.max(0, index) * 45);
-        node.style.transitionDelay = delay + "ms";
-        node.classList.add("in");
-        observer.unobserve(node);
+        titleObserver.disconnect();
+        showTitle();
       });
-    }, { rootMargin: "0px 0px -8% 0px", threshold: 0.05 });
-
-    nodes.forEach(function (node) { observer.observe(node); });
+    }, { threshold: 0.02 });
+    titleObserver.observe(title);
   }
 
   /**
@@ -528,7 +666,7 @@
   drawPlexus();
   drawGrid();
   drawSnow();
-  revealBlocks();
+  motionReveal();
   navMotion();
   scrollMotion();
 })();
