@@ -232,6 +232,9 @@ pub struct Settings {
     /// Свёрнута ли группа «Без категории».
     #[serde(default)]
     pub loose_collapsed: bool,
+    /// Первый запуск пройден: окно быстрой настройки больше не показываем.
+    #[serde(default)]
+    pub onboarded: bool,
     /// Размер эффектов в процентах: 60–220.
     #[serde(default = "default_effect_size")]
     pub effect_size: u8,
@@ -337,6 +340,7 @@ impl Default for Settings {
             mr_grid: default_feed_grid(),
             theme_tint: None,
             loose_collapsed: false,
+            onboarded: false,
             effect_size: default_effect_size(),
             trail: default_true_trail(),
             trail_size: default_trail_size(),

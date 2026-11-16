@@ -237,6 +237,25 @@
   </div>
 </div>
 
+<!-- ============ ПЕРВЫЙ ЗАПУСК: быстрая настройка ============ -->
+<div class="modal-backdrop" id="modal-onboard" hidden>
+  <div class="modal onboard-box">
+    <header class="modal-head">
+      <h2>Настройка лаунчера</h2>
+      <div class="spacer"></div>
+      <span class="mono onboard-count" id="onboard-count">1 / 5</span>
+      <button class="icon-btn" data-close-onboard title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="modal-body onboard-body" id="onboard-body"></div>
+    <footer class="modal-foot">
+      <button class="btn btn-ghost" id="onboard-skip">Пропустить</button>
+      <div class="spacer"></div>
+      <button class="btn" id="onboard-prev" hidden>Назад</button>
+      <button class="btn btn-primary" id="onboard-next">Далее</button>
+    </footer>
+  </div>
+</div>
+
 <!-- ============ АККАУНТЫ ============ -->
 <div class="modal-backdrop" id="modal-account" hidden>
   <div class="modal" style="width:min(560px,94vw)">

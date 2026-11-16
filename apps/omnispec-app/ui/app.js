@@ -129,14 +129,15 @@
       "--muted": vars["--dim-2"]
     });
     // полупрозрачные поверхности — нужны, когда включены обои
-    vars["--bg-1a"] = rgbaOf(vars["--bg-2"], 0.94);
-    vars["--bg-2a"] = rgbaOf(vars["--bg-2"], 0.84);
-    vars["--bg-3a"] = rgbaOf(vars["--bg-3"], 0.88);
+    vars["--bg-1a"] = rgbaOf(vars["--bg-2"], 0.9);
+    vars["--bg-2a"] = rgbaOf(vars["--bg-2"], 0.78);
+    vars["--bg-3a"] = rgbaOf(vars["--bg-3"], 0.82);
     for (const [key, value] of Object.entries(vars)) document.body.style.setProperty(key, value);
     const valid = name === "custom" || Boolean(THEMES[name]);
     document.body.dataset.theme = valid ? name : "dark";
     // подложка поверх обоев по умолчанию берёт цвет темы
     applyThemeTint();
+    forceRepaint();
     // частицы фона подстраиваются под тему: тёмные на светлой, светлые на тёмной
     if (ambientInkRefresh) ambientInkRefresh();
     trailFx.refreshInk();
@@ -829,8 +830,80 @@
     return name === "noise" ? "assets/wallpapers/noise.jpg" : `assets/wallpapers/${name}.png`;
   }
 
+  function loadWallImage(src) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("фон не открылся"));
+      image.src = src;
+    });
+  }
+
+  /**
+   * Готовим фон один раз в canvas: масштаб под окно, размытие и размер по вкусу.
+   * Слой получается обычной картинкой (JPEG), а не гигантским PNG в background-image:
+   * так WebView2 рисует его одинаково на любой видеокарте и не чернит панели сверху.
+   */
+  const wallLayerCache = new Map();
+
+  async function prepareWallLayer(src, fit, blur) {
+    const vw = Math.max(640, Math.round(window.innerWidth || 1280));
+    const vh = Math.max(420, Math.round(window.innerHeight || 720));
+    const scale = Math.min(1, 1920 / vw);
+    const width = Math.round(vw * scale);
+    const height = Math.round(vh * scale);
+    const key = `${fit}|${blur}|${width}x${height}|${src.length}|${src.slice(-48)}`;
+    if (wallLayerCache.has(key)) return wallLayerCache.get(key);
+    let url = null;
+    try {
+      const image = await loadWallImage(src);
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      // подложка темы — чтобы у прозрачных картинок не было чёрных полей
+      ctx.fillStyle = themeTintColor();
+      ctx.fillRect(0, 0, width, height);
+      if (blur > 0) ctx.filter = `blur(${Math.max(1, Math.round(blur * 1.6))}px)`;
+      const pad = blur > 0 ? 1.08 : 1;
+      const iw = image.naturalWidth || image.width;
+      const ih = image.naturalHeight || image.height;
+      if (fit === "tile") {
+        const pattern = ctx.createPattern(image, "repeat");
+        if (pattern) {
+          ctx.fillStyle = pattern;
+          ctx.fillRect(0, 0, width, height);
+        }
+      } else if (fit === "fill") {
+        ctx.drawImage(image, 0, 0, width, height);
+      } else {
+        const ratio = iw / Math.max(1, ih);
+        const target = width / height;
+        let dw = width;
+        let dh = height;
+        const cover = fit !== "contain";
+        if (ratio > target) {
+          dh = height;
+          dw = height * ratio;
+        } else {
+          dw = width;
+          dh = width / ratio;
+        }
+        if (cover) { dw *= pad; dh *= pad; }
+        ctx.drawImage(image, (width - dw) / 2, (height - dh) / 2, dw, dh);
+      }
+      url = canvas.toDataURL("image/jpeg", 0.92);
+    } catch (error) {
+      url = null;
+    }
+    if (wallLayerCache.size > 6) wallLayerCache.clear();
+    wallLayerCache.set(key, url);
+    return url;
+  }
+
   /** Показать обои по настройкам (или по переданным значениям — для живого превью). */
-  function applyWallpaper(overrides = {}) {
+  async function applyWallpaper(overrides = {}) {
     const settings = state.settings || {};
     const layer = $("#wall");
     if (!layer) return;
@@ -845,15 +918,38 @@
       document.body.classList.remove("has-wall");
       return;
     }
+    const src = name === "custom" ? state.customWall : wallUrl(name);
     layer.hidden = false;
-    layer.style.backgroundImage = `url("${name === "custom" ? state.customWall : wallUrl(name)}")`;
+    document.body.classList.add("has-wall");
+    layer.style.setProperty("--wall-dim", String(Math.min(100, Math.max(0, dim)) / 100));
+    // основной путь: готовый слой нужного размера
+    const prepared = await prepareWallLayer(src, fit, blur);
+    if (prepared) {
+      layer.style.filter = "";
+      layer.style.transform = "";
+      layer.style.backgroundSize = "cover";
+      layer.style.backgroundRepeat = "no-repeat";
+      layer.style.backgroundImage = `url("${prepared}")`;
+      layer.dataset.prepared = "1";
+      forceRepaint();
+      return;
+    }
+    // запасной путь (canvas недоступен): прямо картинкой и CSS-фильтром
+    layer.style.backgroundImage = `url("${src}")`;
     layer.style.backgroundSize = fit === "fill" ? "100% 100%" : fit === "contain" ? "contain" : fit === "tile" ? "auto" : "cover";
     layer.style.backgroundRepeat = fit === "tile" ? "repeat" : "no-repeat";
     layer.style.filter = blur ? `blur(${blur}px)` : "";
     layer.style.transform = blur ? "scale(1.05)" : "";
-    layer.style.setProperty("--wall-dim", String(Math.min(80, Math.max(0, dim)) / 100));
-    document.body.classList.add("has-wall");
+    layer.dataset.prepared = "";
   }
+
+  /* размер окна изменился — пересобираем слой фона под новый размер */
+  let wallResizeTimer = 0;
+  window.addEventListener("resize", () => {
+    if (!document.body.classList.contains("has-wall")) return;
+    clearTimeout(wallResizeTimer);
+    wallResizeTimer = setTimeout(() => { applyWallpaper(); }, 350);
+  });
 
   /**
    * Базовый цвет фона: он ложится поверх обоев. По умолчанию — цвет темы
@@ -869,6 +965,19 @@
 
   function applyThemeTint() {
     document.body.style.setProperty("--wall-tint", themeTintColor());
+  }
+
+  /**
+   * Просьба перерисовать слои: WebView2 иногда оставляет панели чёрными, пока
+   * не тронешь композитинг. Один кадр с отдельным слоем — и картинка обновляется.
+   */
+  function forceRepaint() {
+    const app = $(".app");
+    if (!app) return;
+    app.style.transform = "translateZ(0)";
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => { app.style.transform = ""; });
+    });
   }
 
   /** Свои цвета сохраняем сразу — тема не теряется при перезапуске. */
@@ -2911,7 +3020,7 @@
     const percent = total > 0 ? Math.max(0, Math.min(100, Math.round((done / total) * 100))) : 0;
     const stage = PROGRESS_STAGES[payload.stage] || payload.stage || "импорт";
     const detail = `${stage}: ${payload.detail || "…"}`.slice(0, 80);
-    return { percent, text: total > 0 ? `${detail} · ${percent}%` : detail };
+    return { percent, total, text: detail };
   }
 
   /** Живая полоса импорта: обновляем текст и процент без полной перерисовки. */
@@ -2939,7 +3048,13 @@
       fill.style.width = `${info.percent}%`;
     }
     const percent = $("#imp-live-percent");
-    if (percent) percent.textContent = info && info.total ? `${info.percent}%` : "";
+    if (percent) {
+      const hasTotal = Boolean(info && info.total);
+      percent.textContent = hasTotal ? `${info.percent}%` : "…";
+      percent.classList.toggle("is-wait", !hasTotal);
+    }
+    const liveBox = $("#imp-live");
+    if (liveBox) liveBox.classList.toggle("is-idle", !(info && info.total));
   }
 
   /** Полоса процессов на главной: видна всё время импорта/распаковки. */
@@ -4304,15 +4419,16 @@
     const title = importTitle(stage);
     const text = (cfg.busy && cfg.status) || (info && info.text) || "копируем файлы в папку лаунчера…";
     const percent = info ? info.percent : 0;
-    return `<div class="imp-live" id="imp-live">
-      <span class="imp-spinner"></span>
+    const hasTotal = Boolean(info && info.total);
+    return `<div class="imp-live${hasTotal ? "" : " is-idle"}" id="imp-live">
+      <span class="imp-spinner" aria-hidden="true"></span>
       <div class="imp-live-main">
         <div class="imp-live-row">
           <span class="imp-live-title" id="imp-live-title">${esc(title)}</span>
-          <span class="mono imp-live-percent" id="imp-live-percent">${info && info.total ? `${percent}%` : ""}</span>
+          <span class="imp-live-percent mono${hasTotal ? "" : " is-wait"}" id="imp-live-percent">${hasTotal ? `${percent}%` : "…"}</span>
         </div>
         <div class="imp-live-text mono" id="imp-live-text">${esc(text)}</div>
-        <div class="imp-live-bar"><div class="imp-live-fill ${info && info.total ? "" : "is-idle"}" id="imp-live-fill" style="width:${info && info.total ? percent : 100}%"></div></div>
+        <div class="imp-live-bar"><div class="imp-live-fill ${hasTotal ? "" : "is-idle"}" id="imp-live-fill" style="width:${hasTotal ? percent : 100}%"></div></div>
       </div>
     </div>`;
   }
@@ -5704,7 +5820,9 @@
                 ${account.uuid === activeId
                   ? '<span class="tag green">активный</span>'
                   : '<button class="btn btn-small" data-acc="pick">Выбрать</button>'}
-                ${account.kind === "microsoft" ? "" : `<button class="icon-btn" data-acc="rename-one" title="Изменить ник"><svg class="ic"><use href="#i-pencil"/></svg></button>`}
+                ${account.kind === "microsoft"
+                  ? '<span class="acc-slot" aria-hidden="true"></span>'
+                  : `<button class="icon-btn" data-acc="rename-one" title="Изменить ник"><svg class="ic"><use href="#i-pencil"/></svg></button>`}
                 <button class="icon-btn" data-acc="remove-one" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
               </div>`).join("")}
           </div>
@@ -6737,16 +6855,18 @@
 
   /**
    * Плащ: пластина 10×16 за спиной (тело заканчивается на z = 2), толщина 1 px.
-   * UV — как в ванильной развёртке 64×32: рисунок лежит в 1..11 по u и 1..17 по v.
+   * Развёртка 64×32 как в Blockbench: рисунок плаща лежит в 1..11 × 1..17 — это
+   * НАРУЖНАЯ сторона, её видно сзади (south, +Z). Внутренняя подкладка — 12..22.
+   * Раньше стороны были перепутаны, поэтому рисунок не читался.
    */
   const SKIN_CAPE = {
     n: "Cape",
     b: [-5, 8, 2, 5, 24, 3],
     i: 0,
     uv: {
-      north: [1, 1, 11, 17],
+      south: [1, 1, 11, 17],
+      north: [12, 1, 22, 17],
       east: [0, 1, 1, 17],
-      south: [12, 1, 22, 17],
       west: [11, 1, 12, 17],
       up: [11, 1, 1, 0],
       down: [12, 0, 11, 1]
@@ -8426,6 +8546,171 @@
     await api.onToast((payload) => toast(payload.message, payload.kind || ""));
   }
 
+  /* ==================== ПЕРВЫЙ ЗАПУСК ====================
+   * Пять коротких шагов: тема, эффекты, трейсер, масштаб и импорт сборок.
+   * Показываем один раз — отметка onboarded живёт в настройках.
+   */
+  const ONBOARD_STEPS = ["theme", "effects", "trail", "scale", "import"];
+  let onboardStep = 0;
+
+  function onboardNeeded() {
+    return !(state.settings && state.settings.onboarded === true);
+  }
+
+  function onboardEffectsOn() {
+    return (state.fx && state.fx !== "off") || (state.ambient && state.ambient !== "off");
+  }
+
+  function onboardSave(patch) {
+    state.settings = { ...(state.settings || {}), ...patch };
+    api.saveSettings(state.settings).catch(() => {});
+  }
+
+  function onboardStepHtml() {
+    const step = ONBOARD_STEPS[onboardStep];
+    if (step === "theme") {
+      return `<div class="onboard-lead">
+          <span class="onboard-title">Тема оформления</span>
+          <span class="muted">перекрашивает весь лаунчер — панели, текст и акцент</span>
+        </div>
+        <div class="theme-grid onboard-themes" id="onboard-themes">
+          ${Object.entries(THEMES).map(([id, theme]) => `
+            <button class="theme-chip ${state.theme === id ? "is-active" : ""}" data-theme-id="${id}" title="${esc(theme.label)}">
+              <span class="theme-swatch" style="background:${theme.bg}">
+                <span class="theme-band" style="background:${theme.panel}"></span>
+                <span class="theme-accent" style="background:${theme.accent}"></span>
+              </span>
+              <span class="theme-name">${esc(theme.label)}</span>
+            </button>`).join("")}
+        </div>`;
+    }
+    if (step === "effects") {
+      return `<div class="onboard-lead">
+          <span class="onboard-title">Эффекты на экране</span>
+          <span class="muted">волна от клика и частицы на фоне</span>
+        </div>
+        <div class="onboard-row">
+          <div class="onboard-row-main">
+            <span class="onboard-row-title">${onboardEffectsOn() ? "Включены" : "Выключены"}</span>
+            <span class="muted">если мешают — выключите, лаунчер будет спокойнее</span>
+          </div>
+          <button class="switch ${onboardEffectsOn() ? "on" : ""}" id="onboard-fx"></button>
+        </div>`;
+    }
+    if (step === "trail") {
+      const on = state.trail !== false;
+      return `<div class="onboard-lead">
+          <span class="onboard-title">Трейсер за курсором</span>
+          <span class="muted">искры тянутся за мышкой</span>
+        </div>
+        <div class="onboard-row">
+          <div class="onboard-row-main">
+            <span class="onboard-row-title">${on ? "Включён" : "Выключен"}</span>
+            <span class="muted">толщину, длину и цвет можно подобрать в настройках</span>
+          </div>
+          <button class="switch ${on ? "on" : ""}" id="onboard-trail"></button>
+        </div>`;
+    }
+    if (step === "scale") {
+      const current = Number(state.uiScale) || 100;
+      return `<div class="onboard-lead">
+          <span class="onboard-title">Масштаб лаунчера</span>
+          <span class="muted">размер интерфейса — как «размер интерфейса» в Minecraft</span>
+        </div>
+        <div class="chips onboard-scale" id="onboard-scale">
+          ${UI_SCALES.map((scale) => `<button class="chip ${current === scale ? "is-active" : ""}" data-scale="${scale}">${scale}%</button>`).join("")}
+        </div>`;
+    }
+    return `<div class="onboard-lead">
+        <span class="onboard-title">Сборки</span>
+        <span class="muted">можно добавить сразу или позже — кнопка «Добавить сборку» всегда на главной</span>
+      </div>
+      <div class="onboard-row">
+        <div class="onboard-row-main">
+          <span class="onboard-row-title">Импорт готовой сборки</span>
+          <span class="muted">файл .mrpack или .zip, папка лаунчера (PolyMC/Prism), ссылка</span>
+        </div>
+        <button class="btn" id="onboard-import"><svg class="ic"><use href="#i-download"/></svg>Выбрать файл</button>
+      </div>`;
+  }
+
+  function renderOnboard() {
+    const body = $("#onboard-body");
+    if (!body) return;
+    $("#onboard-count").textContent = `${onboardStep + 1} / ${ONBOARD_STEPS.length}`;
+    $("#onboard-prev").hidden = onboardStep === 0;
+    $("#onboard-next").textContent = onboardStep === ONBOARD_STEPS.length - 1 ? "Готово" : "Далее";
+    body.innerHTML = onboardStepHtml();
+    const step = ONBOARD_STEPS[onboardStep];
+
+    if (step === "theme") {
+      $$("#onboard-themes .theme-chip").forEach((chip) => chip.addEventListener("click", () => {
+        const id = chip.dataset.themeId;
+        applyTheme(id);
+        state.theme = id;
+        $$("#onboard-themes .theme-chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+        onboardSave({ theme: id });
+        applyWallpaper();
+      }));
+    }
+    if (step === "effects") {
+      $("#onboard-fx").addEventListener("click", (event) => {
+        const on = !onboardEffectsOn();
+        const style = (state.settings && FX_STYLES[state.settings.click_fx]) ? state.settings.click_fx : "wave";
+        state.fx = on ? style : "off";
+        applyClickFx(state.fx);
+        applyAmbient(on ? (state.ambient && state.ambient !== "off" ? state.ambient : "stars") : "off");
+        event.currentTarget.classList.toggle("on", on);
+        onboardSave({ click_fx: state.fx, ambient: on ? "stars" : "off" });
+        renderOnboard();
+      });
+    }
+    if (step === "trail") {
+      $("#onboard-trail").addEventListener("click", (event) => {
+        const on = !(state.trail !== false);
+        applyTrail(on);
+        event.currentTarget.classList.toggle("on", on);
+        onboardSave({ trail: on, ...(on ? {
+          trail_style: TRAIL_DEFAULTS.style,
+          trail_size: TRAIL_DEFAULTS.size,
+          trail_length: TRAIL_DEFAULTS.length,
+          trail_opacity: TRAIL_DEFAULTS.opacity
+        } : {}) });
+        renderOnboard();
+      });
+    }
+    if (step === "scale") {
+      $$("#onboard-scale .chip").forEach((chip) => chip.addEventListener("click", () => {
+        const scale = Number(chip.dataset.scale) || 100;
+        applyUiScale(scale);
+        $$("#onboard-scale .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+        onboardSave({ ui_scale: scale });
+      }));
+    }
+    if (step === "import") {
+      $("#onboard-import").addEventListener("click", async () => {
+        await finishOnboard();
+        importFromExplorer(null);
+      });
+    }
+  }
+
+  function openOnboard() {
+    const modal = $("#modal-onboard");
+    if (!modal) return;
+    modal.hidden = false;
+    onboardStep = 0;
+    renderOnboard();
+  }
+
+  /** Закрываем первый запуск: больше окно не показываем. */
+  async function finishOnboard() {
+    const modal = $("#modal-onboard");
+    if (modal) modal.hidden = true;
+    state.settings = { ...(state.settings || {}), onboarded: true };
+    try { await api.saveSettings(state.settings); } catch (error) { /* не критично */ }
+  }
+
   async function init() {
     bindEvents();
     initClickFx();
@@ -8514,10 +8799,30 @@
         if (startup) installMrpackPath(startup);
       } catch (error) { /* без аргументов — обычный запуск */ }
     }
+    // первый запуск: короткая настройка (тема, эффекты, трейсер, масштаб, импорт)
+    if (onboardNeeded()) openOnboard();
     if (!IS_APP) {
       /* демо-режим без бэкенда — тихо */
     }
   }
+
+  /* кнопки окна первого запуска */
+  (() => {
+    const modal = $("#modal-onboard");
+    if (!modal) return;
+    $("#onboard-next").addEventListener("click", () => {
+      if (onboardStep >= ONBOARD_STEPS.length - 1) { finishOnboard(); return; }
+      onboardStep += 1;
+      renderOnboard();
+    });
+    $("#onboard-prev").addEventListener("click", () => {
+      if (onboardStep === 0) return;
+      onboardStep -= 1;
+      renderOnboard();
+    });
+    $("#onboard-skip").addEventListener("click", finishOnboard);
+    $$("[data-close-onboard]", modal).forEach((btn) => btn.addEventListener("click", finishOnboard));
+  })();
 
   // отладочный мостик для автотестов интерфейса (Playwright): не влияет на работу лаунчера
   window.omnispecDebug = { state, paletteFromImage, wallpaperPalette, feedGridLevel };

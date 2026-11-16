@@ -1107,7 +1107,6 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
   padding: 2px 6px;
   background: rgba(0, 0, 0, .55);
   font-size: 10px; color: #e6e6e8; text-align: left;
-  backdrop-filter: none;
 }
 .wall-chip.none {
   display: grid; place-items: center;
@@ -1841,6 +1840,26 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
 .profile-list { display: grid; gap: 3px; margin-top: 8px; }
 .profile-row .btn { height: var(--h-xs); }
 .profile-row .icon-btn { width: 24px; height: 24px; }
+/* строка аккаунта — сетка, чтобы «Выбрать», карандаш и корзина стояли в одних колонках */
+.profile-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 92px 24px 24px;
+  align-items: center;
+  column-gap: 9px;
+  min-height: 42px;
+  padding: 5px 8px;
+}
+.profile-row .avatar, .profile-row .avatar-sm, .profile-row .acc-avatar { justify-self: start; }
+.profile-row .acc-main { grid-column: 2; }
+/* «Выбрать» и «активный» — одна колонка: правые края и высота совпадают */
+.profile-row > .btn,
+.profile-row > .tag {
+  justify-self: stretch; width: 100%; min-width: 0;
+  height: var(--h-xs); display: inline-flex; align-items: center; justify-content: center;
+}
+.profile-row .icon-btn { justify-self: center; }
+.profile-row .acc-slot { display: block; width: 24px; height: 24px; }
+.profile-row .acc-slot:last-child { display: none; }
 
 /* ═════════════ ДИЗАЙН OMNIPANEL: МОНО-ШРИФТ И ШАПКА СБОРКИ ═════════════ */
 
@@ -1967,9 +1986,7 @@ body.has-wall .account-chip { background: var(--bg-3a); }
 
 /* ---------- строка пути при включённом фоне: читаемая подложка ---------- */
 body.has-wall .build-path {
-  background: var(--bg-1a);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
+  background: var(--bg-2a);
   border-bottom: 1px solid var(--line-2);
   color: var(--dim);
 }
@@ -1979,8 +1996,6 @@ body.has-wall .account-chip,
 body.has-wall .home-head,
 body.has-wall .home-feed-head {
   background: var(--bg-1a);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
 }
 
 /* ---------- главная страница ---------- */
@@ -2061,8 +2076,11 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 }
 .fav-head { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; }
 .fav-slots {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px; margin-top: 8px;
+}
+@media (max-width: 900px) {
+  .fav-slots { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 .fav-slot {
   position: relative;
@@ -2077,6 +2095,9 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 .fav-slot.is-empty {
   border-style: dashed; justify-content: center; gap: 6px; color: var(--dim-2);
 }
+.fav-slot { min-height: 116px; }
+.fav-slot .fav-name { min-height: 12px; }
+.fav-slot .fav-cape { min-height: 11px; }
 .fav-slot.is-empty .ic { width: 16px; height: 16px; }
 .fav-slot.is-blank { border-style: dashed; opacity: .45; pointer-events: none; }
 .fav-slot .fav-mini { display: grid; place-items: center; width: 100%; height: 74px; aspect-ratio: auto; }
@@ -2174,7 +2195,7 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
   border-radius: var(--r);
 }
 .home-import.is-busy { opacity: .75; pointer-events: none; }
-body.has-wall .home-import { background: var(--bg-1a); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+body.has-wall .home-import { background: var(--bg-2a); }
 .imp-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .imp-head .home-sub { font-size: 11px; color: var(--dim-2); }
 
@@ -2768,31 +2789,79 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 }
 .card-actions .card-icon-btn.is-primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
 
+/* ---------- первый запуск: короткая настройка ---------- */
+.onboard-box { width: min(760px, 96vw); height: auto; max-height: 92vh; }
+.onboard-count {
+  font-size: 11px; color: var(--dim-2);
+  padding: 0 6px; font-variant-numeric: tabular-nums;
+}
+.onboard-body {
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 18px 20px 20px;
+  min-height: 260px;
+}
+.onboard-lead { display: flex; flex-direction: column; gap: 3px; }
+.onboard-title { font-size: 15px; font-weight: 650; color: var(--text); }
+.onboard-lead .muted { font-size: 11.5px; }
+.onboard-themes { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+.onboard-scale { display: flex; gap: 6px; flex-wrap: wrap; }
+.onboard-scale .chip { min-width: 72px; }
+.onboard-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--bg-3);
+}
+.onboard-row-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.onboard-row-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.onboard-row .muted { font-size: 11.5px; }
+.onboard-row .switch { flex: none; }
+.onboard-row .btn { flex: none; }
+
 /* ---------- живая строка импорта: спиннер, этап, процент ---------- */
 .imp-live {
-  display: flex; align-items: flex-start; gap: 10px;
+  position: relative;
+  display: flex; align-items: flex-start; gap: 12px;
   margin: 10px var(--pad) 0;
-  padding: 10px 12px;
+  padding: 12px 14px 13px;
   border: 1px solid var(--line-2);
   border-radius: var(--r-md);
   background: var(--bg-3);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
+body.has-wall .imp-live { background: var(--bg-3a); }
 .imp-spinner {
-  width: 14px; height: 14px; flex: none; margin-top: 2px;
-  border: 1.6px solid var(--line-3);
+  width: 16px; height: 16px; flex: none; margin-top: 1px;
+  border: 2px solid var(--line-3);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: impSpin .8s linear infinite;
 }
 @keyframes impSpin { to { transform: rotate(360deg); } }
-.imp-live-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-.imp-live-row { display: flex; align-items: baseline; gap: 10px; }
-.imp-live-title { font-size: 12px; font-weight: 600; color: var(--text); }
-.imp-live-percent { margin-left: auto; font-size: 11px; color: var(--accent); }
+.imp-live-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.imp-live-row { display: flex; align-items: center; gap: 10px; }
+.imp-live-title { font-size: 12.5px; font-weight: 650; color: var(--text); letter-spacing: .1px; }
+.imp-live-percent {
+  margin-left: auto; flex: none;
+  min-width: 52px; height: 22px; padding: 0 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line-2); border-radius: var(--r-xs);
+  background: var(--bg-4);
+  font-size: 12px; font-weight: 600; color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.imp-live-percent.is-wait { color: var(--dim-2); }
 .imp-live-text { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.imp-live-bar { height: 4px; border-radius: 999px; background: var(--bg-5); overflow: hidden; }
-.imp-live-fill { height: 100%; background: var(--accent); transition: width .25s ease; }
-.imp-live-fill.is-idle { animation: impIndeterminate 1.2s ease-in-out infinite; opacity: .6; }
+.imp-live-bar {
+  height: 6px; border-radius: 999px; background: var(--bg-5);
+  overflow: hidden; box-shadow: inset 0 0 0 1px var(--line);
+}
+.imp-live-fill {
+  height: 100%; border-radius: 999px;
+  background: var(--accent);
+  transition: width .25s ease;
+}
+.imp-live-fill.is-idle { animation: impIndeterminate 1.2s ease-in-out infinite; opacity: .55; }
 @keyframes impIndeterminate {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(100%); }
