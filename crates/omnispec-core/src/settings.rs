@@ -223,6 +223,15 @@ pub struct Settings {
     /// Размер плиток в «Готовых сборках»: 1 — 12 в ряд, 2 — 9, 3 — 6.
     #[serde(default = "default_feed_grid")]
     pub feed_grid: u8,
+    /// Размер плитки во вкладке Modrinth внутри сборки: 1 — 12 в ряд, 2 — 9, 3 — 6.
+    #[serde(default = "default_feed_grid")]
+    pub mr_grid: u8,
+    /// Базовый цвет фона поверх обоев (#rrggbb). Пусто — цвет текущей темы.
+    #[serde(default)]
+    pub theme_tint: Option<String>,
+    /// Свёрнута ли группа «Без категории».
+    #[serde(default)]
+    pub loose_collapsed: bool,
     /// Размер эффектов в процентах: 60–220.
     #[serde(default = "default_effect_size")]
     pub effect_size: u8,
@@ -325,6 +334,9 @@ impl Default for Settings {
             ambient: default_ambient(),
             sound_style: default_sound_style(),
             feed_grid: default_feed_grid(),
+            mr_grid: default_feed_grid(),
+            theme_tint: None,
+            loose_collapsed: false,
             effect_size: default_effect_size(),
             trail: default_true_trail(),
             trail_size: default_trail_size(),

@@ -602,6 +602,47 @@ input, select, textarea { font: inherit; color: inherit; }
   text-transform: uppercase; letter-spacing: .4px; font-size: 9px;
 }
 
+/* файлы в дереве, перенос мышью и просмотр картинок */
+.fm-row .sz {
+  flex: none; font-size: 9.5px; color: var(--dim-2);
+  font-variant-numeric: tabular-nums;
+}
+.fm-row.is-file { color: var(--dim-2); }
+.fm-row.is-file:hover, .fm-row.is-file.active { color: var(--text); }
+.fm-row .arrow.is-leaf { visibility: hidden; }
+.fm-item.is-drop, .fm-row.is-drop, .fm-crumb .c.is-drop {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--text);
+}
+.fm-crumb .c.archive { color: var(--text); font-weight: 500; }
+.fm-view.is-image { overflow: hidden; }
+.fm-viewer { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.fm-viewer-bar {
+  display: flex; align-items: center; gap: 6px;
+  height: 32px; flex: none; padding: 0 10px;
+  background: var(--bg-2); border-bottom: 1px solid var(--line);
+  font-size: 11px; color: var(--dim);
+}
+.fm-viewer-name {
+  max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text);
+}
+.fm-viewer-bar .btn-mini {
+  height: 22px; padding: 0 8px; flex: none;
+  font-size: 11px; border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--bg-3); color: var(--dim);
+}
+.fm-viewer-bar .btn-mini:hover { background: var(--bg-4); border-color: var(--line-2); color: var(--text); }
+.fm-zoom-val { min-width: 40px; text-align: center; font-size: 10.5px; color: var(--dim-2); font-variant-numeric: tabular-nums; }
+.fm-viewer-body {
+  flex: 1; min-height: 0; display: grid; place-items: center;
+  overflow: hidden; background: var(--console-bg); cursor: grab;
+}
+.fm-viewer-body.is-pan { cursor: grabbing; }
+.fm-img { transform-origin: center center; user-select: none; -webkit-user-drag: none; }
+.fm-img.is-pixel { image-rendering: pixelated; }
+
 /* ═══════════════════ списки (моды, ресурспаки, миры) ═══════════════════ */
 .list-wrap { flex: 1; min-height: 0; overflow-y: auto; padding: var(--pad) var(--pad) 28px; }
 .panel {
@@ -1010,7 +1051,8 @@ body.no-fx .cfx { display: none; }
 }
 .wall::after {
   content: ""; position: absolute; inset: 0;
-  background: var(--bg);
+  /* базовый цвет фона из настроек: по умолчанию цвет темы, в светлой — белая подложка */
+  background: var(--wall-tint, var(--bg));
   opacity: var(--wall-dim, .4);
 }
 .app { position: relative; z-index: 1; }
@@ -2247,6 +2289,11 @@ body.has-wall .home-import { background: var(--bg-1a); -webkit-backdrop-filter: 
 }
 .cat-head:hover { background: var(--bg-3); color: var(--text); }
 .cat-head.is-drop { border-color: var(--accent); background: var(--bg-4); color: var(--text); }
+/* перетаскивание категорий: куда именно встанет */
+.cat.is-drop-before > .cat-head { box-shadow: inset 0 2px 0 var(--accent); }
+.cat.is-drop-after > .cat-head { box-shadow: inset 0 -2px 0 var(--accent); }
+.cat.is-drag > .cat-head { opacity: .5; }
+.cat-head { cursor: grab; }
 .cat-head .cat-chev { width: 12px; height: 12px; flex: none; transition: transform var(--t-fast); transform: rotate(-90deg); }
 .cat.is-open > .cat-head .cat-chev { transform: rotate(0deg); }
 .cat-head .cat-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

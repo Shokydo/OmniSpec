@@ -654,6 +654,332 @@ fn delete_file(
     }
 }
 
+/// Формат архива по расширению: zip/jar/mrpack — крейт zip, rar — unrar.
+#[derive(Clone, Copy)]
+enum ArchiveKind {
+    Zip,
+    Rar,
+}
+
+fn archive_kind(path: &Path) -> Result<ArchiveKind, String> {
+    match path
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .as_deref()
+    {
+        Some("zip") | Some("jar") | Some("mrpack") => Ok(ArchiveKind::Zip),
+        Some("rar") => Ok(ArchiveKind::Rar),
+        _ => Err("это не архив: поддержаны .zip, .jar, .mrpack и .rar".into()),
+    }
+}
+
+#[derive(Serialize)]
+struct ArchiveEntry {
+    name: String,
+    size: u64,
+    packed: u64,
+    is_dir: bool,
+}
+
+#[derive(Serialize)]
+struct ArchivePreview {
+    kind: String,
+    size: u64,
+    data_url: Option<String>,
+    text: Option<String>,
+}
+
+/// Строка из архива: сначала UTF-8, иначе CP866 (старые архивы под Windows).
+fn archive_name(raw: &[u8]) -> String {
+    match std::str::from_utf8(raw) {
+        Ok(text) if !text.is_empty() => text.to_string(),
+        _ => {
+            let (text, _, _) = encoding_rs::IBM866.decode(raw);
+            text.to_string()
+        }
+    }
+}
+
+fn archive_list_entries(path: &Path) -> Result<Vec<ArchiveEntry>, String> {
+    match archive_kind(path)? {
+        ArchiveKind::Zip => {
+            let file = std::fs::File::open(path).map_err(|e| format!("не открыть архив: {e}"))?;
+            let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("не прочитать zip: {e}"))?;
+            let mut out = Vec::with_capacity(zip.len());
+            for index in 0..zip.len() {
+                let entry = zip
+                    .by_index(index)
+                    .map_err(|e| format!("не прочитать запись архива: {e}"))?;
+                out.push(ArchiveEntry {
+                    name: archive_name(entry.name_raw()),
+                    size: entry.size(),
+                    packed: entry.compressed_size(),
+                    is_dir: entry.is_dir(),
+                });
+            }
+            Ok(out)
+        }
+        ArchiveKind::Rar => {
+            let mut cursor = unrar::Archive::new(path)
+                .open_for_listing()
+                .map_err(|e| format!("не открыть rar: {e}"))?;
+            let mut out = Vec::new();
+            loop {
+                match cursor
+                    .read_header()
+                    .map_err(|e| format!("не прочитать rar: {e}"))?
+                {
+                    Some(header) => {
+                        let entry = header.entry();
+                        out.push(ArchiveEntry {
+                            name: entry.filename.to_string_lossy().replace('\\', "/"),
+                            size: entry.unpacked_size,
+                            packed: 0,
+                            is_dir: entry.is_directory(),
+                        });
+                        cursor = header
+                            .skip()
+                            .map_err(|e| format!("не пропустить запись rar: {e}"))?;
+                    }
+                    None => break,
+                }
+            }
+            Ok(out)
+        }
+    }
+}
+
+/// Байты одной записи архива — с ограничением, чтобы не тянуть гигабайты в окно.
+const ARCHIVE_LIMIT: u64 = 64 * 1024 * 1024;
+
+fn archive_bytes(path: &Path, entry_name: &str) -> Result<Vec<u8>, String> {
+    match archive_kind(path)? {
+        ArchiveKind::Zip => {
+            let file = std::fs::File::open(path).map_err(|e| format!("не открыть архив: {e}"))?;
+            let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("не прочитать zip: {e}"))?;
+            let mut entry = zip
+                .by_name(entry_name)
+                .map_err(|e| format!("в архиве нет «{entry_name}» ({e})"))?;
+            if entry.size() > ARCHIVE_LIMIT {
+                return Err("файл в архиве больше 64 МБ".into());
+            }
+            let mut buffer = Vec::with_capacity(entry.size() as usize);
+            std::io::copy(&mut entry, &mut buffer).map_err(|e| format!("не прочитать файл: {e}"))?;
+            Ok(buffer)
+        }
+        ArchiveKind::Rar => {
+            let mut cursor = unrar::Archive::new(path)
+                .open_for_processing()
+                .map_err(|e| format!("не открыть rar: {e}"))?;
+            let wanted = entry_name.replace('\\', "/");
+            loop {
+                match cursor
+                    .read_header()
+                    .map_err(|e| format!("не прочитать rar: {e}"))?
+                {
+                    Some(header) => {
+                        let name = header.entry().filename.to_string_lossy().replace('\\', "/");
+                        if name == wanted && !header.entry().is_directory() {
+                            if header.entry().unpacked_size > ARCHIVE_LIMIT {
+                                return Err("файл в архиве больше 64 МБ".into());
+                            }
+                            let (data, _next) = header
+                                .read()
+                                .map_err(|e| format!("не распаковать запись: {e}"))?;
+                            return Ok(data);
+                        }
+                        cursor = header
+                            .skip()
+                            .map_err(|e| format!("не пропустить запись rar: {e}"))?;
+                    }
+                    None => return Err(format!("в архиве нет «{entry_name}»")),
+                }
+            }
+        }
+    }
+}
+
+fn image_mime(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .as_deref()
+    {
+        Some("png") => Some("image/png"),
+        Some("jpg") | Some("jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        Some("bmp") => Some("image/bmp"),
+        Some("ico") => Some("image/x-icon"),
+        _ => None,
+    }
+}
+
+/// Создать папку в сборке (в том числе вложенную).
+#[tauri::command]
+fn fm_create_dir(
+    state: State<'_, AppState>,
+    instance_id: String,
+    path: String,
+) -> Result<(), String> {
+    let base = instances::game_dir(&state.paths, &instance_id);
+    let target = safe_join(&base, &path)?;
+    std::fs::create_dir_all(&target).map_err(err)
+}
+
+/// Переименовать файл или папку; возвращаем новый относительный путь.
+#[tauri::command]
+fn fm_rename(
+    state: State<'_, AppState>,
+    instance_id: String,
+    path: String,
+    name: String,
+) -> Result<String, String> {
+    let clean = name.trim();
+    if clean.is_empty()
+        || clean == "."
+        || clean == ".."
+        || clean.contains('/')
+        || clean.contains('\\')
+    {
+        return Err("имя не годится: нужны буквы, цифры, точка, дефис".into());
+    }
+    let base = instances::game_dir(&state.paths, &instance_id);
+    let from = safe_join(&base, &path)?;
+    let parent = path.rsplit_once('/').map(|(head, _)| head).unwrap_or("");
+    let relative = if parent.is_empty() {
+        clean.to_string()
+    } else {
+        format!("{parent}/{clean}")
+    };
+    let to = safe_join(&base, &relative)?;
+    if to == from {
+        return Ok(relative);
+    }
+    if to.exists() {
+        return Err(format!("«{clean}» уже есть в этой папке"));
+    }
+    std::fs::rename(&from, &to).map_err(err)?;
+    Ok(relative)
+}
+
+/// Перенести файлы и папки в другую папку сборки; возвращаем число перенесённых.
+#[tauri::command]
+fn fm_move(
+    state: State<'_, AppState>,
+    instance_id: String,
+    paths: Vec<String>,
+    dir: String,
+) -> Result<usize, String> {
+    let base = instances::game_dir(&state.paths, &instance_id);
+    let target = safe_join(&base, &dir)?;
+    std::fs::create_dir_all(&target).map_err(err)?;
+    let mut moved = 0usize;
+    for path in paths {
+        let from = safe_join(&base, &path)?;
+        if !from.exists() {
+            continue;
+        }
+        let Some(name) = from.file_name().map(|name| name.to_os_string()) else {
+            continue;
+        };
+        let to = target.join(&name);
+        if to == from {
+            continue;
+        }
+        // папку нельзя положить в саму себя
+        if to.starts_with(&from) {
+            return Err("папку нельзя перенести в неё же".into());
+        }
+        if to.exists() {
+            return Err(format!(
+                "«{}» уже есть в целевой папке",
+                name.to_string_lossy()
+            ));
+        }
+        std::fs::rename(&from, &to)
+            .map_err(|e| format!("не перенести «{}»: {e}", name.to_string_lossy()))?;
+        moved += 1;
+    }
+    Ok(moved)
+}
+
+/// Картинка файлом как data-url: просмотр с зумом без отдельного протокола.
+#[tauri::command]
+fn fm_read_image(
+    state: State<'_, AppState>,
+    instance_id: String,
+    path: String,
+) -> Result<String, String> {
+    let base = instances::game_dir(&state.paths, &instance_id);
+    let file = safe_join(&base, &path)?;
+    let mime = image_mime(&file).ok_or_else(|| "это не картинка".to_string())?;
+    let meta = std::fs::metadata(&file).map_err(err)?;
+    if meta.len() > 32 * 1024 * 1024 {
+        return Err("картинка больше 32 МБ — откройте её проводником".into());
+    }
+    let bytes = std::fs::read(&file).map_err(err)?;
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{mime};base64,{data}"))
+}
+
+/// Содержимое архива как список записей — архив открывается как папка.
+#[tauri::command]
+fn archive_list(
+    state: State<'_, AppState>,
+    instance_id: String,
+    path: String,
+) -> Result<Vec<ArchiveEntry>, String> {
+    let base = instances::game_dir(&state.paths, &instance_id);
+    let file = safe_join(&base, &path)?;
+    archive_list_entries(&file)
+}
+
+/// Прочитать запись архива: картинку отдаём data-url, остальное — строкой.
+#[tauri::command]
+fn archive_read(
+    state: State<'_, AppState>,
+    instance_id: String,
+    path: String,
+    entry: String,
+) -> Result<ArchivePreview, String> {
+    let base = instances::game_dir(&state.paths, &instance_id);
+    let file = safe_join(&base, &path)?;
+    let bytes = archive_bytes(&file, &entry)?;
+    let lower = entry.to_lowercase();
+    let is_image = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]
+        .iter()
+        .any(|ext| lower.ends_with(ext));
+    if is_image {
+        let mime = if lower.ends_with(".png") {
+            "image/png"
+        } else if lower.ends_with(".gif") {
+            "image/gif"
+        } else if lower.ends_with(".webp") {
+            "image/webp"
+        } else if lower.ends_with(".bmp") {
+            "image/bmp"
+        } else {
+            "image/jpeg"
+        };
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        return Ok(ArchivePreview {
+            kind: "image".into(),
+            size: bytes.len() as u64,
+            data_url: Some(format!("data:{mime};base64,{data}")),
+            text: None,
+        });
+    }
+    Ok(ArchivePreview {
+        kind: "text".into(),
+        size: bytes.len() as u64,
+        data_url: None,
+        text: Some(String::from_utf8_lossy(&bytes).to_string()),
+    })
+}
+
 #[derive(Serialize)]
 struct ModEntry {
     name: String,
@@ -2132,6 +2458,12 @@ fn main() {
             list_dir,
             read_text_file,
             delete_file,
+            fm_create_dir,
+            fm_rename,
+            fm_move,
+            fm_read_image,
+            archive_list,
+            archive_read,
             list_mods,
             toggle_mod,
             list_java,

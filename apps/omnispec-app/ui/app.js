@@ -135,6 +135,8 @@
     for (const [key, value] of Object.entries(vars)) document.body.style.setProperty(key, value);
     const valid = name === "custom" || Boolean(THEMES[name]);
     document.body.dataset.theme = valid ? name : "dark";
+    // подложка поверх обоев по умолчанию берёт цвет темы
+    applyThemeTint();
     // частицы фона подстраиваются под тему: тёмные на светлой, светлые на тёмной
     if (ambientInkRefresh) ambientInkRefresh();
     trailFx.refreshInk();
@@ -853,6 +855,22 @@
     document.body.classList.add("has-wall");
   }
 
+  /**
+   * Базовый цвет фона: он ложится поверх обоев. По умолчанию — цвет темы
+   * (в светлой это белая подложка), но в настройках его можно подобрать вручную.
+   */
+  function themeTintColor() {
+    const settings = state.settings || {};
+    const own = String(settings.theme_tint || "").trim();
+    if (/^#[0-9a-f]{6}$/i.test(own)) return own.toLowerCase();
+    const name = document.body.dataset.theme || settings.theme || "dark";
+    return themeOf(name).bg;
+  }
+
+  function applyThemeTint() {
+    document.body.style.setProperty("--wall-tint", themeTintColor());
+  }
+
   /** Свои цвета сохраняем сразу — тема не теряется при перезапуске. */
   function saveCustomTheme() {
     state.settings = {
@@ -1555,6 +1573,123 @@
     return [];
   };
 
+  /** Демо-файловая система сборки: список, тексты, картинки и архивы в памяти. */
+  function demoFilesSeed() {
+    DEMO.files = DEMO.files || { tree: {}, text: {}, images: {}, archives: {} };
+    if (DEMO.files.ready) return DEMO.files;
+    DEMO.files.ready = true;
+    const file = (path, size) => ({ name: path.split("/").pop(), is_dir: false, size, path, modified: Math.floor(Date.now() / 1000) - 7200 });
+    const dir = (path) => ({ name: path.split("/").pop(), is_dir: true, size: 0, path });
+    DEMO.files.tree = {
+      "": [dir("mods"), dir("config"), dir("saves"), dir("resourcepacks"), dir("shaderpacks"), dir("logs"), file("options.txt", 2048), file("servers.dat", 1420), file("usercache.json", 512)],
+      mods: [file("mods/sodium-fabric-0.6.13.jar", 1102848), file("mods/iris-fabric-1.8.1.jar", 2487168), file("mods/lithium-fabric-0.15.3.jar", 620544)],
+      config: [dir("config/fabric"), file("config/sodium-options.json", 3480)],
+      "config/fabric": [file("config/fabric/indigo-renderer.properties", 320)],
+      logs: [file("logs/latest.log", 184320), file("logs/debug.log", 917504)],
+      resourcepacks: [file("resourcepacks/Stay_True_1.21.zip", 4204800), file("resourcepacks/FreshAnimations_v1.9.zip", 1986560)],
+      shaderpacks: [file("shaderpacks/ComplementaryReimagined_r5.3.zip", 3112960), file("shaderpacks/BSL_v8.2.04.zip", 2781184)],
+      saves: [dir("saves/Мир выживания"), dir("saves/Тест редстоуна")],
+      "saves/Мир выживания": [file("saves/Мир выживания/level.dat", 81920), file("saves/Мир выживания/icon.png", 4096)]
+    };
+    DEMO.files.text = {
+      "options.txt": "fov:0.0\nlang:ru_ru\nrenderDistance:12\nnarrator:0\nguiScale:3\n",
+      "servers.dat": "",
+      "config/sodium-options.json": "{\n  \"quality\": {\n    \"weather_quality\": \"FANCY\"\n  }\n}\n"
+    };
+    DEMO.files.archives = {
+      "resourcepacks/Stay_True_1.21.zip": [
+        { name: "pack.mcmeta", size: 148, packed: 120, is_dir: false },
+        { name: "pack.png", size: 8124, packed: 7420, is_dir: false },
+        { name: "assets/", size: 0, packed: 0, is_dir: true },
+        { name: "assets/minecraft/", size: 0, packed: 0, is_dir: true },
+        { name: "assets/minecraft/textures/", size: 0, packed: 0, is_dir: true },
+        { name: "assets/minecraft/textures/block/dirt.png", size: 512, packed: 420, is_dir: false },
+        { name: "assets/minecraft/textures/block/grass_block_top.png", size: 640, packed: 512, is_dir: false },
+        { name: "assets/minecraft/textures/item/diamond.png", size: 512, packed: 430, is_dir: false },
+        { name: "assets/minecraft/sounds.json", size: 2400, packed: 1100, is_dir: false }
+      ],
+      "resourcepacks/FreshAnimations_v1.9.zip": [
+        { name: "pack.mcmeta", size: 160, packed: 130, is_dir: false },
+        { name: "assets/", size: 0, packed: 0, is_dir: true },
+        { name: "assets/minecraft/sounds.json", size: 1800, packed: 900, is_dir: false }
+      ]
+    };
+    return DEMO.files;
+  }
+
+  /** Крошечная картинка для демо-просмотра (шахматка 32×32). */
+  function demoPixelImage() {
+    demoFilesSeed();
+    if (DEMO.files.pixel) return DEMO.files.pixel;
+    const canvas = document.createElement("canvas");
+    canvas.width = 32;
+    canvas.height = 32;
+    const ctx = canvas.getContext("2d");
+    for (let y = 0; y < 32; y += 1) {
+      for (let x = 0; x < 32; x += 1) {
+        const on = (x >> 3) % 2 === (y >> 3) % 2;
+        ctx.fillStyle = on ? "#8b6f47" : "#c8b18a";
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+    DEMO.files.pixel = canvas.toDataURL("image/png");
+    return DEMO.files.pixel;
+  }
+
+  function demoFileRemove(path) {
+    const parent = String(path).split("/").slice(0, -1).join("/");
+    const list = DEMO.files.tree[parent] || [];
+    DEMO.files.tree[parent] = list.filter((entry) => entry.path !== path);
+  }
+
+  function demoFileDelete(path) {
+    demoFilesSeed();
+    const prefix = `${path}/`;
+    Object.keys(DEMO.files.tree).forEach((key) => {
+      if (key === path || key.startsWith(prefix)) delete DEMO.files.tree[key];
+    });
+    demoFileRemove(path);
+  }
+
+  function demoFileWrite(path, entry) {
+    demoFilesSeed();
+    const parent = String(path).split("/").slice(0, -1).join("/");
+    if (!DEMO.files.tree[parent]) DEMO.files.tree[parent] = [];
+    if (typeof entry.is_dir !== "boolean") entry.is_dir = false;
+    DEMO.files.tree[parent] = DEMO.files.tree[parent].filter((item) => item.path !== path);
+    DEMO.files.tree[parent].push(entry);
+    if (entry.is_dir && !DEMO.files.tree[path]) DEMO.files.tree[path] = [];
+  }
+
+  function demoFileMove(paths, dir, renameTo) {
+    demoFilesSeed();
+    const target = dir || "";
+    let moved = 0;
+    (paths || []).forEach((path) => {
+      const parent = String(path).split("/").slice(0, -1).join("/");
+      const list = DEMO.files.tree[parent] || [];
+      const found = list.find((entry) => entry.path === path);
+      if (!found || parent === target) return;
+      const name = renameTo ? String(renameTo).split("/").pop() : found.name;
+      const nextPath = target ? `${target}/${name}` : name;
+      DEMO.files.tree[parent] = list.filter((entry) => entry.path !== path);
+      if (!DEMO.files.tree[target]) DEMO.files.tree[target] = [];
+      DEMO.files.tree[target].push({ ...found, name, path: nextPath });
+      Object.keys(DEMO.files.tree).forEach((key) => {
+        if (key.startsWith(`${path}/`)) {
+          const inner = key.slice(path.length);
+          DEMO.files.tree[`${nextPath}${inner}`] = DEMO.files.tree[key].map((entry) => ({
+            ...entry,
+            path: `${nextPath}${inner}/${entry.name}`
+          }));
+          delete DEMO.files.tree[key];
+        }
+      });
+      moved += 1;
+    });
+    return moved;
+  }
+
   const DEMO = {
     instances: [
       { id: "fabulously-optimized", name: "Fabulously Optimized", category: "cat-perf", mc_version: "1.21.4", loader: { type: "fabric", version: "0.16.9" }, icon: null, created: now - 86400 * 9, last_played: now - 3600, playtime_secs: 7200, memory_mb: null, java_path: null, jvm_args: null, notes: "", source: "modrinth", source_url: null, version_override: null },
@@ -1604,6 +1739,12 @@
     listDir: (instanceId, sub) => invoke("list_dir", { instanceId, sub }),
     readFile: (instanceId, path) => invoke("read_text_file", { instanceId, path }),
     deleteFile: (instanceId, path) => invoke("delete_file", { instanceId, path }),
+    fmCreateDir: (instanceId, path) => invoke("fm_create_dir", { instanceId, path }),
+    fmRename: (instanceId, path, name) => invoke("fm_rename", { instanceId, path, name }),
+    fmMove: (instanceId, paths, dir) => invoke("fm_move", { instanceId, paths, dir }),
+    fmReadImage: (instanceId, path) => invoke("fm_read_image", { instanceId, path }),
+    archiveList: (instanceId, path) => invoke("archive_list", { instanceId, path }),
+    archiveRead: (instanceId, path, entry) => invoke("archive_read", { instanceId, path, entry }),
     mods: (instanceId) => invoke("list_mods", { instanceId }),
     modIcons: (instanceId) => invoke("mod_icons", { instanceId }),
     // содержимое сборки: моды, ресурспаки, шейдеры
@@ -1785,33 +1926,34 @@
       return DEMO.instances[0];
     },
     listDir: async (_id, sub) => {
-      const tree = {
-        "": [
-          { name: "mods", is_dir: true, size: 0, path: "mods" },
-          { name: "config", is_dir: true, size: 0, path: "config" },
-          { name: "saves", is_dir: true, size: 0, path: "saves" },
-          { name: "resourcepacks", is_dir: true, size: 0, path: "resourcepacks" },
-          { name: "shaderpacks", is_dir: true, size: 0, path: "shaderpacks" },
-          { name: "options.txt", is_dir: false, size: 2048, path: "options.txt" },
-          { name: "logs", is_dir: true, size: 0, path: "logs" }
-        ],
-        resourcepacks: [
-          { name: "Stay_True_1.21.zip", is_dir: false, size: 4_204_800, path: "resourcepacks/Stay_True_1.21.zip" },
-          { name: "FreshAnimations_v1.9.zip", is_dir: false, size: 1_986_560, path: "resourcepacks/FreshAnimations_v1.9.zip" }
-        ],
-        shaderpacks: [
-          { name: "ComplementaryReimagined_r5.3.zip", is_dir: false, size: 3_112_960, path: "shaderpacks/ComplementaryReimagined_r5.3.zip" },
-          { name: "BSL_v8.2.04.zip", is_dir: false, size: 2_781_184, path: "shaderpacks/BSL_v8.2.04.zip" }
-        ],
-        saves: [
-          { name: "Мир выживания", is_dir: true, size: 0, path: "saves/Мир выживания" },
-          { name: "Тест редстоуна", is_dir: true, size: 0, path: "saves/Тест редстоуна" }
-        ]
-      };
-      return tree[sub || ""] || [];
+      demoFilesSeed();
+      const key = sub || "";
+      const list = DEMO.files.tree[key] || [];
+      return list.map((entry) => ({ ...entry }));
     },
-    readFile: async () => "fov:0.0\nlang:ru_ru\nrenderDistance:12\nnarrator:0\n",
-    deleteFile: async () => null,
+    readFile: async (_id, path) => DEMO.files.text[path] || "fov:0.0\nlang:ru_ru\nrenderDistance:12\nnarrator:0\n",
+    deleteFile: async (_id, path) => { demoFileDelete(path); return null; },
+    fmCreateDir: async (_id, path) => { demoFileWrite(path, { name: path.split("/").pop(), is_dir: true, size: 0, path }); return null; },
+    fmRename: async (_id, path, name) => {
+      const parent = path.split("/").slice(0, -1).join("/");
+      const next = parent ? `${parent}/${name}` : name;
+      demoFileMove([path], parent, next);
+      return next;
+    },
+    fmMove: async (_id, paths, dir) => demoFileMove(paths, dir),
+    fmReadImage: async (_id, path) => DEMO.files.images[path] || demoPixelImage(),
+    archiveList: async (_id, path) => {
+      const list = DEMO.files.archives[path];
+      if (!list) throw new Error("в демо-режиме этот архив пуст");
+      return list;
+    },
+    archiveRead: async (_id, path, entry) => {
+      const list = DEMO.files.archives[path] || [];
+      const found = list.find((item) => item.name === entry);
+      if (!found) throw new Error(`в архиве нет файла «${entry}»`);
+      if (/\.(png|jpg|jpeg|gif|webp)$/i.test(entry)) return { kind: "image", size: found.size, data_url: demoPixelImage(), text: null };
+      return { kind: "text", size: found.size, data_url: null, text: `# ${entry}\n# демо-содержимое внутри архива\n` };
+    },
     mods: async () => demoMods.map((m) => ({ ...m })),
     // содержимое сборки в демо-режиме
     contentList: async (_id, kind) => (kind === "mod"
@@ -2340,7 +2482,7 @@
         id: "",
         name: categories.length ? "БЕЗ КАТЕГОРИИ" : "ВСЕ СБОРКИ",
         items: loose,
-        open: true
+        open: !looseCollapsed()
       }));
     }
     list.innerHTML = blocks.join("");
@@ -2400,7 +2542,12 @@
       const id = group.dataset.cat;
       const head = group.querySelector(".cat-head");
       if (!head || id === "__running") return;
-      if (id) head.addEventListener("click", () => toggleCategory(id));
+      head.addEventListener("click", () => {
+        if (consumeDragClick()) return;
+        if (id) toggleCategory(id); else toggleLoose();
+      });
+      // перетаскивание самих категорий: меняем их порядок
+      if (id) head.addEventListener("mousedown", (event) => beginCategoryDrag(event, id, group));
       head.dataset.dropCat = id;
       group.dataset.dropCat = id;
     });
@@ -2420,6 +2567,12 @@
     dragClickGuard = false;
     return true;
   };
+
+  /** После переноса гасим один клик, но не дольше 300 мс: иначе съедался следующий. */
+  function armDragClickGuard() {
+    dragClickGuard = true;
+    setTimeout(() => { dragClickGuard = false; }, 300);
+  }
 
   function beginInstanceDrag(event, row) {
     if (event.button !== 0) return;
@@ -2487,9 +2640,98 @@
     if (drag.ghost) drag.ghost.remove();
     if (drag.row) drag.row.classList.remove("is-drag");
     if (!drag.active) return;
-    dragClickGuard = true;
+    armDragClickGuard();
     if (drag.target === undefined) return;
     await moveInstanceToCategory(drag.id, drag.target === "__none" ? null : drag.target);
+  }
+
+  /** «Без категории» сворачивается так же, как обычные категории. */
+  function looseCollapsed() {
+    return Boolean(state.settings && state.settings.loose_collapsed);
+  }
+
+  async function toggleLoose() {
+    const next = !looseCollapsed();
+    state.settings = { ...(state.settings || {}), loose_collapsed: next };
+    renderSidebar();
+    try { await api.saveSettings(state.settings); } catch (error) { /* не критично */ }
+  }
+
+  /* ── перетаскивание категорий: порядок в списке ── */
+  let catDrag = null;
+
+  function clearCatDrop() {
+    $$(".cat.is-drop-before, .cat.is-drop-after").forEach((el) => el.classList.remove("is-drop-before", "is-drop-after"));
+  }
+
+  function beginCategoryDrag(event, id, group) {
+    if (event.button !== 0) return;
+    if (event.target.closest("button")) return;   // кнопки в шапке категории не тащим
+    catDrag = { id, group, startX: event.clientX, startY: event.clientY, active: false, ghost: null, target: null, after: false };
+    window.addEventListener("mousemove", onCategoryDragMove);
+    window.addEventListener("mouseup", onCategoryDragEnd);
+  }
+
+  function onCategoryDragMove(event) {
+    const drag = catDrag;
+    if (!drag) return;
+    const dy = event.clientY - drag.startY;
+    if (!drag.active && Math.hypot(event.clientX - drag.startX, dy) < 5) return;
+    if (!drag.active) {
+      drag.active = true;
+      const category = categoriesOf().find((item) => item.id === drag.id);
+      const ghost = document.createElement("div");
+      ghost.className = "drag-ghost";
+      ghost.innerHTML = `<span class="drag-ghost-name">${esc(category ? category.name : "категория")}</span>`;
+      document.body.appendChild(ghost);
+      drag.ghost = ghost;
+      drag.group.classList.add("is-drag");
+      document.body.classList.add("is-dragging");
+    }
+    drag.ghost.style.left = `${event.clientX + 12}px`;
+    drag.ghost.style.top = `${event.clientY + 10}px`;
+    clearCatDrop();
+    drag.target = null;
+    const under = document.elementFromPoint(event.clientX, event.clientY);
+    const target = under ? under.closest(".cat[data-cat]") : null;
+    if (!target) return;
+    const targetId = target.dataset.cat;
+    if (!targetId || targetId === "__running" || targetId === drag.id) return;
+    const rect = target.querySelector(".cat-head").getBoundingClientRect();
+    drag.target = targetId;
+    drag.after = event.clientY > rect.top + rect.height / 2;
+    target.classList.add(drag.after ? "is-drop-after" : "is-drop-before");
+  }
+
+  async function onCategoryDragEnd() {
+    window.removeEventListener("mousemove", onCategoryDragMove);
+    window.removeEventListener("mouseup", onCategoryDragEnd);
+    const drag = catDrag;
+    catDrag = null;
+    if (!drag) return;
+    clearCatDrop();
+    document.body.classList.remove("is-dragging");
+    if (drag.ghost) drag.ghost.remove();
+    drag.group.classList.remove("is-drag");
+    if (!drag.active) return;
+    armDragClickGuard();
+    if (!drag.target) return;
+    await reorderCategories(drag.id, drag.target, drag.after);
+  }
+
+  /** Поставить категорию перед/после другой и сохранить порядок. */
+  async function reorderCategories(fromId, toId, after) {
+    const list = categoriesOf().slice();
+    const fromIndex = list.findIndex((item) => item.id === fromId);
+    if (fromIndex < 0) return;
+    const [moved] = list.splice(fromIndex, 1);
+    let toIndex = list.findIndex((item) => item.id === toId);
+    if (toIndex < 0) { renderSidebar(); return; }
+    if (after) toIndex += 1;
+    list.splice(toIndex, 0, moved);
+    state.settings = { ...(state.settings || {}), categories: list };
+    renderSidebar();
+    await saveCategories(list);
   }
 
   async function toggleCategory(id) {
@@ -2827,20 +3069,25 @@
     });
   }
 
-  /* ---------- файлы ---------- */
   /* ---------- файлы: менеджер в духе OmniPanel ----------
-   * Слева — дерево папок сборки (ленивое, раскрывается по клику),
-   * справа — хлебные крошки, список с колонками и статус-бар.
-   * Файл открывается вместо списка, с номерами строк.
+   * Слева — дерево папки сборки: показываем и папки, и файлы с размерами.
+   * Справа — хлебные крошки, список с колонками, превью и статус-бар.
+   * Архивы (.zip/.jar/.mrpack/.rar) открываются как папка, картинки — в просмотрщике с зумом.
    */
+  const FM_ARCHIVES = ["zip", "rar", "jar", "mrpack"];
+  const FM_IMAGES = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"];
+
   const fm = {
     path: "",
     entries: [],
-    dirs: new Map(),     // путь -> [{ name, path }] (только папки)
+    cache: new Map(),      // путь -> список того, что внутри
     expanded: new Set(),
     selected: null,
-    preview: null,       // { path, text, error }
-    query: ""
+    preview: null,         // { kind: "text"|"image", text?, src?, name, error }
+    query: "",
+    archive: null,         // { path, entries, dir }
+    drag: null,
+    image: { zoom: 1, x: 0, y: 0 }
   };
 
   function fmExt(name) {
@@ -2848,14 +3095,17 @@
     return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
   }
 
+  function fmIsArchive(name) { return FM_ARCHIVES.includes(fmExt(name)); }
+  function fmIsImage(name) { return FM_IMAGES.includes(fmExt(name)); }
+
   function fmKind(name) {
     const ext = fmExt(name);
     if (!ext) return "файл";
     const groups = {
       конфиг: ["json", "json5", "toml", "yaml", "yml", "properties", "cfg", "conf", "ini", "txt", "mcmeta", "snbt"],
       код: ["js", "ts", "rs", "py", "sh", "bat", "cmd", "lua", "java"],
-      архив: ["jar", "zip", "mrpack", "7z", "rar"],
-      картинка: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"],
+      архив: FM_ARCHIVES,
+      картинка: FM_IMAGES,
       лог: ["log", "txt"]
     };
     for (const [kind, list] of Object.entries(groups)) if (list.includes(ext)) return kind;
@@ -2864,10 +3114,9 @@
 
   function fmIcon(name, isDir) {
     if (isDir) return "i-folder";
-    const kind = fmKind(name);
-    if (kind === "архив") return "i-mod";
-    if (kind === "картинка") return "i-grid";
-    return "i-base";
+    if (fmIsArchive(name)) return "i-mod";
+    if (fmIsImage(name)) return "i-grid";
+    return "i-file";
   }
 
   function fmDate(seconds) {
@@ -2877,34 +3126,45 @@
     return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
 
+  /** Содержимое папки с кэшем: дерево не дёргает диск на каждую перерисовку. */
   async function fmList(path) {
-    const entries = await api.listDir(state.selectedId, path)
-      .catch((err) => { toast(String(err), "err"); return []; });
-    return entries.sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name, "ru"));
+    const key = path || "";
+    if (fm.cache.has(key)) return fm.cache.get(key);
+    const entries = await api.listDir(state.selectedId, key)
+      .catch((error) => { toast(String(error), "err"); return []; });
+    const sorted = entries.slice().sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name, "ru"));
+    fm.cache.set(key, sorted);
+    return sorted;
   }
 
-  async function fmDirs(path) {
-    if (!fm.dirs.has(path)) {
-      const entries = await fmList(path);
-      fm.dirs.set(path, entries.filter((entry) => entry.is_dir).map((entry) => ({ name: entry.name, path: entry.path })));
-    }
-    return fm.dirs.get(path);
-  }
+  function fmDropCache() { fm.cache.clear(); }
 
+  /* ── дерево слева: папки и файлы с размерами ── */
   async function fmTreeHtml(path, depth) {
-    const dirs = await fmDirs(path);
+    const entries = await fmList(path);
     const term = fm.query.trim().toLowerCase();
+    const dirs = entries.filter((entry) => entry.is_dir);
+    const files = entries.filter((entry) => !entry.is_dir);
     let html = "";
     for (const dir of dirs) {
-      if (term && !dir.name.toLowerCase().includes(term)) continue;
       const open = fm.expanded.has(dir.path);
       const active = fm.path === dir.path;
-      html += `<div class="fm-row${open ? " open" : ""}${active ? " active" : ""}" data-dir="${esc(dir.path)}" style="padding-left:${6 + depth * 12}px">
+      html += `<div class="fm-row${open ? " open" : ""}${active ? " active" : ""}" data-dir="${esc(dir.path)}" data-drop="1" style="padding-left:${6 + depth * 12}px">
         <span class="arrow" data-toggle="${esc(dir.path)}">▸</span>
         <span class="ico"><svg class="ic" width="13" height="13"><use href="#i-folder"/></svg></span>
         <span class="nm">${esc(dir.name)}</span>
       </div>`;
       if (open) html += await fmTreeHtml(dir.path, depth + 1);
+    }
+    for (const file of files) {
+      if (term && !file.name.toLowerCase().includes(term)) continue;
+      const active = fm.selected === file.path;
+      html += `<div class="fm-row is-file${active ? " active" : ""}" data-file="${esc(file.path)}" data-drag="${esc(file.path)}" style="padding-left:${6 + depth * 12}px">
+        <span class="arrow is-leaf"></span>
+        <span class="ico"><svg class="ic" width="13" height="13"><use href="#${fmIcon(file.name, false)}"/></svg></span>
+        <span class="nm">${esc(file.name)}</span>
+        <span class="sz">${humanSize(file.size)}</span>
+      </div>`;
     }
     return html;
   }
@@ -2913,71 +3173,241 @@
     const box = $("#fm-tree");
     if (!box) return;
     const html = await fmTreeHtml("", 0);
-    box.innerHTML = html || `<div class="fm-empty">${fm.query ? "Ничего не найдено" : "Папок нет"}</div>`;
+    box.innerHTML = html || `<div class="fm-empty">${fm.query ? "Ничего не найдено" : "Папка пуста"}</div>`;
     $$(".fm-row", box).forEach((row) => {
       const path = row.dataset.dir;
+      const file = row.dataset.file;
       const arrow = $(".arrow", row);
-      if (arrow) {
+      if (path !== undefined && arrow) {
         arrow.addEventListener("click", async (event) => {
           event.stopPropagation();
           if (fm.expanded.has(path)) fm.expanded.delete(path); else fm.expanded.add(path);
           await fmRenderTree();
         });
       }
-      row.addEventListener("click", () => fmOpen(path));
+      if (path !== undefined) {
+        row.addEventListener("click", () => { if (consumeDragClick()) return; fmOpen(path); });
+        row.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          fmOpenMenu(event.clientX, event.clientY, { path, name: path.split("/").pop(), is_dir: true, size: 0 });
+        });
+        row.addEventListener("mousedown", (event) => fmBeginDrag(event, path, true));
+      }
+      if (file !== undefined) {
+        row.addEventListener("click", () => { if (consumeDragClick()) return; fmPreviewFile(file); });
+        row.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          const entry = fm.entries.find((item) => item.path === file);
+          fmOpenMenu(event.clientX, event.clientY, { path: file, name: file.split("/").pop(), is_dir: false, size: entry ? entry.size : 0 });
+        });
+        row.addEventListener("mousedown", (event) => fmBeginDrag(event, file, false));
+      }
     });
   }
 
+  /* ── хлебные крошки: папка сборки или путь внутри архива ── */
   function fmRenderCrumb() {
     const box = $("#fm-crumb");
     if (!box) return;
     const meta = selected();
+    const chips = [];
+    if (fm.archive) {
+      const parts = String(fm.archive.dir || "").split("/").filter(Boolean);
+      chips.push(`<span class="c archive" title="Выйти из архива">${esc(String(fm.archive.path).split("/").pop())}</span>`);
+      parts.forEach((part, index) => {
+        const path = parts.slice(0, index + 1).join("/");
+        chips.push(`<span class="s">/</span><span class="c${index === parts.length - 1 ? " last" : ""}" data-arc="${esc(path)}">${esc(part)}</span>`);
+      });
+      box.innerHTML = chips.join("");
+      const up = $(".c.archive", box);
+      if (up) up.addEventListener("click", () => fmCloseArchive());
+      $$(".c[data-arc]", box).forEach((chip) => chip.addEventListener("click", () => {
+        fm.archive.dir = chip.dataset.arc;
+        fmRenderList();
+        fmRenderCrumb();
+        fmRenderStatus();
+      }));
+      return;
+    }
     const parts = fm.path ? fm.path.split("/").filter(Boolean) : [];
-    const chips = [`<span class="c" data-crumb="">${esc(meta ? meta.name : "сборка")}</span>`];
+    chips.push(`<span class="c" data-crumb="">${esc(meta ? meta.name : "сборка")}</span>`);
     parts.forEach((part, index) => {
       const path = parts.slice(0, index + 1).join("/");
       chips.push(`<span class="s">/</span><span class="c${index === parts.length - 1 ? " last" : ""}" data-crumb="${esc(path)}">${esc(part)}</span>`);
     });
     box.innerHTML = chips.join("");
-    $$(".c", box).forEach((chip) => chip.addEventListener("click", () => fmOpen(chip.dataset.crumb)));
+    $$(".c", box).forEach((chip) => {
+      chip.addEventListener("click", () => fmOpen(chip.dataset.crumb || ""));
+      if (chip.dataset.crumb) chip.dataset.drop = chip.dataset.crumb;
+    });
+  }
+
+  /* ── список: папка сборки или содержимое архива ── */
+  function fmArchiveRows() {
+    const arc = fm.archive;
+    if (!arc) return { dirs: [], files: [] };
+    const dir = arc.dir ? `${arc.dir.replace(/\/+$/, "")}/` : "";
+    const dirs = new Set();
+    const files = [];
+    arc.entries.forEach((entry) => {
+      const name = entry.name.replace(/\/+$/, "");
+      if (!name || name === arc.dir) return;
+      if (dir && !name.startsWith(dir)) return;
+      const rest = dir ? name.slice(dir.length) : name;
+      if (!rest) return;
+      if (rest.includes("/")) {
+        dirs.add(`${dir}${rest.split("/")[0]}`);
+      } else if (!entry.is_dir) {
+        files.push({ name: rest, path: name, size: entry.size, packed: entry.packed, is_dir: false });
+      }
+    });
+    return {
+      dirs: [...dirs].sort((a, b) => a.localeCompare(b, "ru")).map((path) => ({ name: path.split("/").pop(), path, is_dir: true, size: 0 })),
+      files: files.sort((a, b) => a.name.localeCompare(b.name, "ru"))
+    };
   }
 
   function fmRenderList() {
     const list = $("#fm-list");
     if (!list) return;
     const term = fm.query.trim().toLowerCase();
-    const rows = fm.entries.filter((entry) => !term || entry.name.toLowerCase().includes(term));
-    const items = rows.map((entry) => `
-      <div class="fm-item${fm.selected === entry.path ? " active" : ""}" data-path="${esc(entry.path)}" data-dir="${entry.is_dir}">
+    let rows = [];
+    if (fm.archive) {
+      const { dirs, files } = fmArchiveRows();
+      rows = [...dirs, ...files];
+    } else {
+      rows = fm.entries.slice();
+    }
+    if (term) rows = rows.filter((entry) => entry.name.toLowerCase().includes(term));
+    const items = rows.map((entry) => {
+      const sel = fm.selected === entry.path ? " active" : "";
+      const extra = fm.archive ? "" : `<span class="fdate">${entry.is_dir ? "—" : fmDate(entry.modified)}</span>`;
+      const size = entry.is_dir ? "—" : humanSize(entry.size);
+      return `<div class="fm-item${sel}" data-path="${esc(entry.path)}" data-dir="${entry.is_dir ? "true" : "false"}"${entry.is_dir && !fm.archive ? ' data-drop="1"' : ""}>
         <span class="fname">
           <span class="ico"><svg class="ic" width="13" height="13"><use href="#${fmIcon(entry.name, entry.is_dir)}"/></svg></span>
-          <span>${esc(entry.name)}</span>
+          <span class="nm">${esc(entry.name)}</span>
         </span>
-        <span class="fsize">${entry.is_dir ? "—" : humanSize(entry.size)}</span>
-        <span class="fdate">${entry.is_dir ? "—" : fmDate(entry.modified)}</span>
-      </div>`).join("");
-    list.innerHTML = `
-      <div class="fm-head"><span>Имя</span><span>Размер</span><span>Изменён</span></div>
-      ${items || `<div class="fm-empty">Папка пуста</div>`}`;
-    $$(".fm-item", list).forEach((row) => row.addEventListener("click", () => {
-      if (row.dataset.dir === "true") fmOpen(row.dataset.path);
-      else fmPreviewFile(row.dataset.path);
-    }));
+        <span class="fsize">${size}</span>
+        ${extra}
+      </div>`;
+    }).join("");
+    const head = fm.archive
+      ? `<div class="fm-head is-archive"><span>Имя в архиве</span><span>Размер</span></div>`
+      : `<div class="fm-head"><span>Имя</span><span>Размер</span><span>Изменён</span></div>`;
+    list.innerHTML = `${head}${items || `<div class="fm-empty">${fm.archive ? "В архиве пусто" : "Папка пуста"}</div>`}`;
+    $$(".fm-item", list).forEach((row) => {
+      const path = row.dataset.path;
+      const isDir = row.dataset.dir === "true";
+      row.addEventListener("click", () => {
+        if (consumeDragClick()) return;
+        if (fm.archive) {
+          if (isDir) {
+            fm.archive.dir = path;
+            fmRenderList();
+            fmRenderCrumb();
+            fmRenderStatus();
+          } else {
+            fmPreviewEntry(path);
+          }
+          return;
+        }
+        if (isDir) fmOpen(path); else fmPreviewFile(path);
+      });
+      row.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        const entry = rows.find((item) => item.path === path) || { path, name: path.split("/").pop(), is_dir: isDir, size: 0 };
+        fmOpenMenu(event.clientX, event.clientY, entry);
+      });
+      if (!fm.archive) row.addEventListener("mousedown", (event) => fmBeginDrag(event, path, isDir));
+    });
   }
 
+  /* ── просмотр: текст с номерами строк или картинка с зумом ── */
   function fmRenderView() {
     const view = $("#fm-view");
     if (!view) return;
     const preview = fm.preview;
-    if (!preview) { view.hidden = true; return; }
+    if (!preview) { view.hidden = true; view.classList.remove("is-image"); return; }
     view.hidden = false;
+    view.classList.toggle("is-image", preview.kind === "image");
     if (preview.error) {
       view.innerHTML = `<div class="fm-empty">${esc(preview.error)}</div>`;
       return;
     }
-    const lines = preview.text.split("\n");
+    if (preview.kind === "image") {
+      fm.image = { zoom: 1, x: 0, y: 0 };
+      view.innerHTML = `
+        <div class="fm-viewer">
+          <div class="fm-viewer-bar">
+            <span class="fm-viewer-name" title="${esc(preview.name || "")}">${esc(preview.name || "картинка")}</span>
+            <span class="spacer"></span>
+            <button class="btn-mini" id="fm-zoom-out" title="Уменьшить">−</button>
+            <span class="fm-zoom-val mono" id="fm-zoom-val">100%</span>
+            <button class="btn-mini" id="fm-zoom-in" title="Увеличить">+</button>
+            <button class="btn-mini" id="fm-zoom-fit" title="Вписать в окно">Вписать</button>
+            <button class="btn-mini" id="fm-zoom-100" title="Натуральный размер">1:1</button>
+          </div>
+          <div class="fm-viewer-body" id="fm-viewer-body">
+            <img class="fm-img" id="fm-img" src="${preview.src}" alt="" draggable="false">
+          </div>
+        </div>`;
+      const body = $("#fm-viewer-body");
+      const img = $("#fm-img");
+      img.addEventListener("load", () => {
+        // мелкие текстуры показываем пикселями, большие фото — сглаженно
+        img.classList.toggle("is-pixel", img.naturalWidth <= 256);
+        const fit = Math.min(1, Math.min(body.clientWidth / img.naturalWidth, body.clientHeight / img.naturalHeight));
+        fm.image = { zoom: fit || 1, x: 0, y: 0 };
+        fmImageApply();
+      });
+      $("#fm-zoom-in").addEventListener("click", () => fmZoom(1.25));
+      $("#fm-zoom-out").addEventListener("click", () => fmZoom(1 / 1.25));
+      $("#fm-zoom-100").addEventListener("click", () => { fm.image = { zoom: 1, x: 0, y: 0 }; fmImageApply(); });
+      $("#fm-zoom-fit").addEventListener("click", () => {
+        const fit = Math.min(1, Math.min(body.clientWidth / img.naturalWidth, body.clientHeight / img.naturalHeight));
+        fm.image = { zoom: fit || 1, x: 0, y: 0 };
+        fmImageApply();
+      });
+      body.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        fmZoom(event.deltaY < 0 ? 1.15 : 1 / 1.15);
+      }, { passive: false });
+      // перетаскивание картинки: тянем за неё, когда увеличена
+      let pan = null;
+      body.addEventListener("mousedown", (event) => {
+        if (event.button !== 0) return;
+        pan = { x: event.clientX, y: event.clientY, ox: fm.image.x, oy: fm.image.y };
+        body.classList.add("is-pan");
+        event.preventDefault();
+      });
+      window.addEventListener("mousemove", (event) => {
+        if (!pan || !$("#fm-viewer-body")) return;
+        fm.image.x = pan.ox + (event.clientX - pan.x);
+        fm.image.y = pan.oy + (event.clientY - pan.y);
+        fmImageApply();
+      });
+      window.addEventListener("mouseup", () => { pan = null; body.classList.remove("is-pan"); });
+      return;
+    }
+    const lines = String(preview.text || "").split("\n");
     const gutter = lines.map((_, index) => index + 1).join("\n");
-    view.innerHTML = `<div class="fm-gutter">${gutter}</div><pre class="fm-pre">${esc(preview.text)}</pre>`;
+    view.innerHTML = `<div class="fm-gutter">${gutter}</div><pre class="fm-pre">${esc(preview.text || "")}</pre>`;
+  }
+
+  function fmImageApply() {
+    const img = $("#fm-img");
+    if (!img) return;
+    const { zoom, x, y } = fm.image;
+    img.style.transform = `translate(${x}px, ${y}px) scale(${zoom})`;
+    const label = $("#fm-zoom-val");
+    if (label) label.textContent = `${Math.round(zoom * 100)}%`;
+  }
+
+  function fmZoom(multiplier) {
+    const zoom = Math.min(8, Math.max(0.05, fm.image.zoom * multiplier));
+    fm.image.zoom = zoom;
+    fmImageApply();
   }
 
   function fmRenderStatus() {
@@ -2985,12 +3415,20 @@
     const pathBox = $("#fm-path");
     if (!pathBox) return;
     const target = fm.selected || fm.path;
+    if (fm.archive) {
+      pathBox.textContent = `${fm.archive.path}${fm.archive.dir ? ` / ${fm.archive.dir}` : ""}`;
+      $("#fm-kind").hidden = false;
+      $("#fm-kind").textContent = "архив";
+      $("#fm-size").textContent = `${fm.archive.entries.length} записей`;
+      $("#fm-lines").textContent = fm.preview && fm.preview.kind === "text" ? `${String(fm.preview.text || "").split("\n").length} стр.` : "";
+      return;
+    }
     pathBox.textContent = target ? `${meta ? meta.name : "сборка"}/${target}` : `${meta ? meta.name : "сборка"}`;
     const entry = fm.entries.find((item) => item.path === fm.selected);
     $("#fm-kind").hidden = !entry;
     if (entry) $("#fm-kind").textContent = fmKind(entry.name);
     $("#fm-size").textContent = entry ? humanSize(entry.size) : `${fm.entries.length} объектов`;
-    const lines = fm.preview && !fm.preview.error ? fm.preview.text.split("\n").length : 0;
+    const lines = fm.preview && fm.preview.kind === "text" ? String(fm.preview.text || "").split("\n").length : 0;
     $("#fm-lines").textContent = lines ? `${lines} стр.` : "";
   }
 
@@ -2998,7 +3436,6 @@
     if (!$("#fm-tree")) return;
     const entries = await fmList(fm.path);
     fm.entries = entries;
-    fm.dirs.set(fm.path, entries.filter((entry) => entry.is_dir).map((entry) => ({ name: entry.name, path: entry.path })));
     await fmRenderTree();
     fmRenderList();
     fmRenderCrumb();
@@ -3006,10 +3443,11 @@
   }
 
   async function fmOpen(path) {
-    fm.path = path;
+    fm.path = path || "";
     fm.selected = null;
     fm.preview = null;
-    fm.expanded.add(path);
+    fm.archive = null;
+    fm.expanded.add(fm.path);
     $("#fm-list").hidden = false;
     const backButton = $("#fm-back");
     if (backButton) backButton.hidden = true;
@@ -3017,39 +3455,319 @@
     await fmRefresh();
   }
 
+  /* ── превью файла: картинка или текст ── */
   async function fmPreviewFile(path) {
     fm.selected = path;
     fmRenderList();
+    fmRenderTree();
     const view = $("#fm-view");
     const list = $("#fm-list");
     if (view) { view.hidden = false; view.innerHTML = `<div class="fm-empty">Читаем файл…</div>`; }
     if (list) list.hidden = true;
     const back = $("#fm-back");
     if (back) back.hidden = false;
+    const name = path.split("/").pop();
     try {
-      const text = await api.readFile(state.selectedId, path);
-      fm.preview = { path, text, error: null };
-    } catch (err) {
-      fm.preview = { path, text: "", error: String(err) };
+      if (fmIsImage(name)) {
+        const src = await api.fmReadImage(state.selectedId, path);
+        fm.preview = { kind: "image", src, name, error: null };
+      } else if (fmIsArchive(name)) {
+        // архив показываем как папку, а не текстом
+        await fmOpenArchive(path);
+        return;
+      } else {
+        const text = await api.readFile(state.selectedId, path);
+        fm.preview = { kind: "text", text, name, error: null };
+      }
+    } catch (error) {
+      fm.preview = { kind: "text", text: "", name, error: String(error) };
     }
     fmRenderView();
     fmRenderStatus();
   }
 
+  /* ── архивы: показываем содержимое как папку ── */
+  async function fmOpenArchive(path) {
+    const view = $("#fm-view");
+    const list = $("#fm-list");
+    if (view) { view.hidden = false; view.innerHTML = `<div class="fm-empty">Читаем архив…</div>`; }
+    if (list) list.hidden = true;
+    try {
+      const entries = await api.archiveList(state.selectedId, path);
+      fm.archive = { path, entries, dir: "" };
+      fm.preview = null;
+      fm.selected = null;
+      if (view) view.hidden = true;
+      if (list) list.hidden = false;
+      const back = $("#fm-back");
+      if (back) back.hidden = false;
+      fmRenderList();
+      fmRenderCrumb();
+      fmRenderStatus();
+    } catch (error) {
+      fm.preview = { kind: "text", text: "", name: path, error: String(error) };
+      fmRenderView();
+      fmRenderStatus();
+    }
+  }
+
+  function fmCloseArchive() {
+    fm.archive = null;
+    fm.preview = null;
+    fm.selected = null;
+    const view = $("#fm-view");
+    const list = $("#fm-list");
+    if (view) { view.hidden = true; view.classList.remove("is-image"); }
+    if (list) list.hidden = false;
+    const back = $("#fm-back");
+    if (back) back.hidden = true;
+    fmRenderList();
+    fmRenderCrumb();
+    fmRenderStatus();
+  }
+
+  async function fmPreviewEntry(entry) {
+    const view = $("#fm-view");
+    const list = $("#fm-list");
+    if (view) { view.hidden = false; view.innerHTML = `<div class="fm-empty">Читаем файл из архива…</div>`; }
+    if (list) list.hidden = true;
+    const back = $("#fm-back");
+    if (back) back.hidden = false;
+    const name = String(entry).split("/").pop();
+    try {
+      const result = await api.archiveRead(state.selectedId, fm.archive.path, entry);
+      if (result.kind === "image") {
+        fm.preview = { kind: "image", src: result.data_url, name, error: null };
+      } else {
+        fm.preview = { kind: "text", text: result.text || "", name, error: null };
+      }
+    } catch (error) {
+      fm.preview = { kind: "text", text: "", name, error: String(error) };
+    }
+    fmRenderView();
+    fmRenderStatus();
+  }
+
+  /** «Назад»: из файла — к списку, из архива — на уровень выше. */
+  function fmBack() {
+    if (fm.preview) {
+      fm.preview = null;
+      fmShowList();
+      fmRenderList();
+      fmRenderCrumb();
+      fmRenderStatus();
+      return;
+    }
+    if (fm.archive && fm.archive.dir) {
+      const parts = fm.archive.dir.split("/").filter(Boolean);
+      parts.pop();
+      fm.archive.dir = parts.join("/");
+      fmShowList();
+      fmRenderList();
+      fmRenderCrumb();
+      fmRenderStatus();
+      return;
+    }
+    if (fm.archive) { fmCloseArchive(); return; }
+    fm.selected = null;
+    fmShowList();
+    fmRenderList();
+    fmRenderStatus();
+  }
+
+  function fmShowList() {
+    const view = $("#fm-view");
+    const list = $("#fm-list");
+    if (view) { view.hidden = true; view.classList.remove("is-image"); }
+    if (list) list.hidden = false;
+    const back = $("#fm-back");
+    if (back) back.hidden = !(fm.archive && fm.archive.dir);
+  }
+
+  /* ── ПКМ по файлу или папке ── */
+  function fmOpenMenu(x, y, entry) {
+    if (!entry) return;
+    const isDir = Boolean(entry.is_dir);
+    const name = entry.name || String(entry.path).split("/").pop();
+    const archive = !isDir && fmIsArchive(name);
+    const dirOf = (path) => String(path).split("/").slice(0, -1).join("/");
+    if (fm.archive) {
+      fillCtxMenu(x, y, `
+        <div class="ctx-caption">${esc(name)}</div>
+        ${isDir ? `<button class="ctx-item" data-act="open"><svg class="ic"><use href="#i-folder"/></svg>Открыть папку</button>` : `<button class="ctx-item" data-act="open"><svg class="ic"><use href="#i-base"/></svg>Открыть в просмотре</button>`}
+        <div class="ctx-sep"></div>
+        <button class="ctx-item" data-act="up"><svg class="ic"><use href="#i-chev"/></svg>Выйти из архива</button>`, (act) => {
+        if (act === "open") {
+          if (isDir) {
+            fm.archive.dir = entry.path;
+            fmRenderList(); fmRenderCrumb(); fmRenderStatus();
+          } else {
+            fmPreviewEntry(entry.path);
+          }
+        }
+        if (act === "up") fmCloseArchive();
+      });
+      return;
+    }
+    fillCtxMenu(x, y, `
+      <div class="ctx-caption" title="${esc(entry.path)}">${esc(name)}</div>
+      ${isDir
+        ? `<button class="ctx-item" data-act="open"><svg class="ic"><use href="#i-folder"/></svg>Открыть</button>`
+        : archive
+          ? `<button class="ctx-item" data-act="archive"><svg class="ic"><use href="#i-mod"/></svg>Открыть архив</button>
+             <button class="ctx-item" data-act="open"><svg class="ic"><use href="#i-base"/></svg>Открыть в просмотре</button>`
+          : `<button class="ctx-item" data-act="open"><svg class="ic"><use href="#i-base"/></svg>Открыть в просмотре</button>`}
+      <div class="ctx-sep"></div>
+      <button class="ctx-item" data-act="rename"><svg class="ic"><use href="#i-pencil"/></svg>Переименовать</button>
+      <button class="ctx-item" data-act="mkdir"><svg class="ic"><use href="#i-plus"/></svg>Новая папка${isDir ? " внутри" : ""}</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item" data-act="reveal"><svg class="ic"><use href="#i-folder"/></svg>Показать в проводнике</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item danger" data-act="delete"><svg class="ic"><use href="#i-trash"/></svg>Удалить</button>`, async (act) => {
+      if (act === "open") {
+        if (isDir) await fmOpen(entry.path);
+        else await fmPreviewFile(entry.path);
+      }
+      if (act === "archive") await fmOpenArchive(entry.path);
+      if (act === "rename") {
+        const next = await promptModal({ title: "Переименовать", label: "Новое имя", value: name });
+        if (!next || next === name) return;
+        try {
+          await api.fmRename(state.selectedId, entry.path, next);
+          fmDropCache();
+          await fmRefresh();
+          toast("Переименовано", "ok");
+        } catch (error) { toast(String(error), "err"); }
+      }
+      if (act === "mkdir") {
+        const base = isDir ? entry.path : dirOf(entry.path);
+        const next = await promptModal({ title: "Новая папка", label: "Название", value: "" });
+        if (!next) return;
+        try {
+          await api.fmCreateDir(state.selectedId, base ? `${base}/${next}` : next);
+          fm.expanded.add(base || "");
+          fmDropCache();
+          await fmRefresh();
+          toast(`Папка «${next}» создана`, "ok");
+        } catch (error) { toast(String(error), "err"); }
+      }
+      if (act === "reveal") {
+        const meta = selected();
+        if (!meta) return;
+        const dir = isDir ? entry.path : dirOf(entry.path);
+        api.openPath(`/instances/${meta.id}/minecraft${dir ? `/${dir}` : ""}`).catch((error) => toast(String(error), "err"));
+      }
+      if (act === "delete") {
+        const okDelete = await askConfirm({
+          title: "Удалить",
+          text: isDir ? `Папка «${name}» будет удалена вместе с содержимым.` : `Файл «${name}» будет удалён.`,
+          ok: "Удалить"
+        });
+        if (!okDelete) return;
+        try {
+          await api.deleteFile(state.selectedId, entry.path);
+          if (fm.selected === entry.path) { fm.preview = null; fmRenderView(); }
+          fm.selected = null;
+          fmDropCache();
+          await fmRefresh();
+          toast("Удалено", "ok");
+        } catch (error) { toast(String(error), "err"); }
+      }
+    });
+  }
+
+  /* ── перенос файлов мышью между папками ── */
+  function fmClearDrop() {
+    $$(".fm-item.is-drop, .fm-row.is-drop, .fm-crumb .c.is-drop").forEach((el) => el.classList.remove("is-drop"));
+  }
+
+  function fmBeginDrag(event, path, isDir) {
+    if (event.button !== 0) return;
+    fm.drag = { path, isDir, startX: event.clientX, startY: event.clientY, active: false, ghost: null, target: null };
+    window.addEventListener("mousemove", fmDragMove);
+    window.addEventListener("mouseup", fmDragEnd);
+  }
+
+  function fmDragMove(event) {
+    const drag = fm.drag;
+    if (!drag) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.active && Math.hypot(dx, dy) < 5) return;
+    if (!drag.active) {
+      drag.active = true;
+      const ghost = document.createElement("div");
+      ghost.className = "drag-ghost";
+      ghost.innerHTML = `<span class="drag-ghost-name">${esc(String(drag.path).split("/").pop())}</span>`;
+      document.body.appendChild(ghost);
+      drag.ghost = ghost;
+      document.body.classList.add("is-dragging");
+    }
+    drag.ghost.style.left = `${event.clientX + 12}px`;
+    drag.ghost.style.top = `${event.clientY + 10}px`;
+    fmClearDrop();
+    drag.target = null;
+    const under = document.elementFromPoint(event.clientX, event.clientY);
+    if (!under) return;
+    const folder = under.closest('.fm-item[data-drop="1"], .fm-row[data-drop="1"], .fm-crumb .c[data-drop]');
+    if (folder) {
+      folder.classList.add("is-drop");
+      // у строки списка путь в data-path, у папки в дереве — в data-dir, у крошки — в data-drop
+      drag.target = folder.dataset.path !== undefined
+        ? folder.dataset.path
+        : folder.dataset.dir !== undefined
+          ? folder.dataset.dir
+          : folder.dataset.drop;
+    } else if (under.closest("#fm-list, #fm-tree")) {
+      drag.target = fm.path;   // бросок в пустое место — в текущую папку
+    }
+  }
+
+  async function fmDragEnd() {
+    window.removeEventListener("mousemove", fmDragMove);
+    window.removeEventListener("mouseup", fmDragEnd);
+    const drag = fm.drag;
+    fm.drag = null;
+    if (!drag) return;
+    fmClearDrop();
+    document.body.classList.remove("is-dragging");
+    if (drag.ghost) drag.ghost.remove();
+    if (!drag.active) return;
+    armDragClickGuard();
+    if (drag.target === null) return;
+    const from = String(drag.path);
+    const to = String(drag.target || "");
+    const fromDir = from.split("/").slice(0, -1).join("/");
+    if (fromDir === to) return;
+    try {
+      const moved = await api.fmMove(state.selectedId, [from], to);
+      if (!moved) return;
+      fm.expanded.add(to);
+      fmDropCache();
+      await fmRefresh();
+      await fmRenderTree();
+      toast(`Перенесено в «${to || "корень сборки"}»`, "ok");
+    } catch (error) {
+      toast(String(error), "err");
+    }
+  }
+
   async function renderFiles() {
     fm.path = "";
     fm.entries = [];
-    fm.dirs.clear();
+    fm.cache.clear();
     fm.expanded.clear();
     fm.selected = null;
     fm.preview = null;
     fm.query = "";
+    fm.archive = null;
     $("#tab-body").innerHTML = `
       <div class="fm">
         <aside class="fm-side">
           <div class="fm-side-head">
-            <input class="filter" id="fm-search" placeholder="найти папку…" spellcheck="false">
+            <input class="filter" id="fm-search" placeholder="найти файл…" spellcheck="false">
             <button class="btn-mini" id="fm-refresh" title="Обновить дерево">⟳</button>
+            <button class="btn-mini" id="fm-mkdir" title="Новая папка">+ папка</button>
           </div>
           <div class="fm-tree" id="fm-tree"><div class="fm-empty">Загрузка…</div></div>
         </aside>
@@ -3057,7 +3775,8 @@
           <div class="fm-bar">
             <div class="fm-crumb" id="fm-crumb"></div>
             <div class="right">
-              <button class="btn btn-small" id="fm-back" hidden>← К списку</button>
+              <button class="btn btn-small" id="fm-back" hidden>← Назад</button>
+              <button class="btn btn-small" id="fm-mkdir-top">+ папка</button>
               <button class="btn btn-small" id="fm-open-ext">Открыть папку</button>
               <button class="btn btn-small" id="fm-reload">Обновить</button>
             </div>
@@ -3079,17 +3798,36 @@
       fmRenderTree();
       fmRenderList();
     });
-    $("#fm-refresh").addEventListener("click", async () => { fm.dirs.clear(); await fmRenderTree(); });
-    $("#fm-back").addEventListener("click", () => {
-      fm.preview = null;
-      fm.selected = null;
-      $("#fm-view").hidden = true;
-      $("#fm-list").hidden = false;
-      $("#fm-back").hidden = true;
-      fmRenderList();
-      fmRenderStatus();
+    $("#fm-refresh").addEventListener("click", async () => { fmDropCache(); await fmRenderTree(); });
+    $("#fm-back").addEventListener("click", fmBack);
+    $("#fm-reload").addEventListener("click", async () => { fmDropCache(); await fmRefresh(); });
+    const mkdirHere = async () => {
+      const next = await promptModal({ title: "Новая папка", label: "Название", value: "" });
+      if (!next) return;
+      try {
+        await api.fmCreateDir(state.selectedId, fm.path ? `${fm.path}/${next}` : next);
+        fm.expanded.add(fm.path);
+        fmDropCache();
+        await fmRefresh();
+        toast(`Папка «${next}» создана`, "ok");
+      } catch (error) { toast(String(error), "err"); }
+    };
+    $("#fm-list").addEventListener("contextmenu", (event) => {
+      if (event.target.closest(".fm-item")) return;
+      event.preventDefault();
+      fillCtxMenu(event.clientX, event.clientY, `
+        <div class="ctx-caption">${esc(fm.archive ? "Архив" : fm.path || "сборка")}</div>
+        ${fm.archive
+          ? `<button class="ctx-item" data-act="up"><svg class="ic"><use href="#i-chev"/></svg>Выйти из архива</button>`
+          : `<button class="ctx-item" data-act="mkdir"><svg class="ic"><use href="#i-plus"/></svg>Новая папка</button>
+             <button class="ctx-item" data-act="reload"><svg class="ic"><use href="#i-refresh"/></svg>Обновить</button>`}`, async (act) => {
+        if (act === "mkdir") await mkdirHere();
+        if (act === "reload") { fmDropCache(); await fmRefresh(); }
+        if (act === "up") fmCloseArchive();
+      });
     });
-    $("#fm-reload").addEventListener("click", async () => { fm.dirs.clear(); await fmRefresh(); });
+    $("#fm-mkdir").addEventListener("click", mkdirHere);
+    $("#fm-mkdir-top").addEventListener("click", mkdirHere);
     $("#fm-open-ext").addEventListener("click", () => {
       const meta = selected();
       if (!meta) return toast("Сборка не выбрана", "err");
@@ -3409,6 +4147,16 @@
   const DV_PAGE = 24;
   let dvObserver = null;
 
+  /** Размер плитки во вкладке Modrinth внутри сборки: 1 → 12, 2 → 9, 3 → 6 в ряд. */
+  function mrGridLevel() {
+    const level = Number(state.settings && state.settings.mr_grid);
+    return level === 1 || level === 2 || level === 3 ? level : 2;
+  }
+
+  function mrColumns(level = mrGridLevel()) {
+    return level === 1 ? 12 : level === 3 ? 6 : 9;
+  }
+
   function renderModrinth() {
     const meta = selected();
     const cfg = state.modrinth;
@@ -3448,8 +4196,13 @@
             <button class="${view === "list" ? "is-active" : ""}" data-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
             <button class="${view === "grid" ? "is-active" : ""}" data-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
           </div>
+          <label class="feed-size" style="align-self:flex-end" title="Размер плитки: 1 — 12 в ряд, 2 — 9 в ряд, 3 — 6 в ряд">
+            <svg class="ic"><use href="#i-grid"/></svg>
+            <input type="range" id="mr-size" min="1" max="3" step="1" value="${mrGridLevel()}" aria-label="Размер плитки">
+            <span class="mono" id="mr-size-val">${mrGridLevel()}</span>
+          </label>
         </div>
-        <div class="modrinth-results ${view === "grid" ? "is-grid" : ""}" id="mr-results">
+        <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${mrGridLevel()}` : ""}" id="mr-results" style="--feed-cols:${mrColumns()}">
           ${resultsHtml()}
         </div>
       </div>`;
@@ -3464,6 +4217,22 @@
       state.modrinth.view = btn.dataset.view;
       renderModrinth();
     }));
+    const mrSize = $("#mr-size");
+    if (mrSize) {
+      mrSize.addEventListener("input", () => {
+        const level = Number(mrSize.value) || 2;
+        const label = $("#mr-size-val");
+        if (label) label.textContent = String(level);
+        const results = $("#mr-results");
+        if (results) {
+          results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
+          results.classList.add(`feed-grid-${level}`);
+          results.style.setProperty("--feed-cols", String(mrColumns(level)));
+        }
+        state.settings = { ...(state.settings || {}), mr_grid: level };
+        api.saveSettings(state.settings).catch(() => {});
+      });
+    }
     bindResultEvents();
     const retry = $("#mr-retry");
     if (retry) retry.addEventListener("click", () => runSearch());
@@ -3646,13 +4415,9 @@
   }
 
   /** Сколько карточек в ряд при текущей ширине окна и выбранном размере. */
-  function feedColumns(level = feedGridLevel(), width = 0) {
-    const max = level === 1 ? 12 : level === 3 ? 6 : 9;
-    const min = level === 1 ? 3 : level === 3 ? 2 : 3;
-    const available = width || Math.max(320, (window.innerWidth || 1280) - 264 - 16);
-    // карточка не должна быть уже ~96 px и шире ~260 px
-    const byWidth = Math.floor(available / (level === 3 ? 168 : level === 2 ? 124 : 92));
-    return Math.max(min, Math.min(max, byWidth || max));
+  /** Сколько карточек в ряд: 1 → 12, 2 → 9 (стандарт), 3 → 6 — как написано в подсказке к ползунку. */
+  function feedColumns(level = feedGridLevel()) {
+    return level === 1 ? 12 : level === 3 ? 6 : 9;
   }
 
   /** Пересчитать число колонок у уже отрисованной ленты. */
@@ -5046,6 +5811,27 @@
         ${colorRow({ id: "theme-accent", label: "Акцент", value: own.accent })}
         ${colorRow({ id: "theme-text", label: "Текст", value: own.text })}
       </div>` : ""}
+      <div class="prefs-section" id="tint-section">
+        <div class="prefs-row-head">
+          <span class="prefs-label">Базовый цвет фона</span>
+          <div class="spacer"></div>
+          <button class="btn btn-small" id="tint-auto"><svg class="ic"><use href="#i-refresh"/></svg>Как в теме</button>
+        </div>
+        <div class="settings-row">
+          <span class="label">Цвет</span>
+          <div class="color-field">
+            <input type="color" id="tint-color" value="${esc(themeTintColor())}" aria-label="Базовый цвет фона">
+            <span class="color-hex" id="tint-color-hex">${esc(themeTintColor())}</span>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="label">Прозрачность</span>
+          <div class="range" style="flex:1">
+            <input type="range" id="tint-alpha" min="0" max="100" step="1" value="${Math.min(100, Math.max(0, Number(settings.wallpaper_dim ?? 40)))}">
+            <span class="tag" id="tint-alpha-val">${Math.min(100, Math.max(0, Number(settings.wallpaper_dim ?? 40)))}%</span>
+          </div>
+        </div>
+      </div>
       <div class="prefs-section">
         <div class="prefs-row-head">
           <span class="prefs-label">Масштаб интерфейса</span>
@@ -5121,7 +5907,7 @@
           </div>
           <div class="field" style="flex:1;min-width:170px">
             <label>Затемнение</label>
-            <div class="range"><input type="range" id="wall-dim" min="0" max="80" value="${state.wall.dim}"><span class="tag" id="wall-dim-value">${state.wall.dim}%</span></div>
+            <div class="range"><input type="range" id="wall-dim" min="0" max="100" value="${state.wall.dim}"><span class="tag" id="wall-dim-value">${state.wall.dim}%</span></div>
           </div>
         </div>
 
@@ -5450,6 +6236,35 @@
         input.click();
       });
     };
+    const tintColor = $("#tint-color");
+    if (tintColor) {
+      const applyTint = (value) => {
+        if (!/^#[0-9a-f]{6}$/i.test(String(value))) return;
+        state.settings = { ...(state.settings || {}), theme_tint: String(value).toLowerCase() };
+        tintColor.value = state.settings.theme_tint;
+        const hex = $("#tint-color-hex");
+        if (hex) hex.textContent = state.settings.theme_tint;
+        applyThemeTint();
+        api.saveSettings(state.settings).catch(() => {});
+      };
+      tintColor.addEventListener("input", () => applyTint(tintColor.value));
+      const auto = $("#tint-auto");
+      if (auto) auto.addEventListener("click", () => {
+        state.settings = { ...(state.settings || {}), theme_tint: "" };
+        applyThemeTint();
+        api.saveSettings(state.settings).catch(() => {});
+        renderPrefs();
+      });
+    }
+    const tintAlpha = $("#tint-alpha");
+    if (tintAlpha) tintAlpha.addEventListener("input", (event) => {
+      const value = Math.min(100, Math.max(0, Number(event.target.value)));
+      state.wall.dim = value;
+      state.settings = { ...(state.settings || {}), wallpaper_dim: value };
+      const label = $("#tint-alpha-val");
+      if (label) label.textContent = `${value}%`;
+      applyWallpaper(state.wall);
+    });
     bindColor("bg", "theme-bg");
     bindColor("accent", "theme-accent");
     bindColor("text", "theme-text");

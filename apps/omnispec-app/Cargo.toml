@@ -17,8 +17,14 @@ futures = { workspace = true }
 omnispec-core = { path = "../../crates/omnispec-core" }
 # системные диалоги «проводника»: выбор файла/папки
 rfd = "0.15"
-# читаем метаданные модов внутри jar
+# читаем метаданные модов внутри jar и содержимое архивов
 zip = { workspace = true }
+# .rar в файловом менеджере (пользователь выбрал «оставляем unrar»)
+unrar = "0.5"
+# картинка из файла или архива отдаётся в окно как data-url
+base64 = "0.22"
+# имена внутри старых zip-архивов в CP866
+encoding_rs = "0.8"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
