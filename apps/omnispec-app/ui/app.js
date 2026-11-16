@@ -5920,6 +5920,24 @@
     slim: MODEL_SLIM
   };
 
+  /**
+   * Плащ: пластина 10×16 за спиной (тело заканчивается на z = 2), толщина 1 px.
+   * UV — как в ванильной развёртке 64×32: рисунок лежит в 1..11 по u и 1..17 по v.
+   */
+  const SKIN_CAPE = {
+    n: "Cape",
+    b: [-5, 8, 2, 5, 24, 3],
+    i: 0,
+    uv: {
+      north: [1, 1, 11, 17],
+      east: [0, 1, 1, 17],
+      south: [12, 1, 22, 17],
+      west: [11, 1, 12, 17],
+      up: [11, 1, 1, 0],
+      down: [12, 0, 11, 1]
+    }
+  };
+
   const SKIN_FACE_NORMALS = {
     north: [0, 0, -1], south: [0, 0, 1], east: [1, 0, 0],
     west: [-1, 0, 0], up: [0, 1, 0], down: [0, -1, 0]
@@ -5944,7 +5962,7 @@
    * Отрисовка модели в canvas: второй слой поверх, грани отвёрнутые от камеры не рисуем,
    * дальние — первыми. `yaw` крутит вокруг оси Y, `pitch` наклоняет (плюс — камера сверху).
    */
-  function drawSkinModel(canvas, texture, variant, yawDeg, pitchDeg) {
+  function drawSkinModel(canvas, texture, variant, yawDeg, pitchDeg, capeTexture) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const W = canvas.width;
@@ -5970,14 +5988,18 @@
     const originY = H / 2;
     const project = ([x, y, z]) => [originX + x * unit, originY - (y - 16) * unit, z];
 
+    const parts = (SKIN_MODEL[variant] || SKIN_MODEL.classic).slice();
+    // плащ — отдельная деталь со своей картинкой (64×32), показываем, если он есть
+    if (capeTexture) parts.push({ ...SKIN_CAPE, tex: capeTexture });
+
     const faces = [];
-    (SKIN_MODEL[variant] || SKIN_MODEL.classic).forEach((part) => {
+    parts.forEach((part) => {
       const corners = skinFaceCorners(part.b, part.i);
       Object.keys(part.uv).forEach((dir) => {
         const normal = rotate(SKIN_FACE_NORMALS[dir]);
         if (normal[2] >= -0.001) return; // грань смотрит от камеры
         const pts = corners[dir].map(rotate).map(project);
-        faces.push({ uv: part.uv[dir], pts, depth: (pts[0][2] + pts[1][2] + pts[2][2] + pts[3][2]) / 4 });
+        faces.push({ uv: part.uv[dir], pts, tex: part.tex || texture, depth: (pts[0][2] + pts[1][2] + pts[2][2] + pts[3][2]) / 4 });
       });
     });
 
@@ -6003,7 +6025,7 @@
       const c = (p3[0] - p0[0]) / vh, d = (p3[1] - p0[1]) / vh;
       const e = p0[0] - a * u1 - c * v1, f = p0[1] - b * u1 - d * v1;
       ctx.setTransform(a, b, c, d, e, f);
-      ctx.drawImage(texture, 0, 0);
+      ctx.drawImage(face.tex, 0, 0);
       ctx.restore();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     });
@@ -6071,7 +6093,7 @@
     const favorites = skinFavorites();
     const filled = favorites.map((fav) => `
       <button class="fav-slot ${fav.id === (skinState().favorite || "") ? "is-active" : ""}" data-fav="${esc(fav.id)}" title="${esc(fav.name)}">
-        <span class="skin-mini fav-mini" data-fav-src="${esc(fav.skinDataUrl || "")}"></span>
+        <span class="skin-mini fav-mini" data-fav-src="${esc(fav.skinDataUrl || "")}" data-fav-cape="${esc(fav.capeDataUrl || "")}"></span>
         <span class="fav-name">${esc(fav.name)}</span>
         <span class="fav-cape">${esc(fav.capeAlias || "без плаща")}</span>
         <span class="preset-del" data-del-fav="${esc(fav.id)}" title="Удалить образ">×</span>
@@ -6094,7 +6116,9 @@
       const src = slot.dataset.favSrc;
       if (!src) return;
       const texture = await textureFromImage(src);
-      if (texture) paintSkinMini(slot, texture);
+      if (!texture) return;
+      const cape = slot.dataset.favCape ? await textureFromImage(slot.dataset.favCape) : null;
+      paintSkinMini(slot, texture, cape);
     });
   }
 
@@ -6130,6 +6154,15 @@
         toast(`Плащ не применён: ${error}`, "err");
       }
     }
+    // в превью сразу показываем плащ из образа, не дожидаясь сервера
+    if (fav.capeDataUrl) {
+      const capeTexture = await textureFromImage(fav.capeDataUrl);
+      state.capeTexture = capeTexture || state.capeTexture;
+      state.capeTextureSrc = fav.capeDataUrl;
+    } else {
+      state.capeTexture = null;
+      state.capeTextureSrc = "";
+    }
     renderPrefs();
     toast(`Образ «${fav.name}» применён`, "ok");
   }
@@ -6141,6 +6174,8 @@
     if (favorites.length >= FAV_SLOTS) return toast(`Образов не больше ${FAV_SLOTS} — удали один`, "err");
     const capeId = activeCapeId();
     const capeAlias = capeId ? capeAliasOf(capeId) : "";
+    const capeEntry = (capeState().list || []).find((cape) => cape.id === capeId);
+    const capeDataUrl = (capeEntry && capeEntry.data_url) || "";
     const name = await promptModal({
       title: "Сохранить образ",
       label: "Название",
@@ -6156,6 +6191,7 @@
       variant: skin.variant === "slim" ? "slim" : "classic",
       capeId,
       capeAlias,
+      capeDataUrl,
       angle: Math.round(Number(skin.yaw) || 0)
     };
     await saveSkinFavorites([...favorites, favorite]);
@@ -6306,6 +6342,23 @@
   }
 
   /** Плащи подгружаем при открытии профиля. */
+  /** Текстура активного плаща — её и рисуем на модели за спиной. */
+  async function loadCapeTexture() {
+    const list = capeState().list || [];
+    const active = list.find((cape) => cape.active);
+    const src = (active && active.data_url) || "";
+    if (!src) {
+      state.capeTexture = null;
+      state.capeTextureSrc = "";
+      return null;
+    }
+    if (state.capeTexture && state.capeTextureSrc === src) return state.capeTexture;
+    const texture = await textureFromImage(src);
+    state.capeTexture = texture || null;
+    state.capeTextureSrc = texture ? src : "";
+    return state.capeTexture;
+  }
+
   async function refreshAccountCapes() {
     const capes = capeState();
     capes.loading = true;
@@ -6318,6 +6371,7 @@
     capes.licensed = Boolean(info.licensed);
     capes.list = info.capes || [];
     capes.error = "";
+    await loadCapeTexture();
   }
 
   function bindCapes() {
@@ -6337,6 +6391,7 @@
       try {
         await api.setCape(id);
         capes.list.forEach((cape) => { cape.active = id ? cape.id === id : false; });
+        await loadCapeTexture();
         renderPrefs();
         toast(id ? "Плащ включён" : "Плащ выключен", "ok");
       } catch (error) {
@@ -6401,16 +6456,18 @@
     const cssHeight = Math.round(rect.height || 380);
     if (!cssWidth || !cssHeight) return;
     skinCanvasSize(canvas, cssWidth, cssHeight);
-    drawSkinModel(canvas, skin.texture || null, skin.variant, skin.yaw, skin.pitch);
+    drawSkinModel(canvas, skin.texture || null, skin.variant, skin.yaw, skin.pitch, state.capeTexture || null);
   }
 
   /** Мини-модель для пресета: тот же рендер, маленький. */
-  function paintSkinMini(slot, texture) {
+  function paintSkinMini(slot, texture, capeTexture) {
     if (!slot || !texture) return;
     const canvas = document.createElement("canvas");
     canvas.width = 96;
     canvas.height = 140;
-    drawSkinModel(canvas, texture, "classic", -22, 6);
+    // с плащом мини показываем в три четверти со спины — иначе плаща не видно
+    const yaw = capeTexture ? 130 : -22;
+    drawSkinModel(canvas, texture, "classic", yaw, 6, capeTexture || null);
     slot.innerHTML = "";
     slot.appendChild(canvas);
   }

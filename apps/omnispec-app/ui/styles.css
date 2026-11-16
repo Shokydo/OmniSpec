@@ -2037,8 +2037,8 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 }
 .fav-slot.is-empty .ic { width: 16px; height: 16px; }
 .fav-slot.is-blank { border-style: dashed; opacity: .45; pointer-events: none; }
-.fav-slot .fav-mini { display: grid; place-items: center; width: 100%; height: 66px; aspect-ratio: auto; }
-.fav-slot .fav-mini canvas { width: auto; height: 66px; image-rendering: pixelated; }
+.fav-slot .fav-mini { display: grid; place-items: center; width: 100%; height: 74px; aspect-ratio: auto; }
+.fav-slot .fav-mini canvas { width: auto; height: 74px; image-rendering: pixelated; }
 .fav-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fav-cape { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9.5px; color: var(--dim-2); }
 .fav-slot .preset-del { opacity: 0; }
