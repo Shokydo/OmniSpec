@@ -1160,7 +1160,7 @@
     const running = state.running.has(meta.id);
     el.innerHTML = `
       <div class="ctx-caption">${esc(meta.name)} · MC ${esc(meta.mc_version)}</div>
-      <button class="ctx-item" data-act="play"><svg class="ic"><use href="#${running ? "i-stop" : "i-play"}"/></svg>${running ? "Остановить" : "Играть"}</button>
+      <button class="ctx-item${running ? " danger" : ""}" data-act="play"><svg class="ic"><use href="#${running ? "i-stop" : "i-play"}"/></svg>${running ? "Остановить сборку" : "Играть"}</button>
       <button class="ctx-item" data-act="dup"><svg class="ic"><use href="#i-copy"/></svg>Запустить дубликат…</button>
       <button class="ctx-item" data-act="settings"><svg class="ic"><use href="#i-sliders"/></svg>Настройки сборки</button>
       <div class="ctx-sep"></div>
@@ -2613,6 +2613,11 @@
       el.addEventListener("click", () => {
         if (consumeDragClick()) return;
         selectInstance(el.dataset.id);
+      });
+      // двойной клик по сборке — сразу запускаем игру
+      el.addEventListener("dblclick", (event) => {
+        event.preventDefault();
+        launchFromList(el.dataset.id);
       });
       el.addEventListener("contextmenu", (event) => {
         event.preventDefault();
@@ -4593,6 +4598,11 @@
       selectInstance(card.dataset.homeId);
       state.tab = "console";
       renderTab();
+    }));
+    // двойной клик по недавней сборке — сразу запускаем игру
+    $$("#tab-body [data-home-id]").forEach((card) => card.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      launchFromList(card.dataset.homeId);
     }));
     $("#dv-query").addEventListener("keydown", (event) => { if (event.key === "Enter") dvReset(); });
     $$("#tab-body [data-dv-view]").forEach((btn) => btn.addEventListener("click", () => {
@@ -7938,6 +7948,24 @@
     renderBuildIcon(selected());
   }
 
+  /** Двойной клик по сборке в списке или на главной: выбрать её и запустить игру. */
+  async function launchFromList(id) {
+    const meta = state.instances.find((item) => item.id === id);
+    if (!meta) return;
+    if (state.running.has(id)) {
+      toast(`«${meta.name}» уже запущена`, "");
+      selectInstance(id);
+      return;
+    }
+    if (state.selectedId !== id) {
+      state.selectedId = id;
+      state.tab = "console";
+      renderSidebar();
+      renderTab();
+    }
+    play();
+  }
+
   async function play() {
     const meta = selected();
     if (!meta) return toast("Выбери сборку", "err");
@@ -8557,6 +8585,22 @@
     return !(state.settings && state.settings.onboarded === true);
   }
 
+  /**
+   * Лаунчером уже пользовались? Ник по умолчанию («Player») не в счёт — смотрим
+   * только на то, что появляется от реальной работы: выбранная сборка, категории,
+   * обои, своя тема, масштаб, образы.
+   */
+  function onboardLooksUsed() {
+    const settings = state.settings || {};
+    return Boolean(settings.last_instance)
+      || Boolean(settings.wallpaper)
+      || Boolean(settings.mc_version)
+      || (Array.isArray(settings.categories) && settings.categories.length > 0)
+      || (Array.isArray(settings.skin_favorites) && settings.skin_favorites.length > 0)
+      || (Boolean(settings.theme) && settings.theme !== "dark")
+      || (Number(settings.ui_scale) > 0 && Number(settings.ui_scale) !== 100);
+  }
+
   function onboardEffectsOn() {
     return (state.fx && state.fx !== "off") || (state.ambient && state.ambient !== "off");
   }
@@ -8799,8 +8843,15 @@
         if (startup) installMrpackPath(startup);
       } catch (error) { /* без аргументов — обычный запуск */ }
     }
-    // первый запуск: короткая настройка (тема, эффекты, трейсер, масштаб, импорт)
-    if (onboardNeeded()) openOnboard();
+    // первый запуск: короткая настройка (тема, эффекты, трейсер, масштаб, импорт).
+    // После обновления лаунчера окно не возвращается: если настройки уже есть,
+    // считаем, что знакомство состоялось, и просто ставим отметку.
+    if (onboardNeeded() && onboardLooksUsed()) {
+      state.settings = { ...(state.settings || {}), onboarded: true };
+      api.saveSettings(state.settings).catch(() => {});
+    } else if (onboardNeeded()) {
+      openOnboard();
+    }
     if (!IS_APP) {
       /* демо-режим без бэкенда — тихо */
     }
