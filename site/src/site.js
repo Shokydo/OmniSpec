@@ -113,56 +113,85 @@
   }
 
   /**
-   * Фон: сетка из точек и связей между ними. Курсор притягивает ближние
-   * точки — линии тянутся за мышью, но кликов слой не перехватывает.
+   * Фон: сетка из точек и связей — по настройкам автора макета:
+   * 130 точек, связь до 150 px, скорость 0.6, курсор притягивает в радиусе
+   * 220 px с силой 55, толщина связей 0.3, пульс точек 60, пульс связей 0.
    */
+  var PLEX = {
+    color: "#ffffff",
+    count: 130,
+    countNarrow: 56,
+    distance: 150,
+    distanceNarrow: 118,
+    speed: 0.6,
+    cursorRadius: 220,
+    strength: 55,
+    lineOp: 0.3,
+    cursor: "attract",
+    linkPulse: 0,
+    linkPulseSpeed: 1.5,
+    dotPulse: 60,
+    maxSpeed: 4,
+    dotAlpha: 0.6
+  };
+
   function drawPlexus() {
     var view = setupCanvas("fx-plex");
     if (!view) return;
     var ctx = view.ctx;
+    var narrow = window.innerWidth < 760;
+    var count = narrow ? PLEX.countNarrow : PLEX.count;
+    var distance = narrow ? PLEX.distanceNarrow : PLEX.distance;
     var pointer = { x: -9999, y: -9999 };
-    var mouse = { x: 0, y: 0 };
-    var COUNT = window.innerWidth < 760 ? 46 : 104;
-    var DISTANCE = window.innerWidth < 760 ? 118 : 158;
-    var CURSOR_R = 210;
-    var STRENGTH = 0.55;
     var points = [];
 
     function seed() {
       points = [];
-      for (var i = 0; i < COUNT; i += 1) {
+      for (var i = 0; i < count; i += 1) {
         points.push({
           x: Math.random() * view.w,
           y: Math.random() * view.h,
-          vx: (Math.random() - 0.5) * 0.42,
-          vy: (Math.random() - 0.5) * 0.42,
-          r: 0.9 + Math.random() * 1.4
+          vx: (Math.random() - 0.5) * 2,
+          vy: (Math.random() - 0.5) * 2,
+          r: 1 + Math.random() * 1.5
         });
       }
     }
 
-    function paint() {
+    /** Один кадр: движение, связи, точки. `time` в секундах. */
+    function paint(time) {
       ctx.clearRect(0, 0, view.w, view.h);
+
+      // пульс связей и точек — те же коэффициенты, что в макете
+      var linkPulse = Math.max(0, Math.min(1, PLEX.linkPulse / 100));
+      var linkFactor = (1 - linkPulse) + linkPulse * (0.5 + 0.5 * Math.sin(time * PLEX.linkPulseSpeed * Math.PI * 2));
+      var dotPulse = Math.max(0, Math.min(1, PLEX.dotPulse / 100));
+      var radiusFactor = 1 + dotPulse * 0.35 * Math.sin(time * 2.4);
       var i;
       var j;
-      var point;
+
       for (i = 0; i < points.length; i += 1) {
-        point = points[i];
-        var dx = point.x - mouse.x;
-        var dy = point.y - mouse.y;
+        var point = points[i];
+        var dx = point.x - pointer.x;
+        var dy = point.y - pointer.y;
         var d = Math.sqrt(dx * dx + dy * dy);
-        if (d < CURSOR_R && d > 0.01) {
-          var force = (1 - d / CURSOR_R) * STRENGTH * 0.45;
-          point.vx -= (dx / d) * force;
-          point.vy -= (dy / d) * force;
+        if (d < PLEX.cursorRadius && d > 0.01) {
+          var force = (1 - d / PLEX.cursorRadius) * (PLEX.strength / 100) * 0.6;
+          if (PLEX.cursor === "attract") {
+            point.vx -= (dx / d) * force;
+            point.vy -= (dy / d) * force;
+          } else if (PLEX.cursor === "repel") {
+            point.vx += (dx / d) * force;
+            point.vy += (dy / d) * force;
+          }
         }
         var speed = Math.sqrt(point.vx * point.vx + point.vy * point.vy);
-        if (speed > 1.1) {
-          point.vx = (point.vx / speed) * 1.1;
-          point.vy = (point.vy / speed) * 1.1;
+        if (speed > PLEX.maxSpeed) {
+          point.vx = (point.vx / speed) * PLEX.maxSpeed;
+          point.vy = (point.vy / speed) * PLEX.maxSpeed;
         }
-        point.x += point.vx;
-        point.y += point.vy;
+        point.x += point.vx * PLEX.speed;
+        point.y += point.vy * PLEX.speed;
         if (point.x < 0 || point.x > view.w) point.vx *= -1;
         if (point.y < 0 || point.y > view.h) point.vy *= -1;
       }
@@ -173,8 +202,8 @@
           var lx = points[i].x - points[j].x;
           var ly = points[i].y - points[j].y;
           var ld = Math.sqrt(lx * lx + ly * ly);
-          if (ld < DISTANCE) {
-            ctx.strokeStyle = "rgba(255,255,255," + alphaStr((1 - ld / DISTANCE) * 0.16) + ")";
+          if (ld < distance) {
+            ctx.strokeStyle = "rgba(255,255,255," + alphaStr((1 - ld / distance) * PLEX.lineOp * linkFactor) + ")";
             ctx.beginPath();
             ctx.moveTo(points[i].x, points[i].y);
             ctx.lineTo(points[j].x, points[j].y);
@@ -183,14 +212,14 @@
         }
       }
 
-      // линия к курсору — только у ближних точек, чтобы фон не «паутинился»
-      if (pointer.x > -999) {
+      // линия к курсору — только если в настройках выбран режим «grab»
+      if (PLEX.cursor === "attract" && pointer.x > -999) {
         for (i = 0; i < points.length; i += 1) {
           var cx = points[i].x - pointer.x;
           var cy = points[i].y - pointer.y;
           var cd = Math.sqrt(cx * cx + cy * cy);
-          if (cd < CURSOR_R) {
-            ctx.strokeStyle = "rgba(255,255,255," + alphaStr((1 - cd / CURSOR_R) * 0.22) + ")";
+          if (cd < PLEX.cursorRadius) {
+            ctx.strokeStyle = "rgba(255,255,255," + alphaStr((1 - cd / PLEX.cursorRadius) * 0.22) + ")";
             ctx.beginPath();
             ctx.moveTo(pointer.x, pointer.y);
             ctx.lineTo(points[i].x, points[i].y);
@@ -199,10 +228,10 @@
         }
       }
 
-      ctx.fillStyle = "rgba(255,255,255,.34)";
+      ctx.fillStyle = "rgba(255,255,255," + alphaStr(PLEX.dotAlpha) + ")";
       for (i = 0; i < points.length; i += 1) {
         ctx.beginPath();
-        ctx.arc(points[i].x, points[i].y, points[i].r, 0, Math.PI * 2);
+        ctx.arc(points[i].x, points[i].y, points[i].r * radiusFactor, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -212,18 +241,16 @@
     window.addEventListener("pointermove", function (event) {
       pointer.x = event.clientX;
       pointer.y = event.clientY;
-      mouse.x = event.clientX;
-      mouse.y = event.clientY;
     }, { passive: true });
     window.addEventListener("pointerleave", function () {
       pointer.x = -9999;
       pointer.y = -9999;
     }, { passive: true });
 
-    if (reduceMotion) { paint(); return; }
-    var last = 0;
+    if (reduceMotion) { paint(0); return; }
+    var started = performance.now();
     function frame(now) {
-      if (now - last > 33) { last = now; paint(); }
+      paint((now - started) / 1000);
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);

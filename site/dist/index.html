@@ -713,7 +713,7 @@ main, .ftr { position: relative; z-index: 1; }
 <main>
 
 <div class="wrap hero">
-  <span class="eyebrow"><span class="dot"></span> версия <b>0.31.0</b> · 16 ноября 2026 · Windows 10/11</span>
+  <span class="eyebrow"><span class="dot"></span> версия <b>0.33.0</b> · 16 ноября 2026 · Windows 10/11</span>
   <h1>Лаунчер Minecraft,<br>который не мешает играть</h1>
   <p class="lead">
     Сборки с папками и своими настройками, моды, ресурспаки и шейдеры прямо с Modrinth
@@ -723,11 +723,11 @@ main, .ftr { position: relative; z-index: 1; }
   <div class="cta">
     <a class="btn btn-primary btn-lg" href="https://github.com/Shokydo/OmniSpec/releases/latest/download/OmniSpec-Setup.exe">
       <svg viewBox="0 0 24 24"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16 6.3 10.3l1.4-1.4L11 12.2V3ZM4 18h16v2H4v-2Z"/></svg>
-      Скачать установщик · 11,4 МБ
+      Скачать установщик · 11,5 МБ
     </a>
     <a class="btn btn-lg" href="https://github.com/Shokydo/OmniSpec/releases/latest/download/OmniSpec.exe">
       <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4V4Zm2 2v12h12V6H6Z"/></svg>
-      Портативная версия · 7,8 МБ
+      Портативная версия · 8,0 МБ
     </a>
   </div>
   <div class="meta-row">
@@ -874,7 +874,7 @@ main, .ftr { position: relative; z-index: 1; }
       <div class="dl-card main">
         <div class="top">
           <span class="tag green">рекомендуется</span>
-          <span class="size">11,4 МБ</span>
+          <span class="size">11,5 МБ</span>
         </div>
         <h3>OmniSpec-Setup.exe</h3>
         <p>Установщик с кнопками: показывает, что и куда поставит, даёт сменить папку, делает ярлыки на рабочем столе и в «Пуск», кладёт рядом uninstall.exe.</p>
@@ -883,7 +883,7 @@ main, .ftr { position: relative; z-index: 1; }
       <div class="dl-card">
         <div class="top">
           <span class="tag">портативно</span>
-          <span class="size">7,8 МБ</span>
+          <span class="size">8,0 МБ</span>
         </div>
         <h3>OmniSpec.exe</h3>
         <p>Скачал и запустил — ничего не ставится. Данные (Java, сборки, миры) лягут в папку OmniSpecData рядом с файлом лаунчера.</p>
@@ -1158,56 +1158,85 @@ main, .ftr { position: relative; z-index: 1; }
   }
 
   /**
-   * Фон: сетка из точек и связей между ними. Курсор притягивает ближние
-   * точки — линии тянутся за мышью, но кликов слой не перехватывает.
+   * Фон: сетка из точек и связей — по настройкам автора макета:
+   * 130 точек, связь до 150 px, скорость 0.6, курсор притягивает в радиусе
+   * 220 px с силой 55, толщина связей 0.3, пульс точек 60, пульс связей 0.
    */
+  var PLEX = {
+    color: "#ffffff",
+    count: 130,
+    countNarrow: 56,
+    distance: 150,
+    distanceNarrow: 118,
+    speed: 0.6,
+    cursorRadius: 220,
+    strength: 55,
+    lineOp: 0.3,
+    cursor: "attract",
+    linkPulse: 0,
+    linkPulseSpeed: 1.5,
+    dotPulse: 60,
+    maxSpeed: 4,
+    dotAlpha: 0.6
+  };
+
   function drawPlexus() {
     var view = setupCanvas("fx-plex");
     if (!view) return;
     var ctx = view.ctx;
+    var narrow = window.innerWidth < 760;
+    var count = narrow ? PLEX.countNarrow : PLEX.count;
+    var distance = narrow ? PLEX.distanceNarrow : PLEX.distance;
     var pointer = { x: -9999, y: -9999 };
-    var mouse = { x: 0, y: 0 };
-    var COUNT = window.innerWidth < 760 ? 46 : 104;
-    var DISTANCE = window.innerWidth < 760 ? 118 : 158;
-    var CURSOR_R = 210;
-    var STRENGTH = 0.55;
     var points = [];
 
     function seed() {
       points = [];
-      for (var i = 0; i < COUNT; i += 1) {
+      for (var i = 0; i < count; i += 1) {
         points.push({
           x: Math.random() * view.w,
           y: Math.random() * view.h,
-          vx: (Math.random() - 0.5) * 0.42,
-          vy: (Math.random() - 0.5) * 0.42,
-          r: 0.9 + Math.random() * 1.4
+          vx: (Math.random() - 0.5) * 2,
+          vy: (Math.random() - 0.5) * 2,
+          r: 1 + Math.random() * 1.5
         });
       }
     }
 
-    function paint() {
+    /** Один кадр: движение, связи, точки. `time` в секундах. */
+    function paint(time) {
       ctx.clearRect(0, 0, view.w, view.h);
+
+      // пульс связей и точек — те же коэффициенты, что в макете
+      var linkPulse = Math.max(0, Math.min(1, PLEX.linkPulse / 100));
+      var linkFactor = (1 - linkPulse) + linkPulse * (0.5 + 0.5 * Math.sin(time * PLEX.linkPulseSpeed * Math.PI * 2));
+      var dotPulse = Math.max(0, Math.min(1, PLEX.dotPulse / 100));
+      var radiusFactor = 1 + dotPulse * 0.35 * Math.sin(time * 2.4);
       var i;
       var j;
-      var point;
+
       for (i = 0; i < points.length; i += 1) {
-        point = points[i];
-        var dx = point.x - mouse.x;
-        var dy = point.y - mouse.y;
+        var point = points[i];
+        var dx = point.x - pointer.x;
+        var dy = point.y - pointer.y;
         var d = Math.sqrt(dx * dx + dy * dy);
-        if (d < CURSOR_R && d > 0.01) {
-          var force = (1 - d / CURSOR_R) * STRENGTH * 0.45;
-          point.vx -= (dx / d) * force;
-          point.vy -= (dy / d) * force;
+        if (d < PLEX.cursorRadius && d > 0.01) {
+          var force = (1 - d / PLEX.cursorRadius) * (PLEX.strength / 100) * 0.6;
+          if (PLEX.cursor === "attract") {
+            point.vx -= (dx / d) * force;
+            point.vy -= (dy / d) * force;
+          } else if (PLEX.cursor === "repel") {
+            point.vx += (dx / d) * force;
+            point.vy += (dy / d) * force;
+          }
         }
         var speed = Math.sqrt(point.vx * point.vx + point.vy * point.vy);
-        if (speed > 1.1) {
-          point.vx = (point.vx / speed) * 1.1;
-          point.vy = (point.vy / speed) * 1.1;
+        if (speed > PLEX.maxSpeed) {
+          point.vx = (point.vx / speed) * PLEX.maxSpeed;
+          point.vy = (point.vy / speed) * PLEX.maxSpeed;
         }
-        point.x += point.vx;
-        point.y += point.vy;
+        point.x += point.vx * PLEX.speed;
+        point.y += point.vy * PLEX.speed;
         if (point.x < 0 || point.x > view.w) point.vx *= -1;
         if (point.y < 0 || point.y > view.h) point.vy *= -1;
       }
@@ -1218,8 +1247,8 @@ main, .ftr { position: relative; z-index: 1; }
           var lx = points[i].x - points[j].x;
           var ly = points[i].y - points[j].y;
           var ld = Math.sqrt(lx * lx + ly * ly);
-          if (ld < DISTANCE) {
-            ctx.strokeStyle = "rgba(255,255,255," + alphaStr((1 - ld / DISTANCE) * 0.16) + ")";
+          if (ld < distance) {
+            ctx.strokeStyle = "rgba(255,255,255," + alphaStr((1 - ld / distance) * PLEX.lineOp * linkFactor) + ")";
             ctx.beginPath();
             ctx.moveTo(points[i].x, points[i].y);
             ctx.lineTo(points[j].x, points[j].y);
@@ -1228,14 +1257,14 @@ main, .ftr { position: relative; z-index: 1; }
         }
       }
 
-      // линия к курсору — только у ближних точек, чтобы фон не «паутинился»
-      if (pointer.x > -999) {
+      // линия к курсору — только если в настройках выбран режим «grab»
+      if (PLEX.cursor === "attract" && pointer.x > -999) {
         for (i = 0; i < points.length; i += 1) {
           var cx = points[i].x - pointer.x;
           var cy = points[i].y - pointer.y;
           var cd = Math.sqrt(cx * cx + cy * cy);
-          if (cd < CURSOR_R) {
-            ctx.strokeStyle = "rgba(255,255,255," + alphaStr((1 - cd / CURSOR_R) * 0.22) + ")";
+          if (cd < PLEX.cursorRadius) {
+            ctx.strokeStyle = "rgba(255,255,255," + alphaStr((1 - cd / PLEX.cursorRadius) * 0.22) + ")";
             ctx.beginPath();
             ctx.moveTo(pointer.x, pointer.y);
             ctx.lineTo(points[i].x, points[i].y);
@@ -1244,10 +1273,10 @@ main, .ftr { position: relative; z-index: 1; }
         }
       }
 
-      ctx.fillStyle = "rgba(255,255,255,.34)";
+      ctx.fillStyle = "rgba(255,255,255," + alphaStr(PLEX.dotAlpha) + ")";
       for (i = 0; i < points.length; i += 1) {
         ctx.beginPath();
-        ctx.arc(points[i].x, points[i].y, points[i].r, 0, Math.PI * 2);
+        ctx.arc(points[i].x, points[i].y, points[i].r * radiusFactor, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -1257,18 +1286,16 @@ main, .ftr { position: relative; z-index: 1; }
     window.addEventListener("pointermove", function (event) {
       pointer.x = event.clientX;
       pointer.y = event.clientY;
-      mouse.x = event.clientX;
-      mouse.y = event.clientY;
     }, { passive: true });
     window.addEventListener("pointerleave", function () {
       pointer.x = -9999;
       pointer.y = -9999;
     }, { passive: true });
 
-    if (reduceMotion) { paint(); return; }
-    var last = 0;
+    if (reduceMotion) { paint(0); return; }
+    var started = performance.now();
     function frame(now) {
-      if (now - last > 33) { last = now; paint(); }
+      paint((now - started) / 1000);
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
