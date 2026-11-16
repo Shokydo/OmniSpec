@@ -2029,11 +2029,121 @@
   const selected = () => state.instances.find((item) => item.id === state.selectedId) || null;
 
   /* ==================== ЛОГИ ==================== */
+  /** В DOM держим только хвост лога: вся консоль не грузится, прокрутка не лагает. */
+  const LOG_TAIL = 300;
+  const LOG_TAIL_STEP = 300;
+  const LOG_SEARCH_LIMIT = 400;
+
+  /** Сколько строк сейчас в DOM: считаем сами, querySelectorAll на каждой строке — тормоза. */
+  let logDrawnLines = 0;
+
+  function logTailSize(instanceId) {
+    if (!state.logTails) state.logTails = new Map();
+    return state.logTails.get(instanceId) || LOG_TAIL;
+  }
+
+  function setLogTailSize(instanceId, size) {
+    if (!state.logTails) state.logTails = new Map();
+    state.logTails.set(instanceId, Math.max(LOG_TAIL, Math.round(size)));
+  }
+
+  function logAtBottom(el) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  }
+
+  function logLineNode(index, entry) {
+    const line = document.createElement("div");
+    line.className = "log-line";
+    line.dataset.index = String(index);
+    line.innerHTML = `<span class="log-num">${index + 1}</span><span class="log-text ${entry.kind}">${esc(entry.line)}</span>`;
+    return line;
+  }
+
+  /** Кнопка «показать ещё» над хвостом: подгружает по 300 строк, без перерисовки всего лога. */
+  function syncLogMore(instanceId) {
+    const consoleEl = $("#console-out");
+    if (!consoleEl) return;
+    let more = consoleEl.querySelector(".log-more");
+    const first = consoleEl.querySelector(".log-line");
+    const hidden = first ? Number(first.dataset.index) || 0 : 0;
+    if (!hidden) {
+      if (more) more.remove();
+      return;
+    }
+    if (!more) {
+      more = document.createElement("button");
+      more.className = "log-more";
+      more.addEventListener("click", () => {
+        setLogTailSize(instanceId, logTailSize(instanceId) + LOG_TAIL_STEP);
+        renderLogs(instanceId, { keepScroll: true });
+      });
+      const before = consoleEl.scrollHeight;
+      consoleEl.prepend(more);
+      consoleEl.scrollTop += consoleEl.scrollHeight - before;
+    }
+    more.textContent = `Показать ещё ${Math.min(LOG_TAIL_STEP, hidden)} строк · выше ещё ${hidden}`;
+  }
+
+  /** Новые строки копим и вставляем раз в кадр: без layout на каждую строку. */
+  let logPending = [];
+  let logFlushRaf = 0;
+
+  function flushLog() {
+    logFlushRaf = 0;
+    const consoleEl = $("#console-out");
+    const instanceId = state.selectedId;
+    if (!consoleEl || !logPending.length) {
+      logPending = [];
+      return;
+    }
+    const list = state.logs[instanceId] || [];
+    const stick = logAtBottom(consoleEl);
+    const tail = logTailSize(instanceId);
+    const incoming = logPending.length;
+    const fragment = document.createDocumentFragment();
+    logPending.forEach((index) => {
+      const entry = list[index];
+      if (entry) fragment.appendChild(logLineNode(index, entry));
+    });
+    logPending = [];
+    const empty = consoleEl.querySelector(".empty-state");
+    if (empty) empty.remove();
+    const heightBefore = consoleEl.scrollHeight;
+    consoleEl.appendChild(fragment);
+    logDrawnLines += incoming;
+    // в DOM держим ровно хвост: старое сверху срезаем
+    let dropped = 0;
+    if (logDrawnLines > tail) {
+      dropped = logDrawnLines - tail;
+      const nodes = consoleEl.querySelectorAll(".log-line");
+      for (let i = 0; i < dropped && i < nodes.length; i += 1) nodes[i].remove();
+      logDrawnLines -= dropped;
+    }
+    if (stick) {
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    } else if (dropped) {
+      // читают выше — компенсируем сдвиг, чтобы текст не прыгал
+      consoleEl.scrollTop -= heightBefore - consoleEl.scrollHeight;
+      syncLogMore(instanceId);
+    }
+    const count = $("#log-count");
+    if (count) count.textContent = logDrawnLines < list.length ? `хвост ${logDrawnLines} из ${list.length} строк` : `${list.length} строк`;
+  }
+
   function pushLog(instanceId, line, kind = "") {
     const list = state.logs[instanceId] || (state.logs[instanceId] = []);
     list.push({ line, kind });
-    if (list.length > 4000) list.splice(0, 500);
-    if (state.tab === "console" && state.selectedId === instanceId) appendLogLine(list.length - 1, list[list.length - 1]);
+    if (list.length > 4000) {
+      list.splice(0, 500);
+      if (state.tab === "console" && state.selectedId === instanceId) {
+        logPending = [];
+        renderLogs(instanceId);
+      }
+      return;
+    }
+    if (state.tab !== "console" || state.selectedId !== instanceId || state.logQuery) return;
+    logPending.push(list.length - 1);
+    if (!logFlushRaf) logFlushRaf = requestAnimationFrame(flushLog);
   }
 
   function appendLogLine(index, entry) {
@@ -2041,21 +2151,61 @@
     if (!consoleEl) return;
     const empty = consoleEl.querySelector(".empty-state");
     if (empty) empty.remove();
-    const line = document.createElement("div");
-    line.className = "log-line";
-    line.innerHTML = `<span class="log-num">${index + 1}</span><span class="log-text ${entry.kind}">${esc(entry.line)}</span>`;
-    consoleEl.appendChild(line);
-    consoleEl.scrollTop = consoleEl.scrollHeight;
+    consoleEl.appendChild(logLineNode(index, entry));
   }
 
-  function renderLogs(instanceId) {
+  /** Отрисовка консоли: хвост лога, поиск по всему логу, «показать ещё» сверху. */
+  function renderLogs(instanceId, options = {}) {
     const consoleEl = $("#console-out");
     if (!consoleEl) return;
     const list = state.logs[instanceId] || [];
+    const query = options.query !== undefined ? options.query : (state.logQuery || "");
+    const term = String(query || "").trim().toLowerCase();
+    const previousTop = consoleEl.scrollTop;
+    const previousHeight = consoleEl.scrollHeight;
     consoleEl.innerHTML = "";
-    list.forEach((entry, index) => appendLogLine(index, entry));
+
+    logDrawnLines = 0;
     if (!list.length) {
       consoleEl.innerHTML = `<div class="empty-state">Лог пуст</div>`;
+      return;
+    }
+
+    if (term) {
+      const hits = [];
+      for (let i = 0; i < list.length; i += 1) {
+        if (list[i].line.toLowerCase().includes(term)) {
+          hits.push(i);
+          if (hits.length >= LOG_SEARCH_LIMIT) break;
+        }
+      }
+      const note = document.createElement("div");
+      note.className = "log-note";
+      note.textContent = !hits.length
+        ? "Ничего не найдено"
+        : (hits.length >= LOG_SEARCH_LIMIT
+          ? `Первые ${LOG_SEARCH_LIMIT} совпадений — уточни запрос`
+          : `Совпадений: ${hits.length}`);
+      consoleEl.appendChild(note);
+      hits.forEach((index) => consoleEl.appendChild(logLineNode(index, list[index])));
+      logDrawnLines = hits.length;
+      consoleEl.scrollTop = 0;
+      return;
+    }
+
+    const tail = logTailSize(instanceId);
+    const from = Math.max(0, list.length - tail);
+    for (let i = from; i < list.length; i += 1) consoleEl.appendChild(logLineNode(i, list[i]));
+    logDrawnLines = list.length - from;
+    syncLogMore(instanceId);
+    if (options.keepScroll) {
+      consoleEl.scrollTop = previousTop + (consoleEl.scrollHeight - previousHeight);
+    } else {
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+    const count = $("#log-count");
+    if (count) {
+      count.textContent = list.length > tail ? `хвост ${tail} из ${list.length} строк` : `${list.length} строк`;
     }
   }
 
@@ -2390,7 +2540,17 @@
         updateStatus();
         toast("Дубликат выключен", "ok");
       } catch (error) {
-        toast(`Не удалось выключить дубликат: ${error}`, "err");
+        const text = String(error);
+        // окно могло закрыться само — тогда просто убираем ноду из списка
+        if (text.includes("не запущена")) {
+          dropSession(instanceId, runId);
+          renderSidebar();
+          renderTab();
+          updateStatus();
+          toast("Дубликат уже закрыт", "");
+          return;
+        }
+        toast(`Не удалось выключить дубликат: ${text}`, "err");
       }
     });
   }
@@ -2630,6 +2790,14 @@
   }
 
   /* ---------- консоль ---------- */
+  /** Сколько строк всего и сколько показано: видно, что консоль грузит хвост. */
+  function updateLogCount() {
+    const box = $("#log-count");
+    if (!box) return;
+    const total = (state.logs[state.selectedId] || []).length;
+    box.textContent = total ? (logDrawnLines < total ? `хвост ${logDrawnLines} из ${total} строк` : `${total} строк`) : "";
+  }
+
   function renderConsole() {
     const meta = selected();
     $("#tab-body").innerHTML = `
@@ -2639,25 +2807,31 @@
           <button class="btn btn-small" id="log-clear">Очистить</button>
           <button class="btn btn-small" id="log-copy">Скопировать</button>
           <div class="spacer"></div>
+          <span class="muted" id="log-count" style="font-size:11px"></span>
           <span class="muted" style="font-size:11px">${meta ? esc(meta.name) : ""}</span>
         </div>
         <div class="console" id="console-out"></div>
       </div>`;
+    state.logQuery = "";
+    logPending = [];
     renderLogs(state.selectedId);
+    updateLogCount();
     $("#log-clear").addEventListener("click", () => {
       state.logs[state.selectedId] = [];
+      logPending = [];
       renderLogs(state.selectedId);
+      updateLogCount();
     });
     $("#log-copy").addEventListener("click", async () => {
       const text = (state.logs[state.selectedId] || []).map((entry) => entry.line).join("\n");
       try { await navigator.clipboard.writeText(text); toast("Лог скопирован", "ok"); }
       catch { toast("Не удалось скопировать", "err"); }
     });
+    let searchTimer = 0;
     $("#log-search").addEventListener("input", (event) => {
-      const term = event.target.value.toLowerCase();
-      $$("#console-out .log-line").forEach((line) => {
-        line.style.display = !term || line.textContent.toLowerCase().includes(term) ? "" : "none";
-      });
+      state.logQuery = event.target.value;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => renderLogs(state.selectedId, { query: state.logQuery }), 140);
     });
   }
 
@@ -4729,6 +4903,8 @@
     }));
 
     const settings = state.settings || {};
+    // перерисовка не должна дёргать прокрутку: иначе после «+» профиль улетает вниз
+    const keepScroll = body.scrollTop;
     renderPrefsAccountCard();
     if (prefsCategory === "profile") body.innerHTML = prefsProfile();
     if (prefsCategory === "look") body.innerHTML = prefsLook(settings);
@@ -4741,8 +4917,10 @@
     if (prefsCategory === "profile") {
       bindPrefsProfile();
       bindCapes();
+      bindFavorites();
       bindSkin();
     }
+    if (keepScroll) body.scrollTop = keepScroll;
   }
 
   /** Профиль: слева список аккаунтов, справа — активный. */
@@ -4791,6 +4969,12 @@
             </div>
 `
             : `<div class="profile-card is-empty"><span class="muted">Аккаунта пока нет</span></div>`}
+          <div class="fav-head">
+            <span class="prefs-label">Образы</span>
+            <div class="spacer"></div>
+            <span class="muted" style="font-size:10.5px">скин + плащ · до ${FAV_SLOTS}</span>
+          </div>
+          ${favoriteSlotsHtml()}
         </section>
       </div>
       ${skinSectionHtml()}`;
@@ -5862,6 +6046,151 @@
   }
 
   /** Строка под кнопками: обновляется без перерисовки всего профиля. */
+  /** Избранные образы: скин + плащ, ровно пять слотов под списком аккаунтов. */
+  const FAV_SLOTS = 5;
+
+  function skinFavorites() {
+    const list = state.settings && Array.isArray(state.settings.skin_favorites) ? state.settings.skin_favorites : [];
+    return list.filter((item) => item && item.id).slice(0, FAV_SLOTS);
+  }
+
+  async function saveSkinFavorites(next) {
+    state.settings = { ...(state.settings || {}), skin_favorites: next.slice(0, FAV_SLOTS) };
+    try {
+      await api.saveSettings(state.settings);
+    } catch (error) {
+      toast(String(error), "err");
+    }
+    renderPrefs();
+  }
+
+  function activeCapeId() {
+    const list = capeState().list || [];
+    return (list.find((cape) => cape.active) || {}).id || "";
+  }
+
+  function capeAliasOf(id) {
+    const list = capeState().list || [];
+    return (list.find((cape) => cape.id === id) || {}).alias || "";
+  }
+
+  /** Пять слотов: занятые образы, «+» для нового и пустые рамки до пяти. */
+  function favoriteSlotsHtml() {
+    const favorites = skinFavorites();
+    const filled = favorites.map((fav) => `
+      <button class="fav-slot ${fav.id === (skinState().favorite || "") ? "is-active" : ""}" data-fav="${esc(fav.id)}" title="${esc(fav.name)}">
+        <span class="skin-mini fav-mini" data-fav-src="${esc(fav.skinDataUrl || "")}"></span>
+        <span class="fav-name">${esc(fav.name)}</span>
+        <span class="fav-cape">${esc(fav.capeAlias || "без плаща")}</span>
+        <span class="preset-del" data-del-fav="${esc(fav.id)}" title="Удалить образ">×</span>
+      </button>`);
+    const canAdd = favorites.length < FAV_SLOTS;
+    const add = canAdd
+      ? `<button class="fav-slot is-empty" id="fav-add" title="Сохранить текущий скин и плащ">
+          <svg class="ic"><use href="#i-plus"/></svg>
+          <span class="fav-name">образ</span>
+        </button>`
+      : "";
+    const placeholders = Array.from({ length: Math.max(0, FAV_SLOTS - filled.length - (canAdd ? 1 : 0)) })
+      .map(() => '<span class="fav-slot is-blank" aria-hidden="true"></span>');
+    return `<div class="fav-slots" id="skin-favorites">${filled.join("")}${add}${placeholders.join("")}</div>`;
+  }
+
+  /** Мини-модели образов рисуем из сохранённого PNG — файл искать не нужно. */
+  function paintFavoriteMinis() {
+    $$("#skin-favorites [data-fav-src]").forEach(async (slot) => {
+      const src = slot.dataset.favSrc;
+      if (!src) return;
+      const texture = await textureFromImage(src);
+      if (texture) paintSkinMini(slot, texture);
+    });
+  }
+
+  async function applyFavorite(fav) {
+    const skin = skinState();
+    let loaded = false;
+    if (fav.skinPath) loaded = await loadSkinFile(fav.skinPath, fav.skinName || fav.name, null);
+    if (!loaded && fav.skinDataUrl) {
+      const texture = await textureFromImage(fav.skinDataUrl);
+      if (texture) {
+        skin.texture = texture;
+        skin.dataUrl = fav.skinDataUrl;
+        skin.currentPath = "";
+        skin.currentName = fav.skinName || fav.name;
+        skin.fromAccount = false;
+        loaded = true;
+      }
+    }
+    if (!loaded) return toast("Скин из образа не читается — сохрани образ заново", "err");
+    skin.variant = fav.variant === "slim" ? "slim" : "classic";
+    skin.touchedVariant = true;
+    if (Number.isFinite(Number(fav.angle))) skin.yaw = Number(fav.angle);
+    skin.favorite = fav.id;
+
+    // плащ: переключаем только у лицензии и если он отличается
+    const capes = capeState();
+    const wanted = fav.capeId || "";
+    if (capes.licensed && wanted !== activeCapeId()) {
+      try {
+        await api.setCape(wanted || null);
+        capes.list.forEach((cape) => { cape.active = wanted ? cape.id === wanted : false; });
+      } catch (error) {
+        toast(`Плащ не применён: ${error}`, "err");
+      }
+    }
+    renderPrefs();
+    toast(`Образ «${fav.name}» применён`, "ok");
+  }
+
+  async function saveFavorite() {
+    const skin = skinState();
+    if (!skin.texture) return toast("Сначала выбери скин", "err");
+    const favorites = skinFavorites();
+    if (favorites.length >= FAV_SLOTS) return toast(`Образов не больше ${FAV_SLOTS} — удали один`, "err");
+    const capeId = activeCapeId();
+    const capeAlias = capeId ? capeAliasOf(capeId) : "";
+    const name = await promptModal({
+      title: "Сохранить образ",
+      label: "Название",
+      value: `${skin.currentName || "Скин"} + ${capeAlias || "без плаща"}`
+    });
+    if (!name) return;
+    const favorite = {
+      id: `fav-${Date.now().toString(36)}`,
+      name,
+      skinPath: skin.currentPath || "",
+      skinDataUrl: skin.dataUrl || "",
+      skinName: skin.currentName || name,
+      variant: skin.variant === "slim" ? "slim" : "classic",
+      capeId,
+      capeAlias,
+      angle: Math.round(Number(skin.yaw) || 0)
+    };
+    await saveSkinFavorites([...favorites, favorite]);
+    skin.favorite = favorite.id;
+    toast(`Образ «${name}» сохранён`, "ok");
+  }
+
+  function bindFavorites() {
+    paintFavoriteMinis();
+    const add = $("#fav-add");
+    if (add) add.addEventListener("click", saveFavorite);
+    $$("#skin-favorites .fav-slot[data-fav]").forEach((slot) => {
+      slot.addEventListener("click", () => {
+        const fav = skinFavorites().find((item) => item.id === slot.dataset.fav);
+        if (fav) applyFavorite(fav);
+      });
+      const del = slot.querySelector("[data-del-fav]");
+      if (del) del.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const next = skinFavorites().filter((item) => item.id !== del.dataset.delFav);
+        if (skinState().favorite === del.dataset.delFav) skinState().favorite = "";
+        saveSkinFavorites(next);
+        toast("Образ удалён", "ok");
+      });
+    });
+  }
+
   function skinStatusText() {
     const skin = skinState();
     const variant = skin.variant === "slim" ? "slim, руки 3 px" : "wide, руки 4 px";

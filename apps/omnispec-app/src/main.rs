@@ -335,6 +335,18 @@ where
     });
 }
 
+/// Ключ сессии в `state.running` — «id#2». Из интерфейса приходит уже полный
+/// ключ, но принимаем и короткий номер: раньше «id#2» превращался в «id#id#2»,
+/// и дубликат не выключался («сборка не запущена»).
+fn run_key(instance_id: &str, run_id: Option<String>) -> Option<String> {
+    let value = run_id?;
+    if value.contains('#') {
+        Some(value)
+    } else {
+        Some(format!("{instance_id}#{value}"))
+    }
+}
+
 #[tauri::command]
 async fn stop_instance(
     state: State<'_, AppState>,
@@ -342,7 +354,7 @@ async fn stop_instance(
     run_id: Option<String>,
 ) -> Result<(), String> {
     // run_id задан — гасим только это окно (дубликат), иначе все окна сборки
-    let exact = run_id.map(|value| format!("{instance_id}#{value}"));
+    let exact = run_key(&instance_id, run_id);
     let handles: Vec<ChildHandle> = {
         let running = state.running.lock().await;
         running
@@ -2161,4 +2173,24 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("ошибка запуска OmniSpec");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_key;
+
+    #[test]
+    fn run_key_accepts_full_key_from_ui() {
+        assert_eq!(run_key("atm10", Some("atm10#2".into())).as_deref(), Some("atm10#2"));
+    }
+
+    #[test]
+    fn run_key_prefixes_short_number() {
+        assert_eq!(run_key("atm10", Some("2".into())).as_deref(), Some("atm10#2"));
+    }
+
+    #[test]
+    fn run_key_without_run_id_stops_all_windows() {
+        assert_eq!(run_key("atm10", None), None);
+    }
 }
