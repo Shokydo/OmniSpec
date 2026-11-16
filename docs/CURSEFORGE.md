@@ -44,7 +44,8 @@ API-ключ», а `curseforge_ready` честно отвечает `false`.
 ```
 crates/omnispec-core/src/curseforge/
 ├── mod.rs      клиент + преобразование ответов в типы Modrinth
-└── install.rs  установка файла в сборку вместе с обязательными зависимостями
+├── install.rs  установка файла в сборку вместе с обязательными зависимостями
+└── modpack.rs  модпак как отдельная сборка: manifest.json, файлы, overrides
 ```
 
 Типы на выходе — те же, что у Modrinth (`modrinth::SearchHit`, `Project`,
@@ -52,12 +53,16 @@ crates/omnispec-core/src/curseforge/
 источник — это только набор полей рядом с `project_id`.
 
 Команды Tauri: `search_curseforge`, `curseforge_versions`, `curseforge_project`,
-`curseforge_ready`, `install_curseforge`.
+`curseforge_ready`, `install_curseforge` (файл в текущую сборку),
+`install_curseforge_modpack` (модпак отдельной сборкой).
 
 ## Ограничения
 
-* Каталог модпаков CurseForge не подключён: установка модпака требует разбора
-  `manifest.json` и загрузки файлов по `fileId` из манифеста. Моды, ресурспаки и
-  шейдеры устанавливаются как обычно.
+* Модпак ставится только из каталога (`install_curseforge_modpack`): внутри
+  архива читается `manifest.json`, из него берутся версия игры, загрузчик,
+  `overrides/` и список файлов по `projectID` + `fileID`. Ссылок на файлы в
+  манифесте нет — каждая версия запрашивается через API, поэтому установка
+  модпака на 200–300 модов идёт заметно дольше установки одного мода.
+* Необязательные файлы манифеста (`required: false`) не ставятся.
 * Зависимости CurseForge ссылаются на `modId` без номера файла, поэтому для
   каждой берётся самый свежий файл под версию игры и загрузчик сборки.

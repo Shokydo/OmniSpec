@@ -24,7 +24,7 @@ use omnispec_core::game::launch::LaunchPlan;
 use omnispec_core::instances::{self, CreateInstanceRequest, InstanceMeta};
 use omnispec_core::loaders::{self, LoaderOption};
 use omnispec_core::modrinth::{install as modrinth_install, mrpack, Modrinth, SearchQuery};
-use omnispec_core::curseforge::{install as curseforge_install, CurseForge};
+use omnispec_core::curseforge::{install as curseforge_install, modpack as curseforge_modpack, CurseForge};
 use omnispec_core::net::{Http, Reporter};
 use omnispec_core::paths::Paths;
 use omnispec_core::settings::Settings;
@@ -522,6 +522,27 @@ async fn install_curseforge(
         &state.curseforge,
         &state.paths,
         &meta,
+        &project_id,
+        file_id.as_deref(),
+        &reporter,
+    )
+    .await
+    .map_err(err)
+}
+
+/// Поставить модпак CurseForge как новую сборку: манифест внутри архива
+/// задаёт версию игры, загрузчик и список файлов.
+#[tauri::command]
+async fn install_curseforge_modpack(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project_id: String,
+    file_id: Option<String>,
+) -> Result<InstanceMeta, String> {
+    let reporter = reporter_for(&app, "modpack");
+    curseforge_modpack::install(
+        &state.curseforge,
+        &state.paths,
         &project_id,
         file_id.as_deref(),
         &reporter,
@@ -2535,6 +2556,7 @@ fn main() {
             curseforge_project,
             curseforge_ready,
             install_curseforge,
+            install_curseforge_modpack,
             account_skin,
             account_capes,
             set_cape,

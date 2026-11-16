@@ -2736,15 +2736,33 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 /* «Готовые сборки»: поиск по центру и шире, справа — вид и размер плиток */
 .home-feed-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 560px) minmax(0, 1fr);
+  /* заголовок и список источника — по содержимому, поиск забирает остаток */
+  grid-template-columns: auto minmax(180px, 1fr) auto auto;
   align-items: center;
   gap: var(--gap);
   flex-wrap: nowrap;
 }
-.home-feed-head .home-title { min-width: 0; }
-.home-search { width: 100%; max-width: 560px; height: var(--h-sm); margin: 0; justify-self: center; }
+.home-feed-head .home-title { min-width: 0; white-space: nowrap; }
+.home-search { width: 100%; max-width: 520px; height: var(--h-sm); margin: 0; justify-self: stretch; }
 .home-search input { font-size: 12px; }
 .home-tools { justify-self: end; }
+
+/* «Искать в»: выпадающий список источника сборок — Modrinth или CurseForge */
+.feed-source {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: var(--h-sm); padding: 0 4px 0 10px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--bg-3); color: var(--dim-2);
+  white-space: nowrap;
+}
+.feed-source-label { font-size: 11px; letter-spacing: .04em; }
+.feed-source .select {
+  height: calc(var(--h-sm) - 6px); min-width: 122px;
+  padding-left: 8px; font-size: 12px;
+  border-radius: var(--r-sm); background-color: var(--bg-2);
+}
+.feed-source:hover { border-color: var(--line-3); color: var(--text); }
+.feed-source:focus-within { border-color: var(--line-3); }
 
 /* ползунок размера плиток: 1 — 12 в ряд, 2 — 6, 3 — 4 */
 .feed-size {
@@ -2773,7 +2791,14 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 .modrinth-results.is-grid.feed-grid-1 .card-desc,
 .modrinth-results.is-grid.feed-grid-1 .card-meta { display: none; }
 @media (max-width: 1180px) {
-  .home-feed-head { grid-template-columns: minmax(0, 1fr) minmax(180px, 420px) minmax(0, 1fr); }
+  .home-feed-head { grid-template-columns: auto minmax(140px, 1fr) auto auto; }
+  .feed-source-label { display: none; }
+}
+@media (max-width: 980px) {
+  /* на узком окне заголовок уходит на свою строку, инструменты остаются в ряд */
+  .home-feed-head { grid-template-columns: minmax(0, 1fr) auto auto; row-gap: 8px; }
+  .home-feed-head .home-title { grid-column: 1 / -1; }
+  .home-search { justify-self: stretch; max-width: none; }
 }
 
 /* маленькие кнопки-иконки на карточке: скачать / версии / страница */

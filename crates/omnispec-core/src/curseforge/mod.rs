@@ -9,6 +9,7 @@
 //! [`DEFAULT_API_KEY`]. Запросы идут с заголовком `x-api-key`.
 
 pub mod install;
+pub mod modpack;
 
 use std::collections::HashMap;
 

@@ -1900,6 +1900,7 @@
     customWallpaper: () => invoke("custom_wallpaper"),
     modrinthProject: (projectId) => invoke("modrinth_project", { projectId }),
     searchCurseforge: (q) => invoke("search_curseforge", q),
+    installCurseforgeModpack: (projectId, fileId) => invoke("install_curseforge_modpack", { projectId, fileId: fileId || null }),
     curseforgeVersions: (projectId, mc, loader) => invoke("curseforge_versions", { projectId, mcVersion: mc, loader }),
     curseforgeProject: (projectId) => invoke("curseforge_project", { projectId }),
     curseforgeReady: () => invoke("curseforge_ready"),
@@ -2000,9 +2001,38 @@
         ["Clumps", "Склеивает сферы опыта в одну."]
       ];
       const type = (q && q.projectType) || "mod";
+      const PACKS = [
+        ["All the Mods 10", "300+ модов на NeoForge: технологии, магия, квесты."],
+        ["Better MC", "Классическая сборка для игры с друзьями."],
+        ["Cobblemon", "Покемоны в Minecraft: ловля, бои, разведение."],
+        ["Fabulously Optimized", "Максимум FPS на Fabric без лишних модов."],
+        ["Create: Astral", "Сборка вокруг Create и космоса."],
+        ["DawnCraft", "RPG-сборка с боссами и прогрессией."],
+        ["Prominence II", "Приключения, магия и технологии в одном."],
+        ["RLCraft", "Хардкорная выживалка с суровыми мобами."],
+        ["Vault Hunters", "Подземелья, лут и прокачка навыков."],
+        ["All of Fabric 7", "Технологии и магия на Fabric."],
+        ["Deceased Craft", "Зомби-апокалипсис и крафт."],
+        ["Medieval MC", "Средневековый мир, замки и рыцари."],
+        ["Better Adventures+", "Лёгкая приключенческая сборка."],
+        ["Craft to Exile 2", "RPG с деревом навыков."],
+        ["Integrated Minecraft", "Сборка вокруг Integrated Dynamics."],
+        ["Monifactory", "Грегори-технологии и автоматизация."],
+        ["FTB Skies 2", "Небесные острова и прогрессия."],
+        ["Ars Nouveau: New Age", "Магия и заклинания."],
+        ["Steam Powered", "Пар, шестерни и механизмы."],
+        ["Pixelmon Modpack", "Покемоны и открытый мир."],
+        ["Fear Nightfall", "Хоррор-сборка с тьмой и монстрами."],
+        ["Techopolis 2", "Город технологий и логистика."],
+        ["Create: Above and Beyond", "Классика Create с квестами."],
+        ["Encrypted", "Сюжетная сборка с загадками."]
+      ];
+      const LIST = type === "modpack" ? PACKS : SEED;
+      DEMO.cfPacks = DEMO.cfPacks || {};
+      LIST.forEach(([name], index) => { DEMO.cfPacks[`cf-0-${index}`] = name; DEMO.cfPacks[`cf-1-${index}`] = `${name} 2`; });
       const all = [];
       for (let page = 0; page < 2; page += 1) {
-        SEED.forEach(([name, description], index) => {
+        LIST.forEach(([name, description], index) => {
           all.push({
             project_id: `cf-${page}-${index}`,
             project_type: type,
@@ -2028,6 +2058,13 @@
       { id: "cf-file-3", project_id: "cf", name: "create-1.20.1-0.5.1.f.jar", version_number: "create-1.20.1-0.5.1.f.jar", version_type: "beta", game_versions: ["1.20.1"], loaders: ["forge"], date_published: "2025-11-05T12:00:00Z", files: [], dependencies: [] }
     ]),
     installCurseforge: async (_i, projectId, fileId) => ({ installed: [`${fileId || projectId}.jar`], skipped: [] }),
+    installCurseforgeModpack: async (projectId, fileId) => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const name = (DEMO.cfPacks && DEMO.cfPacks[projectId]) || `Модпак ${projectId}`;
+      const created = { id: `cfpack-${Date.now()}`, name, mc_version: "1.21.1", loader: { type: "neoforge", version: "21.1.80" }, icon: null, last_played: Date.now() };
+      DEMO.instances = [created, ...(DEMO.instances || [])];
+      return created;
+    },
     accountSkin: async () => {
       const active = DEMO.accounts.find((a) => a.uuid === DEMO.active);
       return { licensed: Boolean(active && active.kind === "microsoft"), variant: "classic", data_url: demoSkinDataUrl() };
@@ -2076,6 +2113,7 @@
       // демо-выдача никогда не смешивает типы: ресурспаки отдельно, шейдеры отдельно
       const base = demoSearch({ query: q && q.query, projectType: type }).hits;
       const SEEDS = {
+        modpack: ["Fabulously Optimized", "All the Mods 10", "Cobblemon", "Better MC", "Create: Astral", "DawnCraft", "Prominence II", "RLCraft", "Vault Hunters", "All of Fabric 7", "Deceased Craft", "Medieval MC", "Better Adventures+", "Craft to Exile 2", "Integrated Minecraft", "Monifactory", "FTB Skies 2", "Ars Nouveau: New Age", "Steam Powered", "Pixelmon Modpack", "Fear Nightfall", "Techopolis 2", "Create: Above and Beyond", "Encrypted"],
         mod: ["Sodium", "Lithium", "Iris Shaders", "Mod Menu", "Fabric API", "Cloth Config", "Indium", "FerriteCore", "Krypton", "LazyDFU", "Starlight", "C2ME", "Entity Culling", "Dynamic FPS", "Reese's Sodium Options", "Zoomify", "AppleSkin", "Jade", "Roughly Enough Items", "Continuity", "Controlling", "BetterF3", "ImmediatelyFast", "No Chat Reports"],
         resourcepack: ["Complementary Reimagined", "Fresh Animations", "Stay True", "Sodium Reforged", "Better Leaves", "Visual Waxed", "Bushy Leaves", "Motschen's Better Leaves"],
         shader: ["BSL Shaders", "Complementary Shaders", "MakeUp Ultra Fast", "Sildur's Vibrant", "Rethinking Voxels", "Nostalgia Shaders", "Aurora's Shaders", "Photon Shaders"]
@@ -2311,7 +2349,8 @@
     },
     discover: {
       query: "", results: [], total: 0,
-      loading: false, loadingMore: false, error: null, tried: false, view: "grid"
+      loading: false, loadingMore: false, error: null, tried: false, view: "grid",
+      source: "modrinth"
     },
     wall: { wallpaper: null, fit: "cover", blur: 0, dim: 40 },
     update: { info: null, version: "0.1.0", repo: null, enabled: true, checking: false, installing: false },
@@ -4646,6 +4685,8 @@
   function renderDiscover() {
     const cfg = state.discover;
     const view = cfg.view || "grid";
+    if (!cfg.source) cfg.source = (state.settings && state.settings.feed_source) || "modrinth";
+    const source = cfg.source;
     // «Недавнее» — сборки по времени последнего запуска
     const instances = (state.instances || []).slice().sort((a, b) => (b.last_played || b.created || 0) - (a.last_played || a.created || 0));
     $("#tab-body").innerHTML = `
@@ -4659,10 +4700,17 @@
               <svg class="ic"><use href="#i-search"/></svg>
               <input id="dv-query" type="text" placeholder="Найти сборку" spellcheck="false" value="${esc(cfg.query)}">
             </label>
+            <label class="feed-source" title="Где искать сборки">
+              <span class="feed-source-label">Искать в</span>
+              <select class="select" id="dv-source">
+                <option value="modrinth" ${source === "modrinth" ? "selected" : ""}>Modrinth</option>
+                <option value="curseforge" ${source === "curseforge" ? "selected" : ""}>CurseForge</option>
+              </select>
+            </label>
             <div class="home-tools">
               <div class="mr-view" title="Вид">
-                <button class="${view === "grid" ? "is-active" : ""}" data-dv-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
                 <button class="${view === "list" ? "is-active" : ""}" data-dv-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
+                <button class="${view === "grid" ? "is-active" : ""}" data-dv-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
               </div>
               <label class="feed-size" title="Размер плиток: 1 — 12 в ряд, 2 — 9 в ряд, 3 — 6 в ряд">
                 <svg class="ic"><use href="#i-grid"/></svg>
@@ -4686,6 +4734,13 @@
       launchFromList(card.dataset.homeId);
     }));
     $("#dv-query").addEventListener("keydown", (event) => { if (event.key === "Enter") dvReset(); });
+    const sourceSelect = $("#dv-source");
+    if (sourceSelect) sourceSelect.addEventListener("change", () => {
+      state.discover.source = sourceSelect.value === "curseforge" ? "curseforge" : "modrinth";
+      state.settings = { ...(state.settings || {}), feed_source: state.discover.source };
+      api.saveSettings(state.settings).catch(() => {});
+      dvReset();
+    });
     $$("#tab-body [data-dv-view]").forEach((btn) => btn.addEventListener("click", () => {
       state.discover.view = btn.dataset.dvView;
       renderDiscover();
@@ -4710,6 +4765,7 @@
     const retry = $("#dv-retry");
     if (retry) retry.addEventListener("click", () => dvReset());
     bindResultEvents();
+    bindCfEvents();
     dvWatch();
     if (!cfg.tried && !cfg.loading && !cfg.error) dvReset();
   }
@@ -4940,7 +4996,7 @@
       </div>`;
     }
     if (!cfg.results.length) return `<div class="empty-state">Ничего не нашлось — попробуй другой запрос</div>`;
-    return `${cfg.results.map((hit) => cardHtml(hit, "pack")).join("")}<div class="mr-sentinel" id="dv-sentinel">${dvSentinelText()}</div>`;
+    return `${cfg.results.map((hit) => discCardHtml(hit)).join("")}<div class="mr-sentinel" id="dv-sentinel">${dvSentinelText()}</div>`;
   }
 
   function dvSentinelText() {
@@ -4969,6 +5025,37 @@
     dvObserver.observe(sentinel);
   }
 
+  /** Карточка ленты: у Modrinth и CurseForge свои обработчики кнопок. */
+  function discCardHtml(hit) {
+    if ((state.discover.source || "modrinth") === "curseforge") return cfPackCardHtml(hit);
+    return cardHtml(hit, "pack");
+  }
+
+  /** Запрос ленты: источник выбирается списком «Искать в». */
+  async function dvFetch(offset) {
+    const cfg = state.discover;
+    if ((cfg.source || "modrinth") === "curseforge") {
+      return api.searchCurseforge({
+        query: cfg.query,
+        projectType: "modpack",
+        mcVersion: null,
+        loader: null,
+        offset,
+        limit: DV_PAGE,
+        sort: "downloads"
+      });
+    }
+    return api.search({
+      query: cfg.query,
+      projectType: "modpack",
+      mcVersion: null,
+      loader: null,
+      offset,
+      limit: DV_PAGE,
+      sort: "downloads"
+    });
+  }
+
   async function dvLoadMore() {
     const cfg = state.discover;
     if (cfg.loading || cfg.loadingMore || cfg.error) return;
@@ -4976,22 +5063,15 @@
     cfg.loadingMore = true;
     dvUpdateSentinel();
     try {
-      const page = await api.search({
-        query: cfg.query,
-        projectType: "modpack",
-        mcVersion: null,
-        loader: null,
-        offset: cfg.results.length,
-        limit: DV_PAGE,
-        sort: "downloads"
-      });
+      const page = await dvFetch(cfg.results.length);
       const known = new Set(cfg.results.map((hit) => hit.project_id));
       const fresh = (page.hits || []).filter((hit) => !known.has(hit.project_id));
       cfg.results = cfg.results.concat(fresh);
       cfg.total = page.total_hits || cfg.total;
       const sentinel = $("#dv-sentinel");
-      if (sentinel && fresh.length) sentinel.insertAdjacentHTML("beforebegin", fresh.map((hit) => cardHtml(hit, "pack")).join(""));
+      if (sentinel && fresh.length) sentinel.insertAdjacentHTML("beforebegin", fresh.map((hit) => discCardHtml(hit)).join(""));
       bindResultEvents();
+      bindCfEvents();
       if (!fresh.length) cfg.total = cfg.results.length;
     } catch (err) {
       cfg.error = String(err);
@@ -5013,15 +5093,7 @@
     cfg.total = 0;
     renderDiscover();
     try {
-      const page = await api.search({
-        query: cfg.query,
-        projectType: "modpack",
-        mcVersion: null,
-        loader: null,
-        offset: 0,
-        limit: DV_PAGE,
-        sort: "downloads"
-      });
+      const page = await dvFetch(0);
       cfg.results = page.hits || [];
       cfg.total = page.total_hits || cfg.results.length;
       cfg.error = null;
@@ -5387,7 +5459,8 @@
     const meta = selected();
     const cfg = state.curseforge;
     const view = cfg.view || "grid";
-    const types = [["mod", "Моды"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
+    // модпаки ставим отдельной сборкой, моды/ресурспаки/шейдеры — в текущую
+    const types = [["mod", "Моды"], ["modpack", "Модпаки"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
     const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
     $("#tab-body").innerHTML = `
       <div class="modrinth-wrap">
@@ -5424,8 +5497,8 @@
           </div>
           <button class="btn" id="cf-search" style="align-self:flex-end">Найти</button>
           <div class="mr-view" style="align-self:flex-end" title="Вид">
-            <button class="${view === "grid" ? "is-active" : ""}" data-cf-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
             <button class="${view === "list" ? "is-active" : ""}" data-cf-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
+            <button class="${view === "grid" ? "is-active" : ""}" data-cf-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
           </div>
           <label class="feed-size" style="align-self:flex-end" title="Размер плитки: 1 — 12 в ряд, 2 — 9 в ряд, 3 — 6 в ряд">
             <svg class="ic"><use href="#i-grid"/></svg>
@@ -5569,9 +5642,9 @@
           <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
         </div>
         <div class="card-actions">
-          <button class="icon-btn card-icon-btn is-primary" data-cf-install="${esc(hit.project_id)}" title="Скачать и установить" aria-label="Скачать">
-            <svg class="ic"><use href="#i-download"/></svg>
-          </button>
+          ${openType === "modpack"
+            ? `<button class="icon-btn card-icon-btn is-primary" data-cf-pack-install="${esc(hit.project_id)}" data-cf-title="${esc(hit.title)}" title="Установить как сборку" aria-label="Установить"><svg class="ic"><use href="#i-download"/></svg></button>`
+            : `<button class="icon-btn card-icon-btn is-primary" data-cf-install="${esc(hit.project_id)}" title="Скачать и установить" aria-label="Скачать"><svg class="ic"><use href="#i-download"/></svg></button>`}
           <button class="icon-btn card-icon-btn" data-cf-versions="${esc(hit.project_id)}" data-cf-title="${esc(hit.title)}" title="Версии" aria-label="Версии">
             <svg class="ic"><use href="#i-list"/></svg>
           </button>
@@ -5581,6 +5654,55 @@
         </div>
       </div>
     </div>`;
+  }
+
+  /** Карточка модпака CurseForge: ставится отдельной сборкой, а не в текущую. */
+  function cfPackCardHtml(hit) {
+    return `<div class="card" data-cf-project="${esc(hit.project_id)}" data-cf-slug="${esc(hit.slug || hit.project_id)}" data-cf-title="${esc(hit.title)}">
+      <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
+      <div class="card-body">
+        <div class="card-title">${esc(hit.title)}</div>
+        <div class="card-desc">${esc(hit.description)}</div>
+        <div class="card-meta">
+          <span class="tag">curseforge</span>
+          ${(hit.categories || []).slice(0, 2).map((cat) => `<span class="tag">${esc(cat)}</span>`).join("")}
+          <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
+        </div>
+        <div class="card-actions">
+          <button class="icon-btn card-icon-btn is-primary" data-cf-pack-install="${esc(hit.project_id)}" data-cf-title="${esc(hit.title)}" title="Установить как сборку" aria-label="Установить">
+            <svg class="ic"><use href="#i-download"/></svg>
+          </button>
+          <button class="icon-btn card-icon-btn" data-cf-pack-versions="${esc(hit.project_id)}" data-cf-title="${esc(hit.title)}" title="Версии модпака" aria-label="Версии">
+            <svg class="ic"><use href="#i-list"/></svg>
+          </button>
+          <button class="icon-btn card-icon-btn" data-cf-page="${esc(hit.slug || hit.project_id)}" data-cf-type="modpack" title="Страница проекта" aria-label="Страница">
+            <svg class="ic"><use href="#i-link"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  /** Установка модпака CurseForge отдельной сборкой. */
+  async function installCfPack(projectId, fileId, btn, title) {
+    if (btn) { btn.disabled = true; }
+    toast(`Ставим сборку${title ? ` «${title}»` : ""} — это может занять пару минут`, "info");
+    try {
+      const meta = await api.installCurseforgeModpack(projectId, fileId || null);
+      toast(`Сборка «${meta && meta.name ? meta.name : "модпак"}» готова`, "ok");
+      try {
+        const list = await api.instances();
+        state.instances = list || state.instances;
+        renderSidebar();
+      } catch (_) { /* список обновится при следующем рендере */ }
+      if ($("#modal-versions")) $("#modal-versions").hidden = true;
+      if (state.tab === "discover" || state.tab === "curseforge") renderTab();
+      else if (state.tab === "console") renderSidebar();
+    } catch (err) {
+      toast(String(err), "err");
+    } finally {
+      if (btn) { btn.disabled = false; }
+    }
   }
 
   function bindCfEvents() {
@@ -5601,6 +5723,16 @@
       if (btn.dataset.cfBound) return;
       btn.dataset.cfBound = "1";
       btn.addEventListener("click", () => openCfVersions(btn.dataset.cfVersions, btn.dataset.cfTitle));
+    });
+    $$("[data-cf-pack-install]").forEach((btn) => {
+      if (btn.dataset.cfBound) return;
+      btn.dataset.cfBound = "1";
+      btn.addEventListener("click", () => installCfPack(btn.dataset.cfPackInstall, null, btn, btn.dataset.cfTitle));
+    });
+    $$("[data-cf-pack-versions]").forEach((btn) => {
+      if (btn.dataset.cfBound) return;
+      btn.dataset.cfBound = "1";
+      btn.addEventListener("click", () => openCfVersions(btn.dataset.cfPackVersions, btn.dataset.cfTitle, "modpack"));
     });
     $$("[data-cf-page]").forEach((btn) => {
       if (btn.dataset.cfBound) return;
@@ -5713,15 +5845,17 @@
     };
   }
 
-  async function openCfVersions(projectId, title) {
+  async function openCfVersions(projectId, title, kind) {
     const modal = $("#modal-versions");
     if (!modal) return;
     modal.hidden = false;
     $("#ver-title").textContent = `${title || "Версии"} — выбор версии`;
     $("#ver-body").innerHTML = `<div class="empty-state">Загружаем файлы с CurseForge…</div>`;
-    const meta = selected();
-    const mc = state.curseforge.mc || (meta ? meta.mc_version : null);
-    const loader = state.curseforge.loader || (meta && meta.loader ? meta.loader.type : null);
+    // режим модпака: из ленты, из вкладки с типом «Модпаки» — всегда отдельная сборка
+    const pack = kind === "modpack" || state.curseforge.type === "modpack";
+    const meta = pack ? null : selected();
+    const mc = pack ? null : (state.curseforge.mc || (meta ? meta.mc_version : null));
+    const loader = pack ? null : (state.curseforge.loader || (meta && meta.loader ? meta.loader.type : null));
     let versions = [];
     try {
       versions = await api.curseforgeVersions(projectId, mc, loader);
@@ -5749,7 +5883,11 @@
             <button class="btn btn-primary" data-cf-install-version="${esc(version.id)}">Установить</button>
           </div>`).join("")}
       </div>`;
-    $$("[data-cf-install-version]").forEach((btn) => btn.addEventListener("click", () => installCfFile(projectId, btn.dataset.cfInstallVersion, btn)));
+    $$("[data-cf-install-version]").forEach((btn) => btn.addEventListener("click", () => (
+      pack
+        ? installCfPack(projectId, btn.dataset.cfInstallVersion, btn, title)
+        : installCfFile(projectId, btn.dataset.cfInstallVersion, btn)
+    )));
   }
 
   async function installCfFile(projectId, fileId, btn) {
@@ -7276,6 +7414,7 @@
       ambient_color: state.ambientColor || null,
       trail: state.trail !== false,
       feed_grid: feedGridLevel(),
+      feed_source: (state.discover && state.discover.source) || "modrinth",
       wallpaper: state.wall.wallpaper,
       wallpaper_fit: state.wall.fit,
       wallpaper_blur: state.wall.blur,

@@ -82,148 +82,286 @@
     filter();
   }
 
-  /* ── фон: сетка и снежинки ────────────────────────────────── */
+  /* ── фон: частицы, сетка и снежинки ───────────────────────── */
   var reduceMotion = window.matchMedia
     ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
     : false;
 
-  /** Медленно уезжающая сетка из линий в 1px. */
-  function drawGrid() {
-    var canvas = document.getElementById("fx-grid");
-    if (!canvas || !canvas.getContext) return;
-    var ctx = canvas.getContext("2d");
-    var step = 44;
-    var dpr = Math.min(2, window.devicePixelRatio || 1);
-    var w = 0;
-    var h = 0;
+  // сдвиг фона от прокрутки: сетка «плывёт» вместе со страницей, но медленнее
+  var fxState = { scroll: 0 };
 
-    function resize() {
-      w = window.innerWidth;
-      h = window.innerHeight;
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  function alphaStr(value) {
+    return Math.max(0, Math.min(1, value)).toFixed(3);
+  }
+
+  /** Размер полотна в CSS-пикселях и подготовка канваса под плотность экрана. */
+  function setupCanvas(id) {
+    var canvas = document.getElementById(id);
+    if (!canvas || !canvas.getContext) return null;
+    var ctx = canvas.getContext("2d");
+    var state = { canvas: canvas, ctx: ctx, w: 0, h: 0, dpr: Math.min(2, window.devicePixelRatio || 1) };
+    state.resize = function () {
+      state.w = window.innerWidth;
+      state.h = window.innerHeight;
+      canvas.width = Math.round(state.w * state.dpr);
+      canvas.height = Math.round(state.h * state.dpr);
+      ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+    };
+    state.resize();
+    window.addEventListener("resize", state.resize, { passive: true });
+    return state;
+  }
+
+  /**
+   * Фон: сетка из точек и связей между ними. Курсор притягивает ближние
+   * точки — линии тянутся за мышью, но кликов слой не перехватывает.
+   */
+  function drawPlexus() {
+    var view = setupCanvas("fx-plex");
+    if (!view) return;
+    var ctx = view.ctx;
+    var pointer = { x: -9999, y: -9999 };
+    var mouse = { x: 0, y: 0 };
+    var COUNT = window.innerWidth < 760 ? 46 : 104;
+    var DISTANCE = window.innerWidth < 760 ? 118 : 158;
+    var CURSOR_R = 210;
+    var STRENGTH = 0.55;
+    var points = [];
+
+    function seed() {
+      points = [];
+      for (var i = 0; i < COUNT; i += 1) {
+        points.push({
+          x: Math.random() * view.w,
+          y: Math.random() * view.h,
+          vx: (Math.random() - 0.5) * 0.42,
+          vy: (Math.random() - 0.5) * 0.42,
+          r: 0.9 + Math.random() * 1.4
+        });
+      }
     }
 
+    function paint() {
+      ctx.clearRect(0, 0, view.w, view.h);
+      var i;
+      var j;
+      var point;
+      for (i = 0; i < points.length; i += 1) {
+        point = points[i];
+        var dx = point.x - mouse.x;
+        var dy = point.y - mouse.y;
+        var d = Math.sqrt(dx * dx + dy * dy);
+        if (d < CURSOR_R && d > 0.01) {
+          var force = (1 - d / CURSOR_R) * STRENGTH * 0.45;
+          point.vx -= (dx / d) * force;
+          point.vy -= (dy / d) * force;
+        }
+        var speed = Math.sqrt(point.vx * point.vx + point.vy * point.vy);
+        if (speed > 1.1) {
+          point.vx = (point.vx / speed) * 1.1;
+          point.vy = (point.vy / speed) * 1.1;
+        }
+        point.x += point.vx;
+        point.y += point.vy;
+        if (point.x < 0 || point.x > view.w) point.vx *= -1;
+        if (point.y < 0 || point.y > view.h) point.vy *= -1;
+      }
+
+      ctx.lineWidth = 1;
+      for (i = 0; i < points.length; i += 1) {
+        for (j = i + 1; j < points.length; j += 1) {
+          var lx = points[i].x - points[j].x;
+          var ly = points[i].y - points[j].y;
+          var ld = Math.sqrt(lx * lx + ly * ly);
+          if (ld < DISTANCE) {
+            ctx.strokeStyle = "rgba(255,255,255," + alphaStr((1 - ld / DISTANCE) * 0.16) + ")";
+            ctx.beginPath();
+            ctx.moveTo(points[i].x, points[i].y);
+            ctx.lineTo(points[j].x, points[j].y);
+            ctx.stroke();
+          }
+        }
+      }
+
+      // линия к курсору — только у ближних точек, чтобы фон не «паутинился»
+      if (pointer.x > -999) {
+        for (i = 0; i < points.length; i += 1) {
+          var cx = points[i].x - pointer.x;
+          var cy = points[i].y - pointer.y;
+          var cd = Math.sqrt(cx * cx + cy * cy);
+          if (cd < CURSOR_R) {
+            ctx.strokeStyle = "rgba(255,255,255," + alphaStr((1 - cd / CURSOR_R) * 0.22) + ")";
+            ctx.beginPath();
+            ctx.moveTo(pointer.x, pointer.y);
+            ctx.lineTo(points[i].x, points[i].y);
+            ctx.stroke();
+          }
+        }
+      }
+
+      ctx.fillStyle = "rgba(255,255,255,.34)";
+      for (i = 0; i < points.length; i += 1) {
+        ctx.beginPath();
+        ctx.arc(points[i].x, points[i].y, points[i].r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    seed();
+    window.addEventListener("resize", seed, { passive: true });
+    window.addEventListener("pointermove", function (event) {
+      pointer.x = event.clientX;
+      pointer.y = event.clientY;
+      mouse.x = event.clientX;
+      mouse.y = event.clientY;
+    }, { passive: true });
+    window.addEventListener("pointerleave", function () {
+      pointer.x = -9999;
+      pointer.y = -9999;
+    }, { passive: true });
+
+    if (reduceMotion) { paint(); return; }
+    var last = 0;
+    function frame(now) {
+      if (now - last > 33) { last = now; paint(); }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  /** Медленно уезжающая сетка из линий в 1px. */
+  function drawGrid() {
+    var view = setupCanvas("fx-grid");
+    if (!view) return;
+    var ctx = view.ctx;
+    var step = 44;
+
     function paint(shift) {
-      ctx.clearRect(0, 0, w, h);
+      ctx.clearRect(0, 0, view.w, view.h);
       ctx.lineWidth = 1;
       var x = -step + (shift % step);
-      for (; x < w + step; x += step) {
+      for (; x < view.w + step; x += step) {
         var alpha = 0.045 + 0.035 * (0.5 + 0.5 * Math.sin(x * 0.01 + shift * 0.004));
         ctx.strokeStyle = "rgba(255,255,255," + alphaStr(alpha) + ")";
         ctx.beginPath();
         ctx.moveTo(Math.round(x) + 0.5, 0);
-        ctx.lineTo(Math.round(x) + 0.5, h);
+        ctx.lineTo(Math.round(x) + 0.5, view.h);
         ctx.stroke();
       }
       var y = -step + ((shift * 0.45) % step);
-      for (; y < h + step; y += step) {
+      for (; y < view.h + step; y += step) {
         var alphaY = 0.04 + 0.03 * (0.5 + 0.5 * Math.sin(y * 0.012 + shift * 0.003));
         ctx.strokeStyle = "rgba(255,255,255," + alphaStr(alphaY) + ")";
         ctx.beginPath();
         ctx.moveTo(0, Math.round(y) + 0.5);
-        ctx.lineTo(w, Math.round(y) + 0.5);
+        ctx.lineTo(view.w, Math.round(y) + 0.5);
         ctx.stroke();
       }
     }
 
-    resize();
-    window.addEventListener("resize", resize, { passive: true });
-
-    if (reduceMotion) {
-      paint(0);
-      return;
-    }
+    if (reduceMotion) { paint(0); return; }
     var start = performance.now();
     var last = 0;
     function frame(now) {
       // 30 кадров в секунду достаточно: движение медленное, CPU не греется
       if (now - last > 33) {
         last = now;
-        paint((now - start) * 0.012);
+        paint((now - start) * 0.012 + fxState.scroll);
       }
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
   }
 
-  function alphaStr(value) {
-    return Math.max(0, Math.min(1, value)).toFixed(3);
-  }
-
-  /** Снежинки как в лаунчере: падают, покачиваются, оборачиваются по краям. */
+  /**
+   * Снежинки: три слоя глубины — дальние мелкие и медленные, ближние крупные
+   * и быстрые. Ветер и покачивание у каждого свои, края заворачиваются.
+   */
   function drawSnow() {
-    var canvas = document.getElementById("fx-snow");
-    if (!canvas || !canvas.getContext) return;
-    var ctx = canvas.getContext("2d");
-    var dpr = Math.min(2, window.devicePixelRatio || 1);
-    var w = 0;
-    var h = 0;
+    var view = setupCanvas("fx-snow");
+    if (!view) return;
+    var ctx = view.ctx;
+    var narrow = window.innerWidth < 760;
+    var LAYERS = narrow
+      ? [{ count: 16, r: [0.7, 1.1], speed: [14, 26], alpha: 0.22 }, { count: 12, r: [1.1, 1.7], speed: [26, 46], alpha: 0.34 }, { count: 6, r: [1.7, 2.4], speed: [46, 72], alpha: 0.5 }]
+      : [{ count: 38, r: [0.7, 1.2], speed: [18, 34], alpha: 0.24 }, { count: 28, r: [1.2, 1.9], speed: [34, 60], alpha: 0.38 }, { count: 16, r: [1.9, 2.8], speed: [58, 96], alpha: 0.55 }];
     var flakes = [];
-    var COUNT = window.innerWidth < 760 ? 34 : 70;
 
     function seed() {
       flakes = [];
-      for (var i = 0; i < COUNT; i += 1) {
-        flakes.push({
-          x: Math.random() * w,
-          y: Math.random() * h,
-          r: 0.8 + Math.random() * 1.9,
-          speed: 0.18 + Math.random() * 0.55,
-          drift: 0.12 + Math.random() * 0.4,
-          phase: Math.random() * Math.PI * 2,
-          alpha: 0.18 + Math.random() * 0.45
-        });
-      }
+      LAYERS.forEach(function (layer, depth) {
+        for (var i = 0; i < layer.count; i += 1) {
+          flakes.push({
+            depth: depth,
+            x: Math.random() * view.w,
+            y: Math.random() * view.h,
+            r: layer.r[0] + Math.random() * (layer.r[1] - layer.r[0]),
+            speed: layer.speed[0] + Math.random() * (layer.speed[1] - layer.speed[0]),
+            drift: 0.2 + Math.random() * 0.6,
+            sway: 6 + Math.random() * 16,
+            phase: Math.random() * Math.PI * 2,
+            spin: (Math.random() - 0.5) * 0.6,
+            alpha: layer.alpha * (0.75 + Math.random() * 0.5)
+          });
+        }
+      });
     }
 
-    function resize() {
-      w = window.innerWidth;
-      h = window.innerHeight;
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      seed();
-    }
-
-    function frame(now) {
-      ctx.clearRect(0, 0, w, h);
-      var t = now * 0.001;
+    function paint(dt, time) {
+      ctx.clearRect(0, 0, view.w, view.h);
       for (var i = 0; i < flakes.length; i += 1) {
         var flake = flakes[i];
-        flake.y += flake.speed;
-        flake.x += Math.sin(t * flake.drift + flake.phase) * 0.35;
-        if (flake.y - flake.r > h) {
-          flake.y = -flake.r * 2;
-          flake.x = Math.random() * w;
-        }
-        if (flake.x < -6) flake.x = w + 6;
-        if (flake.x > w + 6) flake.x = -6;
         ctx.beginPath();
-        ctx.arc(flake.x, flake.y, flake.r, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(255,255,255," + alphaStr(flake.alpha) + ")";
-        ctx.fill();
+        if (flake.r > 2.1) {
+          // крупная снежинка — звёздочка из трёх штрихов
+          var arm = flake.r * 1.9;
+          var spin = flake.phase + time * flake.spin;
+          ctx.strokeStyle = "rgba(255,255,255," + alphaStr(flake.alpha) + ")";
+          ctx.lineWidth = 1;
+          for (var k = 0; k < 3; k += 1) {
+            var angle = spin + (k * Math.PI) / 3;
+            ctx.moveTo(flake.x - Math.cos(angle) * arm, flake.y - Math.sin(angle) * arm);
+            ctx.lineTo(flake.x + Math.cos(angle) * arm, flake.y + Math.sin(angle) * arm);
+          }
+          ctx.stroke();
+        } else {
+          ctx.arc(flake.x, flake.y, flake.r, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(255,255,255," + alphaStr(flake.alpha) + ")";
+          ctx.fill();
+        }
       }
-      requestAnimationFrame(frame);
     }
 
-    resize();
-    window.addEventListener("resize", resize, { passive: true });
-    if (reduceMotion) {
-      // без анимации — просто редкие точки в кадре
+    function step(dt, time) {
       for (var i = 0; i < flakes.length; i += 1) {
-        ctx.beginPath();
-        ctx.arc(flakes[i].x, flakes[i].y, flakes[i].r, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(255,255,255," + alphaStr(flakes[i].alpha * 0.6) + ")";
-        ctx.fill();
+        var flake = flakes[i];
+        flake.y += flake.speed * dt;
+        flake.x += (Math.sin(time * flake.drift + flake.phase) * flake.sway + 8 * (flake.depth + 1) * 0.35) * dt;
+        if (flake.y - flake.r > view.h) {
+          flake.y = -flake.r * 3;
+          flake.x = Math.random() * view.w;
+        }
+        if (flake.x < -12) flake.x = view.w + 12;
+        if (flake.x > view.w + 12) flake.x = -12;
       }
-      return;
+    }
+
+    seed();
+    window.addEventListener("resize", seed, { passive: true });
+
+    if (reduceMotion) { paint(0, 0); return; }
+    var last = performance.now();
+    function frame(now) {
+      var dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      step(dt, now / 1000);
+      paint(dt, now / 1000);
+      requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
   }
 
-  /** Блоки появляются при прокрутке, с небольшой задержкой друг за другом. */
+  /** Блоки появляются при прокрутке, друг за другом внутри своего ряда. */
   function revealBlocks() {
     var selector = [
       ".sec-head", ".card", ".gal", ".step", ".rel", ".dl-card", ".note",
@@ -238,9 +376,7 @@
       return;
     }
 
-    nodes.forEach(function (node) {
-      node.classList.add("reveal");
-    });
+    nodes.forEach(function (node) { node.classList.add("reveal"); });
 
     var observer = new IntersectionObserver(function (entries) {
       entries.forEach(function (entry) {
@@ -248,7 +384,7 @@
         var node = entry.target;
         var siblings = node.parentNode ? Array.prototype.slice.call(node.parentNode.children) : [];
         var index = siblings.indexOf(node);
-        var delay = Math.min(140, Math.max(0, index) * 35);
+        var delay = Math.min(220, Math.max(0, index) * 45);
         node.style.transitionDelay = delay + "ms";
         node.classList.add("in");
         observer.unobserve(node);
@@ -258,7 +394,96 @@
     nodes.forEach(function (node) { observer.observe(node); });
   }
 
+  /**
+   * Меню: бегунок под активным пунктом и подсветка раздела, который сейчас на
+   * экране. Переходы по ссылкам — плавные (в CSS), бегунок едет за ними.
+   */
+  function navMotion() {
+    var nav = document.getElementById("nav");
+    if (!nav) return;
+    var links = Array.prototype.slice.call(nav.querySelectorAll('a[href^="#"]'));
+    if (!links.length) return;
+
+    var mark = document.createElement("span");
+    mark.className = "nav-mark";
+    mark.setAttribute("aria-hidden", "true");
+    nav.appendChild(mark);
+
+    function moveTo(link) {
+      if (!link || window.innerWidth <= 820) { mark.style.opacity = "0"; return; }
+      var box = link.getBoundingClientRect();
+      var base = nav.getBoundingClientRect();
+      mark.style.opacity = "1";
+      mark.style.width = box.width - 12 + "px";
+      mark.style.transform = "translate(" + (box.left - base.left + 6) + "px," + (box.height - 4) + "px)";
+    }
+
+    var current = null;
+    links.forEach(function (link) {
+      link.addEventListener("pointerenter", function () { moveTo(link); });
+      link.addEventListener("focus", function () { moveTo(link); });
+    });
+    nav.addEventListener("pointerleave", function () { moveTo(current); });
+
+    var sections = links
+      .map(function (link) {
+        var id = link.getAttribute("href").slice(1);
+        var section = id ? document.getElementById(id) : null;
+        return section ? { link: link, section: section } : null;
+      })
+      .filter(Boolean);
+
+    if ("IntersectionObserver" in window && sections.length) {
+      var spy = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          sections.forEach(function (item) { item.link.classList.toggle("is-current", item.section === entry.target); });
+          current = (sections.find(function (item) { return item.section === entry.target; }) || {}).link || current;
+          moveTo(current);
+        });
+      }, { rootMargin: "-45% 0px -50% 0px" });
+      sections.forEach(function (item) { spy.observe(item.section); });
+    }
+  }
+
+  /**
+   * Движение при прокрутке: шапка поджимается, первый экран чуть отстаёт,
+   * блоки секций плавно смещаются. Без рывков — всё на transform.
+   */
+  function scrollMotion() {
+    var header = document.querySelector(".hdr");
+    var frames = Array.prototype.slice.call(document.querySelectorAll(".frame, .gal"));
+    var queued = false;
+
+    function apply() {
+      queued = false;
+      var y = window.scrollY || window.pageYOffset || 0;
+      if (header) header.classList.toggle("is-stuck", y > 12);
+      if (reduceMotion) return;
+      // фон едет медленнее страницы — читаемость не страдает, движение видно
+      fxState.scroll = y * 0.06;
+      frames.forEach(function (frame) {
+        var rect = frame.getBoundingClientRect();
+        if (!rect.height) return;
+        var shift = (rect.top + rect.height / 2 - window.innerHeight / 2) * -0.028;
+        var offset = Math.max(-18, Math.min(18, shift)).toFixed(1);
+        frame.style.transform = "translate3d(0," + offset + "px,0)";
+      });
+    }
+
+    window.addEventListener("scroll", function () {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(apply);
+    }, { passive: true });
+    window.addEventListener("resize", apply, { passive: true });
+    apply();
+  }
+
+  drawPlexus();
   drawGrid();
   drawSnow();
   revealBlocks();
+  navMotion();
+  scrollMotion();
 })();
