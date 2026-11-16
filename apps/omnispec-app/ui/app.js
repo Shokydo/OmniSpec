@@ -132,7 +132,12 @@
     vars["--bg-1a"] = rgbaOf(vars["--bg-2"], 0.9);
     vars["--bg-2a"] = rgbaOf(vars["--bg-2"], 0.78);
     vars["--bg-3a"] = rgbaOf(vars["--bg-3"], 0.82);
-    for (const [key, value] of Object.entries(vars)) document.body.style.setProperty(key, value);
+    // пишем и на :root, иначе переменные, объявленные в :root через другие переменные
+    // (например --modal-solid), считались бы от старой тёмной палитры
+    for (const [key, value] of Object.entries(vars)) {
+      document.documentElement.style.setProperty(key, value);
+      document.body.style.setProperty(key, value);
+    }
     const valid = name === "custom" || Boolean(THEMES[name]);
     document.body.dataset.theme = valid ? name : "dark";
     // подложка поверх обоев по умолчанию берёт цвет темы
