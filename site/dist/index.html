@@ -1168,16 +1168,20 @@ main, .ftr { position: relative; z-index: 1; }
     countNarrow: 56,
     distance: 150,
     distanceNarrow: 118,
-    speed: 0.6,
+    speed: 1.2,
     cursorRadius: 220,
     strength: 55,
-    lineOp: 0.3,
-    cursor: "attract",
-    linkPulse: 0,
-    linkPulseSpeed: 1.5,
+    lineOp: 0.34,
+    cursor: "grab+attract",
+    // связи «дышат» — как в пресете «Живой плексус»
+    linkPulse: 55,
+    linkPulseSpeed: 1.2,
     dotPulse: 60,
+    // собственное течение: точки не замирают, даже когда курсор далеко
+    swirl: 0.07,
+    swirlSpeed: 0.28,
     maxSpeed: 4,
-    dotAlpha: 0.6
+    dotAlpha: 0.7
   };
 
   function drawPlexus() {
@@ -1189,6 +1193,10 @@ main, .ftr { position: relative; z-index: 1; }
     var distance = narrow ? PLEX.distanceNarrow : PLEX.distance;
     var pointer = { x: -9999, y: -9999 };
     var points = [];
+    var cursorMode = String(PLEX.cursor || "");
+    var cursorGrab = cursorMode.indexOf("grab") >= 0;
+    var cursorAttract = cursorMode.indexOf("attract") >= 0;
+    var cursorRepel = cursorMode.indexOf("repel") >= 0;
 
     function seed() {
       points = [];
@@ -1198,7 +1206,9 @@ main, .ftr { position: relative; z-index: 1; }
           y: Math.random() * view.h,
           vx: (Math.random() - 0.5) * 2,
           vy: (Math.random() - 0.5) * 2,
-          r: 1 + Math.random() * 1.5
+          r: 1 + Math.random() * 2.2,
+          phase: Math.random() * Math.PI * 2,
+          phaseY: Math.random() * Math.PI * 2
         });
       }
     }
@@ -1222,14 +1232,18 @@ main, .ftr { position: relative; z-index: 1; }
         var d = Math.sqrt(dx * dx + dy * dy);
         if (d < PLEX.cursorRadius && d > 0.01) {
           var force = (1 - d / PLEX.cursorRadius) * (PLEX.strength / 100) * 0.6;
-          if (PLEX.cursor === "attract") {
+          if (cursorAttract) {
             point.vx -= (dx / d) * force;
             point.vy -= (dy / d) * force;
-          } else if (PLEX.cursor === "repel") {
+          }
+          if (cursorRepel) {
             point.vx += (dx / d) * force;
             point.vy += (dy / d) * force;
           }
         }
+        // собственное течение: у каждой точки свой угол и своя фаза волны
+        point.vx += Math.cos(time * PLEX.swirlSpeed + point.phase) * PLEX.swirl;
+        point.vy += Math.sin(time * PLEX.swirlSpeed + point.phaseY) * PLEX.swirl;
         var speed = Math.sqrt(point.vx * point.vx + point.vy * point.vy);
         if (speed > PLEX.maxSpeed) {
           point.vx = (point.vx / speed) * PLEX.maxSpeed;
@@ -1257,14 +1271,14 @@ main, .ftr { position: relative; z-index: 1; }
         }
       }
 
-      // линия к курсору — только если в настройках выбран режим «grab»
-      if (PLEX.cursor === "attract" && pointer.x > -999) {
+      // линии от курсора к ближним точкам — режим «grab»
+      if (cursorGrab && pointer.x > -999) {
         for (i = 0; i < points.length; i += 1) {
           var cx = points[i].x - pointer.x;
           var cy = points[i].y - pointer.y;
           var cd = Math.sqrt(cx * cx + cy * cy);
           if (cd < PLEX.cursorRadius) {
-            ctx.strokeStyle = "rgba(255,255,255," + alphaStr((1 - cd / PLEX.cursorRadius) * 0.22) + ")";
+            ctx.strokeStyle = "rgba(255,255,255," + alphaStr((1 - cd / PLEX.cursorRadius) * 0.3) + ")";
             ctx.beginPath();
             ctx.moveTo(pointer.x, pointer.y);
             ctx.lineTo(points[i].x, points[i].y);
