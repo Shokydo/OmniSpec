@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OmniSpec — лаунчер Minecraft для сборок, модов и двух аккаунтов</title>
+<meta name="description" content="OmniSpec — лаунчер Minecraft на Rust: сборки и категории, моды с Modrinth, лицензия через Microsoft и офлайн-ник, 16 тем, обои, эффекты. Установщик и портативная версия для Windows 10/11.">
+<meta name="theme-color" content="#08080a">
+<meta property="og:type" content="website">
+<meta property="og:title" content="OmniSpec — лаунчер Minecraft">
+<meta property="og:description" content="Сборки, моды с Modrinth, лицензия и офлайн-аккаунты. Установщик и портативная версия для Windows 10/11.">
+<meta property="og:url" content="{{URL_SITE}}">
+<meta property="og:image" content="{{URL_SITE}}og.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="{{A:favicon}}" type="image/png">
+<style>
+{{CSS}}
+</style>
+</head>
+<body>
+
+<header class="hdr">
+  <div class="wrap hdr-in">
+    <a class="brand" href="./index.html">
+      <img src="{{A:icon-128}}" alt="" width="26" height="26">
+      OmniSpec
+      <small>лаунчер Minecraft</small>
+    </a>
+    <button class="btn nav-toggle" id="nav-toggle" aria-expanded="false" aria-controls="nav">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z"/></svg>
+      Меню
+    </button>
+    <nav class="nav" id="nav">
+      <a href="#features">Возможности</a>
+      <a href="#shots">Скриншоты</a>
+      <a href="#install">Установка</a>
+      <a href="#faq">Вопросы</a>
+      <a href="./changelog.html">Изменения</a>
+      <a class="btn btn-primary" href="{{URL_SETUP}}">
+        <svg viewBox="0 0 24 24"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16 6.3 10.3l1.4-1.4L11 12.2V3ZM4 18h16v2H4v-2Z"/></svg>
+        Скачать
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<div class="wrap hero">
+  <span class="eyebrow"><span class="dot"></span> версия <b>{{VERSION}}</b> · {{DATE}} · Windows 10/11</span>
+  <h1>Лаунчер Minecraft,<br>который не мешает играть</h1>
+  <p class="lead">
+    Сборки с папками и своими настройками, моды, ресурспаки и шейдеры прямо с Modrinth,
+    лицензия через Microsoft и обычный офлайн-ник. Написан на Rust, интерфейс — плотный
+    моно-панель без градиентов и лишних кликов.
+  </p>
+  <div class="cta">
+    <a class="btn btn-primary btn-lg" href="{{URL_SETUP}}">
+      <svg viewBox="0 0 24 24"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16 6.3 10.3l1.4-1.4L11 12.2V3ZM4 18h16v2H4v-2Z"/></svg>
+      Скачать установщик · {{SIZE_SETUP}}
+    </a>
+    <a class="btn btn-lg" href="{{URL_PORTABLE}}">
+      <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4V4Zm2 2v12h12V6H6Z"/></svg>
+      Портативная версия · {{SIZE_PORTABLE}}
+    </a>
+  </div>
+  <div class="meta-row">
+    <span>без прав администратора</span>
+    <span>·</span>
+    <span>uninstall внутри папки</span>
+    <span>·</span>
+    <span>Java скачивается сама</span>
+    <span>·</span>
+    <a href="{{URL_RELEASES}}" style="color:inherit">все файлы и SHA256</a>
+  </div>
+
+  <figure class="frame">
+    <img src="{{A:console}}" alt="Консоль OmniSpec: запуск сборки Fabulously Optimized, 94 мода, Fabric 0.16.9" width="1600" height="1000">
+    <figcaption class="frame-cap">Консоль сборки: живой лог с номерами строк, поиск, копирование и очистка</figcaption>
+  </figure>
+</div>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">что внутри</div>
+      <h2>Всё, что нужно от лаунчера сборок</h2>
+      <p>Ни одного нативного окна: диалоги, меню по правой кнопке и подсказки — свои, в стиле лаунчера.</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 5h6l2 2h10v12H4V5Zm2 4v8h14V9H5Z"/></svg></div>
+        <h3>Сборки и категории</h3>
+        <p>Папки-аккордеоны, перетаскивание сборок между ними, дубликаты в «Запущенных». У каждой сборки свои версия, загрузчик, память, Java и иконка.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 2c1.2 0 2.6 2.3 3.1 5.5H8.9C9.4 7.3 10.8 5 12 5ZM5.2 11h2.7c-.1 1-.1 2 0 3H5.2a7 7 0 0 1 0-3Zm3.7 0h6.2c.1 1 .1 2 0 3H8.9c-.1-1-.1-2 0-3Zm7.2 0h2.7a7 7 0 0 1 0 3h-2.7c.1-1 .1-2 0-3ZM12 19c-1.2 0-2.6-2.3-3.1-5.5h6.2C14.6 16.7 13.2 19 12 19Z"/></svg></div>
+        <h3>Modrinth внутри</h3>
+        <p>Бесконечная лента, вид списком и плиткой, выбор версии под свою сборку и автодокачка обязательных зависимостей.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Zm0 9c4.4 0 8 2.3 8 5.2V21H4v-1.8C4 16.3 7.6 14 12 14Z"/></svg></div>
+        <h3>Лицензия и пиратка</h3>
+        <p>Вход через Microsoft по короткому коду — пароль в лаунчер не попадает. Или ник для офлайн-игры: UUID считается как в самой игре.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16 6.3 10.3l1.4-1.4L11 12.2V3ZM4 18h16v2H4v-2Z"/></svg></div>
+        <h3>Импорт в один клик</h3>
+        <p><b>.mrpack</b>, <b>.zip</b>-модпак, сборки из Prism, MultiMC и Modrinth App. Импорт видно: спиннер, этап и процент прямо в ленте.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3c5 0 9 4 9 9s-4 9-9 9a9 9 0 0 1-7.4-3.9l1.6-1.2A7 7 0 1 0 12 5v2.5L8 4l4-3.5V3Z"/></svg></div>
+        <h3>Оформление</h3>
+        <p>16 тем, своя тема с цветами из обоев, форма элементов, обои с историей, трейс за курсором и частицы. Масштаб интерфейса 80–150 %.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M6 2h8l5 5v15H6V2Zm7 1.5V8h4.5L13 3.5ZM8 11h8v1.6H8V11Zm0 3.4h8v1.6H8v-1.6Zm0 3.4h5v1.6H8v-1.6Z"/></svg></div>
+        <h3>Файловый менеджер</h3>
+        <p>Дерево папок, просмотр файлов с номерами строк, архивы zip и rar с зумом картинок, создание папок и перенос файлов мышью.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M13.6 2 4.8 13.6h5.4l-1.8 8.4 8.8-11.6h-5.4l1.8-8.4Z"/></svg></div>
+        <h3>Быстрый запуск</h3>
+        <p>Проверка файлов, поиск Java и разбор профиля не повторяются каждый раз — повторный запуск сборки идёт заметно быстрее.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 4V1L7 6l5 5V7a5 5 0 1 1-4.6 7h-2A7 7 0 1 0 12 4Z"/></svg></div>
+        <h3>Обновляется сам</h3>
+        <p>Кнопка обновления появляется в лаунчере, когда на GitHub выходит новый релиз. Сборки, миры и настройки остаются на месте.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="shots">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">скриншоты</div>
+      <h2>Как это выглядит</h2>
+      <p>Снято с текущей версии — нажми на любой кадр, чтобы открыть его целиком.</p>
+    </div>
+    <div class="gallery">
+      <figure class="gal">
+        <img src="{{A:home}}" alt="Главная страница: недавние сборки, добавление сборки и лента готовых сборок" width="1600" height="1000">
+        <figcaption>Главная: недавние сборки, добавление сборки и лента готовых сборок с Modrinth</figcaption>
+      </figure>
+      <figure class="gal">
+        <img src="{{A:modrinth}}" alt="Поиск модов на Modrinth внутри лаунчера" width="1600" height="1000">
+        <figcaption>Modrinth: поиск, фильтры по версии и загрузчику, список или плитка</figcaption>
+      </figure>
+      <figure class="gal">
+        <img src="{{A:files}}" alt="Файловый менеджер сборки" width="1600" height="1000">
+        <figcaption>Файлы сборки: дерево, размеры, даты и свои действия в заголовке</figcaption>
+      </figure>
+      <figure class="gal">
+        <img src="{{A:look}}" alt="Настройки лаунчера, раздел «Оформление»: темы, масштаб и форма элементов" width="1600" height="1000">
+        <figcaption>Оформление: 16 тем, базовый цвет фона, масштаб интерфейса и форма элементов</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="accounts">
+  <div class="wrap split">
+    <div>
+      <div class="sec-head">
+        <div class="kicker">аккаунты</div>
+        <h2>Два типа аккаунтов — и честная разница между ними</h2>
+        <p>Профиль в шапке слева, до пяти строк аккаунтов со скроллом в настройках, под каждым — скин и плащ.</p>
+      </div>
+      <ul class="list">
+        <li><b>Лицензия</b> — вход через Microsoft по короткому коду на microsoft.com/link. Токен обновляется сам перед запуском игры.</li>
+        <li><b>Офлайн</b> — ник 3–16 символов, UUID из него же. Работает без интернета.</li>
+        <li><b>Скин</b> — wide или slim, второй слой, поворот модели на полные 360° и свои пресеты из загруженных файлов.</li>
+        <li><b>Плащи</b> — список плащей аккаунта, переключение и «Без плаща» через Mojang API; видно и в ванильном лаунчере.</li>
+      </ul>
+    </div>
+    <div class="cards" style="grid-template-columns:1fr">
+      <div class="card">
+        <h3>Что качает сам</h3>
+        <p>Клиент, библиотеки, нативы и ресурсы — с серверов Mojang. Java подходящей версии, если её нет на компьютере: 8 для старых версий, 21 для новых.</p>
+      </div>
+      <div class="card">
+        <h3>Загрузчики</h3>
+        <p>Fabric, Quilt, Forge и NeoForge. Версия игры и версия загрузчика выбираются двумя списками при создании сборки и в «Сменить версию».</p>
+      </div>
+      <div class="card">
+        <h3>Чего пока нет</h3>
+        <p>CurseForge: для поиска нужен API-ключ, поэтому моды и модпаки берутся с Modrinth. Всё остальное — сборки, моды, ресурспаки, шейдеры, миры — работает.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">установка</div>
+      <h2>Два способа поставить</h2>
+      <p>Оба файла собираются автоматически при каждом релизе — ссылки всегда ведут на последнюю версию.</p>
+    </div>
+
+    <div class="dl">
+      <div class="dl-card main">
+        <div class="top">
+          <span class="tag green">рекомендуется</span>
+          <span class="size">{{SIZE_SETUP}}</span>
+        </div>
+        <h3>OmniSpec-Setup.exe</h3>
+        <p>Установщик с кнопками: показывает, что и куда поставит, даёт сменить папку, делает ярлыки на рабочем столе и в «Пуск», кладёт рядом uninstall.exe.</p>
+        <a class="btn btn-primary btn-wide" href="{{URL_SETUP}}">Скачать установщик</a>
+      </div>
+      <div class="dl-card">
+        <div class="top">
+          <span class="tag">портативно</span>
+          <span class="size">{{SIZE_PORTABLE}}</span>
+        </div>
+        <h3>OmniSpec.exe</h3>
+        <p>Скачал и запустил — ничего не ставится. Данные (Java, сборки, миры) лягут в папку OmniSpecData рядом с файлом лаунчера.</p>
+        <a class="btn btn-wide" href="{{URL_PORTABLE}}">Скачать портативную</a>
+      </div>
+    </div>
+
+    <div class="steps" style="margin-top:12px">
+      <div class="step">
+        <span class="num">1</span>
+        <div>
+          <h3>Запустить файл</h3>
+          <p>Права администратора не нужны. Windows может показать «неизвестного издателя» — установщик не подписан платным сертификатом: «Подробнее» → «Выполнить в любом случае».</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="num">2</span>
+        <div>
+          <h3>Выбрать папку и поставить</h3>
+          <p>По умолчанию предлагается <b>%LOCALAPPDATA%\OmniSpec</b>. Путь запоминается: следующий запуск установщика предложит его же. Переустановка сохраняет сборки и миры.</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="num">3</span>
+        <div>
+          <h3>Создать сборку и играть</h3>
+          <p>Готовую сборку можно добавить из Modrinth или импортировать файлом. Java и файлы игры скачиваются при первом запуске.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="split" style="margin-top:22px">
+      <div>
+        <div class="kicker">что лежит в папке установки</div>
+        <pre class="code"><b>OmniSpec.exe</b>        лаунчер
+<b>icon.png</b>            иконка для ярлыка
+<b>uninstall.exe</b>       деинсталлятор
+<b>install-info.txt</b>    версия, путь, режим данных
+<b>portable.txt</b>        данные рядом с лаунчером</pre>
+        <div class="note">
+          <svg viewBox="0 0 24 24"><path d="M11 3h2v10h-2V3Zm0 12h2v2h-2v-2ZM12 0 2 21h20L12 0Zm0 3.5 7.6 15.5H4.4L12 3.5Z"/></svg>
+          <span>Удалить можно без установщика: <b>uninstall --yes</b> убирает файлы и ярлыки, <b>--purge</b> — ещё и сборки с настройками.</span>
+        </div>
+      </div>
+      <div>
+        <div class="kicker">требования</div>
+        <ul class="list">
+          <li><b>Windows 10 или 11</b>, 64-битная. На «десятке» нужен WebView2 — обычно уже установлен.</li>
+          <li><b>Интернет</b> для первого запуска сборки: клиент, библиотеки и Java.</li>
+          <li><b>Место на диске</b> — примерно 1 ГБ на сборку с модами и миром.</li>
+          <li><b>Linux</b> — бинарник в релизах и сборка из исходников (<b>cargo run -p omnispec-app</b>).</li>
+        </ul>
+        <div class="note">
+          <svg viewBox="0 0 24 24"><path d="M12 2.2 4.5 5v6.9c0 4.8 3.5 8 7.5 9.9 4-1.9 7.5-5.1 7.5-9.9V5L12 2.2Zm0 2.1 5.5 2v5.6c0 3.4-2.3 5.9-5.5 7.6-3.2-1.7-5.5-4.2-5.5-7.6V6.3l5.5-2Z"/></svg>
+          <span>Пароль Microsoft в лаунчер не попадает: вход идёт по device-code, токен живёт час и обновляется сам.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">вопросы</div>
+      <h2>Коротко о главном</h2>
+    </div>
+    <div class="faq">
+      <details>
+        <summary>Нужна ли лицензия Minecraft?</summary>
+        <p>Нет. Офлайн-аккаунт — это просто ник, он работает где угодно без интернета. Лицензия нужна только для скина и плащей через Mojang и для серверов с online-mode.</p>
+      </details>
+      <details>
+        <summary>Лаунчер бесплатный?</summary>
+        <p>Да. Исходники открыты на GitHub, релизы собираются из них автоматически. Никаких подписок и ключей.</p>
+      </details>
+      <details>
+        <summary>Откуда берётся Java?</summary>
+        <p>Лаунчер сам скачивает подходящую версию с серверов Mojang: Java 8 для старых версий игры и Java 21 для новых. Свою Java можно указать в настройках сборки или в разделе «Игра и Java».</p>
+      </details>
+      <details>
+        <summary>Куда сохраняются сборки и миры?</summary>
+        <p>При установке по умолчанию включается портативный режим: данные лежат в <b>OmniSpecData</b> рядом с лаунчером. Если снять галочку — в <b>%APPDATA%\OmniSpec</b>. У сборки может быть своё место установки.</p>
+      </details>
+      <details>
+        <summary>Можно ли импортировать свою сборку?</summary>
+        <p>Да: файл <b>.mrpack</b>, <b>.zip</b>-модпак, сборка из Prism, MultiMC или Modrinth App, а также перетаскивание файла в окно. Экспорт — в .mrpack и .zip.</p>
+      </details>
+      <details>
+        <summary>Обновления сбрасывают настройки?</summary>
+        <p>Нет. Настройки, сборки, миры и время игры остаются; окно первого запуска после обновления не возвращается.</p>
+      </details>
+      <details>
+        <summary>Что с CurseForge?</summary>
+        <p>Пока не поддерживается: их API требует ключ, который нельзя публиковать. Всё остальное — Modrinth, локальные файлы, импорт из других лаунчеров — работает.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<section id="changes">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">изменения</div>
+      <h2>Последние версии</h2>
+      <p>Полный список изменений со всеми релизами — на отдельной странице.</p>
+    </div>
+    <div style="display:grid;gap:10px">
+      {{CHANGELOG_TEASER}}
+    </div>
+    <div style="margin-top:16px">
+      <a class="btn" href="./changelog.html">Все изменения · {{RELEASES_COUNT}} релизов</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="ftr">
+  <div class="wrap ftr-in">
+    <a class="brand" href="./index.html">
+      <img src="{{A:icon-128}}" alt="" width="22" height="22">
+      OmniSpec
+    </a>
+    <nav>
+      <a href="{{URL_REPO}}">GitHub</a>
+      <a href="{{URL_RELEASES}}">Релизы</a>
+      <a href="./changelog.html">Изменения</a>
+      <a href="{{URL_ISSUES}}">Issues</a>
+    </nav>
+    <p class="fine">
+      OmniSpec — лаунчер Minecraft на Rust и Tauri 2, интерфейс на чистом HTML/CSS/JS.
+      Проект не связан с Mojang Studios и Microsoft. Minecraft — торговая марка Mojang Studios.
+      Сайт и лаунчер обновляются из GitHub Releases автоматически.
+    </p>
+  </div>
+</footer>
+
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Скриншот">
+  <button class="lb-close" id="lb-close" aria-label="Закрыть">✕</button>
+  <img src="" alt="" id="lb-img">
+</div>
+
+<script>
+{{JS}}
+</script>
+</body>
+</html>

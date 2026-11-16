@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Список изменений — OmniSpec</title>
+<meta name="description" content="Все версии OmniSpec: что появилось и что исправлено в каждом релизе лаунчера Minecraft.">
+<meta name="theme-color" content="#08080a">
+<link rel="icon" href="{{A:favicon}}" type="image/png">
+<style>
+{{CSS}}
+</style>
+</head>
+<body>
+
+<header class="hdr">
+  <div class="wrap hdr-in">
+    <a class="brand" href="./index.html">
+      <img src="{{A:icon-128}}" alt="" width="26" height="26">
+      OmniSpec
+      <small>изменения</small>
+    </a>
+    <button class="btn nav-toggle" id="nav-toggle" aria-expanded="false" aria-controls="nav">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z"/></svg>
+      Меню
+    </button>
+    <nav class="nav" id="nav">
+      <a href="./index.html">Главная</a>
+      <a href="./index.html#features">Возможности</a>
+      <a href="./index.html#shots">Скриншоты</a>
+      <a href="{{URL_REPO}}">GitHub</a>
+      <a class="btn btn-primary" href="{{URL_SETUP}}">
+        <svg viewBox="0 0 24 24"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16 6.3 10.3l1.4-1.4L11 12.2V3ZM4 18h16v2H4v-2Z"/></svg>
+        Скачать {{VERSION}}
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section style="padding-top:44px">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">список изменений</div>
+      <h2>Все версии OmniSpec</h2>
+      <p>Каждый релиз — тег в GitHub, из которого автоматически собираются установщик, портативная версия и Linux-бинарник.
+      Текущая версия — <b>{{VERSION}}</b> от {{DATE}}.</p>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:20px">
+      <div class="search" style="flex:1 1 320px">
+        <svg viewBox="0 0 24 24"><path d="M10.5 3a7.5 7.5 0 1 0 4.6 13.4l4.2 4.3 1.4-1.4-4.2-4.3A7.5 7.5 0 0 0 10.5 3Zm0 2a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11Z"/></svg>
+        <input id="rel-search" type="text" placeholder="Найти: моды, темы, обои, импорт…" spellcheck="false" autocomplete="off">
+      </div>
+      <span class="muted" id="rel-count" style="color:var(--dim-2);font-size:12px"></span>
+      <a class="btn" href="{{URL_RELEASES}}" style="margin-left:auto">Релизы на GitHub</a>
+    </div>
+
+    <div style="display:grid;gap:2px">
+      {{CHANGELOG_ALL}}
+    </div>
+    <div class="empty" id="rel-empty" hidden>Ничего не нашлось — попробуй другое слово.</div>
+  </div>
+</section>
+</main>
+
+<footer class="ftr">
+  <div class="wrap ftr-in">
+    <a class="brand" href="./index.html">
+      <img src="{{A:icon-128}}" alt="" width="22" height="22">
+      OmniSpec
+    </a>
+    <nav>
+      <a href="{{URL_REPO}}">GitHub</a>
+      <a href="{{URL_RELEASES}}">Релизы</a>
+      <a href="./index.html">Главная</a>
+      <a href="{{URL_ISSUES}}">Issues</a>
+    </nav>
+    <p class="fine">OmniSpec — лаунчер Minecraft на Rust и Tauri 2. Проект не связан с Mojang Studios и Microsoft.</p>
+  </div>
+</footer>
+
+<script>
+{{JS}}
+</script>
+</body>
+</html>

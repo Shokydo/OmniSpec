@@ -1,0 +1,52 @@
+name: pages
+
+# Сайт проекта: собирается из site/ и публикуется на GitHub Pages.
+# Точка входа — сайт витрины (site/dist), сам лаунчер этот workflow не трогает.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Собрать сайт
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # теги нужны: из них собирается список изменений
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Сборка (site/src → site/dist)
+        run: python3 site/build.py
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    name: Опубликовать
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
