@@ -5,7 +5,9 @@ use std::collections::HashSet;
 
 use crate::error::{Error, Result};
 use crate::instances::InstanceMeta;
-use crate::modrinth::install::{target_dir, InstallOutcome};
+use crate::modrinth::install::target_dir;
+// наружу отдаём тот же тип, что у Modrinth: интерфейсу не нужно различать источники
+pub use crate::modrinth::install::InstallOutcome;
 use crate::net::Reporter;
 use crate::paths::Paths;
 
