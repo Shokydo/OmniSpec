@@ -8,7 +8,14 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      - "README.md"
       - ".github/workflows/pages.yml"
+  # релиз создаётся workflow «Release» с GITHUB_TOKEN, а такие события не
+  # запускают другие workflow — поэтому ловим не release, а завершение сборки
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  # а этого хватает, если релиз опубликован вручную
   release:
     types: [published]
   workflow_dispatch:
