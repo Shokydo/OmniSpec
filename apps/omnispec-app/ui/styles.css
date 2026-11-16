@@ -2013,6 +2013,10 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 .profile-list::-webkit-scrollbar { width: 6px; }
 
 /* пять образов «скин + плащ» под аккаунтами */
+/* узкое окно — колонки профиля друг под другом, чтобы образы остались в ряд */
+@media (max-width: 1100px) {
+  .profile-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+}
 .fav-head { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; }
 .fav-slots {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
@@ -2596,7 +2600,8 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 .icon-grid + .settings-actions > .btn { flex: 0 0 auto; min-width: 200px; }
 
 /* --- окно настроек крупнее, вкладки шире --- */
-.prefs-box { width: min(1120px, 97vw); height: min(780px, 92vh); }
+/* окно настроек ещё шире: пять образов «скин + плащ» помещаются в один ряд */
+.prefs-box { width: min(1280px, 98vw); height: min(820px, 93vh); }
 .prefs { grid-template-columns: 232px 1fr; }
 .prefs-tab { height: 32px; padding: 0 12px; font-size: 12.5px; }
 .prefs-row-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
