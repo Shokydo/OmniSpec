@@ -120,7 +120,7 @@ pub async fn ensure_version_json(
     let text = http.get_text(&entry.url).await?;
     let json: VersionJson = serde_json::from_str(&text)?;
     std::fs::create_dir_all(paths.version_dir(id))?;
-    std::fs::write(&file, &text)?;
+    std::fs::write(paths.version_file(id), &text)?;
     Ok(json)
 }
 
