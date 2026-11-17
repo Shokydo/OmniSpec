@@ -1215,7 +1215,8 @@ async fn mod_icons(
                 }
                 continue;
             }
-            missing.push((file, pack_probe(&file), project_type.to_string()));
+            let probe = pack_probe(&file);
+            missing.push((file, probe, project_type.to_string()));
         }
     }
 
