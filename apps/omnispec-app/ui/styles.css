@@ -669,6 +669,44 @@ input, select, textarea { font: inherit; color: inherit; }
 .item-row:last-child { border-bottom: 0; }
 .item-row:hover { background: var(--bg-3); }
 .item-main { flex: 1; min-width: 0; }
+
+/* ═══════════════════ скриншоты: сетка плиток ═══════════════════ */
+.shots-grid {
+  display: grid; gap: 10px;
+  padding: var(--pad);
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+.shot-tile {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 6px; text-align: left;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.shot-tile:hover { background: var(--bg-4); border-color: var(--line-2); }
+.shot-img {
+  display: block; aspect-ratio: 16 / 9; overflow: hidden;
+  border-radius: var(--r-sm);
+  background: var(--bg-4);
+}
+.shot-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.shot-name {
+  font-size: 11.5px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.shot-sub { font-size: 10.5px; color: var(--dim-2); }
+
+/* просмотр скриншота на весь экран */
+.shot-box { width: min(960px, 94vw); }
+.shot-body {
+  display: grid; place-items: center;
+  background: #000;
+  padding: 10px;
+}
+.shot-body img { max-width: 100%; max-height: 72vh; display: block; }
+.shot-foot { align-items: center; }
 .item-title { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .item-sub { margin-top: 1px; font-size: 10.5px; color: var(--dim-2); }
 

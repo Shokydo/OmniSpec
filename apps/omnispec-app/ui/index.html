@@ -153,6 +153,7 @@
       <button class="tab" data-tab="resourcepacks">Ресурспаки</button>
       <button class="tab" data-tab="shaders">Шейдеры</button>
       <button class="tab" data-tab="worlds">Миры</button>
+      <button class="tab" data-tab="screenshots">Скриншоты <span class="tab-badge" id="badge-screenshots" hidden>0</span></button>
       <button class="tab" data-tab="modrinth">Modrinth</button>
       <button class="tab" data-tab="curseforge">CurseForge</button>
       <button class="tab" data-tab="settings">Сборка</button>
@@ -239,6 +240,24 @@
 </div>
 
 <!-- ============ ПЕРВЫЙ ЗАПУСК: быстрая настройка ============ -->
+<div class="modal-backdrop" id="modal-shot" hidden>
+  <div class="modal shot-box">
+    <div class="modal-head">
+      <h2 id="shot-title">Скриншот</h2>
+      <button class="icon-btn" data-close-shot title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="modal-body shot-body">
+      <img id="shot-img" alt="">
+    </div>
+    <div class="modal-foot shot-foot">
+      <span class="muted" id="shot-meta"></span>
+      <div class="spacer"></div>
+      <button class="btn" id="shot-open-file"><svg class="ic"><use href="#i-image"/></svg>Открыть файл</button>
+      <button class="btn" id="shot-open-folder"><svg class="ic"><use href="#i-folder"/></svg>Открыть папку</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="modal-onboard" hidden>
   <div class="modal onboard-box">
     <header class="modal-head">

@@ -1985,6 +1985,7 @@
     mods: (instanceId) => invoke("list_mods", { instanceId }),
     modIcons: (instanceId) => invoke("mod_icons", { instanceId }),
     worldIcons: (instanceId) => invoke("world_icons", { instanceId }),
+    listScreenshots: (instanceId) => invoke("list_screenshots", { instanceId }),
     // содержимое сборки: моды, ресурспаки, шейдеры
     contentList: (instanceId, kind) => invoke("content_list", { instanceId, kind }),
     contentToggle: (instanceId, kind, name) => invoke("content_toggle", { instanceId, kind, name }),
@@ -2364,6 +2365,11 @@
     ensureDependencies: async () => ({ installed: [], skipped: [] }),
     // Иконки модов в демо-режиме — те же картинки, что отдал бы Modrinth.
     worldIcons: async () => ({}),
+    listScreenshots: async () => ([
+      { name: "2026-11-17_12.01.14.png", size: 2845120, modified: 1763380000, path: "C:\\Users\\Player\\AppData\\Roaming\\OmniSpec\\instances\\demo\\minecraft\\screenshots\\2026-11-17_12.01.14.png" },
+      { name: "2026-11-16_21.44.02.png", size: 1932288, modified: 1763290000, path: "C:\\Users\\Player\\AppData\\Roaming\\OmniSpec\\instances\\demo\\minecraft\\screenshots\\2026-11-16_21.44.02.png" },
+      { name: "2026-11-15_09.12.55.png", size: 3411960, modified: 1763200000, path: "C:\\Users\\Player\\AppData\\Roaming\\OmniSpec\\instances\\demo\\minecraft\\screenshots\\2026-11-15_09.12.55.png" }
+    ]),
     modIcons: async () => {
       const map = {};
       demoMods.forEach((mod, index) => {
@@ -3396,6 +3402,7 @@
       case "resourcepacks": return renderContent("resourcepack");
       case "shaders": return renderContent("shader");
       case "worlds": return renderWorlds();
+      case "screenshots": return renderScreenshots();
       case "modrinth": return renderModrinth();
       case "curseforge": return renderCurseForge();
       case "settings": return renderSettings();
@@ -4532,6 +4539,63 @@
         </div>
       </div>`;
     $("#worlds-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/saves`).catch(() => {}));
+  }
+
+  /* ---------- Скриншоты ---------- */
+  /** Абсолютный путь файла → file:// URL для <img> в webview. */
+  function fileUrl(path) {
+    const p = String(path || "").replace(/\\/g, "/");
+    return p.startsWith("/") ? `file://${p}` : `file:///${p}`;
+  }
+
+  async function renderScreenshots() {
+    const meta = selected();
+    const entries = await api.listScreenshots(meta.id).catch(() => []);
+    const badge = $("#badge-screenshots");
+    if (badge) {
+      badge.hidden = !entries.length;
+      badge.textContent = String(entries.length);
+    }
+    const srcOf = (entry) => (IS_APP ? fileUrl(entry.path) : demoPixelImage());
+    $("#tab-body").innerHTML = `
+      <div class="list-wrap">
+        <div class="panel">
+          <div class="panel-head">
+            <strong>Скриншоты</strong>
+            <span class="badge">${entries.length}</span>
+            <div class="spacer"></div>
+            <button class="btn btn-small" id="shots-open">Открыть папку</button>
+          </div>
+          ${entries.length ? `<div class="shots-grid">${entries.map((entry, index) => `
+            <button class="shot-tile" data-shot="${index}" title="${esc(entry.name)}">
+              <span class="shot-img"><img src="${esc(srcOf(entry))}" alt="" loading="lazy"></span>
+              <span class="shot-name">${esc(entry.name)}</span>
+              <span class="shot-sub">${humanSize(entry.size)}${entry.modified ? ` · ${relativeWhen(entry.modified)}` : ""}</span>
+            </button>`).join("")}</div>`
+          : `<div class="item-row"><div class="item-main muted">Скриншотов пока нет — нажми F2 в игре</div></div>`}
+        </div>
+      </div>`;
+    $("#shots-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/screenshots`).catch(() => {}));
+    $$("#tab-body .shot-tile").forEach((tile) => tile.addEventListener("click", () => {
+      const entry = entries[Number(tile.dataset.shot)];
+      if (entry) openShot(entry, srcOf(entry));
+    }));
+  }
+
+  /** Просмотр скриншота на весь экран. */
+  let shotCurrent = null;
+  function openShot(entry, src) {
+    shotCurrent = entry;
+    $("#shot-title").textContent = entry.name;
+    $("#shot-img").src = src;
+    $("#shot-meta").textContent = `${humanSize(entry.size)}${entry.modified ? ` · ${relativeWhen(entry.modified)}` : ""}`;
+    $("#modal-shot").hidden = false;
+  }
+
+  function closeShot() {
+    $("#modal-shot").hidden = true;
+    $("#shot-img").src = "";
+    shotCurrent = null;
   }
 
   /* ---------- Modrinth ---------- */
@@ -9747,6 +9811,26 @@
       /* демо-режим без бэкенда — тихо */
     }
   }
+
+  /* просмотр скриншота */
+  (() => {
+    const modal = $("#modal-shot");
+    if (!modal) return;
+    $$("[data-close-shot]", modal).forEach((btn) => btn.addEventListener("click", closeShot));
+    modal.addEventListener("mousedown", (event) => { if (event.target === modal) closeShot(); });
+    $("#shot-open-file").addEventListener("click", () => {
+      if (!shotCurrent) return;
+      api.openPath(shotCurrent.path).catch((error) => toast(String(error), "err"));
+    });
+    $("#shot-open-folder").addEventListener("click", () => {
+      if (!shotCurrent) return;
+      const dir = shotCurrent.path.replace(/\\[^\\/]*$/, "");
+      api.openPath(dir).catch((error) => toast(String(error), "err"));
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !modal.hidden) closeShot();
+    });
+  })();
 
   /* кнопки окна первого запуска */
   (() => {

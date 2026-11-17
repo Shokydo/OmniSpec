@@ -1126,6 +1126,51 @@ fn list_mods(state: State<'_, AppState>, instance_id: String) -> Result<Vec<ModE
     Ok(result)
 }
 
+/// Один скриншот из папки `screenshots` сборки.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ScreenshotEntry {
+    name: String,
+    size: u64,
+    /// Время изменения, секунды от эпохи.
+    modified: Option<u64>,
+    /// Абсолютный путь — фронт показывает через `file://`.
+    path: String,
+}
+
+/// Скриншоты сборки (папка `screenshots` в игровой папке), новые сверху.
+#[tauri::command]
+fn list_screenshots(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<Vec<ScreenshotEntry>, String> {
+    let dir = instances::game_dir(&state.paths, &instance_id).join("screenshots");
+    let mut result = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(result);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || image_mime(&path).is_none() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let meta = entry.metadata().ok();
+        let modified = meta
+            .as_ref()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs());
+        result.push(ScreenshotEntry {
+            name,
+            size: meta.map(|meta| meta.len()).unwrap_or(0),
+            modified,
+            path: path.display().to_string(),
+        });
+    }
+    result.sort_by(|a, b| b.modified.cmp(&a.modified));
+    Ok(result)
+}
+
 /// Иконки миров: имя папки мира → `icon.png` из неё (как в самой игре).
 #[tauri::command]
 fn world_icons(
@@ -2682,6 +2727,7 @@ fn main() {
             window_action,
             mod_icons,
             world_icons,
+            list_screenshots,
             scan_external_launchers,
             import_external,
             export_instance,
