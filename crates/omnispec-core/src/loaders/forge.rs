@@ -69,6 +69,32 @@ fn neoforge_prefix(mc_version: &str) -> String {
     format!("{major}.{minor}.")
 }
 
+/// Инсталлятору Forge/NeoForge нужен `launcher_profiles.json` в целевой папке —
+/// без него он падает с «no minecraft launcher profile, run the launcher first».
+/// Создаём минимальный, если его ещё нет (существующий не трогаем).
+fn ensure_launcher_profiles(meta: &std::path::Path) {
+    let file = meta.join("launcher_profiles.json");
+    if file.exists() {
+        return;
+    }
+    let content = r#"{
+  "version": 3,
+  "profiles": {
+    "Minecraft": {
+      "name": "Minecraft",
+      "type": "minecraft",
+      "created": "2026-01-01T00:00:00.000Z",
+      "lastUsed": "2026-01-01T00:00:00.000Z",
+      "gameDir": ".",
+      "javaArgs": ""
+    }
+  },
+  "selectedProfile": "Minecraft"
+}
+"#;
+    let _ = std::fs::write(&file, content);
+}
+
 /// Скачать и запустить инсталлятор, вернуть id созданной версии.
 async fn run_installer(
     http: &Http,
@@ -88,6 +114,7 @@ async fn run_installer(
     let java = crate::game::java::find_java(http, paths, &settings, 17, reporter).await?;
     let meta = paths.meta();
     std::fs::create_dir_all(&meta)?;
+    ensure_launcher_profiles(&meta);
 
     let output = tokio::process::Command::new(&java.path)
         .arg("-jar")
