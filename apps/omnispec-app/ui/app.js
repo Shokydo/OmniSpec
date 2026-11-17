@@ -4542,12 +4542,6 @@
   }
 
   /* ---------- Скриншоты ---------- */
-  /** Абсолютный путь файла → file:// URL для <img> в webview. */
-  function fileUrl(path) {
-    const p = String(path || "").replace(/\\/g, "/");
-    return p.startsWith("/") ? `file://${p}` : `file:///${p}`;
-  }
-
   async function renderScreenshots() {
     const meta = selected();
     const entries = await api.listScreenshots(meta.id).catch(() => []);
@@ -4556,7 +4550,8 @@
       badge.hidden = !entries.length;
       badge.textContent = String(entries.length);
     }
-    const srcOf = (entry) => (IS_APP ? fileUrl(entry.path) : demoPixelImage());
+    // Картинка приходит data URI из бэкенда (file:// в webview не грузится).
+    const srcOf = (entry) => (IS_APP ? (entry.src || "") : demoPixelImage());
     $("#tab-body").innerHTML = `
       <div class="list-wrap">
         <div class="panel">
@@ -4566,12 +4561,15 @@
             <div class="spacer"></div>
             <button class="btn btn-small" id="shots-open">Открыть папку</button>
           </div>
-          ${entries.length ? `<div class="shots-grid">${entries.map((entry, index) => `
+          ${entries.length ? `<div class="shots-grid">${entries.map((entry, index) => {
+            const src = srcOf(entry);
+            return `
             <button class="shot-tile" data-shot="${index}" title="${esc(entry.name)}">
-              <span class="shot-img"><img src="${esc(srcOf(entry))}" alt="" loading="lazy"></span>
+              <span class="shot-img">${src ? `<img src="${esc(src)}" alt="" loading="lazy">` : `<svg class="ic shot-placeholder"><use href="#i-image"/></svg>`}</span>
               <span class="shot-name">${esc(entry.name)}</span>
               <span class="shot-sub">${humanSize(entry.size)}${entry.modified ? ` · ${relativeWhen(entry.modified)}` : ""}</span>
-            </button>`).join("")}</div>`
+            </button>`;
+          }).join("")}</div>`
           : `<div class="item-row"><div class="item-main muted">Скриншотов пока нет — нажми F2 в игре</div></div>`}
         </div>
       </div>`;

@@ -1133,8 +1133,10 @@ struct ScreenshotEntry {
     size: u64,
     /// Время изменения, секунды от эпохи.
     modified: Option<u64>,
-    /// Абсолютный путь — фронт показывает через `file://`.
+    /// Абсолютный путь — для кнопок «открыть файл/папку».
     path: String,
+    /// Картинка как data URI (base64): `file://` в WebView2 не грузится.
+    src: String,
 }
 
 /// Скриншоты сборки (папка `screenshots` в игровой папке), новые сверху.
@@ -1150,7 +1152,10 @@ fn list_screenshots(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_file() || image_mime(&path).is_none() {
+        let Some(mime) = image_mime(&path) else {
+            continue;
+        };
+        if !path.is_file() {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
@@ -1160,11 +1165,20 @@ fn list_screenshots(
             .and_then(|meta| meta.modified().ok())
             .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs());
+        // Картинку отдаём data URI, как превью в файловом менеджере:
+        // webview не умеет грузить file:// с чужого origin.
+        let src = match std::fs::read(&path) {
+            Ok(bytes) if !bytes.is_empty() && bytes.len() <= 32 * 1024 * 1024 => {
+                format!("data:{mime};base64,{}", base64_encode(&bytes))
+            }
+            _ => String::new(),
+        };
         result.push(ScreenshotEntry {
             name,
             size: meta.map(|meta| meta.len()).unwrap_or(0),
             modified,
             path: path.display().to_string(),
+            src,
         });
     }
     result.sort_by(|a, b| b.modified.cmp(&a.modified));

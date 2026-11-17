@@ -692,6 +692,10 @@ input, select, textarea { font: inherit; color: inherit; }
   background: var(--bg-4);
 }
 .shot-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.shot-placeholder {
+  width: 100%; height: 100%; padding: 18%;
+  color: var(--dim-2);
+}
 .shot-name {
   font-size: 11.5px; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
