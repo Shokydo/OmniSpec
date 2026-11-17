@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -44,6 +44,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 site/build.py
+      # свежий снимок (версия и счётчик скачиваний) — обратно в репозиторий,
+      # чтобы при недоступности API сайт показывал последнее известное.
+      # Пуш через GITHUB_TOKEN не запускает workflow заново — петли нет.
+      - name: Сохранить снимок latest.json
+        run: |
+          git config user.name "OmniSpec Bot"
+          git config user.email "bot@omnispec.local"
+          git add site/src/latest.json
+          if git diff --cached --quiet; then
+            echo "снимок не изменился"
+          else
+            git commit -m "site: свежий снимок latest.json (версия и счётчик скачиваний)"
+            git push
+          fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -164,6 +164,36 @@ def releases_from_file():
         return json.load(fh)
 
 
+def _release_downloads(release):
+    return sum(
+        a.get("download_count", 0)
+        for a in release.get("assets", [])
+        if not a["name"].endswith(".sha256")
+    )
+
+
+def total_downloads_from_api(headers):
+    """Накопленное число скачиваний по ВСЕМ релизам — счётчик не обнуляется
+    при выходе нового релиза (у свежего релиза скачиваний ещё нет)."""
+    total = 0
+    page = 1
+    while True:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{REPO}/releases?per_page=100&page={page}",
+            headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            batch = json.load(resp)
+        if not batch:
+            break
+        for release in batch:
+            total += _release_downloads(release)
+        if len(batch) < 100:
+            break
+        page += 1
+    return total
+
+
 def latest_from_api():
     headers = {"User-Agent": "OmniSpec-site-builder", "Accept": "application/vnd.github+json"}
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -177,11 +207,10 @@ def latest_from_api():
         data = json.load(resp)
     by_name = {a["name"]: a["size"] for a in data.get("assets", [])}
     pick = lambda name: {"name": name, "size": by_name.get(name, 0)}
-    downloads = sum(
-        a.get("download_count", 0)
-        for a in data.get("assets", [])
-        if not a["name"].endswith(".sha256")
-    )
+    try:
+        downloads = total_downloads_from_api(headers)
+    except Exception:
+        downloads = _release_downloads(data)
     return {
         "version": data["tag_name"].lstrip("v"),
         "published_at": (data.get("published_at") or "")[:10],
