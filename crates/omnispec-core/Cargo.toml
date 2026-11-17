@@ -17,6 +17,7 @@ hex = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }
 regex = { workspace = true }
+rusqlite = { workspace = true }
 
 [[bin]]
 name = "omnispec"

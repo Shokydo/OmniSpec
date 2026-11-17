@@ -95,6 +95,8 @@ fn instance_roots() -> Vec<(String, PathBuf)> {
     }
     if let Some(base) = localappdata() {
         push("astralrinth", base.join("AstralRinthApp").join("profiles"));
+        push("modrinth", base.join("Modrinth App").join("profiles"));
+        push("modrinth", base.join("ModrinthApp").join("profiles"));
         push(
             "modrinth",
             base.join("com.modrinth.theseus").join("profiles"),
@@ -329,8 +331,18 @@ fn icon_in(folder: &Path) -> Option<String> {
 /// Все сборки, найденные в других лаунчерах.
 pub fn scan_external() -> Vec<ExternalProfile> {
     let mut found: Vec<ExternalProfile> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (launcher, root) in instance_roots() {
+        // Modrinth App / AstralRinth: актуальный источник — app.db (SQLite),
+        // profile.json пишут только старые версии.
+        if launcher == "modrinth" || launcher == "astralrinth" {
+            for profile in read_modrinth_db(&launcher, &root) {
+                if seen.insert(profile.path.clone()) {
+                    found.push(profile);
+                }
+            }
+        }
         let Ok(entries) = std::fs::read_dir(&root) else {
             continue;
         };
@@ -348,14 +360,123 @@ pub fn scan_external() -> Vec<ExternalProfile> {
                 _ => None,
             };
             if let Some(profile) = profile {
-                found.push(profile);
+                if seen.insert(profile.path.clone()) {
+                    found.push(profile);
+                }
             }
         }
     }
 
     found.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    found.dedup_by(|a, b| a.path == b.path);
     found
+}
+
+/// Профили из `app.db` Modrinth App / AstralRinth (SQLite, только чтение).
+/// Новая схема (0.15+): `instances` + `instance_content_sets`;
+/// старая (≤0.14): таблица `profiles`.
+fn read_modrinth_db(launcher: &str, profiles_root: &Path) -> Vec<ExternalProfile> {
+    let Some(parent) = profiles_root.parent() else {
+        return Vec::new();
+    };
+    let db_path = parent.join("app.db");
+    if !db_path.is_file() {
+        return Vec::new();
+    }
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return Vec::new();
+    };
+
+    // (path, name, icon_path, game_version, loader, loader_version)
+    type Row = (String, String, Option<String>, String, String, Option<String>);
+    let mut rows: Vec<Row> = Vec::new();
+    let mut collect = |sql: &str, rows: &mut Vec<Row>| {
+        let Ok(mut stmt) = conn.prepare(sql) else {
+            return;
+        };
+        let mapped = stmt.query_map((), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        });
+        if let Ok(iter) = mapped {
+            for row in iter.flatten() {
+                rows.push(row);
+            }
+        }
+    };
+    collect(
+        "SELECT i.path, i.name, i.icon_path, c.game_version, c.loader, c.loader_version          FROM instances i JOIN instance_content_sets c ON c.id = i.applied_content_set_id",
+        &mut rows,
+    );
+    if rows.is_empty() {
+        collect(
+            "SELECT path, name, icon_path, game_version, mod_loader, mod_loader_version FROM profiles",
+            &mut rows,
+        );
+    }
+
+    rows.into_iter()
+        .filter_map(|(path, name, icon_path, game_version, loader_raw, loader_version)| {
+            if game_version.trim().is_empty() {
+                return None;
+            }
+            let folder = if Path::new(&path).is_absolute() {
+                PathBuf::from(&path)
+            } else {
+                profiles_root.join(&path)
+            };
+            if !folder.is_dir() {
+                return None;
+            }
+            let game = if folder.join("profile").is_dir() {
+                folder.join("profile")
+            } else {
+                folder.clone()
+            };
+            let loader = match loader_raw.to_lowercase().as_str() {
+                "fabric" => "fabric",
+                "quilt" => "quilt",
+                "forge" => "forge",
+                "neoforge" => "neoforge",
+                _ => "vanilla",
+            };
+            let icon = icon_path
+                .as_deref()
+                .and_then(|raw| {
+                    let candidate = if Path::new(raw).is_absolute() {
+                        PathBuf::from(raw)
+                    } else {
+                        folder.join(raw)
+                    };
+                    candidate
+                        .is_file()
+                        .then(|| candidate.display().to_string())
+                })
+                .or_else(|| icon_in(&folder));
+            let title = if name.trim().is_empty() {
+                folder.file_name()?.to_string_lossy().to_string()
+            } else {
+                name
+            };
+            Some(ExternalProfile {
+                launcher: launcher.into(),
+                name: title,
+                path: game.display().to_string(),
+                mc_version: game_version,
+                loader: loader.into(),
+                loader_version: loader_version.unwrap_or_default(),
+                icon,
+            })
+        })
+        .collect()
 }
 
 fn read_modrinth_profile(launcher: &str, folder: &Path) -> Option<ExternalProfile> {
