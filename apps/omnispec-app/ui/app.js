@@ -40,7 +40,7 @@
   const FX_STYLES = { wave: "Волна", dot: "Точка", ring: "Кольцо", cross: "Крест", off: "Выкл" };
 
   /** Фоновая анимация: звёздочки, пыль, палочки, снег. */
-  const AMBIENT_STYLES = { stars: "Звёзды", dust: "Пыль", sticks: "Палочки", snow: "Снег", flakes: "Снежинки", off: "Выкл" };
+  const AMBIENT_STYLES = { stars: "Звёзды", dust: "Пыль", sticks: "Палочки", snow: "Снег", flakes: "Снежинки", leaves: "Листья", petals: "Лепестки", butterflies: "Бабочки", hearts: "Сердечки", off: "Выкл" };
 
   function rgbOf(hex) {
     const clean = String(hex || "#000").replace("#", "");
@@ -354,6 +354,9 @@
       if (style === "snow") return mul(Math.max(30, Math.min(140, Math.round(area / 15000))));
       if (style === "dust") return mul(Math.max(40, Math.min(180, Math.round(area / 11000))));
       if (style === "sticks") return mul(Math.max(16, Math.min(70, Math.round(area / 26000))));
+      if (style === "leaves" || style === "petals") return mul(Math.max(20, Math.min(90, Math.round(area / 21000))));
+      if (style === "hearts") return mul(Math.max(12, Math.min(50, Math.round(area / 32000))));
+      if (style === "butterflies") return mul(Math.max(6, Math.min(26, Math.round(area / 52000))));
       return mul(Math.max(34, Math.min(170, Math.round(area / 12000))));
     }
 
@@ -372,6 +375,21 @@
       }
       if (style === "snow") {
         return { ...base, r: rand(0.9, 2.3) * scale, vy: rand(7, 20), drift: rand(-10, 10), sway: rand(0.4, 1.4), kind: "dot" };
+      }
+      if (style === "leaves") {
+        // лист: падает, качается и крутится
+        return { ...base, s: rand(4, 8) * scale, vy: rand(12, 30), drift: rand(-8, 8), spin: rand(-1.2, 1.2), rot: rand(0, Math.PI), sway: rand(0.5, 1.3), kind: "leaf" };
+      }
+      if (style === "petals") {
+        // лепесток: круглее листа, без черенка
+        return { ...base, s: rand(3.5, 7) * scale, vy: rand(10, 26), drift: rand(-8, 8), spin: rand(-1, 1), rot: rand(0, Math.PI), sway: rand(0.5, 1.3), kind: "petal" };
+      }
+      if (style === "hearts") {
+        return { ...base, s: rand(3.5, 6.5) * scale, vy: rand(8, 20), drift: rand(-7, 7), spin: rand(-0.7, 0.7), rot: rand(0, Math.PI), sway: rand(0.4, 1.1), kind: "heart" };
+      }
+      if (style === "butterflies") {
+        // бабочка: волнистый полёт, крылья машут
+        return { ...base, s: rand(5, 9) * scale, vy: rand(6, 16), wander: rand(0.5, 1.2), flap: rand(9, 15), kind: "butterfly" };
       }
       // звёзды: часть — четырёхлучевые искры, остальные — точки
       return { ...base, r: rand(0.6, 1.9) * scale, vy: rand(5, 18), drift: rand(-6, 6), spark: Math.random() < 0.12, kind: "star" };
@@ -432,6 +450,83 @@
       ctx.restore();
     }
 
+    function drawLeaf(p) {
+      ctx.save();
+      ctx.globalAlpha = p.alpha * 0.9;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = ink;
+      ctx.beginPath();
+      ctx.moveTo(0, -p.s);
+      ctx.quadraticCurveTo(p.s * 0.85, -p.s * 0.05, 0, p.s);
+      ctx.quadraticCurveTo(-p.s * 0.85, -p.s * 0.05, 0, -p.s);
+      ctx.closePath();
+      ctx.fill();
+      // черенок
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = Math.max(0.7, p.s * 0.12);
+      ctx.beginPath();
+      ctx.moveTo(0, p.s * 0.85);
+      ctx.lineTo(0, p.s * 1.3);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawPetal(p) {
+      ctx.save();
+      ctx.globalAlpha = p.alpha * 0.85;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = ink;
+      ctx.beginPath();
+      ctx.moveTo(0, -p.s);
+      ctx.quadraticCurveTo(p.s * 1.05, -p.s * 0.1, 0, p.s);
+      ctx.quadraticCurveTo(-p.s * 1.05, -p.s * 0.1, 0, -p.s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawHeart(p) {
+      ctx.save();
+      ctx.globalAlpha = p.alpha * 0.9;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = ink;
+      const s = p.s;
+      ctx.beginPath();
+      ctx.moveTo(0, s * 0.95);
+      ctx.bezierCurveTo(-s * 1.5, s * 0.15, -s * 0.95, -s * 0.95, 0, -s * 0.3);
+      ctx.bezierCurveTo(s * 0.95, -s * 0.95, s * 1.5, s * 0.15, 0, s * 0.95);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawButterfly(p, time) {
+      // крылья машут: ширина крыльев качается от нуля до полного размаха
+      const flap = Math.abs(Math.sin(time * p.flap + p.phase));
+      const wing = p.s * (0.3 + 0.7 * flap);
+      ctx.save();
+      ctx.globalAlpha = p.alpha;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = ink;
+      // верхние крылья
+      ctx.beginPath();
+      ctx.ellipse(-wing * 0.75, -p.s * 0.3, wing, p.s * 0.62, -0.45, 0, Math.PI * 2);
+      ctx.ellipse(wing * 0.75, -p.s * 0.3, wing, p.s * 0.62, 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      // нижние крылья
+      ctx.beginPath();
+      ctx.ellipse(-wing * 0.6, p.s * 0.38, wing * 0.72, p.s * 0.42, 0.35, 0, Math.PI * 2);
+      ctx.ellipse(wing * 0.6, p.s * 0.38, wing * 0.72, p.s * 0.42, -0.35, 0, Math.PI * 2);
+      ctx.fill();
+      // тельце
+      ctx.fillRect(-p.s * 0.13, -p.s * 0.75, p.s * 0.26, p.s * 1.5);
+      ctx.restore();
+    }
+
     function drawStick(p) {
       ctx.save();
       ctx.globalAlpha = p.alpha * 0.7;
@@ -452,13 +547,22 @@
         const p = particles[i];
         p.y += p.vy * dt;
         p.x += (p.drift || 0) * dt;
-        if (p.kind === "stick" || p.kind === "flake") p.rot += p.spin * dt;
-        if ((p.kind === "dot" || p.kind === "flake") && p.sway) p.x += Math.sin(time * p.sway + p.phase) * 6 * dt;
+        if (p.kind === "stick" || p.kind === "flake" || p.kind === "leaf" || p.kind === "petal" || p.kind === "heart") p.rot += p.spin * dt;
+        if ((p.kind === "dot" || p.kind === "flake" || p.kind === "leaf" || p.kind === "petal" || p.kind === "heart") && p.sway) p.x += Math.sin(time * p.sway + p.phase) * 6 * dt;
+        if (p.kind === "butterfly") {
+          // волнистый полёт: виляет из стороны в сторону и кренится на поворотах
+          p.x += Math.sin(time * p.wander + p.phase) * 34 * dt;
+          p.rot = Math.cos(time * p.wander + p.phase) * 0.55;
+        }
         const gone = p.vy > 0 ? p.y > height + 40 : p.y < -40;
         if (gone || p.x < -60 || p.x > width + 60) { particles[i] = spawn(false); continue; }
         if (p.kind === "star") drawStar(p, time);
         else if (p.kind === "stick") drawStick(p);
         else if (p.kind === "flake") drawFlake(p);
+        else if (p.kind === "leaf") drawLeaf(p);
+        else if (p.kind === "petal") drawPetal(p);
+        else if (p.kind === "heart") drawHeart(p);
+        else if (p.kind === "butterfly") drawButterfly(p, time);
         else drawDot(p);
       }
       ctx.globalAlpha = 1;
