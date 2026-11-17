@@ -89,7 +89,10 @@
   /** Сюда движок частиц кладёт пересчёт цвета (тема меняется раньше его создания). */
   let ambientInkRefresh = null;
 
-  function applyTheme(name) {
+  /** live=true — живое обновление во время перетаскивания в пикере:
+   *  без перерисовки слоя и перечитывания чернил частиц (getComputedStyle
+   *  на каждый тик — главный источник лагов). */
+  function applyTheme(name, live) {
     const theme = themeOf(name);
     const dark = luminance(theme.bg) < 0.4;
     const step = dark ? theme.text : "#000000";
@@ -142,10 +145,12 @@
     document.body.dataset.theme = valid ? name : "dark";
     // подложка поверх обоев по умолчанию берёт цвет темы
     applyThemeTint();
-    forceRepaint();
-    // частицы фона подстраиваются под тему: тёмные на светлой, светлые на тёмной
-    if (ambientInkRefresh) ambientInkRefresh();
-    trailFx.refreshInk();
+    if (!live) {
+      forceRepaint();
+      // частицы фона подстраиваются под тему: тёмные на светлой, светлые на тёмной
+      if (ambientInkRefresh) ambientInkRefresh();
+      trailFx.refreshInk();
+    }
     return valid ? name : "dark";
   }
 
@@ -1099,6 +1104,21 @@
       theme_text: state.customTheme.text
     };
     api.saveSettings(state.settings).catch(() => {});
+  }
+
+  let saveThemeTimer = null;
+  /** Отложенная запись своей темы: во время перетаскивания в пикере
+   *  не пишем файл на каждый тик мыши. */
+  function saveCustomThemeSoon() {
+    if (saveThemeTimer) return;
+    saveThemeTimer = setTimeout(() => { saveThemeTimer = null; saveCustomTheme(); }, 600);
+  }
+
+  let saveSettingsTimer = null;
+  /** Отложенная запись настроек (тинт и т.п.) — то же самое. */
+  function saveSettingsSoon() {
+    if (saveSettingsTimer) return;
+    saveSettingsTimer = setTimeout(() => { saveSettingsTimer = null; api.saveSettings(state.settings).catch(() => {}); }, 600);
   }
 
   /* ==================== ЦВЕТА ИЗ ФОНА ==================== */
@@ -7294,27 +7314,39 @@
     const bindColor = (key, id) => {
       const input = $(`#${id}`);
       if (!input) return;
-      const apply = (value) => {
+      let queued = false;
+      const paintLive = () => {
+        queued = false;
+        state.theme = applyTheme("custom", true);
+      };
+      const apply = (value, final) => {
         if (!/^#[0-9a-f]{6}$/i.test(String(value))) return;
         state.customTheme[key] = String(value).toLowerCase();
         input.value = state.customTheme[key];
         const hex = $(`#${id}-hex`);
         if (hex) hex.textContent = state.customTheme[key];
-        state.theme = applyTheme("custom");
-        saveCustomTheme();
+        if (final) {
+          state.theme = applyTheme("custom");
+          saveCustomTheme();
+        } else {
+          // живое обновление — не чаще раза в кадр и без записи на диск
+          if (!queued) { queued = true; requestAnimationFrame(paintLive); }
+          saveCustomThemeSoon();
+        }
       };
-      input.addEventListener("input", () => apply(input.value));
+      input.addEventListener("input", () => apply(input.value, false));
+      input.addEventListener("change", () => apply(input.value, true));
       const pick = $(`#${id}-pick`);
       if (pick) pick.addEventListener("click", async () => {
         // главное назначение кнопки — цвет ПОД ФОН: берём палитру обоев
         const palette = await wallpaperPalette();
-        if (palette && palette[key]) { apply(palette[key]); return; }
+        if (palette && palette[key]) { apply(palette[key], true); return; }
         // обоев нет (или картинка недоступна) — обычная пипетка
         if (window.EyeDropper) {
           try {
             const result = await new window.EyeDropper().open();
             const value = String(result.sRGBHex || "").toLowerCase();
-            if (value) apply(value);
+            if (value) apply(value, true);
             return;
           } catch (error) { /* отменили выбор — открываем обычный выбор цвета */ }
         }
@@ -7323,16 +7355,26 @@
     };
     const tintColor = $("#tint-color");
     if (tintColor) {
-      const applyTint = (value) => {
+      let tintQueued = false;
+      const applyTint = (value, final) => {
         if (!/^#[0-9a-f]{6}$/i.test(String(value))) return;
         state.settings = { ...(state.settings || {}), theme_tint: String(value).toLowerCase() };
         tintColor.value = state.settings.theme_tint;
         const hex = $("#tint-color-hex");
         if (hex) hex.textContent = state.settings.theme_tint;
-        applyThemeTint();
-        api.saveSettings(state.settings).catch(() => {});
+        if (final) {
+          applyThemeTint();
+          api.saveSettings(state.settings).catch(() => {});
+        } else {
+          if (!tintQueued) {
+            tintQueued = true;
+            requestAnimationFrame(() => { tintQueued = false; applyThemeTint(); });
+          }
+          saveSettingsSoon();
+        }
       };
-      tintColor.addEventListener("input", () => applyTint(tintColor.value));
+      tintColor.addEventListener("input", () => applyTint(tintColor.value, false));
+      tintColor.addEventListener("change", () => applyTint(tintColor.value, true));
       const auto = $("#tint-auto");
       if (auto) auto.addEventListener("click", () => {
         state.settings = { ...(state.settings || {}), theme_tint: "" };
@@ -7342,14 +7384,21 @@
       });
     }
     const tintAlpha = $("#tint-alpha");
-    if (tintAlpha) tintAlpha.addEventListener("input", (event) => {
-      const value = Math.min(100, Math.max(0, Number(event.target.value)));
-      state.wall.dim = value;
-      state.settings = { ...(state.settings || {}), wallpaper_dim: value };
-      const label = $("#tint-alpha-val");
-      if (label) label.textContent = `${value}%`;
-      applyWallpaper(state.wall);
-    });
+    if (tintAlpha) {
+      let alphaQueued = false;
+      tintAlpha.addEventListener("input", (event) => {
+        const value = Math.min(100, Math.max(0, Number(event.target.value)));
+        state.wall.dim = value;
+        state.settings = { ...(state.settings || {}), wallpaper_dim: value };
+        const label = $("#tint-alpha-val");
+        if (label) label.textContent = `${value}%`;
+        // applyWallpaper тянет подготовку слоя — не чаще раза в кадр
+        if (!alphaQueued) {
+          alphaQueued = true;
+          requestAnimationFrame(() => { alphaQueued = false; applyWallpaper(state.wall); });
+        }
+      });
+    }
     bindColor("bg", "theme-bg");
     bindColor("accent", "theme-accent");
     bindColor("text", "theme-text");
@@ -9472,6 +9521,20 @@
     on("#instance-search", "input", renderSidebar);
 
     $$("[data-win]").forEach((btn) => btn.addEventListener("click", () => api.window(btn.dataset.win).catch(() => {})));
+    // перетаскивание окна за шапку — в оконном и развёрнутом режимах;
+    // двойной клик по шапке — развернуть/свернуть, как в Windows
+    const titlebar = $(".titlebar");
+    if (titlebar) {
+      titlebar.addEventListener("mousedown", (event) => {
+        if (event.button !== 0 || !IS_APP) return;
+        if (event.target.closest("button")) return;
+        api.window("drag").catch(() => {});
+      });
+      titlebar.addEventListener("dblclick", (event) => {
+        if (!IS_APP || event.target.closest("button")) return;
+        api.window("maximize").catch(() => {});
+      });
+    }
     $$("[data-close-modal]").forEach((btn) => btn.addEventListener("click", () => { $("#modal-create").hidden = true; }));
     $$("[data-close-update]").forEach((btn) => btn.addEventListener("click", () => { $("#modal-update").hidden = true; }));
     $("#modal-update").addEventListener("mousedown", (event) => { if (event.target.id === "modal-update") $("#modal-update").hidden = true; });

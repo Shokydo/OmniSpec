@@ -2620,6 +2620,7 @@ fn instance_path(state: State<'_, AppState>, instance_id: String) -> Result<Stri
 #[tauri::command]
 fn window_action(window: tauri::WebviewWindow, action: String) -> Result<(), String> {
     match action.as_str() {
+        "drag" => window.start_dragging(),
         "minimize" => window.minimize(),
         "maximize" => {
             if window.is_maximized().unwrap_or(false) {
