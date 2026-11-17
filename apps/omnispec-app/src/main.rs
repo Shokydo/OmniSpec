@@ -177,11 +177,13 @@ async fn install_instance(
 ) -> Result<Value, String> {
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let reporter = reporter_for(&app, &instance_id);
-    loaders::ensure_profile(&state.http, &state.paths, &meta, &reporter)
+    // id возвращаемый ensure_profile — реальный: инсталлятор мог назвать
+    // папку профиля иначе, чем version_id() ожидает.
+    let version_id = loaders::ensure_profile(&state.http, &state.paths, &meta, &reporter)
         .await
         .map_err(err)?;
     let report =
-        game::install::ensure_installed(&state.http, &state.paths, &meta.version_id(), &reporter)
+        game::install::ensure_installed(&state.http, &state.paths, &version_id, &reporter)
             .await
             .map_err(err)?;
     Ok(json!({

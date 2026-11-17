@@ -173,7 +173,9 @@ pub async fn install_forge(
 
     let url = format!("{FORGE_MAVEN}/{mc_version}-{forge_version}/forge-{mc_version}-{forge_version}-installer.jar");
     let file_name = format!("forge-{mc_version}-{forge_version}-installer.jar");
-    run_installer(http, paths, &url, &file_name, "forge", reporter).await
+    let id = run_installer(http, paths, &url, &file_name, "forge", reporter).await?;
+    let expected = format!("forge-{mc_version}-{forge_version}");
+    Ok(resolve_installed_id(paths, &id, &expected))
 }
 
 pub async fn install_neoforge(
@@ -188,21 +190,59 @@ pub async fn install_neoforge(
 
     let url = format!("{NEOFORGE_MAVEN}/{neoforge_version}/neoforge-{neoforge_version}-installer.jar");
     let file_name = format!("neoforge-{neoforge_version}-installer.jar");
-    let mut id = run_installer(http, paths, &url, &file_name, "neoforge", reporter).await?;
+    let id = run_installer(http, paths, &url, &file_name, "neoforge", reporter).await?;
 
-    // Некоторые версии инсталлятора создают папку вида "1.21.4-neoforge-21.4.100".
-    if !paths.version_file(&id).exists() {
-        if let Some(fixed) = find_profile_with_json(paths, &id) {
-            id = fixed;
-        }
+    // Некоторые версии инсталлятора создают папку вида "1.21.4-neoforge-21.4.100"
+    // или кладут внутрь json с другим именем — ищем профиль по внутреннему id.
+    let expected = format!("neoforge-{mc_version}-{neoforge_version}");
+    Ok(resolve_installed_id(paths, &id, &expected))
+}
+
+/// Реальный id установленного профиля: папка, внутри которой лежит json
+/// с внутренним id из `expected` (или хотя бы любой json).
+fn resolve_installed_id(paths: &Paths, installed: &str, expected: &str) -> String {
+    if paths.version_file(installed).exists() {
+        return installed.to_string();
     }
-    Ok(id)
+    if let Some(found) = find_profile_with_json(paths, expected) {
+        return found;
+    }
+    if let Some(found) = find_profile_with_json(paths, installed) {
+        return found;
+    }
+    installed.to_string()
 }
 
 fn find_profile_with_json(paths: &Paths, id: &str) -> Option<String> {
     list_version_ids(paths)
         .into_iter()
-        .find(|candidate| candidate.contains(id) && paths.version_file(candidate).exists())
+        .find(|candidate| {
+            if !candidate.contains(id) && candidate != id {
+                // папка может называться иначе — смотрим внутренний id json
+                return profile_json_id(paths, candidate).as_deref() == Some(id);
+            }
+            paths.version_file(candidate).exists() || profile_json_id(paths, candidate).is_some()
+        })
+}
+
+/// Внутренний `id` из json профиля в папке (имя файла может отличаться).
+fn profile_json_id(paths: &Paths, folder: &str) -> Option<String> {
+    let dir = paths.version_dir(folder);
+    let file = if paths.version_file(folder).exists() {
+        paths.version_file(folder)
+    } else {
+        std::fs::read_dir(&dir)
+            .ok()?
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))?
+    };
+    let text = std::fs::read_to_string(file).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value
+        .get("id")
+        .and_then(|id| id.as_str())
+        .map(|id| id.to_string())
 }
 
 /// Папка для ручной установки (на случай, если инсталлятор попросит путь).

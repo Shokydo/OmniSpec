@@ -87,6 +87,21 @@ pub async fn fetch_manifest(http: &Http, paths: &Paths, max_age: Duration) -> Re
     }
 }
 
+/// Найти json профиля в папке версии: обычно `<id>.json`, но инсталляторы
+/// загрузчиков иногда кладут файл с другим именем.
+pub fn version_json_file(paths: &Paths, id: &str) -> Option<std::path::PathBuf> {
+    let file = paths.version_file(id);
+    if file.exists() {
+        return Some(file);
+    }
+    let dir = paths.version_dir(id);
+    std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+}
+
 /// Скачать `version.json` по id, если его ещё нет локально.
 pub async fn ensure_version_json(
     http: &Http,
@@ -94,8 +109,7 @@ pub async fn ensure_version_json(
     manifest: &VersionManifest,
     id: &str,
 ) -> Result<VersionJson> {
-    let file = paths.version_file(id);
-    if file.exists() {
+    if let Some(file) = version_json_file(paths, id) {
         return read_version_json(&file);
     }
     let entry = manifest
@@ -121,10 +135,7 @@ pub fn resolve_local(paths: &Paths, id: &str) -> Option<ResolvedVersion> {
     let mut chain = Vec::new();
     let mut current = id.to_string();
     for _ in 0..8 {
-        let file = paths.version_file(&current);
-        if !file.exists() {
-            return None;
-        }
+        let file = version_json_file(paths, &current)?;
         let json = read_version_json(&file).ok()?;
         let parent = json.inherits_from.clone();
         chain.push(json);

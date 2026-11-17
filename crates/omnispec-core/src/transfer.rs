@@ -71,13 +71,30 @@ fn instance_roots() -> Vec<(String, PathBuf)> {
 
     if let Some(base) = appdata() {
         push("prism", base.join("PrismLauncher").join("instances"));
+        push("polymc", base.join("PolyMC").join("instances"));
         push("multimc", base.join("MultiMC").join("instances"));
+        // Modrinth App: до 0.8 — com.modrinth.theseus, с 0.8 — ModrinthApp.
+        push("modrinth", base.join("ModrinthApp").join("profiles"));
         push(
             "modrinth",
             base.join("com.modrinth.theseus").join("profiles"),
         );
+        // AstralRinth — форк Modrinth App, тот же формат profile.json.
+        push("astralrinth", base.join("AstralRinthApp").join("profiles"));
+        push("atlauncher", base.join("ATLauncher").join("Instances"));
+        push("atlauncher", base.join("ATLauncher").join("instances"));
+        push(
+            "curseforge",
+            base.join("CurseForge").join("Minecraft").join("Instances"),
+        );
+        push("gdlauncher", base.join("gdlauncher_next").join("instances"));
+        push(
+            "gdlauncher",
+            base.join("gdlauncher_carbon").join("data").join("instances"),
+        );
     }
     if let Some(base) = localappdata() {
+        push("astralrinth", base.join("AstralRinthApp").join("profiles"));
         push(
             "modrinth",
             base.join("com.modrinth.theseus").join("profiles"),
@@ -93,16 +110,65 @@ fn instance_roots() -> Vec<(String, PathBuf)> {
             home.join(".var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances"),
         );
         push(
+            "polymc",
+            home.join(".local").join("share").join("PolyMC").join("instances"),
+        );
+        push(
+            "polymc",
+            home.join(".var/app/org.polymc.PolyMC/data/PolyMC/instances"),
+        );
+        push(
             "multimc",
             home.join(".local").join("share").join("multimc").join("instances"),
         );
+        push("modrinth", home.join(".config").join("ModrinthApp").join("profiles"));
         push(
             "modrinth",
             home.join(".local").join("share").join("com.modrinth.theseus").join("profiles"),
         );
         push(
             "modrinth",
+            home.join(".var/app/com.modrinth.ModrinthApp/data/ModrinthApp/profiles"),
+        );
+        push(
+            "modrinth",
             home.join(".var/app/com.modrinth.ModrinthApp/data/com.modrinth.theseus/profiles"),
+        );
+        push(
+            "astralrinth",
+            home.join(".config").join("AstralRinthApp").join("profiles"),
+        );
+        push(
+            "atlauncher",
+            home.join(".local").join("share").join("ATLauncher").join("Instances"),
+        );
+        push(
+            "atlauncher",
+            home.join(".local").join("share").join("ATLauncher").join("instances"),
+        );
+        push(
+            "gdlauncher",
+            home.join(".config").join("gdlauncher_next").join("instances"),
+        );
+        push(
+            "gdlauncher",
+            home.join(".local").join("share").join("gdlauncher_carbon").join("data").join("instances"),
+        );
+        // macOS
+        let support = home.join("Library").join("Application Support");
+        push("prism", support.join("PrismLauncher").join("instances"));
+        push("polymc", support.join("PolyMC").join("instances"));
+        push("multimc", support.join("MultiMC").join("instances"));
+        push("modrinth", support.join("ModrinthApp").join("profiles"));
+        push("astralrinth", support.join("AstralRinthApp").join("profiles"));
+        push("atlauncher", support.join("ATLauncher").join("Instances"));
+        push(
+            "curseforge",
+            support.join("CurseForge").join("Minecraft").join("Instances"),
+        );
+        push(
+            "gdlauncher",
+            support.join("gdlauncher_carbon").join("data").join("instances"),
         );
     }
     roots
@@ -147,9 +213,96 @@ struct ModrinthProfile {
     #[serde(default)]
     loader: String,
     #[serde(default)]
-    loader_version: String,
+    loader_version: serde_json::Value,
     #[serde(default)]
     icon: Option<String>,
+    /// Новый формат Modrinth App (0.8+): всё лежит в `metadata`.
+    #[serde(default)]
+    metadata: Option<ModrinthMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModrinthMetadata {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    game_version: String,
+    #[serde(default)]
+    loader: String,
+    #[serde(default)]
+    loader_version: serde_json::Value,
+    #[serde(default)]
+    icon: Option<String>,
+}
+
+/// Версия загрузчика в profile.json: строка ("stable"/"latest"/"0.16.9")
+/// или объект `{"id": "0.16.9"}`.
+fn loader_version_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Object(map) => map
+            .get("id")
+            .and_then(|id| id.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+/// ATLauncher: `instance.json` в корне папки сборки (она же — игровая папка).
+#[derive(Debug, Deserialize)]
+struct AtInstance {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    launcher: Option<AtLauncherInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AtLauncherInfo {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    #[serde(rename = "loaderVersion")]
+    loader_version: Option<AtLoaderVersion>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AtLoaderVersion {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    version: String,
+}
+
+/// CurseForge: `minecraftinstance.json` в папке сборки.
+#[derive(Debug, Deserialize)]
+struct CurseForgeInstance {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    #[serde(rename = "gameVersion")]
+    game_version: String,
+    #[serde(default)]
+    #[serde(rename = "baseModLoader")]
+    base_mod_loader: String,
+}
+
+/// GDLauncher (Next): `config.json` с блоком `loader`.
+#[derive(Debug, Deserialize)]
+struct GdConfig {
+    #[serde(default)]
+    loader: Option<GdLoader>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GdLoader {
+    #[serde(rename = "loaderType")]
+    kind: String,
+    #[serde(rename = "mcVersion")]
+    mc_version: String,
+    #[serde(rename = "loaderVersion")]
+    version: String,
 }
 
 /// Загрузчик по uid компонента Prism/MultiMC.
@@ -186,13 +339,15 @@ pub fn scan_external() -> Vec<ExternalProfile> {
             if !folder.is_dir() {
                 continue;
             }
-            if launcher == "modrinth" {
-                if let Some(profile) = read_modrinth_profile(&folder) {
-                    found.push(profile);
-                }
-                continue;
-            }
-            if let Some(profile) = read_mmc_instance(&launcher, &folder) {
+            let profile = match launcher.as_str() {
+                "modrinth" | "astralrinth" => read_modrinth_profile(&launcher, &folder),
+                "prism" | "polymc" | "multimc" => read_mmc_instance(&launcher, &folder),
+                "atlauncher" => read_atlauncher_instance(&folder),
+                "curseforge" => read_curseforge_instance(&folder),
+                "gdlauncher" => read_gdlauncher_instance(&folder),
+                _ => None,
+            };
+            if let Some(profile) = profile {
                 found.push(profile);
             }
         }
@@ -203,22 +358,41 @@ pub fn scan_external() -> Vec<ExternalProfile> {
     found
 }
 
-fn read_modrinth_profile(folder: &Path) -> Option<ExternalProfile> {
+fn read_modrinth_profile(launcher: &str, folder: &Path) -> Option<ExternalProfile> {
     let file = folder.join("profile.json");
     if !file.is_file() {
         return None;
     }
     let text = std::fs::read_to_string(&file).ok()?;
     let profile: ModrinthProfile = serde_json::from_str(&text).ok()?;
-    if profile.game_version.trim().is_empty() {
+    // Новый формат: поля в `metadata`; старый — плоско в корне.
+    let (name_raw, game_version, loader_raw, loader_version_raw, icon_raw) =
+        if let Some(meta) = &profile.metadata {
+            (
+                meta.name.clone(),
+                meta.game_version.clone(),
+                meta.loader.clone(),
+                loader_version_text(&meta.loader_version),
+                meta.icon.clone(),
+            )
+        } else {
+            (
+                profile.name.clone(),
+                profile.game_version.clone(),
+                profile.loader.clone(),
+                loader_version_text(&profile.loader_version),
+                profile.icon.clone(),
+            )
+        };
+    if game_version.trim().is_empty() {
         return None;
     }
-    let name = if profile.name.trim().is_empty() {
+    let name = if name_raw.trim().is_empty() {
         folder.file_name()?.to_string_lossy().to_string()
     } else {
-        profile.name.clone()
+        name_raw
     };
-    let loader = match profile.loader.to_lowercase().as_str() {
+    let loader = match loader_raw.to_lowercase().as_str() {
         "fabric" => "fabric",
         "quilt" => "quilt",
         "forge" => "forge",
@@ -232,14 +406,177 @@ fn read_modrinth_profile(folder: &Path) -> Option<ExternalProfile> {
         folder.to_path_buf()
     };
     Some(ExternalProfile {
-        launcher: "modrinth".into(),
+        launcher: launcher.into(),
         name,
         path: game.display().to_string(),
-        mc_version: profile.game_version,
+        mc_version: game_version,
         loader: loader.into(),
-        loader_version: profile.loader_version,
-        icon: profile.icon.or_else(|| icon_in(folder)),
+        loader_version: loader_version_raw,
+        icon: icon_raw.or_else(|| icon_in(folder)),
     })
+}
+
+/// ATLauncher: папка сборки — она же игровая, версия в `instance.json:id`.
+fn read_atlauncher_instance(folder: &Path) -> Option<ExternalProfile> {
+    let file = folder.join("instance.json");
+    if !file.is_file() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&file).ok()?;
+    let parsed: AtInstance = serde_json::from_str(&text).ok()?;
+    if parsed.id.trim().is_empty() {
+        return None;
+    }
+    let (name, loader, loader_version) = match &parsed.launcher {
+        Some(info) => {
+            let name = if info.name.trim().is_empty() {
+                folder.file_name()?.to_string_lossy().to_string()
+            } else {
+                info.name.clone()
+            };
+            let (loader, version) = match &info.loader_version {
+                Some(found) => (
+                    match found.kind.to_lowercase().as_str() {
+                        "fabric" => "fabric",
+                        "quilt" => "quilt",
+                        "forge" => "forge",
+                        "neoforge" => "neoforge",
+                        _ => "vanilla",
+                    },
+                    found.version.clone(),
+                ),
+                None => ("vanilla", String::new()),
+            };
+            (name, loader, version)
+        }
+        None => (
+            folder.file_name()?.to_string_lossy().to_string(),
+            "vanilla",
+            String::new(),
+        ),
+    };
+    Some(ExternalProfile {
+        launcher: "atlauncher".into(),
+        name,
+        path: folder.display().to_string(),
+        mc_version: parsed.id,
+        loader: loader.into(),
+        loader_version,
+        icon: icon_in(folder),
+    })
+}
+
+/// CurseForge: `minecraftinstance.json`, загрузчик — `baseModLoader`
+/// вида `forge-47.2.0` / `fabric-0.16.9-1.21.1` / `neoforge-21.1.219`.
+fn read_curseforge_instance(folder: &Path) -> Option<ExternalProfile> {
+    let file = folder.join("minecraftinstance.json");
+    if !file.is_file() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&file).ok()?;
+    let parsed: CurseForgeInstance = serde_json::from_str(&text).ok()?;
+    if parsed.game_version.trim().is_empty() {
+        return None;
+    }
+    let name = if parsed.name.trim().is_empty() {
+        folder.file_name()?.to_string_lossy().to_string()
+    } else {
+        parsed.name.clone()
+    };
+    let (loader, loader_version) = parse_curseforge_loader(&parsed.base_mod_loader, &parsed.game_version);
+    Some(ExternalProfile {
+        launcher: "curseforge".into(),
+        name,
+        path: folder.display().to_string(),
+        mc_version: parsed.game_version,
+        loader: loader.into(),
+        loader_version,
+        icon: icon_in(folder),
+    })
+}
+
+fn parse_curseforge_loader(base: &str, mc_version: &str) -> (&'static str, String) {
+    let base = base.trim().to_lowercase();
+    let (kind, rest) = match base.split_once('-') {
+        Some(pair) => pair,
+        None => return ("vanilla", String::new()),
+    };
+    let loader = match kind {
+        "fabric" => "fabric",
+        "quilt" => "quilt",
+        "forge" => "forge",
+        "neoforge" => "neoforge",
+        _ => return ("vanilla", String::new()),
+    };
+    // fabric/quilt пишут версию загрузчика вместе с версией игры: 0.16.9-1.21.1
+    let version = rest
+        .strip_suffix(&format!("-{mc_version}"))
+        .unwrap_or(rest)
+        .to_string();
+    (loader, version)
+}
+
+/// GDLauncher: `config.json` с блоком `loader` (Next) или `instance.json` (Carbon).
+fn read_gdlauncher_instance(folder: &Path) -> Option<ExternalProfile> {
+    let name = folder.file_name()?.to_string_lossy().to_string();
+    if let Ok(text) = std::fs::read_to_string(folder.join("config.json")) {
+        if let Ok(parsed) = serde_json::from_str::<GdConfig>(&text) {
+            if let Some(loader) = parsed.loader {
+                if !loader.mc_version.trim().is_empty() {
+                    let kind = match loader.kind.to_lowercase().as_str() {
+                        "fabric" => "fabric",
+                        "quilt" => "quilt",
+                        "forge" => "forge",
+                        "neoforge" => "neoforge",
+                        _ => "vanilla",
+                    };
+                    return Some(ExternalProfile {
+                        launcher: "gdlauncher".into(),
+                        name,
+                        path: folder.display().to_string(),
+                        mc_version: loader.mc_version,
+                        loader: kind.into(),
+                        loader_version: loader.version,
+                        icon: icon_in(folder),
+                    });
+                }
+            }
+        }
+    }
+    // Carbon: instance.json с плоскими полями — пробуем известные ключи.
+    if let Ok(text) = std::fs::read_to_string(folder.join("instance.json")) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+            let get = |keys: &[&str]| {
+                keys.iter()
+                    .find_map(|key| value.get(*key).and_then(|v| v.as_str()))
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let mc_version = get(&["minecraft_version", "mc_version", "game_version", "version"]);
+            if !mc_version.trim().is_empty() {
+                let title = get(&["name"]);
+                let loader_raw = get(&["modloader", "loader", "loader_type", "loaderType"]);
+                let loader = match loader_raw.to_lowercase().as_str() {
+                    "fabric" => "fabric",
+                    "quilt" => "quilt",
+                    "forge" => "forge",
+                    "neoforge" => "neoforge",
+                    _ => "vanilla",
+                };
+                let loader_version = get(&["modloader_version", "loader_version", "loaderVersion"]);
+                return Some(ExternalProfile {
+                    launcher: "gdlauncher".into(),
+                    name: if title.trim().is_empty() { name } else { title },
+                    path: folder.display().to_string(),
+                    mc_version,
+                    loader: loader.into(),
+                    loader_version,
+                    icon: icon_in(folder),
+                });
+            }
+        }
+    }
+    None
 }
 
 fn read_mmc_instance(launcher: &str, folder: &Path) -> Option<ExternalProfile> {

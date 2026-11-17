@@ -2376,7 +2376,12 @@
       { launcher: "prism", name: "Fabulously Optimized", path: "C:\\Users\\Vanya\\AppData\\Roaming\\PrismLauncher\\instances\\fabulously-optimized\\.minecraft", mc_version: "1.21.4", loader: "fabric", loader_version: "0.16.9", icon: null },
       { launcher: "prism", name: "Create: Astral", path: "C:\\Users\\Vanya\\AppData\\Roaming\\PrismLauncher\\instances\\create-astral\\.minecraft", mc_version: "1.18.2", loader: "forge", loader_version: "40.2.10", icon: null },
       { launcher: "multimc", name: "Vanilla 1.20.1", path: "C:\\Users\\Vanya\\AppData\\Roaming\\MultiMC\\instances\\vanilla120\\.minecraft", mc_version: "1.20.1", loader: "vanilla", loader_version: "", icon: null },
-      { launcher: "modrinth", name: "Cobblemon Official", path: "C:\\Users\\Vanya\\AppData\\Roaming\\com.modrinth.theseus\\profiles\\cobblemon", mc_version: "1.21.1", loader: "fabric", loader_version: "0.16.5", icon: null }
+      { launcher: "modrinth", name: "Cobblemon Official", path: "C:\\Users\\Vanya\\AppData\\Roaming\\ModrinthApp\\profiles\\cobblemon", mc_version: "1.21.1", loader: "fabric", loader_version: "0.16.5", icon: null },
+      { launcher: "astralrinth", name: "Astral Realms", path: "C:\\Users\\Vanya\\AppData\\Roaming\\AstralRinthApp\\profiles\\astral-realms", mc_version: "1.21.4", loader: "neoforge", loader_version: "21.4.100", icon: null },
+      { launcher: "atlauncher", name: "RLCraft", path: "C:\\Users\\Vanya\\AppData\\Roaming\\ATLauncher\\Instances\\rlcraft", mc_version: "1.12.2", loader: "forge", loader_version: "14.23.5.2860", icon: null },
+      { launcher: "curseforge", name: "FTB Skies", path: "C:\\Users\\Vanya\\AppData\\Roaming\\CurseForge\\Minecraft\\Instances\\FTB Skies", mc_version: "1.20.1", loader: "forge", loader_version: "47.2.0", icon: null },
+      { launcher: "gdlauncher", name: "SevTech Ages", path: "C:\\Users\\Vanya\\AppData\\Roaming\\gdlauncher_next\\instances\\SevTech Ages", mc_version: "1.12.2", loader: "forge", loader_version: "14.23.5.2855", icon: null },
+      { launcher: "polymc", name: "Better MC", path: "C:\\Users\\Vanya\\AppData\\Roaming\\PolyMC\\instances\\better-mc\\.minecraft", mc_version: "1.20.1", loader: "fabric", loader_version: "stable", icon: null }
     ]),
     importExternal: async (payload) => {
       const meta = { ...DEMO.instances[0], id: "demo-" + Date.now(), name: payload.name || "Imported", mc_version: payload.mcVersion, loader: payload.loader ? { type: payload.loader, version: payload.loaderVersion } : { type: "vanilla" } };
@@ -4743,7 +4748,7 @@
           ${cfg.zipLoader && cfg.zipLoader !== "vanilla" ? `<div class="field">
             <label>Версия загрузчика</label>
             <select class="select" id="imp-zip-loader-version">
-              ${cfg.zipLoaderVersions.length ? cfg.zipLoaderVersions.map((option) => `<option value="${esc(option.version)}" ${option.version === cfg.zipLoaderVersion ? "selected" : ""}>${esc(option.version)}</option>`).join("") : `<option value="">загружаем…</option>`}
+              ${cfg.zipLoaderVersions.length ? cfg.zipLoaderVersions.map((option) => `<option value="${esc(option.version)}" ${option.version === cfg.zipLoaderVersion ? "selected" : ""}>${esc(option.version)}${recommendedLoader(cfg.zipLoaderVersions) && option.version === recommendedLoader(cfg.zipLoaderVersions).version ? " ★ рекомендуется" : ""}</option>`).join("") : `<option value="">загружаем…</option>`}
             </select>
           </div>` : ""}
         </div>` : `<div class="imp-note">Архив .mrpack — версия и загрузчик возьмутся из него.</div>`}
@@ -4756,7 +4761,7 @@
     if (cfg.extOpen) {
       const list = cfg.external || [];
       const picked = cfg.extSelected;
-      const launchers = { prism: "Prism", multimc: "MultiMC", modrinth: "Modrinth App" };
+      const launchers = { prism: "Prism", polymc: "PolyMC", multimc: "MultiMC", modrinth: "Modrinth App", astralrinth: "AstralRinth", atlauncher: "ATLauncher", curseforge: "CurseForge", gdlauncher: "GDLauncher" };
       parts.push(`<div class="imp-block">
         <div class="imp-block-head">
           <strong>Найдено сборок: ${list.length}</strong>
@@ -4766,7 +4771,7 @@
           <button class="btn btn-small" id="imp-ext-close">Свернуть</button>
         </div>
         ${cfg.extLoading
-          ? `<div class="add-empty">Смотрим Prism Launcher, MultiMC и Modrinth App…</div>`
+          ? `<div class="add-empty">Смотрим Prism, MultiMC, PolyMC, Modrinth App, AstralRinth, ATLauncher, CurseForge и GDLauncher…</div>`
           : list.length
             ? `<div class="imp-list">${list.map((item) => `
                 <label class="imp-item ${picked.has(item.path) ? "is-picked" : ""}">
@@ -5135,12 +5140,20 @@
       cfg.status = `импортируем ${done + 1} из ${list.length}: ${item.name}`;
       renderDiscover();
       try {
+        // «stable»/«latest» из чужого лаунчера — не версия: подставляем
+        // актуальную стабильную версию загрузчика для этой версии игры.
+        let loaderVersion = item.loader_version || "";
+        if (item.loader && item.loader !== "vanilla" && (!loaderVersion || loaderVersion === "stable" || loaderVersion === "latest")) {
+          const options = await api.loaderVersions(item.loader, item.mc_version).catch(() => []);
+          const current = (options || []).find((option) => option.stable) || (options || [])[0];
+          loaderVersion = current ? current.version : "";
+        }
         last = await api.importExternal({
           path: item.path,
           name: item.name,
           mcVersion: item.mc_version,
           loader: item.loader === "vanilla" ? null : item.loader,
-          loaderVersion: item.loader_version || null,
+          loaderVersion: loaderVersion || null,
           icon: item.icon || null
         });
         cfg.extSelected.delete(item.path);
@@ -8931,6 +8944,7 @@
             ${cfg.loading ? `<div class="add-empty">Загружаем версии…</div>` : versions.length ? versions.map((version) => `
               <button class="mcver-item ${version.id === cfg.mc ? "is-active" : ""}" data-mcver-mc="${esc(version.id)}">
                 <span>${esc(version.id)}</span>
+                ${version.id === latestReleaseId(cfg.versions) ? `<span class="tag">рекомендуется</span>` : ""}
                 ${version.type && version.type !== "release" ? `<span class="tag">${esc(version.type)}</span>` : ""}
               </button>`).join("") : `<div class="add-empty">Ничего не найдено</div>`}
           </div>
@@ -8947,6 +8961,7 @@
                 ? cfg.loaderVersions.map((option) => `
                   <button class="mcver-item ${option.version === cfg.loaderVersion ? "is-active" : ""}" data-mcver-loader-version="${esc(option.version)}">
                     <span>${esc(option.version)}</span>
+                    ${recommendedLoader(cfg.loaderVersions) && option.version === recommendedLoader(cfg.loaderVersions).version ? `<span class="tag">рекомендуется</span>` : ""}
                     ${option.stable ? "" : `<span class="tag">beta</span>`}
                   </button>`).join("")
                 : `<div class="add-empty">Загружаем версии ${esc(loaderName)}…</div>`}
@@ -9002,6 +9017,19 @@
     }
   }
 
+  /** Последняя стабильная версия Minecraft из списка манифеста (рекомендуемая). */
+  function latestReleaseId(versions) {
+    const list = versions || [];
+    const found = list.find((version) => !version.type || version.type === "release");
+    return found ? found.id : ((list[0] || {}).id || "");
+  }
+
+  /** Первая стабильная версия загрузчика — рекомендуемая. */
+  function recommendedLoader(list) {
+    const options = list || [];
+    return options.find((option) => option.stable) || options[0] || null;
+  }
+
   /* ==================== МОДАЛКА СОЗДАНИЯ ==================== */
   async function openCreate(options = {}) {
     const settings = state.settings || {};
@@ -9026,7 +9054,7 @@
     $("#modal-create").hidden = false;
     renderCreateModal();
     state.create.versions = await api.versions((settings.show_snapshots) || false).catch(() => []);
-    state.create.mc = (state.create.versions[0] || {}).id || "1.21.4";
+    state.create.mc = latestReleaseId(state.create.versions) || "1.21.4";
     state.create.name = `Сборка ${state.create.mc}`;
     renderCreateModal();
     await loadLoaderVersions();
@@ -9070,7 +9098,7 @@
         <div class="field">
           <label>Версия</label>
           <select class="select" id="c-mc">
-            ${cfg.versions.map((version) => `<option value="${esc(version.id)}" ${version.id === cfg.mc ? "selected" : ""}>${esc(version.id)}${version.type && version.type !== "release" ? ` (${esc(version.type)})` : ""}</option>`).join("") || `<option value="${esc(cfg.mc)}">${esc(cfg.mc)}</option>`}
+            ${cfg.versions.map((version) => `<option value="${esc(version.id)}" ${version.id === cfg.mc ? "selected" : ""}>${esc(version.id)}${version.type && version.type !== "release" ? ` (${esc(version.type)})` : ""}${version.id === latestReleaseId(cfg.versions) ? " ★ рекомендуется" : ""}</option>`).join("") || `<option value="${esc(cfg.mc)}">${esc(cfg.mc)}</option>`}
           </select>
         </div>
 
@@ -9095,7 +9123,7 @@
         <div class="field" id="c-loader-version-field" ${cfg.loader === "vanilla" ? "hidden" : ""}>
           <label>Версия загрузчика</label>
           <select class="select" id="c-loader-version">
-            ${cfg.loaderVersionsList.length ? cfg.loaderVersionsList.map((option) => `<option value="${esc(option.version)}" ${option.version === cfg.loaderVersion ? "selected" : ""}>${esc(option.version)}${option.stable ? "" : " (beta)"}</option>`).join("") : `<option value="">загружаем…</option>`}
+            ${cfg.loaderVersionsList.length ? cfg.loaderVersionsList.map((option) => `<option value="${esc(option.version)}" ${option.version === cfg.loaderVersion ? "selected" : ""}>${esc(option.version)}${option.stable ? "" : " (beta)"}${recommendedLoader(cfg.loaderVersionsList) && option.version === recommendedLoader(cfg.loaderVersionsList).version ? " ★ рекомендуется" : ""}</option>`).join("") : `<option value="">загружаем…</option>`}
           </select>
         </div>
 
@@ -9426,26 +9454,13 @@
    * Показываем один раз — отметка onboarded живёт в настройках.
    */
   const ONBOARD_STEPS = ["theme", "effects", "trail", "scale", "import"];
+  // Версия окна первого запуска: при её росте окно показывается заново,
+  // чтобы показать новые шаги (например, импорт из других лаунчеров).
+  const ONBOARD_VERSION = 2;
   let onboardStep = 0;
 
   function onboardNeeded() {
-    return !(state.settings && state.settings.onboarded === true);
-  }
-
-  /**
-   * Лаунчером уже пользовались? Ник по умолчанию («Player») не в счёт — смотрим
-   * только на то, что появляется от реальной работы: выбранная сборка, категории,
-   * обои, своя тема, масштаб, образы.
-   */
-  function onboardLooksUsed() {
-    const settings = state.settings || {};
-    return Boolean(settings.last_instance)
-      || Boolean(settings.wallpaper)
-      || Boolean(settings.mc_version)
-      || (Array.isArray(settings.categories) && settings.categories.length > 0)
-      || (Array.isArray(settings.skin_favorites) && settings.skin_favorites.length > 0)
-      || (Boolean(settings.theme) && settings.theme !== "dark")
-      || (Number(settings.ui_scale) > 0 && Number(settings.ui_scale) !== 100);
+    return !state.settings || Number(state.settings.onboard_version || 0) !== ONBOARD_VERSION;
   }
 
   function onboardEffectsOn() {
@@ -9522,6 +9537,13 @@
           <span class="muted">файл .mrpack или .zip, папка лаунчера (PolyMC/Prism), ссылка</span>
         </div>
         <button class="btn" id="onboard-import"><svg class="ic"><use href="#i-download"/></svg>Выбрать файл</button>
+      </div>
+      <div class="onboard-row">
+        <div class="onboard-row-main">
+          <span class="onboard-row-title">Импорт из другого лаунчера</span>
+          <span class="muted">Prism, MultiMC, PolyMC, Modrinth App, AstralRinth, ATLauncher, CurseForge, GDLauncher — найдём сборки сами</span>
+        </div>
+        <button class="btn" id="onboard-import-launcher"><svg class="ic"><use href="#i-grid"/></svg>Из лаунчера</button>
       </div>`;
   }
 
@@ -9583,6 +9605,14 @@
         await finishOnboard();
         importFromExplorer(null);
       });
+      $("#onboard-import-launcher").addEventListener("click", async () => {
+        await finishOnboard();
+        // открываем главную и сразу разворачиваем поиск сборок в других лаунчерах
+        state.tab = "discover";
+        state.home.extOpen = true;
+        renderTab();
+        loadHomeExternal();
+      });
     }
   }
 
@@ -9594,11 +9624,11 @@
     renderOnboard();
   }
 
-  /** Закрываем первый запуск: больше окно не показываем. */
+  /** Закрываем первый запуск: больше окно этой версии не показываем. */
   async function finishOnboard() {
     const modal = $("#modal-onboard");
     if (modal) modal.hidden = true;
-    state.settings = { ...(state.settings || {}), onboarded: true };
+    state.settings = { ...(state.settings || {}), onboarded: true, onboard_version: ONBOARD_VERSION };
     try { await api.saveSettings(state.settings); } catch (error) { /* не критично */ }
   }
 
@@ -9690,13 +9720,10 @@
         if (startup) installMrpackPath(startup);
       } catch (error) { /* без аргументов — обычный запуск */ }
     }
-    // первый запуск: короткая настройка (тема, эффекты, трейсер, масштаб, импорт).
-    // После обновления лаунчера окно не возвращается: если настройки уже есть,
-    // считаем, что знакомство состоялось, и просто ставим отметку.
-    if (onboardNeeded() && onboardLooksUsed()) {
-      state.settings = { ...(state.settings || {}), onboarded: true };
-      api.saveSettings(state.settings).catch(() => {});
-    } else if (onboardNeeded()) {
+    // первое окно: короткая настройка (тема, эффекты, трейсер, масштаб, импорт).
+    // Версия окна в настройках (onboard_version): когда она устарела, окно
+    // показывается заново — так пользователи видят новые шаги после патча.
+    if (onboardNeeded()) {
       openOnboard();
     }
     if (!IS_APP) {

@@ -220,14 +220,10 @@ async fn run(command: &str, args: Args) -> omnispec_core::Result<()> {
         "install" => {
             let id = args.positional.first().ok_or("укажите сборку")?;
             let meta = instances::load(&paths, id)?;
-            omnispec_core::loaders::ensure_profile(&http, &paths, &meta, &reporter).await?;
-            let report = game::install::ensure_installed(
-                &http,
-                &paths,
-                &meta.version_id(),
-                &reporter,
-            )
-            .await?;
+            let version_id =
+                omnispec_core::loaders::ensure_profile(&http, &paths, &meta, &reporter).await?;
+            let report =
+                game::install::ensure_installed(&http, &paths, &version_id, &reporter).await?;
             println!(
                 "\nГотово: {} файлов в classpath, ресурсы: {:?}",
                 report.classpath.len(),

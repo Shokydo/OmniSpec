@@ -22,18 +22,23 @@ pub struct LoaderOption {
 }
 
 /// Убедиться, что профиль версии (ваниль или загрузчик) есть в `meta/versions`.
+/// Возвращает id профиля, с которым реально можно запускаться: инсталлятор
+/// Forge/NeoForge иногда создаёт папку с другим именем, чем мы ждём
+/// (`1.21.1-neoforge-21.1.267` вместо `neoforge-1.21.1-21.1.267`), и запуск
+/// по исходному id падал с «не найдена в манифесте Mojang».
 pub async fn ensure_profile(
     http: &Http,
     paths: &Paths,
     instance: &InstanceMeta,
     reporter: &Reporter,
-) -> Result<()> {
+) -> Result<String> {
     let id = instance.version_id();
     if paths.version_file(&id).exists() {
-        return Ok(());
+        return Ok(id);
     }
 
     reporter.emit("loader", 0, 2, format!("готовим профиль {id}"));
+    let mut effective = id.clone();
     match &instance.loader {
         Loader::Vanilla => {
             // Ваниль подтянется из манифеста Mojang при resolve.
@@ -56,15 +61,17 @@ pub async fn ensure_profile(
                 }
             };
             if installed_id != id {
-                // Инсталлятор мог создать папку с другим именем — запомним его.
+                // Инсталлятор создал папку с другим именем — запомним его и
+                // вернём вызывающему, чтобы запуск шёл по реальному id.
                 let mut updated = instance.clone();
-                updated.version_override = Some(installed_id);
+                updated.version_override = Some(installed_id.clone());
                 instances::save(paths, &updated)?;
             }
+            effective = installed_id;
         }
     }
     reporter.emit("loader", 2, 2, "профиль готов");
-    Ok(())
+    Ok(effective)
 }
 
 /// Доступные версии загрузчика для конкретной версии игры.

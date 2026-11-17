@@ -69,8 +69,10 @@ pub async fn prepare(
     let started = std::time::Instant::now();
     reporter.emit("launch", 0, 5, "проверяем профиль версии");
 
-    let version_id = instance.version_id();
-    crate::loaders::ensure_profile(http, paths, instance, reporter).await?;
+    // ensure_profile возвращает id, по которому профиль реально лежит на диске:
+    // инсталлятор мог назвать папку иначе, чем version_id() ожидает.
+    let version_id =
+        crate::loaders::ensure_profile(http, paths, instance, reporter).await?;
 
     reporter.emit("launch", 1, 5, "проверяем файлы игры");
     // Профиль разбираем один раз и передаём в установку: раньше его разбирали
