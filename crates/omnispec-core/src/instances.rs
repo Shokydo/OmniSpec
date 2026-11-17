@@ -309,6 +309,49 @@ fn unique_id(paths: &Paths, base: &str) -> String {
 }
 
 /// Удалить сборку вместе с мирами и модами.
+/// Дублировать сборку: копия папки с новым id и именем «… (копия)».
+/// Логи и отчёты о падениях не копируем — они только раздувают архив.
+pub fn duplicate(paths: &Paths, id: &str) -> Result<InstanceMeta> {
+    let source = load(paths, id)?;
+    let source_dir = paths.instance_dir(id);
+    if !source_dir.exists() {
+        return Err(Error::not_found(format!("сборка «{id}» не найдена")));
+    }
+    let new_id = unique_id(paths, &source.id);
+    let target_dir = paths.instance_dir(&new_id);
+    copy_dir_skip(&source_dir, &target_dir, &["logs", "crash-reports"])?;
+
+    let mut meta = source.clone();
+    meta.id = new_id;
+    meta.name = format!("{} (копия)", source.name);
+    meta.created = now_unix();
+    meta.last_played = None;
+    meta.playtime_secs = 0;
+    save(paths, &meta)?;
+    Ok(meta)
+}
+
+/// Рекурсивное копирование папки, пропуская указанные подпапки верхнего уровня.
+fn copy_dir_skip(from: &Path, to: &Path, skip: &[&str]) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if skip.contains(&name.as_ref()) {
+            continue;
+        }
+        let target = to.join(name.as_ref());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_skip(&entry.path(), &target, &[])?;
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn delete(paths: &Paths, id: &str) -> Result<()> {
     let dir = paths.instance_dir(id);
     if !dir.exists() {

@@ -129,6 +129,15 @@ fn delete_instance(state: State<'_, AppState>, instance_id: String) -> Result<()
     instances::delete(&state.paths, &instance_id).map_err(err)
 }
 
+/// Дублировать сборку: копия с новым id и именем «… (копия)».
+#[tauri::command]
+fn duplicate_instance(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<InstanceMeta, String> {
+    instances::duplicate(&state.paths, &instance_id).map_err(err)
+}
+
 #[tauri::command]
 fn update_instance(state: State<'_, AppState>, meta: InstanceMeta) -> Result<(), String> {
     instances::save(&state.paths, &meta).map_err(err)
@@ -1115,6 +1124,34 @@ fn list_mods(state: State<'_, AppState>, instance_id: String) -> Result<Vec<ModE
     Ok(result)
 }
 
+/// Иконки миров: имя папки мира → `icon.png` из неё (как в самой игре).
+#[tauri::command]
+fn world_icons(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let saves = instances::game_dir(&state.paths, &instance_id).join("saves");
+    let mut result = std::collections::HashMap::new();
+    let Ok(entries) = std::fs::read_dir(&saves) else {
+        return Ok(result);
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let icon = entry.path().join("icon.png");
+        let Ok(bytes) = std::fs::read(&icon) else {
+            continue;
+        };
+        if bytes.is_empty() || bytes.len() > 256 * 1024 {
+            continue;
+        }
+        result.insert(name, format!("data:image/png;base64,{}", base64_encode(&bytes)));
+    }
+    Ok(result)
+}
+
 /// Иконки модов: имя файла → ссылка на картинку с Modrinth.
 ///
 /// Имя мода берём из `fabric.mod.json` / `mods.toml` внутри jar, дальше ищем
@@ -1133,36 +1170,65 @@ async fn mod_icons(
         .unwrap_or_default();
 
     let mut result = std::collections::HashMap::new();
-    let mut missing: Vec<(String, String)> = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&mods_dir) else {
-        return Ok(result);
-    };
-    for entry in entries.flatten() {
-        let file = entry.file_name().to_string_lossy().to_string();
-        if !file.ends_with(".jar") && !file.ends_with(".jar.disabled") {
-            continue;
-        }
-        let key = mod_key(&file);
-        if let Some(url) = cache.get(&key) {
-            if !url.is_empty() {
-                result.insert(file.clone(), url.clone());
+    // (имя файла, поисковый запрос, тип проекта на Modrinth)
+    let mut missing: Vec<(String, String, String)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&mods_dir) {
+        for entry in entries.flatten() {
+            let file = entry.file_name().to_string_lossy().to_string();
+            if !file.ends_with(".jar") && !file.ends_with(".jar.disabled") {
+                continue;
             }
-            continue;
+            let key = mod_key(&file);
+            if let Some(url) = cache.get(&key) {
+                if !url.is_empty() {
+                    result.insert(file.clone(), url.clone());
+                }
+                continue;
+            }
+            let probe = mod_display_name(&entry.path()).unwrap_or_else(|| key.clone());
+            missing.push((file, probe, "mod".to_string()));
         }
-        let probe = mod_display_name(&entry.path()).unwrap_or_else(|| key.clone());
-        missing.push((file, probe));
+    }
+
+    // Ресурспаки и шейдеры: сначала pack.png изнутри zip (как в самой игре),
+    // если его нет — ищем проект на Modrinth по имени файла.
+    let game_dir = instances::game_dir(&state.paths, &instance_id);
+    for (dir_name, project_type) in [("resourcepacks", "resourcepack"), ("shaderpacks", "shader")] {
+        let dir = game_dir.join(dir_name);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let file = entry.file_name().to_string_lossy().to_string();
+            let lower = file.to_lowercase();
+            if !lower.ends_with(".zip") && !lower.ends_with(".zip.disabled") {
+                continue;
+            }
+            if let Some(data_url) = pack_png_data_url(&entry.path()) {
+                result.insert(file, data_url);
+                continue;
+            }
+            let key = format!("{project_type}:{}", mod_key(&file));
+            if let Some(url) = cache.get(&key) {
+                if !url.is_empty() {
+                    result.insert(file.clone(), url.clone());
+                }
+                continue;
+            }
+            missing.push((file, pack_probe(&file), project_type.to_string()));
+        }
     }
 
     // Не больше 6 запросов разом — Modrinth не любит шквал.
     let http = state.http.clone();
-    let mut stream = futures::stream::iter(missing.into_iter().map(|(file, probe)| {
+    let mut stream = futures::stream::iter(missing.into_iter().map(|(file, probe, project_type)| {
         let http = http.clone();
         async move {
             let modrinth = omnispec_core::modrinth::Modrinth::new(http);
             let found = modrinth
                 .search(&omnispec_core::modrinth::SearchQuery {
                     query: probe.clone(),
-                    project_type: "mod".into(),
+                    project_type,
                     game_version: None,
                     loader: None,
                     categories: Vec::new(),
@@ -1198,6 +1264,35 @@ async fn mod_icons(
         let _ = std::fs::write(&cache_file, text);
     }
     Ok(result)
+}
+
+/// Иконка пака: `pack.png` из корня zip, как её показывает сама игра.
+fn pack_png_data_url(zip_path: &std::path::Path) -> Option<String> {
+    let file = std::fs::File::open(zip_path).ok()?;
+    let mut zip = zip::ZipArchive::new(file).ok()?;
+    let mut entry = zip.by_name("pack.png").ok()?;
+    let mut bytes = Vec::new();
+    use std::io::Read;
+    entry.read_to_end(&mut bytes).ok()?;
+    if bytes.is_empty() || bytes.len() > 512 * 1024 {
+        return None;
+    }
+    Some(format!("data:image/png;base64,{}", base64_encode(&bytes)))
+}
+
+/// Поисковый запрос по имени файла пака: без версии и расширения.
+fn pack_probe(file: &str) -> String {
+    let stem = file
+        .trim_end_matches(".disabled")
+        .trim_end_matches(".zip");
+    let cut = stem
+        .find(|c: char| c.is_ascii_digit())
+        .filter(|index| *index > 2)
+        .unwrap_or(stem.len());
+    stem[..cut]
+        .replace(['_', '-'], " ")
+        .trim()
+        .to_string()
 }
 
 /// Ключ кэша: имя файла без версии и загрузчика.
@@ -2541,6 +2636,7 @@ fn main() {
             list_instances,
             create_instance,
             delete_instance,
+            duplicate_instance,
             update_instance,
             minecraft_versions,
             loader_versions,
@@ -2582,6 +2678,7 @@ fn main() {
             open_path,
             window_action,
             mod_icons,
+            world_icons,
             scan_external_launchers,
             import_external,
             export_instance,

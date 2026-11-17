@@ -165,9 +165,13 @@ def releases_from_file():
 
 
 def latest_from_api():
+    headers = {"User-Agent": "OmniSpec-site-builder", "Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(
         f"https://api.github.com/repos/{REPO}/releases/latest",
-        headers={"User-Agent": "OmniSpec-site-builder", "Accept": "application/vnd.github+json"},
+        headers=headers,
     )
     with urllib.request.urlopen(req, timeout=20) as resp:
         data = json.load(resp)
@@ -278,6 +282,11 @@ def fetch_latest(offline):
     for key in ("setup", "portable", "linux"):
         if api.get(key, {}).get("size"):
             data[key] = api[key]
+    try:
+        with open(snapshot, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=1)
+    except OSError:
+        pass
     return data
 
 

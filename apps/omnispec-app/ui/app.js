@@ -1248,6 +1248,16 @@
     if (el) el.hidden = true;
   }
 
+  /** Скопировать текст в буфер обмена (с понятным тостом). */
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("Ссылка скопирована", "ok");
+    } catch (err) {
+      toast(text, "info");
+    }
+  }
+
   /** Общее контекстное меню: html + обработчик по data-act. */
   function fillCtxMenu(x, y, html, handler) {
     const el = $("#ctx-menu");
@@ -1271,6 +1281,7 @@
       <div class="ctx-caption">${esc(meta.name)} · MC ${esc(meta.mc_version)}</div>
       <button class="ctx-item${running ? " danger" : ""}" data-act="play"><svg class="ic"><use href="#${running ? "i-stop" : "i-play"}"/></svg>${running ? "Остановить сборку" : "Играть"}</button>
       <button class="ctx-item" data-act="dup"><svg class="ic"><use href="#i-copy"/></svg>Запустить дубликат…</button>
+      <button class="ctx-item" data-act="duplicate"><svg class="ic"><use href="#i-copy"/></svg>Дублировать сборку</button>
       <button class="ctx-item" data-act="settings"><svg class="ic"><use href="#i-sliders"/></svg>Настройки сборки</button>
       <div class="ctx-sep"></div>
       <button class="ctx-item" data-act="icon"><svg class="ic"><use href="#i-image"/></svg>Иконка из картинки…</button>
@@ -1312,6 +1323,14 @@
     }
     if (action === "dup") {
       openDupLaunch(fresh);
+      return;
+    }
+    if (action === "duplicate") {
+      try {
+        const copy = await api.duplicateInstance(fresh.id);
+        await refreshInstances();
+        toast(`Сборка «${copy.name}» создана`, "ok");
+      } catch (err) { toast(String(err), "err"); }
       return;
     }
     if (action === "settings") {
@@ -1965,6 +1984,7 @@
     archiveRead: (instanceId, path, entry) => invoke("archive_read", { instanceId, path, entry }),
     mods: (instanceId) => invoke("list_mods", { instanceId }),
     modIcons: (instanceId) => invoke("mod_icons", { instanceId }),
+    worldIcons: (instanceId) => invoke("world_icons", { instanceId }),
     // содержимое сборки: моды, ресурспаки, шейдеры
     contentList: (instanceId, kind) => invoke("content_list", { instanceId, kind }),
     contentToggle: (instanceId, kind, name) => invoke("content_toggle", { instanceId, kind, name }),
@@ -1975,6 +1995,7 @@
     scanExternal: () => invoke("scan_external_launchers"),
     importExternal: (payload) => invoke("import_external", payload),
     exportInstance: (instanceId, path, format) => invoke("export_instance", { instanceId, path, format }),
+    duplicateInstance: (instanceId) => invoke("duplicate_instance", { instanceId }),
     installZip: (payload) => invoke("import_zip", payload),
     toggleMod: (instanceId, name) => invoke("toggle_mod", { instanceId, name }),
     javas: () => invoke("list_java"),
@@ -2342,6 +2363,7 @@
     },
     ensureDependencies: async () => ({ installed: [], skipped: [] }),
     // Иконки модов в демо-режиме — те же картинки, что отдал бы Modrinth.
+    worldIcons: async () => ({}),
     modIcons: async () => {
       const map = {};
       demoMods.forEach((mod, index) => {
@@ -2362,6 +2384,12 @@
       return meta;
     },
     exportInstance: async (_id, path) => path,
+    duplicateInstance: async (instanceId) => {
+      const meta = DEMO.instances.find((item) => item.id === instanceId);
+      const copy = meta ? { ...meta, id: meta.id + "-copy", name: meta.name + " (копия)" } : { id: "copy", name: "Копия" };
+      DEMO.instances.unshift(copy);
+      return copy;
+    },
     installZip: async (payload) => {
       await demoProgress("unzip", "распаковка архива сборки");
       await demoProgress("copy", "перенос модов и конфигов");
@@ -4221,9 +4249,15 @@
 
   /** Иконка мода: картинка с Modrinth, иначе нейтральный значок. */
   function modIconHtml(mod) {
-    const url = state.modIcons[mod.name];
+    return contentIconHtml("mod", mod);
+  }
+
+  /** Иконка файла контента: картинка (мод/пак), иначе значок вида. */
+  function contentIconHtml(kind, entry) {
+    const url = state.modIcons[entry.filename || entry.name];
     if (url) return `<span class="mod-icon"><img src="${esc(url)}" alt="" loading="lazy"></span>`;
-    return `<span class="mod-icon"><svg class="ic"><use href="#i-mod"/></svg></span>`;
+    const fallback = kind === "shader" ? "i-gem" : kind === "resourcepack" ? "i-base" : "i-mod";
+    return `<span class="mod-icon"><svg class="ic"><use href="#${fallback}"/></svg></span>`;
   }
 
   /** Название файла без версии и расширения — для карточек без картотеки. */
@@ -4247,13 +4281,16 @@
       state.mods = entries;
       $("#badge-mods").hidden = !entries.length;
       $("#badge-mods").textContent = String(entries.length);
-      if (!Object.keys(state.modIcons).length) {
-        api.modIcons(meta.id).then((map) => {
-          if (!map || !Object.keys(map).length) return;
-          state.modIcons = map;
-          if (state.tab === "mods" && state.selectedId === meta.id) renderContent("mod");
-        }).catch(() => {});
-      }
+    }
+    // иконки подгружаются для модов, ресурспаков и шейдеров
+    if (!Object.keys(state.modIcons).length) {
+      api.modIcons(meta.id).then((map) => {
+        if (!map || !Object.keys(map).length) return;
+        state.modIcons = map;
+        if (state.tab === "mods" || state.tab === "resourcepacks" || state.tab === "shaders") {
+          if (state.selectedId === meta.id) renderContent(state.tab === "mods" ? "mod" : state.tab === "resourcepacks" ? "resourcepack" : "shader");
+        }
+      }).catch(() => {});
     }
 
     const query = (state.contentQuery[kind] || "").trim().toLowerCase();
@@ -4268,7 +4305,7 @@
       const update = updateOf(kind, entry);
       return `
         <div class="item-row content-row ${entry.enabled ? "" : "is-off"}" data-content="${esc(entry.filename)}">
-          ${kind === "mod" ? modIconHtml(entry) : `<span class="mod-icon"><svg class="ic"><use href="#${kind === "shader" ? "i-gem" : "i-base"}"/></svg></span>`}
+          ${contentIconHtml(kind, entry)}
           <div class="item-main">
             <div class="item-title">${esc(contentTitle(entry))}${entry.enabled ? "" : ' <span class="tag">выключен</span>'}</div>
             <div class="item-sub">${entry.version_number ? `v${esc(entry.version_number)} · ` : ""}${humanSize(entry.size)}${update ? ` · <span class="content-update">есть ${esc(update.latest)}</span>` : ""}</div>
@@ -4467,6 +4504,7 @@
   async function renderWorlds() {
     const meta = selected();
     const entries = await api.listDir(meta.id, "saves").catch(() => []);
+    const icons = await api.worldIcons(meta.id).catch(() => ({}));
     $("#tab-body").innerHTML = `
       <div class="list-wrap">
         <div class="panel">
@@ -4476,11 +4514,16 @@
             <div class="spacer"></div>
             <button class="btn btn-small" id="worlds-open">Открыть папку</button>
           </div>
-          ${entries.length ? entries.map((entry) => `
+          ${entries.length ? entries.map((entry) => {
+            const icon = icons[entry.name];
+            return `
             <div class="item-row">
-              <svg class="ic" style="color:#6b727a"><use href="#i-folder"/></svg>
+              ${icon
+                ? `<span class="mod-icon"><img src="${esc(icon)}" alt="" loading="lazy"></span>`
+                : `<span class="mod-icon"><svg class="ic"><use href="#i-cube"/></svg></span>`}
               <div class="item-main"><div class="item-title">${esc(entry.name)}</div><div class="item-sub">${humanSize(entry.size)}</div></div>
-            </div>`).join("") : `<div class="item-row"><div class="item-main muted">Миров пока нет — создай их в игре</div></div>`}
+            </div>`;
+          }).join("") : `<div class="item-row"><div class="item-main muted">Миров пока нет — создай их в игре</div></div>`}
         </div>
       </div>`;
     $("#worlds-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/saves`).catch(() => {}));
@@ -4782,6 +4825,26 @@
     window.addEventListener("resize", () => syncFeedColumns());
   }
 
+  /** «Недавнее» — максимум один ряд: сколько карточек влезет по ширине, столько и видно. */
+  function syncRecentRow() {
+    const grid = document.getElementById("home-grid");
+    if (!grid) return;
+    const cards = [...grid.querySelectorAll(".home-card")];
+    if (!cards.length) return;
+    // карточка минимум 232px + зазор 8px (см. .home-grid в styles.css)
+    const cols = Math.max(1, Math.floor((grid.clientWidth + 8) / 240));
+    cards.forEach((card, index) => {
+      card.style.display = index < cols ? "" : "none";
+    });
+  }
+
+  let recentResizeBound = false;
+  function bindRecentResize() {
+    if (recentResizeBound) return;
+    recentResizeBound = true;
+    window.addEventListener("resize", () => syncRecentRow());
+  }
+
   function setFeedGridLevel(level) {
     const clean = level === 1 || level === 3 ? level : 2;
     state.settings = { ...(state.settings || {}), feed_grid: clean };
@@ -4798,7 +4861,7 @@
     $("#tab-body").innerHTML = `
       <div class="home">
         <div class="home-scroll" id="home-scroll">
-          ${instances.length ? `<div class="home-section-title">Недавнее</div><div class="home-grid">${instances.map(homeInstanceHtml).join("")}</div>` : ""}
+          ${instances.length ? `<div class="home-section-title">Недавнее</div><div class="home-grid" id="home-grid">${instances.map(homeInstanceHtml).join("")}</div>` : ""}
           ${homeImportHtml()}
           <div class="home-feed-head">
             <div class="home-title">Готовые сборки</div>
@@ -4839,6 +4902,13 @@
       event.preventDefault();
       launchFromList(card.dataset.homeId);
     }));
+    // ПКМ по недавней сборке — то же меню, что и в списке сборок
+    $$("#tab-body [data-home-id]").forEach((card) => card.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      const meta = (state.instances || []).find((item) => item.id === card.dataset.homeId);
+      if (meta) openInstanceMenu(event.clientX, event.clientY, meta);
+    }));
+    syncRecentRow();
     $("#dv-query").addEventListener("keydown", (event) => { if (event.key === "Enter") dvReset(); });
     const sourceSelect = $("#dv-source");
     if (sourceSelect) sourceSelect.addEventListener("change", () => {
@@ -4852,6 +4922,7 @@
       renderDiscover();
     }));
     bindFeedResize();
+    bindRecentResize();
     const feedSize = $("#feed-size");
     if (feedSize) {
       feedSize.addEventListener("input", () => {
@@ -5305,6 +5376,27 @@
       card.addEventListener("click", (event) => {
         if (event.target.closest("button")) return;
         openProjectModal(card.dataset.project, card.dataset.kind, card.dataset.slug, card.dataset.title);
+      });
+      card.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        const id = card.dataset.project;
+        const kind = card.dataset.kind;
+        const title = card.dataset.title;
+        const type = kind === "pack" ? "modpack" : (state.modrinth.type || "mod");
+        const url = `https://modrinth.com/${type}/${card.dataset.slug}`;
+        fillCtxMenu(event.clientX, event.clientY, `
+          <div class="ctx-caption">${esc(title)}</div>
+          <button class="ctx-item" data-act="install"><svg class="ic"><use href="#i-download"/></svg>Установить</button>
+          <button class="ctx-item" data-act="versions"><svg class="ic"><use href="#i-list"/></svg>Версии</button>
+          <div class="ctx-sep"></div>
+          <button class="ctx-item" data-act="page"><svg class="ic"><use href="#i-link"/></svg>Открыть страницу</button>
+          <button class="ctx-item" data-act="copy"><svg class="ic"><use href="#i-copy"/></svg>Копировать ссылку</button>`,
+        (act) => {
+          if (act === "install") installFromModrinth(id, kind);
+          else if (act === "versions") openVersions(id, kind, title);
+          else if (act === "page") api.openUrl(url).catch((error) => toast(String(error), "err"));
+          else if (act === "copy") copyText(url);
+        });
       });
     });
     $$("[data-install]").forEach((btn) => {
@@ -5818,6 +5910,25 @@
       card.addEventListener("click", (event) => {
         if (event.target.closest("button")) return;
         openCfProjectModal(card.dataset.cfProject, card.dataset.cfTitle, card.dataset.cfSlug);
+      });
+      card.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        const id = card.dataset.cfProject;
+        const title = card.dataset.cfTitle;
+        const url = `https://www.curseforge.com/minecraft/${cfPath("modpack")}/${card.dataset.cfSlug}`;
+        fillCtxMenu(event.clientX, event.clientY, `
+          <div class="ctx-caption">${esc(title)}</div>
+          <button class="ctx-item" data-act="install"><svg class="ic"><use href="#i-download"/></svg>Установить как сборку</button>
+          <button class="ctx-item" data-act="versions"><svg class="ic"><use href="#i-list"/></svg>Версии модпака</button>
+          <div class="ctx-sep"></div>
+          <button class="ctx-item" data-act="page"><svg class="ic"><use href="#i-link"/></svg>Открыть страницу</button>
+          <button class="ctx-item" data-act="copy"><svg class="ic"><use href="#i-copy"/></svg>Копировать ссылку</button>`,
+        (act) => {
+          if (act === "install") installCfPack(id, null, null, title);
+          else if (act === "versions") openCfVersions(id, title, "modpack");
+          else if (act === "page") api.openUrl(url).catch((error) => toast(String(error), "err"));
+          else if (act === "copy") copyText(url);
+        });
       });
     });
     $$("[data-cf-install]").forEach((btn) => {
