@@ -118,6 +118,20 @@ pub fn install_dir() -> PathBuf {
         .join(APP_NAME)
 }
 
+/// Папка установки внутри выбранной пользователем папки: `D:` → `D:\OmniSpec`.
+/// Если путь уже заканчивается на `OmniSpec` — оставляем как есть.
+pub fn with_app_folder(dir: &Path) -> PathBuf {
+    let is_app = dir
+        .file_name()
+        .map(|name| name.to_string_lossy().eq_ignore_ascii_case(APP_NAME))
+        .unwrap_or(false);
+    if is_app {
+        dir.to_path_buf()
+    } else {
+        dir.join(APP_NAME)
+    }
+}
+
 pub fn dirs_home() -> Option<PathBuf> {
     std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))

@@ -133,7 +133,8 @@ fn pause() {
 
 pub fn run(reinstall: bool, assume_yes: bool, dir_override: Option<String>) {
     let dir = match dir_override {
-        Some(path) => common::expand_path(&path),
+        // как в окне: D: → D:\OmniSpec
+        Some(path) => common::with_app_folder(&common::expand_path(&path)),
         None => common::install_dir(),
     };
     let exe = dir.join(APP_EXE);

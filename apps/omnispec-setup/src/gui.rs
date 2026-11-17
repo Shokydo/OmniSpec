@@ -501,6 +501,11 @@ impl Setup {
                 });
 
                 self.blank(ui, 10.0);
+                ui.label(mono_color(
+                    format!("  установка в: {}", common::with_app_folder(&self.pick_dir).display()),
+                    DIM2,
+                ));
+                self.blank(ui, 6.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     if self.button(ui, "Выбрать эту папку", true, true).clicked() {
@@ -516,7 +521,8 @@ impl Setup {
             self.pick_goto(path);
         }
         if choose {
-            self.dir = self.pick_dir.clone();
+            // выбранная папка — родитель: установка идёт в подпапку OmniSpec
+            self.dir = common::with_app_folder(&self.pick_dir);
             self.pick_input = self.dir.display().to_string();
             self.picking = false;
         }
