@@ -33,10 +33,26 @@ MONTHS = ["января", "февраля", "марта", "апреля", "ма�
 DEFAULT_LATEST = {
     "version": "0.31.0",
     "published_at": "2026-11-16",
+    "downloads": 0,
     "setup": {"name": "OmniSpec-Setup.exe", "size": 11931136},
     "portable": {"name": "OmniSpec.exe", "size": 8188928},
     "linux": {"name": "OmniSpec", "size": 10088008},
 }
+
+
+def downloads_text(count):
+    """«скачано 1 234 раза» — пусто, если скачиваний ещё не было."""
+    if not count:
+        return ""
+    n = int(count)
+    if n % 10 == 1 and n % 100 != 11:
+        word = "раз"
+    elif n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        word = "раза"
+    else:
+        word = "раз"
+    num = f"{n:,}".replace(",", "\u00a0")
+    return f"<span>·</span><span>скачано {num} {word}</span>"
 
 
 def human_date(iso):
@@ -157,9 +173,15 @@ def latest_from_api():
         data = json.load(resp)
     by_name = {a["name"]: a["size"] for a in data.get("assets", [])}
     pick = lambda name: {"name": name, "size": by_name.get(name, 0)}
+    downloads = sum(
+        a.get("download_count", 0)
+        for a in data.get("assets", [])
+        if not a["name"].endswith(".sha256")
+    )
     return {
         "version": data["tag_name"].lstrip("v"),
         "published_at": (data.get("published_at") or "")[:10],
+        "downloads": downloads,
         "setup": pick("OmniSpec-Setup.exe"),
         "portable": pick("OmniSpec.exe"),
         "linux": pick("OmniSpec"),
@@ -251,6 +273,8 @@ def fetch_latest(offline):
     for key in ("version", "published_at"):
         if api.get(key):
             data[key] = api[key]
+    if "downloads" in api:
+        data["downloads"] = api["downloads"]
     for key in ("setup", "portable", "linux"):
         if api.get(key, {}).get("size"):
             data[key] = api[key]
@@ -273,6 +297,7 @@ def main():
         "{{URL_REPO}}": f"https://github.com/{REPO}",
         "{{URL_RELEASES}}": f"https://github.com/{REPO}/releases",
         "{{URL_ISSUES}}": f"https://github.com/{REPO}/issues",
+        "{{DOWNLOADS}}": downloads_text(latest.get("downloads", 0)),
         "{{URL_SETUP}}": f"https://github.com/{REPO}/releases/latest/download/OmniSpec-Setup.exe",
         "{{URL_PORTABLE}}": f"https://github.com/{REPO}/releases/latest/download/OmniSpec.exe",
         "{{URL_LINUX}}": f"https://github.com/{REPO}/releases/latest/download/OmniSpec",
