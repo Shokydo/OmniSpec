@@ -9454,13 +9454,27 @@
    * Показываем один раз — отметка onboarded живёт в настройках.
    */
   const ONBOARD_STEPS = ["theme", "effects", "trail", "scale", "import"];
-  // Версия окна первого запуска: при её росте окно показывается заново,
-  // чтобы показать новые шаги (например, импорт из других лаунчеров).
-  const ONBOARD_VERSION = 2;
   let onboardStep = 0;
 
+  /** Окно первого запуска — только при самом первом входе, не при обновлении. */
   function onboardNeeded() {
-    return !state.settings || Number(state.settings.onboard_version || 0) !== ONBOARD_VERSION;
+    return !(state.settings && state.settings.onboarded === true);
+  }
+
+  /**
+   * Лаунчером уже пользовались? Ник по умолчанию («Player») не в счёт — смотрим
+   * только на то, что появляется от реальной работы: выбранная сборка, категории,
+   * обои, своя тема, масштаб, образы.
+   */
+  function onboardLooksUsed() {
+    const settings = state.settings || {};
+    return Boolean(settings.last_instance)
+      || Boolean(settings.wallpaper)
+      || Boolean(settings.mc_version)
+      || (Array.isArray(settings.categories) && settings.categories.length > 0)
+      || (Array.isArray(settings.skin_favorites) && settings.skin_favorites.length > 0)
+      || (Boolean(settings.theme) && settings.theme !== "dark")
+      || (Number(settings.ui_scale) > 0 && Number(settings.ui_scale) !== 100);
   }
 
   function onboardEffectsOn() {
@@ -9628,7 +9642,7 @@
   async function finishOnboard() {
     const modal = $("#modal-onboard");
     if (modal) modal.hidden = true;
-    state.settings = { ...(state.settings || {}), onboarded: true, onboard_version: ONBOARD_VERSION };
+    state.settings = { ...(state.settings || {}), onboarded: true };
     try { await api.saveSettings(state.settings); } catch (error) { /* не критично */ }
   }
 
@@ -9721,9 +9735,12 @@
       } catch (error) { /* без аргументов — обычный запуск */ }
     }
     // первое окно: короткая настройка (тема, эффекты, трейсер, масштаб, импорт).
-    // Версия окна в настройках (onboard_version): когда она устарела, окно
-    // показывается заново — так пользователи видят новые шаги после патча.
-    if (onboardNeeded()) {
+    // Показывается только при самом первом входе. Если лаунчером уже
+    // пользовались (есть следы работы в настройках), просто ставим отметку.
+    if (onboardNeeded() && onboardLooksUsed()) {
+      state.settings = { ...(state.settings || {}), onboarded: true };
+      api.saveSettings(state.settings).catch(() => {});
+    } else if (onboardNeeded()) {
       openOnboard();
     }
     if (!IS_APP) {
