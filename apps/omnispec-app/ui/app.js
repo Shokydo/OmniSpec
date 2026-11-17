@@ -4574,16 +4574,22 @@
         </div>
       </div>`;
     $("#shots-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/screenshots`).catch(() => {}));
-    $$("#tab-body .shot-tile").forEach((tile) => tile.addEventListener("click", () => {
+    $$("#tab-body .shot-tile").forEach((tile) => {
       const entry = entries[Number(tile.dataset.shot)];
-      if (entry) openShot(entry, srcOf(entry));
-    }));
+      tile.addEventListener("click", () => { if (entry) openShot(entry, srcOf(entry)); });
+      tile.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        if (entry) openShotMenu(event.clientX, event.clientY, entry, srcOf(entry));
+      });
+    });
   }
 
   /** Просмотр скриншота на весь экран. */
   let shotCurrent = null;
+  let shotCurrentSrc = "";
   function openShot(entry, src) {
     shotCurrent = entry;
+    shotCurrentSrc = src || "";
     $("#shot-title").textContent = entry.name;
     $("#shot-img").src = src;
     $("#shot-meta").textContent = `${humanSize(entry.size)}${entry.modified ? ` · ${relativeWhen(entry.modified)}` : ""}`;
@@ -4594,6 +4600,36 @@
     $("#modal-shot").hidden = true;
     $("#shot-img").src = "";
     shotCurrent = null;
+    shotCurrentSrc = "";
+  }
+
+  /** Скопировать картинку скриншота в буфер обмена как изображение. */
+  async function copyShotImage(src) {
+    try {
+      if (!src) throw new Error("no image");
+      const blob = await (await fetch(src)).blob();
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
+      toast("Изображение скопировано", "ok");
+    } catch (err) {
+      toast("Не удалось скопировать изображение", "err");
+    }
+  }
+
+  /** Контекстное меню скриншота (ПКМ по плитке и по картинке в просмотре). */
+  function openShotMenu(x, y, entry, src) {
+    fillCtxMenu(x, y, `
+      <div class="ctx-caption">${esc(entry.name)}</div>
+      <button class="ctx-item" data-act="copy"><svg class="ic"><use href="#i-copy"/></svg>Копировать изображение</button>
+      <button class="ctx-item" data-act="open"><svg class="ic"><use href="#i-image"/></svg>Открыть</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item" data-act="file"><svg class="ic"><use href="#i-file"/></svg>Открыть файл</button>
+      <button class="ctx-item" data-act="folder"><svg class="ic"><use href="#i-folder"/></svg>Открыть папку</button>`,
+    (act) => {
+      if (act === "copy") copyShotImage(src);
+      else if (act === "open") openShot(entry, src);
+      else if (act === "file") api.openPath(entry.path).catch((error) => toast(String(error), "err"));
+      else if (act === "folder") api.openPath(entry.path.replace(/\\[^\\/]*$/, "")).catch((error) => toast(String(error), "err"));
+    });
   }
 
   /* ---------- Modrinth ---------- */
@@ -9816,6 +9852,11 @@
     if (!modal) return;
     $$("[data-close-shot]", modal).forEach((btn) => btn.addEventListener("click", closeShot));
     modal.addEventListener("mousedown", (event) => { if (event.target === modal) closeShot(); });
+    $("#shot-copy").addEventListener("click", () => copyShotImage(shotCurrentSrc));
+    $("#shot-img").addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      if (shotCurrent) openShotMenu(event.clientX, event.clientY, shotCurrent, shotCurrentSrc);
+    });
     $("#shot-open-file").addEventListener("click", () => {
       if (!shotCurrent) return;
       api.openPath(shotCurrent.path).catch((error) => toast(String(error), "err"));
