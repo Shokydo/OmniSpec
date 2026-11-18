@@ -115,17 +115,18 @@ impl Presence {
     fn session(&self, client_id: &str) -> Result<(), String> {
         let mut stream = connect_ipc().map_err(|error| format!("нет Discord IPC: {error}"))?;
         self.log("IPC подключён, шлём handshake");
-        write_frame(
-            &mut stream,
-            0,
-            &serde_json::json!({
-                "cmd": "HANDSHAKE",
-                "args": {"version": 1, "client_id": client_id},
-                "nonce": next_nonce(),
-            })
-            .to_string(),
-        )
-        .map_err(|error| format!("handshake: {error}"))?;
+        // client_id дублируется на верхний уровень: часть сборок Discord
+        // ищет его там, а не в args, и отвечает «No Client ID Specified».
+        let handshake = serde_json::json!({
+            "cmd": "HANDSHAKE",
+            "args": {"version": 1, "client_id": client_id},
+            "client_id": client_id,
+            "nonce": next_nonce(),
+        })
+        .to_string();
+        self.log(&format!("handshake payload: {handshake}"));
+        write_frame(&mut stream, 0, &handshake)
+            .map_err(|error| format!("handshake: {error}"))?;
         self.log("handshake отправлен, ждём READY");
         // ждём READY (на PING отвечаем PONG)
         loop {
