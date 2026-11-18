@@ -36,6 +36,7 @@ pub async fn install(
         &mut outcome,
     )
     .await?;
+    reporter.emit_state("mods", "done", "готово");
     Ok(outcome)
 }
 

@@ -798,6 +798,8 @@ input, select, textarea { font: inherit; color: inherit; }
 .modrinth-filters .field > label { text-transform: uppercase; letter-spacing: .5px; font-size: 10px; }
 /* страница «Скачать моды»: общий поиск стоит вровень с фильтрами */
 .modrinth-filters > .search { margin-bottom: 0; align-self: flex-end; }
+/* тело источника внутри страницы «Скачать моды»: flex, чтобы список скроллился */
+#dl-source-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
 .input, .select {
   height: var(--h); padding: 0 9px; min-width: 110px;

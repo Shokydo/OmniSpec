@@ -441,6 +441,9 @@ pub async fn apply_update_with(
         },
     );
     save_store(paths, instance, &store)?;
+    if let Some(reporter) = reporter {
+        reporter.emit_state("update", "done", "готово");
+    }
     Ok(update.clone())
 }
 

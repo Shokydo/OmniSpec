@@ -51,6 +51,7 @@ pub async fn install_project(
         &mut outcome,
     )
     .await?;
+    reporter.emit_state("mods", "done", "готово");
     Ok(outcome)
 }
 
@@ -76,6 +77,7 @@ pub async fn install_version(
         &mut outcome,
     )
     .await?;
+    reporter.emit_state("mods", "done", "готово");
     Ok(outcome)
 }
 
@@ -291,6 +293,7 @@ pub async fn ensure_dependencies(
         format!("докачано: {}", outcome.installed.join(", "))
     };
     reporter.emit("mods", total, total, detail);
+    reporter.emit_state("mods", "done", "готово");
     Ok(outcome)
 }
 

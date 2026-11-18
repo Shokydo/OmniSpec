@@ -3481,7 +3481,7 @@
     const dl = state.downloads;
     if (!payload) return;
     const stage = String(payload.stage || "");
-    const isDownloadStage = ["modpack", "mods", "libraries", "assets", "version", "java", "loader", "import"].includes(stage);
+    const isDownloadStage = ["modpack", "mods", "update", "libraries", "assets", "version", "java", "loader", "import"].includes(stage);
     if (!isDownloadStage) return;
 
     // Новая операция (этап сменился или панель была завершена) — сброс.
@@ -3526,6 +3526,10 @@
     } else if (payload.state === "error") {
       dl.state = "error";
       scheduleDlHide();
+    } else if (dl.timer) {
+      // идёт следующая загрузка — отложенное скрытие отменяется
+      clearTimeout(dl.timer);
+      dl.timer = null;
     }
 
     renderDownloads();
