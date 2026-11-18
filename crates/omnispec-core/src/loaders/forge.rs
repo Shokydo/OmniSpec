@@ -128,6 +128,8 @@ async fn run_installer(
     url: &str,
     file_name: &str,
     marker: &str,
+    mc_version: &str,
+    loader_version: &str,
     java_major: u32,
     reporter: &Reporter,
 ) -> Result<String> {
@@ -167,13 +169,28 @@ async fn run_installer(
     reporter.emit("loader", 3, 3, "инсталлятор отработал");
     let after = list_version_ids(paths);
     let created: Vec<String> = after
-        .into_iter()
-        .filter(|id| !before.contains(id) && id.to_lowercase().contains(marker))
+        .iter()
+        .filter(|id| !before.contains(*id) && id.to_lowercase().contains(marker))
+        .cloned()
         .collect();
-    created
-        .into_iter()
-        .next()
-        .ok_or_else(|| Error::Other("инсталлятор не создал профиль версии".into()))
+    if let Some(id) = created.into_iter().next() {
+        return Ok(id);
+    }
+    // Новой папки нет — инсталлятор уже был запущен раньше (например, второй
+    // экземпляр с той же версией Forge/NeoForge). Ищем существующий профиль
+    // по внутреннему id json: он содержит и версию игры, и версию загрузчика.
+    let existing = after
+        .iter()
+        .filter(|id| id.to_lowercase().contains(marker))
+        .find(|candidate| {
+            profile_json_id(paths, candidate)
+                .map(|json_id| {
+                    json_id.contains(mc_version) && json_id.contains(loader_version)
+                })
+                .unwrap_or(false)
+        })
+        .cloned();
+    existing.ok_or_else(|| Error::Other("инсталлятор не создал профиль версии".into()))
 }
 
 fn list_version_ids(paths: &Paths) -> Vec<String> {
@@ -202,7 +219,18 @@ pub async fn install_forge(
     let url = format!("{FORGE_MAVEN}/{mc_version}-{forge_version}/forge-{mc_version}-{forge_version}-installer.jar");
     let file_name = format!("forge-{mc_version}-{forge_version}-installer.jar");
     let java_major = required_java_major(paths, mc_version);
-    let id = run_installer(http, paths, &url, &file_name, "forge", java_major, reporter).await?;
+    let id = run_installer(
+        http,
+        paths,
+        &url,
+        &file_name,
+        "forge",
+        mc_version,
+        forge_version,
+        java_major,
+        reporter,
+    )
+    .await?;
     let expected = format!("forge-{mc_version}-{forge_version}");
     Ok(resolve_installed_id(paths, &id, &expected))
 }
@@ -220,7 +248,18 @@ pub async fn install_neoforge(
     let url = format!("{NEOFORGE_MAVEN}/{neoforge_version}/neoforge-{neoforge_version}-installer.jar");
     let file_name = format!("neoforge-{neoforge_version}-installer.jar");
     let java_major = required_java_major(paths, mc_version);
-    let id = run_installer(http, paths, &url, &file_name, "neoforge", java_major, reporter).await?;
+    let id = run_installer(
+        http,
+        paths,
+        &url,
+        &file_name,
+        "neoforge",
+        mc_version,
+        neoforge_version,
+        java_major,
+        reporter,
+    )
+    .await?;
 
     // Некоторые версии инсталлятора создают папку вида "1.21.4-neoforge-21.4.100"
     // или кладут внутрь json с другим именем — ищем профиль по внутреннему id.
