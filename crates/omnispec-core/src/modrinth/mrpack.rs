@@ -328,22 +328,12 @@ pub async fn install_archive(
         4,
         format!("скачиваем файлов: {}", items.len()),
     );
-    let total = items.len() as u64;
-    let mut done = 0u64;
-    let http = modrinth.http().clone();
-    let reporter_inner = reporter.clone();
-    let mut stream = futures::stream::iter(items.into_iter().map(|item| {
-        let http = http.clone();
-        async move { http.download(&item.url, &item.dest, item.size, None, false).await }
-    }))
-    .buffer_unordered(8)
-    .boxed();
-    use futures::StreamExt;
-    while let Some(result) = stream.next().await {
-        done += 1;
-        result?;
-        reporter_inner.emit("modpack", done, total, format!("файлов {done}/{total}"));
-    }
+    // download_all сам проверяет, что уже лежит на диске, шлёт построчный
+    // и общий прогресс и умеет отмену по флагу.
+    modrinth
+        .http()
+        .download_all(items, 8, reporter, "modpack")
+        .await?;
 
     reporter.emit("modpack", 3, 4, "распаковываем overrides");
     let extracted = extract_overrides(archive, &game_dir)?;

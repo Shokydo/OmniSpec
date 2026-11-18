@@ -23,6 +23,9 @@ pub enum Error {
     #[error("не хватает Java: {0}")]
     Java(String),
 
+    #[error("загрузка отменена пользователем")]
+    Cancelled,
+
     #[error("{0}")]
     Other(String),
 }

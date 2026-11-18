@@ -2026,6 +2026,7 @@
     installMod: (instanceId, projectId) => invoke("install_mod", { instanceId, projectId }),
     installModVersion: (instanceId, versionId) => invoke("install_mod_version", { instanceId, versionId }),
     installModpack: (versionId) => invoke("install_modpack", { versionId }),
+    cancelDownload: () => invoke("cancel_download"),
     listDir: (instanceId, sub) => invoke("list_dir", { instanceId, sub }),
     readFile: (instanceId, path) => invoke("read_text_file", { instanceId, path }),
     deleteFile: (instanceId, path) => invoke("delete_file", { instanceId, path }),
@@ -2560,6 +2561,9 @@
       source: "modrinth"
     },
     wall: { wallpaper: null, fit: "cover", blur: 0, dim: 40 },
+    downloads: { active: false, title: "", done: 0, total: 0, files: new Map(), state: "active", collapsed: false, timer: null },
+    installedProjects: new Set(),
+    downloadingProjects: new Set(),
     update: { info: null, version: "0.1.0", repo: null, enabled: true, checking: false, installing: false },
     theme: "dark",
     customTheme: { ...CUSTOM_THEME_DEFAULT },
@@ -3320,6 +3324,7 @@
     closeAccountPopover();
     state.selectedId = id;
     const meta = selected();
+    refreshInstalledProjects();
     renderSidebar();
     $("#tb-name").textContent = meta ? meta.name : "OmniSpec";
     // версия видна текстом; менять её — на странице сборки
@@ -3448,6 +3453,190 @@
       }
     }
     if (payload.stage === "launch" && payload.done >= payload.total) setTimeout(() => setProgress(null), 2500);
+    updateDownloads(payload);
+  }
+
+  /* ==================== ПАНЕЛЬ ЗАГРУЗОК ==================== */
+  const DL_STAGE_TITLES = {
+    modpack: "Установка сборки", mods: "Установка модов",
+    libraries: "Библиотеки игры", assets: "Ресурсы игры",
+    version: "Версия игры", java: "Java", loader: "Загрузчик",
+    import: "Импорт", unzip: "Распаковка", copy: "Копирование"
+  };
+
+  function fmtBytes(n) {
+    n = Number(n || 0);
+    if (n <= 0) return "";
+    const units = ["Б", "КБ", "МБ", "ГБ"];
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return `${n >= 100 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
+  }
+
+  /** Обновить состояние панели загрузок по событию прогресса. */
+  function updateDownloads(payload) {
+    const dl = state.downloads;
+    if (!payload) return;
+    const stage = String(payload.stage || "");
+    const isDownloadStage = ["modpack", "mods", "libraries", "assets", "version", "java", "loader", "import"].includes(stage);
+    if (!isDownloadStage) return;
+
+    // Новая операция (этап сменился или панель была завершена) — сброс.
+    if (!dl.active || dl.stage !== stage) {
+      dl.active = true;
+      dl.stage = stage;
+      dl.title = DL_STAGE_TITLES[stage] || "Загрузка";
+      dl.done = 0; dl.total = 0;
+      dl.files = new Map();
+      dl.state = "active";
+      dl.collapsed = false;
+      if (dl.timer) { clearTimeout(dl.timer); dl.timer = null; }
+    }
+
+    // Общий прогресс по файлам.
+    const total = Number(payload.total || 0);
+    const done = Number(payload.done || 0);
+    if (total > 0) { dl.total = total; dl.done = done; }
+
+    // Построчный байтовый прогресс.
+    if (payload.file && Number(payload.bytes_total || 0) > 0) {
+      dl.files.set(payload.file, {
+        done: Number(payload.bytes_done || 0),
+        total: Number(payload.bytes_total || 0),
+        complete: false
+      });
+    }
+    // Файл завершён (событие без байтов, но с именем файла).
+    if (payload.file && !Number(payload.bytes_total || 0)) {
+      const entry = dl.files.get(payload.file);
+      if (entry) entry.complete = true;
+    }
+
+    // Финальные состояния.
+    if (payload.state === "done" || (total > 0 && done >= total && payload.detail === "готово")) {
+      dl.state = "done";
+      dl.files.forEach((entry) => { entry.complete = true; entry.done = entry.total; });
+      scheduleDlHide();
+    } else if (payload.state === "cancelled") {
+      dl.state = "cancelled";
+      scheduleDlHide();
+    } else if (payload.state === "error") {
+      dl.state = "error";
+      scheduleDlHide();
+    }
+
+    renderDownloads();
+  }
+
+  function scheduleDlHide() {
+    const dl = state.downloads;
+    if (dl.timer) clearTimeout(dl.timer);
+    dl.timer = setTimeout(() => {
+      dl.active = false;
+      renderDownloads();
+    }, 6000);
+  }
+
+  function renderDownloads() {
+    const dl = state.downloads;
+    const panel = $("#dl-panel");
+    if (!panel) return;
+    if (!dl.active) { panel.hidden = true; return; }
+    panel.hidden = false;
+    panel.classList.toggle("is-collapsed", dl.collapsed);
+    panel.classList.toggle("is-done", dl.state === "done");
+    panel.classList.toggle("is-cancelled", dl.state === "cancelled" || dl.state === "error");
+
+    const title = $("#dl-title");
+    if (title) {
+      title.textContent = dl.state === "done" ? `${dl.title} — готово`
+        : dl.state === "cancelled" ? `${dl.title} — отменено`
+        : dl.state === "error" ? `${dl.title} — ошибка`
+        : dl.title;
+    }
+
+    // Общий прогресс.
+    const percent = dl.total > 0 ? Math.min(100, Math.round((dl.done / dl.total) * 100)) : 0;
+    const pctEl = $("#dl-percent");
+    if (pctEl) pctEl.textContent = dl.total > 0 ? `${percent}%` : "";
+    const fill = $("#dl-total-fill");
+    if (fill) fill.style.width = `${percent}%`;
+    const totalText = $("#dl-total-text");
+    if (totalText) totalText.textContent = dl.total > 0 ? `${dl.done}/${dl.total} файлов` : "";
+
+    // Построчные полосы.
+    const filesEl = $("#dl-files");
+    if (filesEl) {
+      const entries = [...dl.files.entries()].slice(-12);
+      filesEl.innerHTML = entries.map(([name, info]) => {
+        const p = info.total > 0 ? Math.min(100, Math.round((info.done / info.total) * 100)) : (info.complete ? 100 : 0);
+        const size = info.total > 0 ? `${fmtBytes(info.done)} / ${fmtBytes(info.total)}` : (info.complete ? "готово" : "…");
+        return `<div class="dl-file${info.complete ? " is-done" : ""}">
+          <div class="dl-file-top">
+            <span class="dl-file-name" title="${esc(name)}">${esc(name)}</span>
+            <span class="dl-file-size">${size}</span>
+          </div>
+          <div class="progress-bar"><div class="progress-fill" style="width:${p}%"></div></div>
+        </div>`;
+      }).join("");
+    }
+
+    // Кнопка отмены видна только во время активной загрузки.
+    const cancelBtn = $("#dl-cancel");
+    if (cancelBtn) cancelBtn.style.display = dl.state === "active" ? "" : "none";
+  }
+
+  function initDownloadsPanel() {
+    const head = $("#dl-head");
+    if (head) head.addEventListener("click", (e) => {
+      if (e.target.closest("#dl-cancel")) return;
+      state.downloads.collapsed = !state.downloads.collapsed;
+      renderDownloads();
+    });
+    const cancelBtn = $("#dl-cancel");
+    if (cancelBtn) cancelBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try { await api.cancelDownload(); } catch (_) { /* noop */ }
+      toast("Загрузка отменена", "info");
+    });
+  }
+
+  /* ==================== БЕЙДЖИ УСТАНОВЛЕННЫХ МОДОВ ==================== */
+  /** Подтянуть id проектов, уже стоящих в текущей сборке (для бейджей). */
+  async function refreshInstalledProjects() {
+    const meta = selected();
+    if (!meta) { state.installedProjects = new Set(); return; }
+    try {
+      const entries = await api.contentList(meta.id, "mod");
+      const ids = new Set();
+      for (const entry of entries || []) {
+        if (entry.project_id) ids.add(entry.project_id);
+      }
+      state.installedProjects = ids;
+    } catch (_) { /* без бейджей */ }
+  }
+
+  /** Бейдж для карточки проекта: «скачивается» важнее, чем «установлен». */
+  function projectBadge(projectId) {
+    if (!projectId) return "";
+    if (state.downloadingProjects.has(projectId)) {
+      return `<span class="tag tag-downloading">скачивается…</span>`;
+    }
+    if (state.installedProjects.has(projectId)) {
+      return `<span class="tag tag-installed">установлен</span>`;
+    }
+    return "";
+  }
+
+  /** Пометить проект как скачиваемый на время установки. */
+  async function withDownloading(projectId, fn) {
+    if (projectId) state.downloadingProjects.add(projectId);
+    try {
+      return await fn();
+    } finally {
+      if (projectId) state.downloadingProjects.delete(projectId);
+      await refreshInstalledProjects();
+    }
   }
 
   /* ==================== ВКЛАДКИ ==================== */
@@ -5621,6 +5810,7 @@
         <div class="card-title">${esc(hit.title)}</div>
         <div class="card-desc">${esc(hit.description)}</div>
         <div class="card-meta">
+          ${projectBadge(hit.project_id)}
           ${(hit.categories || []).slice(0, 3).map((cat) => `<span class="tag">${esc(cat)}</span>`).join("")}
           <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
         </div>
@@ -5814,7 +6004,7 @@
     const meta = selected();
     if (!meta) return toast("Сначала выбери сборку", "err");
     try {
-      const outcome = await api.installMod(meta.id, projectId);
+      const outcome = await withDownloading(projectId, () => api.installMod(meta.id, projectId));
       toast(outcome.installed.length ? `Установлено: ${outcome.installed.join(", ")}` : "Уже установлено", "ok");
       if (state.tab === "modrinth") renderTab();
     } catch (err) { toast(String(err), "err"); }
@@ -6027,6 +6217,7 @@
         <div class="card-title">${esc(hit.title)}</div>
         <div class="card-desc">${esc(hit.description)}</div>
         <div class="card-meta">
+          ${projectBadge(hit.project_id)}
           <span class="tag">curseforge</span>
           ${(hit.categories || []).slice(0, 2).map((cat) => `<span class="tag">${esc(cat)}</span>`).join("")}
           <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
@@ -6054,6 +6245,7 @@
         <div class="card-title">${esc(hit.title)}</div>
         <div class="card-desc">${esc(hit.description)}</div>
         <div class="card-meta">
+          ${projectBadge(hit.project_id)}
           <span class="tag">curseforge</span>
           ${(hit.categories || []).slice(0, 2).map((cat) => `<span class="tag">${esc(cat)}</span>`).join("")}
           <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
@@ -6185,7 +6377,7 @@
     if (!meta) return toast("Сначала выбери сборку", "err");
     if (btn) { btn.disabled = true; }
     try {
-      const outcome = await api.installCurseforge(meta.id, projectId, null);
+      const outcome = await withDownloading(projectId, () => api.installCurseforge(meta.id, projectId, null));
       toast(
         outcome.installed.length
           ? `Установлено: ${outcome.installed.join(", ")}`
@@ -9554,7 +9746,11 @@
   }
 
   function bindEvents() {
-    $$(".tab").forEach((tab) => tab.addEventListener("click", () => { state.tab = tab.dataset.tab; renderTab(); }));
+    $$(".tab").forEach((tab) => tab.addEventListener("click", () => {
+      state.tab = tab.dataset.tab;
+      if (state.tab === "modrinth" || state.tab === "curseforge") refreshInstalledProjects();
+      renderTab();
+    }));
     on("#btn-play", "click", play);
     on("#btn-stop", "click", stopGame);
     on("#btn-restart", "click", async () => { await stopGame(); setTimeout(play, 800); });
@@ -9922,6 +10118,7 @@
   async function init() {
     bindEvents();
     initClickFx();
+    initDownloadsPanel();
     try {
       state.settings = await api.settings();
     } catch { state.settings = { ...DEMO.settings }; }

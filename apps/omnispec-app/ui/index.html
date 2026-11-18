@@ -172,6 +172,28 @@
   </div>
 </div>
 
+<!-- ============ ПАНЕЛЬ АКТИВНЫХ ЗАГРУЗОК ============ -->
+<div class="dl-panel" id="dl-panel" hidden>
+  <div class="dl-head" id="dl-head">
+    <svg class="ic dl-ic"><use href="#i-download"/></svg>
+    <span class="dl-title" id="dl-title">Загрузка</span>
+    <span class="dl-percent" id="dl-percent"></span>
+    <button class="icon-btn dl-cancel" id="dl-cancel" title="Отменить загрузку">
+      <svg class="ic"><use href="#i-close"/></svg>
+    </button>
+    <button class="icon-btn dl-toggle" id="dl-toggle" title="Свернуть/развернуть">
+      <svg class="ic dl-chevron"><use href="#i-chev"/></svg>
+    </button>
+  </div>
+  <div class="dl-body" id="dl-body">
+    <div class="dl-total">
+      <div class="progress-bar"><div class="progress-fill" id="dl-total-fill"></div></div>
+      <span class="dl-total-text" id="dl-total-text"></span>
+    </div>
+    <div class="dl-files" id="dl-files"></div>
+  </div>
+</div>
+
 <!-- ============ МОДАЛКА СОЗДАНИЯ ============ -->
 <div class="modal-backdrop" id="modal-create" hidden>
   <div class="modal">

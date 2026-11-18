@@ -10,6 +10,35 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 
+/// Глобальный флаг отмены текущей загрузки (панель загрузок в UI).
+/// Операции идут по одной, поэтому одного флага достаточно: он сбрасывается
+/// в начале каждой крупной операции и проверяется в циклах скачивания.
+static CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Сбросить флаг отмены (вызывать перед стартом новой операции).
+pub fn reset_cancel() {
+    CANCELLED.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Отменить текущую загрузку (кнопка в панели загрузок).
+pub fn cancel_current() {
+    CANCELLED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Проверен ли флаг отмены.
+pub fn is_cancelled() -> bool {
+    CANCELLED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Ошибка, если загрузку отменили.
+fn check_cancel() -> Result<()> {
+    if is_cancelled() {
+        Err(Error::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
 /// Событие прогресса для UI.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProgressEvent {
@@ -21,6 +50,21 @@ pub struct ProgressEvent {
     pub total: u64,
     /// Что именно делаем прямо сейчас.
     pub detail: String,
+    /// Байт скачано в текущем файле (0 — не байтовый прогресс).
+    #[serde(default)]
+    pub bytes_done: u64,
+    /// Размер текущего файла в байтах (0 — неизвестен).
+    #[serde(default)]
+    pub bytes_total: u64,
+    /// Имя текущего файла (для построчного прогресса в панели загрузок).
+    #[serde(default)]
+    pub file: String,
+    /// Состояние операции: "active" | "done" | "cancelled" | "error".
+    #[serde(default)]
+    pub state: String,
+    /// Идентификатор операции (панель загрузок группирует события по нему).
+    #[serde(default)]
+    pub op: String,
 }
 
 pub type ProgressFn = Arc<dyn Fn(ProgressEvent) + Send + Sync>;
@@ -30,6 +74,7 @@ pub type ProgressFn = Arc<dyn Fn(ProgressEvent) + Send + Sync>;
 pub struct Reporter {
     callback: Option<ProgressFn>,
     stage: Option<String>,
+    op: Option<String>,
 }
 
 impl Reporter {
@@ -37,6 +82,7 @@ impl Reporter {
         Self {
             callback: Some(Arc::new(callback)),
             stage: None,
+            op: None,
         }
     }
 
@@ -50,6 +96,16 @@ impl Reporter {
         self
     }
 
+    /// Идентификатор операции (для панели загрузок и отмены).
+    pub fn with_op(mut self, op: impl Into<String>) -> Self {
+        self.op = Some(op.into());
+        self
+    }
+
+    pub fn op(&self) -> Option<&str> {
+        self.op.as_deref()
+    }
+
     pub fn emit(&self, stage: &str, done: u64, total: u64, detail: impl Into<String>) {
         if let Some(cb) = &self.callback {
             cb(ProgressEvent {
@@ -57,6 +113,45 @@ impl Reporter {
                 done,
                 total,
                 detail: detail.into(),
+                bytes_done: 0,
+                bytes_total: 0,
+                file: String::new(),
+                state: "active".to_string(),
+                op: self.op.clone().unwrap_or_default(),
+            });
+        }
+    }
+
+    /// Байтовый прогресс одного файла: `done` из `total` байт.
+    pub fn emit_bytes(&self, stage: &str, file: &str, done: u64, total: u64) {
+        if let Some(cb) = &self.callback {
+            cb(ProgressEvent {
+                stage: stage.to_string(),
+                done,
+                total,
+                detail: format!("{file}: {done}/{total} байт"),
+                bytes_done: done,
+                bytes_total: total,
+                file: file.to_string(),
+                state: "active".to_string(),
+                op: self.op.clone().unwrap_or_default(),
+            });
+        }
+    }
+
+    /// Финальное состояние операции ("done" | "cancelled" | "error").
+    pub fn emit_state(&self, stage: &str, state: &str, detail: impl Into<String>) {
+        if let Some(cb) = &self.callback {
+            cb(ProgressEvent {
+                stage: stage.to_string(),
+                done: 0,
+                total: 0,
+                detail: detail.into(),
+                bytes_done: 0,
+                bytes_total: 0,
+                file: String::new(),
+                state: state.to_string(),
+                op: self.op.clone().unwrap_or_default(),
             });
         }
     }
@@ -272,7 +367,21 @@ impl Http {
         sha1: Option<&str>,
         force: bool,
     ) -> Result<bool> {
-        self.download_inner(url, dest, expected_size, sha1, force, None)
+        self.download_inner(url, dest, expected_size, sha1, force, None, None)
+            .await
+    }
+
+    /// Скачать файл с байтовым прогрессом: `on_progress(скачано, всего)`.
+    pub async fn download_tracked(
+        &self,
+        url: &str,
+        dest: &Path,
+        expected_size: Option<u64>,
+        sha1: Option<&str>,
+        force: bool,
+        on_progress: &dyn Fn(u64, u64),
+    ) -> Result<bool> {
+        self.download_inner(url, dest, expected_size, sha1, force, None, Some(on_progress))
             .await
     }
 
@@ -284,7 +393,7 @@ impl Http {
         expected_size: Option<u64>,
         token: Option<&str>,
     ) -> Result<bool> {
-        self.download_inner(url, dest, expected_size, None, true, token)
+        self.download_inner(url, dest, expected_size, None, true, token, None)
             .await
     }
 
@@ -296,6 +405,7 @@ impl Http {
         sha1: Option<&str>,
         force: bool,
         token: Option<&str>,
+        on_progress: Option<&dyn Fn(u64, u64)>,
     ) -> Result<bool> {
         if !force && token.is_none() {
             if let Ok(meta) = tokio::fs::metadata(dest).await {
@@ -318,12 +428,14 @@ impl Http {
         // клиентом, дальше — запасной HTTP/1.1 без пула.
         let mut last: Option<Error> = None;
         for attempt in 0..3u64 {
+            check_cancel()?;
             let client = if attempt == 0 { &self.client } else { &self.fallback };
             match self
-                .download_once(client, url, dest, sha1, token)
+                .download_once(client, url, dest, sha1, token, on_progress)
                 .await
             {
                 Ok(downloaded) => return Ok(downloaded),
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
                 Err(error) => {
                     let _ = tokio::fs::remove_file(dest.with_extension("omnispec-part")).await;
                     last = Some(error);
@@ -335,6 +447,7 @@ impl Http {
     }
 
     /// Одна попытка скачивания файла во временный `.omnispec-part` + rename.
+    /// `on_progress` получает (скачано_байт, всего_байт) — для панели загрузок.
     async fn download_once(
         &self,
         client: &reqwest::Client,
@@ -342,7 +455,9 @@ impl Http {
         dest: &Path,
         sha1: Option<&str>,
         token: Option<&str>,
+        on_progress: Option<&dyn Fn(u64, u64)>,
     ) -> Result<bool> {
+        check_cancel()?;
         let tmp = dest.with_extension("omnispec-part");
         let mut request = client.get(url);
         if let Some(token) = token.filter(|value| !value.trim().is_empty()) {
@@ -355,12 +470,27 @@ impl Http {
         if !status.is_success() {
             return Err(Error::Other(format!("{url} → HTTP {status}")));
         }
+        let total = response.content_length().unwrap_or(0);
         let mut file = tokio::fs::File::create(&tmp).await?;
         let mut stream = response.bytes_stream();
         use tokio::io::AsyncWriteExt;
+        let mut downloaded: u64 = 0;
+        let mut last_report = std::time::Instant::now();
         while let Some(chunk) = stream.next().await {
+            check_cancel()?;
             let chunk = chunk?;
+            downloaded += chunk.len() as u64;
             file.write_all(&chunk).await?;
+            // Троттлим события прогресса: не чаще раза в 100 мс.
+            if let Some(cb) = on_progress {
+                if last_report.elapsed() >= Duration::from_millis(100) {
+                    cb(downloaded, total);
+                    last_report = std::time::Instant::now();
+                }
+            }
+        }
+        if let Some(cb) = on_progress {
+            cb(downloaded, total);
         }
         file.flush().await?;
         drop(file);
@@ -370,6 +500,10 @@ impl Http {
     }
 
     /// Скачать много файлов параллельно с общим прогрессом.
+    ///
+    /// Сначала проверяем, что уже лежит на диске (по размеру): качаем только
+    /// недостающее и честно докладываем «уже есть X, качаем Y». Во время
+    /// загрузки шлём общий байтовый прогресс и построчные события по файлам.
     pub async fn download_all(
         &self,
         items: Vec<DownloadItem>,
@@ -377,26 +511,67 @@ impl Http {
         reporter: &Reporter,
         stage: &str,
     ) -> Result<()> {
-        let total = items.len() as u64;
-        if total == 0 {
+        check_cancel()?;
+        let total_files = items.len() as u64;
+        if total_files == 0 {
             return Ok(());
         }
-        let mut done = 0u64;
-        reporter.emit(stage, 0, total, format!("файлов в очереди: {total}"));
+
+        // Предпроверка: что уже скачано (файл есть и размер совпал).
+        let mut missing: Vec<DownloadItem> = Vec::new();
+        let mut present: u64 = 0;
+        for item in items {
+            let ok = match (item.size, std::fs::metadata(&item.dest)) {
+                (Some(size), Ok(meta)) => meta.len() == size,
+                (None, Ok(meta)) => meta.len() > 0,
+                _ => false,
+            };
+            if ok {
+                present += 1;
+            } else {
+                missing.push(item);
+            }
+        }
+        let total_bytes: u64 = missing.iter().filter_map(|item| item.size).sum();
+        reporter.emit(
+            stage,
+            present,
+            total_files,
+            format!("проверка: уже есть {present}, скачиваем {}", missing.len()),
+        );
+        if missing.is_empty() {
+            reporter.emit(stage, total_files, total_files, "все файлы на месте");
+            return Ok(());
+        }
 
         let client = self.clone();
         let reporter_clone = reporter.clone();
-        let results: Vec<Result<()>> = futures::stream::iter(items)
+        let results: Vec<Result<()>> = futures::stream::iter(missing)
             .map(|item| {
                 let client = client.clone();
                 let reporter = reporter_clone.clone();
                 let stage = stage.to_string();
                 async move {
+                    let file_name = item
+                        .dest
+                        .file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                        .unwrap_or_else(|| item.dest.display().to_string());
+                    // Построчный байтовый прогресс — UI рисует полосу по файлу.
                     let res = client
-                        .download(&item.url, &item.dest, item.size, item.sha1.as_deref(), false)
+                        .download_tracked(
+                            &item.url,
+                            &item.dest,
+                            item.size,
+                            item.sha1.as_deref(),
+                            false,
+                            &|done, total| {
+                                reporter.emit_bytes(&stage, &file_name, done, total);
+                            },
+                        )
                         .await
                         .map(|_| ());
-                    reporter.emit(&stage, 0, 0, item.dest.display().to_string());
+                    reporter.emit(&stage, 0, 0, format!("файл: {file_name}"));
                     res
                 }
             })
@@ -404,12 +579,27 @@ impl Http {
             .collect()
             .await;
 
+        let mut done_files = present;
         for result in results {
-            done += 1;
-            reporter.emit(stage, done, total, format!("{done}/{total}"));
+            if let Err(Error::Cancelled) = result {
+                reporter.emit_state(stage, "cancelled", "загрузка отменена");
+                return Err(Error::Cancelled);
+            }
+            check_cancel().map_err(|_| {
+                reporter.emit_state(stage, "cancelled", "загрузка отменена");
+                Error::Cancelled
+            })?;
+            done_files += 1;
+            reporter.emit(
+                stage,
+                done_files,
+                total_files,
+                format!("файлов {done_files}/{total_files}"),
+            );
             result?;
         }
-        reporter.emit(stage, total, total, "готово");
+        reporter.emit(stage, total_files, total_files, "готово");
+        reporter.emit_state(stage, "done", "готово");
         Ok(())
     }
 }

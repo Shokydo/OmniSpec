@@ -403,6 +403,42 @@ input, select, textarea { font: inherit; color: inherit; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px;
 }
 
+/* ═══════════════════ панель активных загрузок ═══════════════════ */
+.dl-panel {
+  position: fixed; right: 16px; bottom: 16px; z-index: 900;
+  width: 340px; max-width: calc(100vw - 32px);
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: 0 12px 40px rgba(0,0,0,.45);
+  overflow: hidden; font-size: 12px;
+}
+.dl-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 10px; cursor: pointer; user-select: none;
+  background: var(--bg-3);
+}
+.dl-ic { color: var(--accent); flex: none; }
+.dl-title { font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl-percent { color: var(--dim-2); font-variant-numeric: tabular-nums; }
+.dl-cancel { color: var(--danger, #e5484d); }
+.dl-cancel:hover { background: rgba(229,72,77,.15); }
+.dl-chevron { transition: transform .2s; }
+.dl-panel.is-collapsed .dl-chevron { transform: rotate(-90deg); }
+.dl-panel.is-collapsed .dl-body { display: none; }
+.dl-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+.dl-total { display: flex; align-items: center; gap: 8px; }
+.dl-total .progress-bar { flex: 1; height: 6px; }
+.dl-total-text { color: var(--dim-2); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dl-files { display: flex; flex-direction: column; gap: 7px; max-height: 220px; overflow-y: auto; }
+.dl-file { display: flex; flex-direction: column; gap: 3px; }
+.dl-file-top { display: flex; align-items: center; gap: 6px; }
+.dl-file-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.dl-file-size { color: var(--dim-2); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dl-file .progress-bar { width: 100%; height: 4px; }
+.dl-file.is-done .dl-file-name { color: var(--dim-2); }
+.dl-file.is-done .progress-fill { background: var(--ok, #46a758); }
+.dl-panel.is-done .dl-ic { color: var(--ok, #46a758); }
+.dl-panel.is-cancelled .dl-ic { color: var(--danger, #e5484d); }
+
 .tab-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
 /* ═════════════════════════════ консоль ═════════════════════════════ */
@@ -725,6 +761,9 @@ input, select, textarea { font: inherit; color: inherit; }
 .tag.green { color: var(--green); }
 .tag.red { color: var(--red); }
 .tag.blue { color: var(--blue); }
+.tag-installed { color: var(--ok, #46a758); border-color: rgba(70,167,88,.4); background: rgba(70,167,88,.12); }
+.tag-downloading { color: var(--accent); border-color: var(--accent); background: rgba(99,102,241,.12); animation: tag-pulse 1.2s ease-in-out infinite; }
+@keyframes tag-pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
 
 /* переключатель */
 .switch {

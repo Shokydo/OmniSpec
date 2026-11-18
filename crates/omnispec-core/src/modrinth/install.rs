@@ -136,9 +136,20 @@ async fn install_recursive(
         reporter.emit("mods", 0, 0, format!("уже установлен: {}", file.filename));
     } else {
         reporter.emit("mods", 0, 0, format!("скачиваем {}", file.filename));
+        let reporter_progress = reporter.clone();
+        let file_name = file.filename.clone();
         modrinth
             .http()
-            .download(&file.url, &dest, Some(file.size), None, true)
+            .download_tracked(
+                &file.url,
+                &dest,
+                Some(file.size),
+                None,
+                true,
+                &|done, total| {
+                    reporter_progress.emit_bytes("mods", &file_name, done, total);
+                },
+            )
             .await?;
         outcome.installed.push(file.filename.clone());
         // картотека: по ней потом ищутся обновления и зависимости

@@ -106,9 +106,20 @@ async fn install_recursive(
     } else {
         reporter.emit("mods", 0, 0, format!("скачиваем {}", file.filename));
         let sha1 = file.hashes.get("sha1").cloned();
+        let reporter_progress = reporter.clone();
+        let file_name = file.filename.clone();
         curseforge
             .http()
-            .download(&url, &dest, Some(file.size), sha1.as_deref(), true)
+            .download_tracked(
+                &url,
+                &dest,
+                Some(file.size),
+                sha1.as_deref(),
+                true,
+                &|done, total| {
+                    reporter_progress.emit_bytes("mods", &file_name, done, total);
+                },
+            )
             .await?;
         outcome.installed.push(file.filename.clone());
         crate::content::remember(

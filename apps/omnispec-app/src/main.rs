@@ -55,6 +55,8 @@ fn err<E: std::fmt::Display>(error: E) -> String {
 
 /// Reporter, который отправляет прогресс в UI событием `progress`.
 fn reporter_for(app: &AppHandle, instance_id: &str) -> Reporter {
+    // Новая операция — сбрасываем флаг отмены прошлой загрузки.
+    omnispec_core::net::reset_cancel();
     let app = app.clone();
     let instance_id = instance_id.to_string();
     Reporter::new(move |event| {
@@ -66,6 +68,11 @@ fn reporter_for(app: &AppHandle, instance_id: &str) -> Reporter {
                 "done": event.done,
                 "total": event.total,
                 "detail": event.detail,
+                "bytes_done": event.bytes_done,
+                "bytes_total": event.bytes_total,
+                "file": event.file,
+                "state": event.state,
+                "op": event.op,
             }),
         );
     })
@@ -672,6 +679,12 @@ async fn install_mod_version(
     modrinth_install::install_version(&state.modrinth, &state.paths, &meta, &version_id, &reporter)
         .await
         .map_err(err)
+}
+
+/// Отменить текущую загрузку (кнопка в панели загрузок).
+#[tauri::command]
+fn cancel_download() {
+    omnispec_core::net::cancel_current();
 }
 
 /// Установить модпак: принимает id версии Modrinth **или** путь к локальному `.mrpack`.
@@ -2828,6 +2841,7 @@ fn main() {
             install_mod,
             install_mod_version,
             install_modpack,
+            cancel_download,
             list_dir,
             read_text_file,
             delete_file,
