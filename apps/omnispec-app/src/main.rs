@@ -30,6 +30,9 @@ use omnispec_core::paths::Paths;
 use omnispec_core::settings::Settings;
 use omnispec_core::update::{self, UpdateInfo};
 
+/// Discord Rich Presence (локальный IPC Discord).
+mod presence;
+
 type ChildHandle = Arc<Mutex<tokio::process::Child>>;
 
 struct AppState {
@@ -42,6 +45,8 @@ struct AppState {
     curseforge: CurseForge,
     settings: Mutex<Settings>,
     running: Arc<Mutex<HashMap<String, ChildHandle>>>,
+    /// Статус в Discord: фронт пишет через set_presence, воркер шлёт в IPC.
+    presence: presence::Presence,
 }
 
 fn err<E: std::fmt::Display>(error: E) -> String {
@@ -95,9 +100,29 @@ async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
 
 #[tauri::command]
 async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
+    state
+        .presence
+        .configure(&settings.discord_client_id, settings.discord_rpc);
     settings.save(&state.paths).map_err(err)?;
     *state.settings.lock().await = settings;
     Ok(())
+}
+
+/// Статус в Discord: фронт сообщает режим, сборку и время начала.
+#[tauri::command]
+fn set_presence(
+    state: State<'_, AppState>,
+    mode: String,
+    details: String,
+    state_text: String,
+    started_at: Option<u64>,
+) {
+    state.presence.set(presence::PresenceInfo {
+        mode,
+        details,
+        state: state_text,
+        started_at,
+    });
 }
 
 /* ==================== СБОРКИ ==================== */
@@ -2675,6 +2700,12 @@ fn main() {
     let startup_path = std::env::args()
         .skip(1)
         .find(|arg| !arg.starts_with('-') && std::path::Path::new(arg).exists());
+    // Discord Rich Presence: воркер в фоне, молча ждёт Client ID в настройках.
+    let presence = presence::Presence::new();
+    presence.configure(&settings.discord_client_id, settings.discord_rpc);
+    let presence_worker = presence.clone();
+    std::thread::spawn(move || presence_worker.run());
+
     let state = AppState {
         modrinth: Modrinth::new(http.clone()),
         curseforge: CurseForge::new(http.clone()),
@@ -2684,6 +2715,7 @@ fn main() {
         http,
         settings: Mutex::new(settings),
         running: Arc::new(Mutex::new(HashMap::new())),
+        presence,
     };
 
     tauri::Builder::default()
@@ -2704,6 +2736,7 @@ fn main() {
             app_info,
             get_settings,
             save_settings,
+            set_presence,
             list_instances,
             create_instance,
             delete_instance,

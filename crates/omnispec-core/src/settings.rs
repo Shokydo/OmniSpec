@@ -154,6 +154,13 @@ pub struct Settings {
     /// Свой client id Azure для входа через Microsoft (пусто — публичный ID лаунчера).
     pub ms_client_id: Option<String>,
 
+    /// Показывать статус лаунчера в Discord (Rich Presence).
+    #[serde(default = "default_true")]
+    pub discord_rpc: bool,
+    /// Client ID приложения Discord для Rich Presence (пусто — выключено).
+    #[serde(default)]
+    pub discord_client_id: String,
+
     /* ---------- оформление ---------- */
     /// Обои: имя встроенных (`grid`, `aurora`, …) или путь к своему файлу.
     pub wallpaper: Option<String>,
@@ -317,6 +324,8 @@ impl Default for Settings {
             last_instance: None,
             proxy: None,
             ms_client_id: None,
+            discord_rpc: true,
+            discord_client_id: String::new(),
             wallpaper: None,
             wallpaper_fit: default_wallpaper_fit(),
             wallpaper_blur: 0,

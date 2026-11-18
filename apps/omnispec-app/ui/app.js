@@ -1472,16 +1472,19 @@
   }
 
   async function launchDuplicate(meta, accountUuid) {
+    syncPresence("launching");
     try {
       const plan = await api.launch(meta.id, accountUuid);
       addSession(meta.id, plan && plan.run_id, plan && plan.account);
       renderSidebar();
       updateStatus();
+      syncPresence();
       const who = (plan && plan.account) ? ` · ${plan.account}` : "";
       toast(`Дубликат запущен${who}`, "ok");
       pushLog(meta.id, `[omnispec] дубликат запущен${who}`, "dim");
     } catch (err) {
       toast(`Не удалось запустить дубликат: ${err}`, "err");
+      syncPresence();
     }
   }
 
@@ -2046,6 +2049,7 @@
     scanExternal: () => invoke("scan_external_launchers"),
     importExternal: (payload) => invoke("import_external", payload),
     exportInstance: (instanceId, path, format, include) => invoke("export_instance", { instanceId, path, format, include }),
+    setPresence: (mode, details, stateText, startedAt) => invoke("set_presence", { mode, details, stateText, startedAt }),
     duplicateInstance: (instanceId) => invoke("duplicate_instance", { instanceId }),
     installZip: (payload) => invoke("import_zip", payload),
     toggleMod: (instanceId, name) => invoke("toggle_mod", { instanceId, name }),
@@ -2445,6 +2449,7 @@
       return meta;
     },
     exportInstance: async (_id, path) => path,
+    setPresence: async () => null,
     duplicateInstance: async (instanceId) => {
       const meta = DEMO.instances.find((item) => item.id === instanceId);
       const copy = meta ? { ...meta, id: meta.id + "-copy", name: meta.name + " (копия)" } : { id: "copy", name: "Копия" };
@@ -3285,6 +3290,25 @@
     await installMrpackPath(path, categoryId);
   }
 
+  /* ==================== DISCORD RICH PRESENCE ==================== */
+  const APP_STARTED_AT = Math.floor(Date.now() / 1000);
+  let presenceStartedAt = null;
+
+  /** Статус в Discord: «В ожидании» / «Запускает» / «Играет» + сборка и таймер. */
+  function syncPresence(forceMode) {
+    if (!IS_APP) return;
+    const meta = selected();
+    const running = !!(meta && state.running.has(meta.id));
+    const mode = forceMode || (running ? "playing" : "idle");
+    if (mode === "idle") presenceStartedAt = null;
+    else if (!presenceStartedAt) presenceStartedAt = Math.floor(Date.now() / 1000);
+    const details = meta ? meta.name : "OmniSpec";
+    const variant = meta ? `MC ${meta.mc_version} · ${loaderLabel(meta.loader)}` : "";
+    const stateText = mode === "playing" ? variant : mode === "launching" ? "Запускает" : "В ожидании";
+    const startedAt = mode === "idle" ? APP_STARTED_AT : presenceStartedAt;
+    api.setPresence(mode, details, stateText, startedAt).catch(() => {});
+  }
+
   function selectInstance(id) {
     closeAccountPopover();
     state.selectedId = id;
@@ -3313,6 +3337,7 @@
     }
     updateStatus();
     renderTab();
+    syncPresence();
   }
 
   function updateStatus() {
@@ -6745,7 +6770,8 @@
     { id: "fx", label: "Эффекты" },
     { id: "sound", label: "Звуки" },
     { id: "game", label: "Игра и Java" },
-    { id: "updates", label: "Обновления" }
+    { id: "updates", label: "Обновления" },
+    { id: "discord", label: "Discord" }
   ];
   let prefsCategory = "look";
 
@@ -6797,6 +6823,7 @@
     if (prefsCategory === "fx") body.innerHTML = prefsFx();
     if (prefsCategory === "game") body.innerHTML = prefsGame(settings);
     if (prefsCategory === "updates") body.innerHTML = prefsUpdates(settings);
+    if (prefsCategory === "discord") body.innerHTML = prefsDiscord(settings);
     if (prefsCategory === "sound") body.innerHTML = prefsSound(settings);
     bindPrefs();
     if (prefsCategory === "profile") {
@@ -7277,6 +7304,27 @@
       </div>`;
   }
 
+  function prefsDiscord(settings) {
+    return `
+      <div class="prefs-section">
+        <div class="prefs-label">Статус в Discord</div>
+        <div class="prefs-rows">
+          <div class="settings-row">
+            <div class="label">Показывать статус</div>
+            <div><div class="switch-row"><button class="switch ${settings.discord_rpc !== false ? "on" : ""}" id="set-discord-rpc"></button><span class="muted">«В ожидании / Запускает / Играет» + сборка</span></div></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Client ID</div>
+            <div><input class="input" style="width:100%" id="set-discord-id" placeholder="например, 123456789012345678" value="${esc(settings.discord_client_id || "")}" spellcheck="false"></div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Как включить</div>
+            <div class="muted" style="line-height:1.55">Создай приложение на <span class="kbd">discord.dev</span> → New Application, скопируй Client ID сюда. Логотип: Rich Presence → Art Assets → Add Image, имя <span class="kbd">logo</span>. После смены Client ID перезапусти лаунчер.</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
   function prefsUpdates(settings) {
     const version = (state.update && state.update.version) || "—";
     const platform = (state.update && state.update.platform) || "";
@@ -7640,6 +7688,8 @@
     if (memory) memory.addEventListener("input", (event) => { $("#set-memory-value").textContent = `${event.target.value} МБ`; });
     const autoJava = $("#set-auto-java");
     if (autoJava) autoJava.addEventListener("click", () => autoJava.classList.toggle("on"));
+    const discordRpc = $("#set-discord-rpc");
+    if (discordRpc) discordRpc.addEventListener("click", () => discordRpc.classList.toggle("on"));
     const updEnabled = $("#set-upd-enabled");
     const updAuto = $("#set-upd-auto");
     // «авто-обновление» невозможно без проверки, а выключение проверки гасит и его
@@ -7726,6 +7776,9 @@
       el.addEventListener("change", apply);
       el.addEventListener("blur", apply);
     };
+    bindField("#set-discord-id", "discord_client_id");
+    const discordToggle = $("#set-discord-rpc");
+    if (discordToggle) discordToggle.addEventListener("click", () => commit({ discord_rpc: discordToggle.classList.contains("on") }));
     bindField("#set-memory", "memory_mb", { number: true });
     bindField("#set-jvm", "jvm_args");
     bindField("#set-java", "java_path", { trim: true });
@@ -7781,6 +7834,8 @@
       auto_java: flag("#set-auto-java", settings.auto_java),
       proxy: value("#set-proxy") !== undefined ? (value("#set-proxy").trim() || null) : settings.proxy,
       ms_client_id: value("#set-ms-client") !== undefined ? (value("#set-ms-client").trim() || null) : settings.ms_client_id,
+      discord_rpc: flag("#set-discord-rpc", settings.discord_rpc),
+      discord_client_id: value("#set-discord-id") !== undefined ? value("#set-discord-id").trim() : settings.discord_client_id,
       update_enabled: flag("#set-upd-enabled", settings.update_enabled),
       update_auto: flag("#set-upd-auto", settings.update_auto),
       update_prerelease: flag("#set-upd-pre", settings.update_prerelease),
@@ -8995,6 +9050,7 @@
     if (!meta) return toast("Выбери сборку", "err");
     if (state.running.has(meta.id)) return toast("Сборка уже запущена", "err");
     $("#btn-play").disabled = true;
+    syncPresence("launching");
     pushLog(meta.id, `[omnispec] Подготовка «${meta.name}» (MC ${meta.mc_version}, ${loaderLabel(meta.loader)})`, "dim");
     if (state.tab === "console") renderLogs(meta.id);
     try {
@@ -9006,11 +9062,13 @@
       state.running.add(meta.id);
       renderSidebar();
       updateStatus();
+      syncPresence();
     } catch (err) {
       setProgress(null);
       pushLog(meta.id, `[omnispec] Ошибка запуска: ${err}`, "err");
       toast(`Не удалось запустить: ${err}`, "err");
       if (state.tab === "console") renderLogs(meta.id);
+      syncPresence();
     } finally {
       $("#btn-play").disabled = false;
     }
@@ -9025,6 +9083,7 @@
       state.running.delete(meta.id);
       renderSidebar();
       updateStatus();
+      syncPresence();
       toast("Игра остановлена");
     }
     catch (err) { toast(String(err), "err"); }
@@ -9622,6 +9681,7 @@
       if (state.tab === "discover") renderDiscover();
       renderSidebar();
       updateStatus();
+      syncPresence();
       if (payload.code !== 0) toast(`Игра закрылась с ошибкой (код ${payload.code})`, "err");
     });
     await api.onToast((payload) => toast(payload.message, payload.kind || ""));
@@ -9897,6 +9957,7 @@
     if (!state.selectedId) state.tab = "discover";
     updateStatus();
     renderTab();
+    syncPresence();
     try {
       await initUpdates();
       await attachBackendEvents();
