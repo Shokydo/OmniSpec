@@ -29,7 +29,9 @@ pub async fn versions(http: &Http, mc_version: &str) -> Result<Vec<LoaderOption>
         .into_iter()
         .map(|entry| LoaderOption {
             version: entry.loader.version,
-            stable: entry.loader.stable,
+            // В API Quilt нет поля stable — все версии считаем стабильными,
+            // иначе фронт помечает их бетами и выбирает криво.
+            stable: true,
         })
         .collect())
 }

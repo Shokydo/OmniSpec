@@ -95,6 +95,31 @@ fn ensure_launcher_profiles(meta: &std::path::Path) {
     let _ = std::fs::write(&file, content);
 }
 
+/// Требуемая версия Java для версии игры — из её манифеста Mojang
+/// (`javaVersion.majorVersion`). Инсталляторы для 1.20.5+ собраны под
+/// Java 21 и на Java 17 падают, поэтому хардкод 17 здесь нельзя.
+fn required_java_major(paths: &Paths, mc_version: &str) -> u32 {
+    let file = paths.version_file(mc_version);
+    if let Ok(text) = std::fs::read_to_string(&file) {
+        #[derive(Deserialize)]
+        struct Probe {
+            #[serde(default, rename = "javaVersion")]
+            java_version: Option<JavaVersionProbe>,
+        }
+        #[derive(Deserialize)]
+        struct JavaVersionProbe {
+            #[serde(default, rename = "majorVersion")]
+            major_version: Option<u32>,
+        }
+        if let Ok(probe) = serde_json::from_str::<Probe>(&text) {
+            if let Some(major) = probe.java_version.and_then(|java| java.major_version) {
+                return major;
+            }
+        }
+    }
+    17
+}
+
 /// Скачать и запустить инсталлятор, вернуть id созданной версии.
 async fn run_installer(
     http: &Http,
@@ -102,6 +127,7 @@ async fn run_installer(
     url: &str,
     file_name: &str,
     marker: &str,
+    java_major: u32,
     reporter: &Reporter,
 ) -> Result<String> {
     let before = list_version_ids(paths);
@@ -111,7 +137,8 @@ async fn run_installer(
 
     reporter.emit("loader", 1, 3, "запускаем инсталлятор (это может занять пару минут)");
     let settings = crate::settings::Settings::load(paths)?;
-    let java = crate::game::java::find_java(http, paths, &settings, 17, reporter).await?;
+    let java =
+        crate::game::java::find_java(http, paths, &settings, java_major, reporter).await?;
     let meta = paths.meta();
     std::fs::create_dir_all(&meta)?;
     ensure_launcher_profiles(&meta);
@@ -173,7 +200,8 @@ pub async fn install_forge(
 
     let url = format!("{FORGE_MAVEN}/{mc_version}-{forge_version}/forge-{mc_version}-{forge_version}-installer.jar");
     let file_name = format!("forge-{mc_version}-{forge_version}-installer.jar");
-    let id = run_installer(http, paths, &url, &file_name, "forge", reporter).await?;
+    let java_major = required_java_major(paths, mc_version);
+    let id = run_installer(http, paths, &url, &file_name, "forge", java_major, reporter).await?;
     let expected = format!("forge-{mc_version}-{forge_version}");
     Ok(resolve_installed_id(paths, &id, &expected))
 }
@@ -190,7 +218,8 @@ pub async fn install_neoforge(
 
     let url = format!("{NEOFORGE_MAVEN}/{neoforge_version}/neoforge-{neoforge_version}-installer.jar");
     let file_name = format!("neoforge-{neoforge_version}-installer.jar");
-    let id = run_installer(http, paths, &url, &file_name, "neoforge", reporter).await?;
+    let java_major = required_java_major(paths, mc_version);
+    let id = run_installer(http, paths, &url, &file_name, "neoforge", java_major, reporter).await?;
 
     // Некоторые версии инсталлятора создают папку вида "1.21.4-neoforge-21.4.100"
     // или кладут внутрь json с другим именем — ищем профиль по внутреннему id.
