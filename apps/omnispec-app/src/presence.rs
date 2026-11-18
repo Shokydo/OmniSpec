@@ -195,15 +195,14 @@ fn activity_value(info: &PresenceInfo) -> serde_json::Value {
     } else {
         info.state.trim()
     };
-    // Без buttons: часть клиентов Discord отклоняет активность целиком,
-    // если кнопки не поддерживаются. Минимальный набор надёжно показывается.
+    // Минимальная активность: только текст и таймер. Ссылки на картинки
+    // (assets) и кнопки убраны — если ассет «logo» ещё не загружен в портале,
+    // Discord может не показывать активность целиком. Картинку вернём,
+    // когда ассет будет на месте.
     let mut activity = serde_json::json!({
         "type": 0,
         "details": details,
         "state": state,
-        // картинка «logo» загружается в портале разработчика Discord
-        // (Rich Presence → Art Assets); без неё показывается только текст
-        "assets": {"large_image": "logo", "large_text": "OmniSpec"},
         "instance": false,
     });
     if let Some(start) = info.started_at {
