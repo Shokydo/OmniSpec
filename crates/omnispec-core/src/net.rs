@@ -379,7 +379,7 @@ impl Http {
         expected_size: Option<u64>,
         sha1: Option<&str>,
         force: bool,
-        on_progress: &dyn Fn(u64, u64),
+        on_progress: &dyn Fn(u64, u64) + Send + Sync,
     ) -> Result<bool> {
         self.download_inner(url, dest, expected_size, sha1, force, None, Some(on_progress))
             .await
@@ -405,7 +405,7 @@ impl Http {
         sha1: Option<&str>,
         force: bool,
         token: Option<&str>,
-        on_progress: Option<&dyn Fn(u64, u64)>,
+        on_progress: Option<&dyn Fn(u64, u64) + Send + Sync>,
     ) -> Result<bool> {
         if !force && token.is_none() {
             if let Ok(meta) = tokio::fs::metadata(dest).await {
@@ -455,7 +455,7 @@ impl Http {
         dest: &Path,
         sha1: Option<&str>,
         token: Option<&str>,
-        on_progress: Option<&dyn Fn(u64, u64)>,
+        on_progress: Option<&dyn Fn(u64, u64) + Send + Sync>,
     ) -> Result<bool> {
         check_cancel()?;
         let tmp = dest.with_extension("omnispec-part");
