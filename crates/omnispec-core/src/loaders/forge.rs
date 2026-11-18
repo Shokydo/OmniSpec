@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use regex::Regex;
+use serde::Deserialize;
 
 use crate::error::{Error, Result};
 use crate::net::{Http, Reporter};
