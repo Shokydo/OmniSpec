@@ -114,6 +114,7 @@ impl Presence {
     /// Одна сессия: handshake, затем SET_ACTIVITY при изменениях до обрыва.
     fn session(&self, client_id: &str) -> Result<(), String> {
         let mut stream = connect_ipc().map_err(|error| format!("нет Discord IPC: {error}"))?;
+        self.log("IPC подключён, шлём handshake");
         write_frame(
             &mut stream,
             0,
@@ -125,12 +126,13 @@ impl Presence {
             .to_string(),
         )
         .map_err(|error| format!("handshake: {error}"))?;
+        self.log("handshake отправлен, ждём READY");
         // ждём READY (на PING отвечаем PONG)
         loop {
             let Some((opcode, payload)) =
                 read_frame(&mut stream).map_err(|error| format!("чтение: {error}"))?
             else {
-                return Err("discord закрыл соединение".into());
+                return Err("discord закрыл соединение до READY".into());
             };
             if opcode == 3 {
                 write_frame(&mut stream, 4, &String::from_utf8_lossy(&payload))
@@ -138,8 +140,13 @@ impl Presence {
                 continue;
             }
             if payload.windows(5).any(|window| window == b"READY") {
+                self.log("READY получен");
                 break;
             }
+            self.log(&format!(
+                "неожиданный кадр opcode={opcode}: {}",
+                String::from_utf8_lossy(&payload).chars().take(120).collect::<String>()
+            ));
         }
         // читалка: PING → PONG, обрыв → сигнал писателю
         let (gone_tx, gone_rx) = std::sync::mpsc::channel::<()>();
@@ -177,6 +184,7 @@ impl Presence {
                 .to_string();
                 write_frame(&mut stream, 1, &payload)
                     .map_err(|error| format!("set_activity: {error}"))?;
+                self.log("активность отправлена");
             }
             std::thread::sleep(Duration::from_millis(500));
         }
