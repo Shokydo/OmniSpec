@@ -2040,6 +2040,8 @@
     modIcons: (instanceId) => invoke("mod_icons", { instanceId }),
     worldIcons: (instanceId) => invoke("world_icons", { instanceId }),
     listScreenshots: (instanceId) => invoke("list_screenshots", { instanceId }),
+    screenshotThumb: (instanceId, name) => invoke("screenshot_thumb", { instanceId, name }),
+    screenshotFull: (instanceId, name) => invoke("screenshot_full", { instanceId, name }),
     // содержимое сборки: моды, ресурспаки, шейдеры
     contentList: (instanceId, kind) => invoke("content_list", { instanceId, kind }),
     contentToggle: (instanceId, kind, name) => invoke("content_toggle", { instanceId, kind, name }),
@@ -2431,6 +2433,8 @@
       { name: "2026-11-16_21.44.02.png", size: 1932288, modified: 1763290000, path: "C:\\Users\\Player\\AppData\\Roaming\\OmniSpec\\instances\\demo\\minecraft\\screenshots\\2026-11-16_21.44.02.png" },
       { name: "2026-11-15_09.12.55.png", size: 3411960, modified: 1763200000, path: "C:\\Users\\Player\\AppData\\Roaming\\OmniSpec\\instances\\demo\\minecraft\\screenshots\\2026-11-15_09.12.55.png" }
     ]),
+    screenshotThumb: async () => demoPixelImage(),
+    screenshotFull: async () => demoPixelImage(),
     modIcons: async () => {
       const map = {};
       demoMods.forEach((mod, index) => {
@@ -4837,11 +4841,16 @@
   }
 
   /* ---------- Скриншоты ---------- */
+  /* Скриншоты грузятся порциями: все картинки сразу роняли WebView по памяти. */
+  const SHOT_PAGE = 30;
+  let shotObserver = null;
+  let shotInstanceId = null;
+
   async function renderScreenshots() {
     const meta = selected();
+    shotInstanceId = meta.id;
     const entries = await api.listScreenshots(meta.id).catch(() => []);
-    // Картинка приходит data URI из бэкенда (file:// в webview не грузится).
-    const srcOf = (entry) => (IS_APP ? (entry.src || "") : demoPixelImage());
+    state.shots = { entries, shown: 0 };
     $("#tab-body").innerHTML = `
       <div class="list-wrap">
         <div class="panel">
@@ -4851,42 +4860,106 @@
             <div class="spacer"></div>
             <button class="btn btn-small" id="shots-open">Открыть папку</button>
           </div>
-          ${entries.length ? `<div class="shots-grid">${entries.map((entry, index) => {
-            const src = srcOf(entry);
-            return `
-            <button class="shot-tile" data-shot="${index}" title="${esc(entry.name)}">
-              <span class="shot-img">${src ? `<img src="${esc(src)}" alt="" loading="lazy">` : `<svg class="ic shot-placeholder"><use href="#i-image"/></svg>`}</span>
-              <span class="shot-name">${esc(entry.name)}</span>
-              <span class="shot-sub">${humanSize(entry.size)}${entry.modified ? ` · ${relativeWhen(entry.modified)}` : ""}</span>
-            </button>`;
-          }).join("")}</div>`
+          ${entries.length ? `<div class="shots-grid" id="shots-grid"></div><div class="mr-sentinel" id="shots-sentinel"></div>`
           : `<div class="item-row"><div class="item-main muted">Скриншотов пока нет — нажми F2 в игре</div></div>`}
         </div>
       </div>`;
     $("#shots-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/screenshots`).catch(() => {}));
-    $$("#tab-body .shot-tile").forEach((tile) => {
-      const entry = entries[Number(tile.dataset.shot)];
-      tile.addEventListener("click", () => { if (entry) openShot(entry, srcOf(entry)); });
-      tile.addEventListener("contextmenu", (event) => {
-        event.preventDefault();
-        if (entry) openShotMenu(event.clientX, event.clientY, entry, srcOf(entry));
-      });
-    });
+    if (entries.length) {
+      appendShotBatch();
+      watchShotsMore();
+    }
   }
 
-  /** Просмотр скриншота на весь экран. */
+  /** Добавить следующую порцию плиток; миниатюры подгружаются по мере прокрутки. */
+  function appendShotBatch() {
+    const st = state.shots;
+    const grid = $("#shots-grid");
+    if (!st || !grid) return;
+    const slice = st.entries.slice(st.shown, st.shown + SHOT_PAGE);
+    st.shown += slice.length;
+    grid.insertAdjacentHTML("beforeend", slice.map((entry) => `
+      <button class="shot-tile" data-shot-name="${esc(entry.name)}" title="${esc(entry.name)}">
+        <span class="shot-img"><svg class="ic shot-placeholder"><use href="#i-image"/></svg></span>
+        <span class="shot-name">${esc(entry.name)}</span>
+        <span class="shot-sub">${humanSize(entry.size)}${entry.modified ? ` · ${relativeWhen(entry.modified)}` : ""}</span>
+      </button>`).join(""));
+    const tiles = grid.querySelectorAll(".shot-tile:not([data-thumb])");
+    const io = new IntersectionObserver((list) => {
+      for (const item of list) {
+        if (!item.isIntersecting) continue;
+        const tile = item.target;
+        io.unobserve(tile);
+        tile.dataset.thumb = "1";
+        api.screenshotThumb(shotInstanceId, tile.dataset.shotName).then((src) => {
+          const box = tile.querySelector(".shot-img");
+          if (src && box) box.innerHTML = `<img src="${esc(src)}" alt="" loading="lazy">`;
+        }).catch(() => {});
+      }
+    }, { rootMargin: "200px" });
+    tiles.forEach((tile) => io.observe(tile));
+    grid.querySelectorAll(".shot-tile:not([data-bound])").forEach((tile) => {
+      tile.dataset.bound = "1";
+      const entry = st.entries.find((item) => item.name === tile.dataset.shotName);
+      tile.addEventListener("click", () => { if (entry) openShot(entry); });
+      tile.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        if (entry) openShotMenu(event.clientX, event.clientY, entry);
+      });
+    });
+    updateShotsSentinel();
+  }
+
+  function watchShotsMore() {
+    if (shotObserver) { shotObserver.disconnect(); shotObserver = null; }
+    const sentinel = $("#shots-sentinel");
+    if (!sentinel) return;
+    shotObserver = new IntersectionObserver((list) => {
+      if (list.some((item) => item.isIntersecting)) appendShotBatch();
+    }, { rootMargin: "400px" });
+    shotObserver.observe(sentinel);
+  }
+
+  function updateShotsSentinel() {
+    const sentinel = $("#shots-sentinel");
+    const st = state.shots;
+    if (!sentinel || !st) return;
+    sentinel.textContent = st.shown >= st.entries.length
+      ? `Показано всё: ${st.entries.length}`
+      : `Прокрути вниз — ещё ${st.entries.length - st.shown}`;
+    if (st.shown >= st.entries.length && shotObserver) {
+      shotObserver.disconnect();
+      shotObserver = null;
+    }
+  }
+
+  /** Просмотр скриншота на весь экран: полный файл грузится по одному. */
   let shotCurrent = null;
   let shotCurrentSrc = "";
-  function openShot(entry, src) {
+  let shotLoadToken = 0;
+  async function openShot(entry) {
     shotCurrent = entry;
-    shotCurrentSrc = src || "";
+    const token = ++shotLoadToken;
     $("#shot-title").textContent = entry.name;
-    $("#shot-img").src = src;
-    $("#shot-meta").textContent = `${humanSize(entry.size)}${entry.modified ? ` · ${relativeWhen(entry.modified)}` : ""}`;
+    const img = $("#shot-img");
+    img.removeAttribute("src");
+    const metaText = `${humanSize(entry.size)}${entry.modified ? ` · ${relativeWhen(entry.modified)}` : ""}`;
+    $("#shot-meta").textContent = `${metaText} · загрузка…`;
     $("#modal-shot").hidden = false;
+    try {
+      const src = await api.screenshotFull(shotInstanceId, entry.name);
+      if (token !== shotLoadToken || $("#modal-shot").hidden) return;
+      shotCurrentSrc = src || "";
+      if (src) img.src = src;
+      $("#shot-meta").textContent = metaText;
+    } catch (err) {
+      if (token !== shotLoadToken) return;
+      $("#shot-meta").textContent = "Не удалось загрузить изображение";
+    }
   }
 
   function closeShot() {
+    shotLoadToken += 1;
     $("#modal-shot").hidden = true;
     $("#shot-img").src = "";
     shotCurrent = null;
@@ -4894,8 +4967,9 @@
   }
 
   /** Скопировать картинку скриншота в буфер обмена как изображение. */
-  async function copyShotImage(src) {
+  async function copyShotImage(entry) {
     try {
+      const src = await api.screenshotFull(shotInstanceId, entry.name);
       if (!src) throw new Error("no image");
       const blob = await (await fetch(src)).blob();
       await navigator.clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
@@ -4906,7 +4980,7 @@
   }
 
   /** Контекстное меню скриншота (ПКМ по плитке и по картинке в просмотре). */
-  function openShotMenu(x, y, entry, src) {
+  function openShotMenu(x, y, entry) {
     fillCtxMenu(x, y, `
       <div class="ctx-caption">${esc(entry.name)}</div>
       <button class="ctx-item" data-act="copy"><svg class="ic"><use href="#i-copy"/></svg>Копировать изображение</button>
@@ -4915,8 +4989,8 @@
       <button class="ctx-item" data-act="file"><svg class="ic"><use href="#i-file"/></svg>Открыть файл</button>
       <button class="ctx-item" data-act="folder"><svg class="ic"><use href="#i-folder"/></svg>Открыть папку</button>`,
     (act) => {
-      if (act === "copy") copyShotImage(src);
-      else if (act === "open") openShot(entry, src);
+      if (act === "copy") copyShotImage(entry);
+      else if (act === "open") openShot(entry);
       else if (act === "file") api.openPath(entry.path).catch((error) => toast(String(error), "err"));
       else if (act === "folder") api.openPath(entry.path.replace(/\\[^\\/]*$/, "")).catch((error) => toast(String(error), "err"));
     });
@@ -10344,10 +10418,10 @@
     if (!modal) return;
     $$("[data-close-shot]", modal).forEach((btn) => btn.addEventListener("click", closeShot));
     modal.addEventListener("mousedown", (event) => { if (event.target === modal) closeShot(); });
-    $("#shot-copy").addEventListener("click", () => copyShotImage(shotCurrentSrc));
+    $("#shot-copy").addEventListener("click", () => { if (shotCurrent) copyShotImage(shotCurrent); });
     $("#shot-img").addEventListener("contextmenu", (event) => {
       event.preventDefault();
-      if (shotCurrent) openShotMenu(event.clientX, event.clientY, shotCurrent, shotCurrentSrc);
+      if (shotCurrent) openShotMenu(event.clientX, event.clientY, shotCurrent);
     });
     $("#shot-open-file").addEventListener("click", () => {
       if (!shotCurrent) return;

@@ -1223,7 +1223,9 @@ fn list_mods(state: State<'_, AppState>, instance_id: String) -> Result<Vec<ModE
     Ok(result)
 }
 
-/// Один скриншот из папки `screenshots` сборки.
+/// Один скриншот из папки `screenshots` сборки. Только метаданные:
+/// картинки отдаются отдельными командами по одному, иначе сотни
+/// base64-URI в одном ответе роняют WebView по памяти.
 #[derive(Debug, Clone, serde::Serialize)]
 struct ScreenshotEntry {
     name: String,
@@ -1232,8 +1234,6 @@ struct ScreenshotEntry {
     modified: Option<u64>,
     /// Абсолютный путь — для кнопок «открыть файл/папку».
     path: String,
-    /// Картинка как data URI (base64): `file://` в WebView2 не грузится.
-    src: String,
 }
 
 /// Скриншоты сборки (папка `screenshots` в игровой папке), новые сверху.
@@ -1249,9 +1249,9 @@ fn list_screenshots(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let Some(mime) = image_mime(&path) else {
+        if image_mime(&path).is_none() {
             continue;
-        };
+        }
         if !path.is_file() {
             continue;
         }
@@ -1262,24 +1262,88 @@ fn list_screenshots(
             .and_then(|meta| meta.modified().ok())
             .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs());
-        // Картинку отдаём data URI, как превью в файловом менеджере:
-        // webview не умеет грузить file:// с чужого origin.
-        let src = match std::fs::read(&path) {
-            Ok(bytes) if !bytes.is_empty() && bytes.len() <= 32 * 1024 * 1024 => {
-                format!("data:{mime};base64,{}", base64_encode(&bytes))
-            }
-            _ => String::new(),
-        };
         result.push(ScreenshotEntry {
             name,
             size: meta.map(|meta| meta.len()).unwrap_or(0),
             modified,
             path: path.display().to_string(),
-            src,
         });
     }
     result.sort_by(|a, b| b.modified.cmp(&a.modified));
     Ok(result)
+}
+
+/// Путь к скриншоту по имени файла (без выхода за папку скриншотов).
+fn screenshot_path(
+    state: &State<'_, AppState>,
+    instance_id: &str,
+    name: &str,
+) -> Result<std::path::PathBuf, String> {
+    let file_name = std::path::Path::new(name)
+        .file_name()
+        .ok_or_else(|| "неверное имя файла".to_string())?;
+    let dir = instances::game_dir(&state.paths, instance_id).join("screenshots");
+    let path = dir.join(file_name);
+    if !path.is_file() {
+        return Err("скриншот не найден".to_string());
+    }
+    Ok(path)
+}
+
+/// Миниатюра скриншота (JPEG до 480px) как data URI. Кэшируется в
+/// `cache/thumbs/<сборка>/` и перегенерируется, если файл новее.
+#[tauri::command]
+fn screenshot_thumb(
+    state: State<'_, AppState>,
+    instance_id: String,
+    name: String,
+) -> Result<String, String> {
+    let path = screenshot_path(&state, &instance_id, &name)?;
+    let cache_dir = state
+        .paths
+        .cache()
+        .join("thumbs")
+        .join(&instance_id);
+    std::fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
+    let thumb_path = cache_dir.join(format!(
+        "{}.jpg",
+        path.file_stem().unwrap_or_default().to_string_lossy()
+    ));
+    let fresh = thumb_path.exists()
+        && std::fs::metadata(&thumb_path)
+            .and_then(|thumb| thumb.modified())
+            .ok()
+            .zip(std::fs::metadata(&path).and_then(|src| src.modified()).ok())
+            .map(|(thumb_time, src_time)| thumb_time >= src_time)
+            .unwrap_or(false);
+    if !fresh {
+        let img = image::open(&path).map_err(|e| e.to_string())?;
+        let thumb = img.thumbnail(480, 480).to_rgb8();
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageRgb8(thumb)
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+            .map_err(|e| e.to_string())?;
+        std::fs::write(&thumb_path, &buf).map_err(|e| e.to_string())?;
+        return Ok(format!("data:image/jpeg;base64,{}", base64_encode(&buf)));
+    }
+    let bytes = std::fs::read(&thumb_path).map_err(|e| e.to_string())?;
+    Ok(format!("data:image/jpeg;base64,{}", base64_encode(&bytes)))
+}
+
+/// Полный скриншот как data URI — по одному, для просмотра и копирования.
+#[tauri::command]
+fn screenshot_full(
+    state: State<'_, AppState>,
+    instance_id: String,
+    name: String,
+) -> Result<String, String> {
+    let path = screenshot_path(&state, &instance_id, &name)?;
+    let mime = image_mime(&path).ok_or_else(|| "неподдерживаемый формат".to_string())?;
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    if bytes.is_empty() || bytes.len() > 32 * 1024 * 1024 {
+        return Err("файл слишком большой".to_string());
+    }
+    Ok(format!("data:{mime};base64,{}", base64_encode(&bytes)))
 }
 
 /// Иконки миров: имя папки мира → `icon.png` из неё (как в самой игре).
@@ -2880,6 +2944,8 @@ fn main() {
             mod_icons,
             world_icons,
             list_screenshots,
+            screenshot_thumb,
+            screenshot_full,
             scan_external_launchers,
             import_external,
             export_instance,
