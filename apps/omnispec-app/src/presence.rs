@@ -142,48 +142,19 @@ impl Presence {
                 String::from_utf8_lossy(&payload).chars().take(120).collect::<String>()
             ));
         }
-        // Читалка: только читает кадры Discord и пересылает их писателю
-        // по каналу. Писать в pipe из двух потоков нельзя: на Windows
-        // клонированные хэндлы одного pipe клинят друг друга, и второй
-        // SET_ACTIVITY зависает навсегда. Поэтому все записи (PONG и
-        // SET_ACTIVITY) делает только главный поток, а читалка никогда
-        // не пишет.
-        let (frame_tx, frame_rx) = std::sync::mpsc::channel::<(u32, Vec<u8>)>();
-        let mut reader_stream = stream
-            .try_clone()
-            .map_err(|error| format!("clone: {error}"))?;
-        std::thread::spawn(move || {
-            loop {
-                match read_frame(&mut reader_stream) {
-                    Ok(Some(frame)) => {
-                        if frame_tx.send(frame).is_err() {
-                            break;
-                        }
-                    }
-                    _ => break,
-                }
-            }
-        });
+        // После READY — только пишем, из Discord не читаем. Блокирующий
+        // ReadFile в отдельном потоке на Windows сериализует pipe:
+        // запись SET_ACTIVITY зависает, пока висит чтение. Поэтому
+        // читалку убрали совсем. PING от Discord не отвечаем: если
+        // Discord оборвёт соединение из-за пропущенного PONG, запись
+        // упадёт с ошибкой, и run() переподключится (активность
+        // переотправится, таймер продолжит идти — start тот же).
         // Писатель: шлём активность при изменениях и периодически повторяем
         // текущую (раз в 15 с) — иначе Discord не перерисовывает таймер и
         // может не показать обновление статуса.
         let mut last_sent: Option<serde_json::Value> = None;
         let mut last_send_at = std::time::Instant::now() - Duration::from_secs(60);
         loop {
-            // забираем кадры от читалки; на PING отвечаем PONG (пишем сами)
-            loop {
-                match frame_rx.try_recv() {
-                    Ok((3, payload)) => {
-                        write_frame(&mut stream, 4, &String::from_utf8_lossy(&payload))
-                            .map_err(|error| format!("pong: {error}"))?;
-                    }
-                    Ok(_) => {}
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        return Err("discord закрыл соединение".into());
-                    }
-                }
-            }
             let (_, info) = self.snapshot();
             let activity = activity_value(&info);
             let changed = last_sent.as_ref() != Some(&activity);
