@@ -47,6 +47,16 @@ pub async fn install(
     mc_version: &str,
     loader_version: &str,
 ) -> Result<String> {
+    // Проверяем версию по списку API: иначе пользователь видит голый HTTP 404
+    // и не понимает, что такой версии загрузчика для этой версии игры нет.
+    if let Ok(available) = versions(http, mc_version).await {
+        if !available.iter().any(|option| option.version == loader_version) {
+            return Err(crate::error::Error::Other(format!(
+                "Версия Quilt {loader_version} не найдена для Minecraft {mc_version}. \
+                 Выберите другую версию загрузчика."
+            )));
+        }
+    }
     let text = profile(http, mc_version, loader_version).await?;
     super::save_profile(paths, &text)
 }
