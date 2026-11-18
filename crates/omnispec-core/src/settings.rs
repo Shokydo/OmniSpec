@@ -155,11 +155,9 @@ pub struct Settings {
     pub ms_client_id: Option<String>,
 
     /// Показывать статус лаунчера в Discord (Rich Presence).
+    /// Client ID приложения зашит в код (presence.rs), в настройках его нет.
     #[serde(default = "default_true")]
     pub discord_rpc: bool,
-    /// Client ID приложения Discord для Rich Presence (пусто — выключено).
-    #[serde(default)]
-    pub discord_client_id: String,
 
     /* ---------- оформление ---------- */
     /// Обои: имя встроенных (`grid`, `aurora`, …) или путь к своему файлу.
@@ -325,7 +323,6 @@ impl Default for Settings {
             proxy: None,
             ms_client_id: None,
             discord_rpc: true,
-            discord_client_id: "1304864863830540439".to_string(),
             wallpaper: None,
             wallpaper_fit: default_wallpaper_fit(),
             wallpaper_blur: 0,

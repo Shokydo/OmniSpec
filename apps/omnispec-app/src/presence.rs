@@ -4,7 +4,7 @@
 //! Протокол: pipe `\\.\pipe\discord-ipc-N` (Windows) или сокет
 //! `/tmp/discord-ipc-N` (Linux/macOS), кадры [opcode u32 LE][len u32 LE][json]:
 //! handshake → READY → SET_ACTIVITY, на PING отвечаем PONG.
-//! Работает только если в настройках задан Client ID приложения Discord.
+//! Client ID приложения зашит в код (DEFAULT_CLIENT_ID).
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,14 +25,12 @@ pub struct PresenceInfo {
 }
 
 /// Client ID приложения OmniSpec в Discord Developer Portal.
-/// Используется, когда в настройках поле пустое (например, у тех, кто
-/// обновился со старой версии, где ID ещё не было по умолчанию).
+/// Зашит в код: в настройках поле убрано, ID один для всех.
 pub const DEFAULT_CLIENT_ID: &str = "1304864863830540439";
 
 #[derive(Default)]
 struct Shared {
     info: PresenceInfo,
-    client_id: String,
     enabled: bool,
 }
 
@@ -72,18 +70,10 @@ impl Presence {
         }
     }
 
-    /// Настройки Discord из settings.json (при старте и сохранении).
-    /// Пустое поле означает «использовать дефолтный ID приложения» —
-    /// так RPC работает и у тех, кто обновился со старой версии.
-    pub fn configure(&self, client_id: &str, enabled: bool) {
-        let mut shared = self.shared.lock().unwrap();
-        let client_id = client_id.trim();
-        shared.client_id = if client_id.is_empty() {
-            DEFAULT_CLIENT_ID.to_string()
-        } else {
-            client_id.to_string()
-        };
-        shared.enabled = enabled;
+    /// Включён ли Discord RPC (тумблер в настройках). Client ID зашит
+    /// в код (DEFAULT_CLIENT_ID) и из настроек убран.
+    pub fn configure(&self, enabled: bool) {
+        self.shared.lock().unwrap().enabled = enabled;
     }
 
     /// Новое состояние от фронта.
@@ -91,24 +81,20 @@ impl Presence {
         self.shared.lock().unwrap().info = info;
     }
 
-    fn snapshot(&self) -> (String, bool, PresenceInfo) {
+    fn snapshot(&self) -> (bool, PresenceInfo) {
         let shared = self.shared.lock().unwrap();
-        (
-            shared.client_id.clone(),
-            shared.enabled,
-            shared.info.clone(),
-        )
+        (shared.enabled, shared.info.clone())
     }
 
-    /// Цикл воркера: сессия → пауза → снова. Молча ждёт, пока не зададут ID.
+    /// Цикл воркера: сессия → пауза → снова. Молча ждёт, пока не включат RPC.
     pub fn run(&self) {
         loop {
-            let (client_id, enabled, _) = self.snapshot();
-            if !enabled || client_id.is_empty() {
+            let (enabled, _) = self.snapshot();
+            if !enabled {
                 std::thread::sleep(Duration::from_secs(2));
                 continue;
             }
-            if let Err(error) = self.session(&client_id) {
+            if let Err(error) = self.session(DEFAULT_CLIENT_ID) {
                 self.log(&error);
             }
             std::thread::sleep(Duration::from_secs(3));
@@ -153,34 +139,49 @@ impl Presence {
                 String::from_utf8_lossy(&payload).chars().take(120).collect::<String>()
             ));
         }
-        // читалка: PING → PONG, обрыв → сигнал писателю
-        let (gone_tx, gone_rx) = std::sync::mpsc::channel::<()>();
+        // Читалка: только читает кадры Discord и пересылает их писателю
+        // по каналу. Писать в pipe из двух потоков нельзя: на Windows
+        // клонированные хэндлы одного pipe клинят друг друга, и второй
+        // SET_ACTIVITY зависает навсегда. Поэтому все записи (PONG и
+        // SET_ACTIVITY) делает только главный поток, а читалка никогда
+        // не пишет.
+        let (frame_tx, frame_rx) = std::sync::mpsc::channel::<(u32, Vec<u8>)>();
         let mut reader_stream = stream
             .try_clone()
             .map_err(|error| format!("clone: {error}"))?;
         std::thread::spawn(move || {
             loop {
                 match read_frame(&mut reader_stream) {
-                    Ok(Some((3, payload))) => {
-                        let _ =
-                            write_frame(&mut reader_stream, 4, &String::from_utf8_lossy(&payload));
+                    Ok(Some(frame)) => {
+                        if frame_tx.send(frame).is_err() {
+                            break;
+                        }
                     }
-                    Ok(Some(_)) => {}
                     _ => break,
                 }
             }
-            let _ = gone_tx.send(());
         });
-        // писатель: шлём активность при изменениях и периодически повторяем
+        // Писатель: шлём активность при изменениях и периодически повторяем
         // текущую (раз в 15 с) — иначе Discord не перерисовывает таймер и
         // может не показать обновление статуса.
         let mut last_sent: Option<serde_json::Value> = None;
         let mut last_send_at = std::time::Instant::now() - Duration::from_secs(60);
         loop {
-            if gone_rx.try_recv().is_ok() {
-                return Err("discord закрыл соединение".into());
+            // забираем кадры от читалки; на PING отвечаем PONG (пишем сами)
+            loop {
+                match frame_rx.try_recv() {
+                    Ok((3, payload)) => {
+                        write_frame(&mut stream, 4, &String::from_utf8_lossy(&payload))
+                            .map_err(|error| format!("pong: {error}"))?;
+                    }
+                    Ok(_) => {}
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        return Err("discord закрыл соединение".into());
+                    }
+                }
             }
-            let (_, _, info) = self.snapshot();
+            let (_, info) = self.snapshot();
             let activity = activity_value(&info);
             let changed = last_sent.as_ref() != Some(&activity);
             let heartbeat = last_send_at.elapsed() >= Duration::from_secs(15);
@@ -193,6 +194,7 @@ impl Presence {
                     "nonce": next_nonce(),
                 })
                 .to_string();
+                self.log("пишу активность…");
                 write_frame(&mut stream, 1, &payload)
                     .map_err(|error| format!("set_activity: {error}"))?;
                 self.log(&format!(

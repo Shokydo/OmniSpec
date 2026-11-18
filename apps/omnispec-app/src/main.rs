@@ -102,7 +102,7 @@ async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
 async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     state
         .presence
-        .configure(&settings.discord_client_id, settings.discord_rpc);
+        .configure(settings.discord_rpc);
     settings.save(&state.paths).map_err(err)?;
     *state.settings.lock().await = settings;
     Ok(())
@@ -2762,7 +2762,7 @@ fn main() {
     // Discord Rich Presence: воркер в фоне, молча ждёт Client ID в настройках.
     let presence = presence::Presence::new()
         .with_log_path(paths.root.join("discord-rpc.log"));
-    presence.configure(&settings.discord_client_id, settings.discord_rpc);
+    presence.configure(settings.discord_rpc);
     let presence_worker = presence.clone();
     std::thread::spawn(move || presence_worker.run());
 

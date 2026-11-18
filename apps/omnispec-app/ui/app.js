@@ -1992,7 +1992,7 @@
       { username: "Vanya_2012", uuid: "5627dd98-1f5e-3f4e-9c1a-2b3c4d5e6f70", kind: "offline", access_token: "" }
     ],
     active: "069a79f4-44e9-4726-a5be-fca90e38aaf5",
-    settings: { categories: [{ id: "cat-mods", name: "Моды", collapsed: false }, { id: "cat-perf", name: "Производительность", collapsed: false }], username: "Player", java_path: null, memory_mb: 4096, jvm_args: "-XX:+UseG1GC", game_args: "", auto_java: true, show_snapshots: false, verify_hashes: false, language: "ru", keep_console_open: false, enable_modrinth: true, hide_on_launch: false, last_instance: null, update_repo: "Shokydo/OmniSpec", update_enabled: true, update_token: null, update_prerelease: false, theme: "dark", click_fx: "wave", discord_rpc: true, discord_client_id: "1304864863830540439" },
+    settings: { categories: [{ id: "cat-mods", name: "Моды", collapsed: false }, { id: "cat-perf", name: "Производительность", collapsed: false }], username: "Player", java_path: null, memory_mb: 4096, jvm_args: "-XX:+UseG1GC", game_args: "", auto_java: true, show_snapshots: false, verify_hashes: false, language: "ru", keep_console_open: false, enable_modrinth: true, hide_on_launch: false, last_instance: null, update_repo: "Shokydo/OmniSpec", update_enabled: true, update_token: null, update_prerelease: false, theme: "dark", click_fx: "wave", discord_rpc: true },
     versions: ["1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21", "1.20.6", "1.20.4", "1.20.1", "1.19.4", "1.18.2", "1.16.5", "1.12.2", "1.8.9"].map((id) => ({ id, type: "release", url: "", release_time: null })),
     demoLogs: [
       "[12:01:14] [main/INFO]: OmniSpec 0.1.0 — лаунчер готов к работе",
@@ -7325,12 +7325,8 @@
             <div><div class="switch-row"><button class="switch ${settings.discord_rpc !== false ? "on" : ""}" id="set-discord-rpc"></button><span class="muted">«В ожидании / Запускает / Играет» + сборка</span></div></div>
           </div>
           <div class="settings-row">
-            <div class="label">Client ID</div>
-            <div><input class="input" style="width:100%" id="set-discord-id" placeholder="например, 123456789012345678" value="${esc(settings.discord_client_id || "1304864863830540439")}" spellcheck="false"></div>
-          </div>
-          <div class="settings-row">
             <div class="label">Как включить</div>
-            <div class="muted" style="line-height:1.55">Client ID уже вписан — статус работает сразу. Свой ID: приложение на <span class="kbd">discord.dev</span> → New Application → Client ID. Логотип: Rich Presence → Art Assets → Add Image, имя <span class="kbd">logo</span>. После смены Client ID перезапусти лаунчер.</div>
+            <div class="muted" style="line-height:1.55">Статус работает сразу — Client ID приложения зашит в лаунчер. Логотип: Rich Presence → Art Assets → Add Image, имя <span class="kbd">logo</span>.</div>
           </div>
         </div>
       </div>`;
@@ -7787,7 +7783,6 @@
       el.addEventListener("change", apply);
       el.addEventListener("blur", apply);
     };
-    bindField("#set-discord-id", "discord_client_id");
     const discordToggle = $("#set-discord-rpc");
     if (discordToggle) discordToggle.addEventListener("click", () => commit({ discord_rpc: discordToggle.classList.contains("on") }));
     bindField("#set-memory", "memory_mb", { number: true });
@@ -7846,7 +7841,6 @@
       proxy: value("#set-proxy") !== undefined ? (value("#set-proxy").trim() || null) : settings.proxy,
       ms_client_id: value("#set-ms-client") !== undefined ? (value("#set-ms-client").trim() || null) : settings.ms_client_id,
       discord_rpc: flag("#set-discord-rpc", settings.discord_rpc),
-      discord_client_id: value("#set-discord-id") !== undefined ? value("#set-discord-id").trim() : settings.discord_client_id,
       update_enabled: flag("#set-upd-enabled", settings.update_enabled),
       update_auto: flag("#set-upd-auto", settings.update_auto),
       update_prerelease: flag("#set-upd-pre", settings.update_prerelease),
