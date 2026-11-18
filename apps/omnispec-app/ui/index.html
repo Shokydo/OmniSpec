@@ -237,27 +237,24 @@
       <h2>Предложение / баг-репорт</h2>
       <button class="icon-btn" data-close-feedback><svg class="ic"><use href="#i-close"/></svg></button>
     </header>
-    <div class="modal-body">
-      <div class="flex-row" style="align-items:center">
-        <span class="muted">Тип:</span>
-        <div class="chips" style="margin:0">
-          <button class="chip is-active" data-fb-kind="idea">Предложение</button>
-          <button class="chip" data-fb-kind="bug">Баг-репорт</button>
-        </div>
+    <div class="modal-body fb-body">
+      <div class="fb-kinds">
+        <button class="fb-kind is-active" data-fb-kind="idea">Предложение</button>
+        <button class="fb-kind" data-fb-kind="bug">Баг-репорт</button>
       </div>
-      <div class="settings-row" style="margin-top:12px">
-        <div class="label">Имя</div>
-        <div><input class="input" style="width:100%" id="fb-name" placeholder="необязательно" spellcheck="false"></div>
-      </div>
-      <div class="settings-row">
-        <div class="label">Email</div>
-        <div><input class="input" style="width:100%" id="fb-email" placeholder="для ответа (необязательно)" spellcheck="false"></div>
-      </div>
-      <div class="settings-row">
-        <div class="label">Сообщение</div>
-        <div><textarea class="input" style="width:100%;min-height:110px;resize:vertical" id="fb-message" placeholder="Что случилось или что предлагаешь?"></textarea></div>
-      </div>
-      <div class="muted" style="font-size:11px">Сообщение придёт на почту разработчика. Версия лаунчера приложится автоматически.</div>
+      <label class="fb-field">
+        <span>Имя <em>(необязательно)</em></span>
+        <input class="input" id="fb-name" placeholder="Как к тебе обращаться" spellcheck="false">
+      </label>
+      <label class="fb-field">
+        <span>Email <em>(для ответа, необязательно)</em></span>
+        <input class="input" id="fb-email" placeholder="you@example.com" spellcheck="false">
+      </label>
+      <label class="fb-field">
+        <span>Сообщение</span>
+        <textarea class="input" id="fb-message" placeholder="Что случилось или что предлагаешь?"></textarea>
+      </label>
+      <div class="muted fb-note">Сообщение придёт на почту разработчика. Версия лаунчера приложится автоматически.</div>
     </div>
     <footer class="modal-foot">
       <span class="hint" id="fb-hint"></span>

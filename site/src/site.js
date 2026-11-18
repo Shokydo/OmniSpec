@@ -863,21 +863,19 @@
       fbSend.disabled = true;
       fbShowStatus("Отправляем…", "");
       var body = {
+        access_key: "df28d34b-585b-4d20-a52a-49518dc8e2be",
+        subject: fbKind === "bug" ? "OmniSpec (сайт): баг-репорт" : "OmniSpec (сайт): предложение",
         name: name,
         email: email,
-        _subject: fbKind === "bug" ? "OmniSpec (сайт): баг-репорт" : "OmniSpec (сайт): предложение",
-        _template: "table",
-        _captcha: "false",
         message: message
       };
-      if (email) body._replyto = email;
-      fetch("https://formsubmit.co/ajax/OmniSpecLauncher@gmail.com", {
+      fetch("https://api.web3forms.com/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Accept": "application/json" },
         body: JSON.stringify(body)
       }).then(function (r) { return r.json(); }).then(function (data) {
         fbSend.disabled = false;
-        if (data && String(data.success) === "true") {
+        if (data && data.success === true) {
           fbShowStatus("Отправлено! Спасибо за обратную связь.", "ok");
           document.getElementById("fb-message").value = "";
           setTimeout(fbClose, 1600);

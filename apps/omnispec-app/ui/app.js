@@ -4886,8 +4886,9 @@
     const cfg = state.home;
     const parts = [];
     parts.push(`<div class="imp-row">
-      <button class="btn" id="imp-file"><svg class="ic"><use href="#i-download"/></svg>Файл .mrpack / .zip…</button>
-      <button class="btn ${cfg.extOpen ? "is-pressed" : ""}" id="imp-ext"><svg class="ic"><use href="#i-grid"/></svg>Из лаунчера</button>
+      <button class="btn imp-big" id="imp-mrpack"><svg class="ic"><use href="#i-download"/></svg>Из .mrpack</button>
+      <button class="btn imp-big" id="imp-zip"><svg class="ic"><use href="#i-download"/></svg>Zip</button>
+      <button class="btn imp-big ${cfg.extOpen ? "is-pressed" : ""}" id="imp-ext"><svg class="ic"><use href="#i-grid"/></svg>Из лаунчера</button>
       <div class="imp-url">
         <input class="input grow" id="imp-url-input" placeholder="Ссылка на модпак Modrinth или .mrpack" spellcheck="false" value="${esc(cfg.url)}">
         <button class="btn" id="imp-url-go">Добавить</button>
@@ -5130,9 +5131,8 @@
       cfg.open = !cfg.open;
       renderDiscover();
     });
-    const file = $("#imp-file");
-    if (file) file.addEventListener("click", async () => {
-      const picked = await api.pickFile("Модпак .mrpack или .zip", ["mrpack", "zip"]).catch(() => null);
+    async function pickPack(title, extensions) {
+      const picked = await api.pickFile(title, extensions).catch(() => null);
       if (!picked) return;
       cfg.zipPath = picked;
       cfg.status = "";
@@ -5151,7 +5151,11 @@
       } else {
         renderDiscover();
       }
-    });
+    }
+    const mrpack = $("#imp-mrpack");
+    if (mrpack) mrpack.addEventListener("click", () => pickPack("Модпак .mrpack", ["mrpack"]));
+    const zipBtn = $("#imp-zip");
+    if (zipBtn) zipBtn.addEventListener("click", () => pickPack("Архив .zip", ["zip"]));
 
     const ext = $("#imp-ext");
     if (ext) ext.addEventListener("click", () => {

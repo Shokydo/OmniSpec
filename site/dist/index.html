@@ -835,7 +835,7 @@ h1 .w.in { opacity: 1; transform: none; }
 <main>
 
 <div class="wrap hero">
-  <span class="eyebrow"><span class="dot"></span> версия <b>0.40.0</b> · 18 ноября 2026 · Windows 10/11</span>
+  <span class="eyebrow"><span class="dot"></span> версия <b>0.42.0</b> · 18 ноября 2026 · Windows 10/11</span>
   <h1>Лаунчер Minecraft,<br>который не мешает играть</h1>
   <p class="lead">
     Сборки с папками и своими настройками, моды, ресурспаки и шейдеры прямо с Modrinth
@@ -857,7 +857,7 @@ h1 .w.in { opacity: 1; transform: none; }
     <span>·</span>
     <span>uninstall внутри папки</span>
     <span>·</span>
-    <span>Java скачивается сама</span><span>·</span><span>скачано 299 раз</span>
+    <span>Java скачивается сама</span><span>·</span><span>скачано 312 раз</span>
     <span>·</span>
     <a href="https://github.com/Shokydo/OmniSpec/releases" style="color:inherit">все файлы и SHA256</a>
   </div>
@@ -2064,21 +2064,19 @@ h1 .w.in { opacity: 1; transform: none; }
       fbSend.disabled = true;
       fbShowStatus("Отправляем…", "");
       var body = {
+        access_key: "df28d34b-585b-4d20-a52a-49518dc8e2be",
+        subject: fbKind === "bug" ? "OmniSpec (сайт): баг-репорт" : "OmniSpec (сайт): предложение",
         name: name,
         email: email,
-        _subject: fbKind === "bug" ? "OmniSpec (сайт): баг-репорт" : "OmniSpec (сайт): предложение",
-        _template: "table",
-        _captcha: "false",
         message: message
       };
-      if (email) body._replyto = email;
-      fetch("https://formsubmit.co/ajax/OmniSpecLauncher@gmail.com", {
+      fetch("https://api.web3forms.com/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Accept": "application/json" },
         body: JSON.stringify(body)
       }).then(function (r) { return r.json(); }).then(function (data) {
         fbSend.disabled = false;
-        if (data && String(data.success) === "true") {
+        if (data && data.success === true) {
           fbShowStatus("Отправлено! Спасибо за обратную связь.", "ok");
           document.getElementById("fb-message").value = "";
           setTimeout(fbClose, 1600);

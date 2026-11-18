@@ -128,27 +128,25 @@ async fn send_feedback(
     } else {
         "OmniSpec: предложение"
     };
-    let mut body = serde_json::json!({
+    // Web3Forms: бесплатная отправка на почту без бэкенда; ключ — публичный,
+    // он и так виден в коде страницы. В отличие от FormSubmit, не проверяет
+    // происхождение страницы, поэтому работает из встроенного webview.
+    let body = serde_json::json!({
+        "access_key": "df28d34b-585b-4d20-a52a-49518dc8e2be",
+        "subject": subject,
         "name": name.trim(),
         "email": email.trim(),
-        "_subject": subject,
-        "_template": "table",
-        "_captcha": "false",
         "message": message,
         "version": omnispec_core::APP_VERSION,
         "platform": std::env::consts::OS,
     });
-    let reply = email.trim();
-    if !reply.is_empty() {
-        body["_replyto"] = serde_json::json!(reply);
-    }
     let text = state
         .http
-        .post_json("https://formsubmit.co/ajax/OmniSpecLauncher@gmail.com", &body)
+        .post_json("https://api.web3forms.com/submit", &body)
         .await
         .map_err(err)?;
-    // FormSubmit отвечает JSON: {"success":"true", ...}
-    if text.contains("\"success\":\"true\"") || text.contains("\"success\": \"true\"") {
+    // Web3Forms отвечает JSON: {"success":true, ...}
+    if text.contains("\"success\":true") || text.contains("\"success\": true") {
         Ok(())
     } else {
         Err(format!("сервис отправки не принял сообщение: {text}"))
