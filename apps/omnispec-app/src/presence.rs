@@ -55,6 +55,10 @@ impl Presence {
     }
 
     fn log(&self, message: &str) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         eprintln!("[omnispec] discord rpc: {message}");
         if let Some(path) = &self.log_path {
             if let Ok(mut file) = std::fs::OpenOptions::new()
@@ -63,7 +67,7 @@ impl Presence {
                 .open(path)
             {
                 use std::io::Write;
-                let _ = writeln!(file, "{message}");
+                let _ = writeln!(file, "[{stamp}] {message}");
             }
         }
     }
@@ -167,16 +171,22 @@ impl Presence {
             }
             let _ = gone_tx.send(());
         });
-        // писатель: шлём активность, только когда она реально изменилась
+        // писатель: шлём активность при изменениях и периодически повторяем
+        // текущую (раз в 15 с) — иначе Discord не перерисовывает таймер и
+        // может не показать обновление статуса.
         let mut last_sent: Option<serde_json::Value> = None;
+        let mut last_send_at = std::time::Instant::now() - Duration::from_secs(60);
         loop {
             if gone_rx.try_recv().is_ok() {
                 return Err("discord закрыл соединение".into());
             }
             let (_, _, info) = self.snapshot();
             let activity = activity_value(&info);
-            if last_sent.as_ref() != Some(&activity) {
+            let changed = last_sent.as_ref() != Some(&activity);
+            let heartbeat = last_send_at.elapsed() >= Duration::from_secs(15);
+            if changed || heartbeat {
                 last_sent = Some(activity.clone());
+                last_send_at = std::time::Instant::now();
                 let payload = serde_json::json!({
                     "cmd": "SET_ACTIVITY",
                     "args": {"pid": std::process::id(), "activity": activity},
@@ -185,7 +195,10 @@ impl Presence {
                 .to_string();
                 write_frame(&mut stream, 1, &payload)
                     .map_err(|error| format!("set_activity: {error}"))?;
-                self.log("активность отправлена");
+                self.log(&format!(
+                    "активность отправлена: {}",
+                    payload.chars().take(220).collect::<String>()
+                ));
             }
             std::thread::sleep(Duration::from_millis(500));
         }
