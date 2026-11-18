@@ -805,6 +805,92 @@
     apply();
   }
 
+  /* предложение / баг-репорт: уходит на почту разработчика через FormSubmit */
+  var fbOverlay = document.getElementById("fb-overlay");
+  if (fbOverlay) {
+    var fbKind = "idea";
+    var fbStatus = document.getElementById("fb-status");
+    var fbSend = document.getElementById("fb-send");
+    function fbShowStatus(text, kind) {
+      fbStatus.hidden = false;
+      fbStatus.textContent = text;
+      fbStatus.className = "fb-status " + kind;
+    }
+    function fbOpen() {
+      fbKind = "idea";
+      var chips = fbOverlay.querySelectorAll("[data-fb-kind]");
+      for (var i = 0; i < chips.length; i++) {
+        chips[i].classList.toggle("is-active", chips[i].getAttribute("data-fb-kind") === "idea");
+      }
+      document.getElementById("fb-name").value = "";
+      document.getElementById("fb-email").value = "";
+      document.getElementById("fb-message").value = "";
+      fbStatus.hidden = true;
+      fbSend.disabled = false;
+      fbOverlay.hidden = false;
+      document.body.style.overflow = "hidden";
+    }
+    function fbClose() {
+      fbOverlay.hidden = true;
+      document.body.style.overflow = "";
+    }
+    document.getElementById("fb-open").addEventListener("click", fbOpen);
+    document.getElementById("fb-close").addEventListener("click", fbClose);
+    document.getElementById("fb-cancel").addEventListener("click", fbClose);
+    fbOverlay.addEventListener("click", function (e) {
+      if (e.target === fbOverlay) fbClose();
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !fbOverlay.hidden) fbClose();
+    });
+    var fbChips = fbOverlay.querySelectorAll("[data-fb-kind]");
+    for (var j = 0; j < fbChips.length; j++) {
+      fbChips[j].addEventListener("click", function () {
+        fbKind = this.getAttribute("data-fb-kind");
+        for (var k = 0; k < fbChips.length; k++) {
+          fbChips[k].classList.toggle("is-active", fbChips[k] === this);
+        }
+      });
+    }
+    fbSend.addEventListener("click", function () {
+      var name = document.getElementById("fb-name").value.trim();
+      var email = document.getElementById("fb-email").value.trim();
+      var message = document.getElementById("fb-message").value.trim();
+      if (!message) {
+        fbShowStatus("Напиши сообщение.", "err");
+        return;
+      }
+      fbSend.disabled = true;
+      fbShowStatus("Отправляем…", "");
+      var body = {
+        name: name,
+        email: email,
+        _subject: fbKind === "bug" ? "OmniSpec (сайт): баг-репорт" : "OmniSpec (сайт): предложение",
+        _template: "table",
+        _captcha: "false",
+        message: message
+      };
+      if (email) body._replyto = email;
+      fetch("https://formsubmit.co/ajax/OmniSpecLauncher@gmail.com", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify(body)
+      }).then(function (r) { return r.json(); }).then(function (data) {
+        fbSend.disabled = false;
+        if (data && String(data.success) === "true") {
+          fbShowStatus("Отправлено! Спасибо за обратную связь.", "ok");
+          document.getElementById("fb-message").value = "";
+          setTimeout(fbClose, 1600);
+        } else {
+          fbShowStatus("Не удалось отправить. Напиши напрямую на OmniSpecLauncher@gmail.com", "err");
+        }
+      }).catch(function () {
+        fbSend.disabled = false;
+        fbShowStatus("Не удалось отправить. Напиши напрямую на OmniSpecLauncher@gmail.com", "err");
+      });
+    });
+  }
+
   drawPlexus();
   drawGrid();
   drawSnow();

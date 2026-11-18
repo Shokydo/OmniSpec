@@ -108,6 +108,53 @@ async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result
     Ok(())
 }
 
+/// Предложение / баг-репорт: уходит на почту через FormSubmit.
+/// Первый раз FormSubmit пришлёт ссылку активации на этот адрес —
+/// её нужно открыть один раз, иначе отправка не работает.
+#[tauri::command]
+async fn send_feedback(
+    state: State<'_, AppState>,
+    name: String,
+    email: String,
+    kind: String,
+    message: String,
+) -> Result<(), String> {
+    let message = message.trim();
+    if message.is_empty() {
+        return Err("пустое сообщение".into());
+    }
+    let subject = if kind == "bug" {
+        "OmniSpec: баг-репорт"
+    } else {
+        "OmniSpec: предложение"
+    };
+    let mut body = serde_json::json!({
+        "name": name.trim(),
+        "email": email.trim(),
+        "_subject": subject,
+        "_template": "table",
+        "_captcha": "false",
+        "message": message,
+        "version": omnispec_core::APP_VERSION,
+        "platform": std::env::consts::OS,
+    });
+    let reply = email.trim();
+    if !reply.is_empty() {
+        body["_replyto"] = serde_json::json!(reply);
+    }
+    let text = state
+        .http
+        .post_json("https://formsubmit.co/ajax/OmniSpecLauncher@gmail.com", &body)
+        .await
+        .map_err(err)?;
+    // FormSubmit отвечает JSON: {"success":"true", ...}
+    if text.contains("\"success\":\"true\"") || text.contains("\"success\": \"true\"") {
+        Ok(())
+    } else {
+        Err(format!("сервис отправки не принял сообщение: {text}"))
+    }
+}
+
 /// Статус в Discord: фронт сообщает режим, сборку и время начала.
 #[tauri::command]
 fn set_presence(
@@ -2737,6 +2784,7 @@ fn main() {
             get_settings,
             save_settings,
             set_presence,
+            send_feedback,
             list_instances,
             create_instance,
             delete_instance,
