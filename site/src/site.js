@@ -862,35 +862,45 @@
       }
       fbSend.disabled = true;
       fbShowStatus("Отправляем…", "");
-      /* Web3Forms обычным POST формы в скрытый iframe: так не нужен CORS,
-         и отправка работает с любого origin (файл, http, https).
-         Ответ прочитать нельзя (чужой origin), поэтому успех показываем
-         сразу — ключ подтверждён, форма проверена из лаунчера. */
-      var form = document.createElement("form");
-      form.method = "POST";
-      form.action = "https://api.web3forms.com/submit";
-      form.target = "fb-iframe";
-      var fields = {
-        access_key: "df28d34b-585b-4d20-a52a-49518dc8e2be",
-        subject: fbKind === "bug" ? "OmniSpec (сайт): баг-репорт" : "OmniSpec (сайт): предложение",
-        name: name,
-        email: email,
-        message: message
+      /* Discord-вебхук: баг-репорты и предложения — в разные каналы.
+         Вебхуки Discord поддерживают CORS, поэтому fetch работает
+         и с сайта, и из файла. ?wait=true — ответ с объектом сообщения. */
+      var isBug = fbKind === "bug";
+      var webhook = isBug
+        ? "https://discord.com/api/webhooks/1572444315311931493/lqeEjurJAu6dJ1u-lvm9YktzxSkMk5Ig6c2ec56BVB3p9XWYEZB4GdQch7pebo6wE05v?wait=true"
+        : "https://discord.com/api/webhooks/1572444462750113883/cfZw4QCYiilG7YGsKb-Fk5cNOQp4WkFM-rrglPZRKjkhb9DSM9vdZwpDvh7hH3vI_60B?wait=true";
+      var fields = [];
+      if (name) fields.push({ name: "Имя", value: name, inline: true });
+      if (email) fields.push({ name: "Email", value: email, inline: true });
+      var body = {
+        username: "OmniSpec",
+        avatar_url: "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/logo.png",
+        embeds: [{
+          title: isBug ? "🐛 Баг-репорт" : "💡 Предложение",
+          description: message,
+          color: isBug ? 0xED4245 : 0x57F287,
+          thumbnail: { url: "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/logo.png" },
+          fields: fields,
+          footer: { text: "OmniSpec" }
+        }]
       };
-      for (var key in fields) {
-        var input = document.createElement("input");
-        input.type = "hidden";
-        input.name = key;
-        input.value = fields[key];
-        form.appendChild(input);
-      }
-      document.body.appendChild(form);
-      form.submit();
-      form.remove();
-      fbSend.disabled = false;
-      fbShowStatus("Отправлено! Спасибо за обратную связь.", "ok");
-      document.getElementById("fb-message").value = "";
-      setTimeout(fbClose, 1600);
+      fetch(webhook, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      }).then(function (r) { return r.json(); }).then(function (data) {
+        fbSend.disabled = false;
+        if (data && data.id) {
+          fbShowStatus("Отправлено! Спасибо за обратную связь.", "ok");
+          document.getElementById("fb-message").value = "";
+          setTimeout(fbClose, 1600);
+        } else {
+          fbShowStatus("Не удалось отправить. Напиши напрямую на OmniSpecLauncher@gmail.com", "err");
+        }
+      }).catch(function () {
+        fbSend.disabled = false;
+        fbShowStatus("Не удалось отправить. Напиши напрямую на OmniSpecLauncher@gmail.com", "err");
+      });
     });
   }
 

@@ -108,7 +108,7 @@ async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result
     Ok(())
 }
 
-/// Предложение / баг-репорт: уходит на почту через Web3Forms.
+/// Предложение / баг-репорт: уходит в Discord-канал через вебхук.
 #[tauri::command]
 async fn send_feedback(
     state: State<'_, AppState>,
@@ -121,33 +121,49 @@ async fn send_feedback(
     if message.is_empty() {
         return Err("пустое сообщение".into());
     }
-    let subject = if kind == "bug" {
-        "OmniSpec: баг-репорт"
+    let is_bug = kind == "bug";
+    // Discord-вебхуки: баг-репорты и предложения — в разные каналы.
+    // Карточка (embed) тёмная по умолчанию, логотип — справа вверху.
+    // ?wait=true: Discord вернёт объект сообщения, по нему видно успех.
+    let webhook = if is_bug {
+        "https://discord.com/api/webhooks/1572444315311931493/lqeEjurJAu6dJ1u-lvm9YktzxSkMk5Ig6c2ec56BVB3p9XWYEZB4GdQch7pebo6wE05v?wait=true"
     } else {
-        "OmniSpec: предложение"
+        "https://discord.com/api/webhooks/1572444462750113883/cfZw4QCYiilG7YGsKb-Fk5cNOQp4WkFM-rrglPZRKjkhb9DSM9vdZwpDvh7hH3vI_60B?wait=true"
     };
-    // Web3Forms: бесплатная отправка на почту без бэкенда; ключ — публичный,
-    // он и так виден в коде страницы. В отличие от FormSubmit, не проверяет
-    // происхождение страницы, поэтому работает из встроенного webview.
+    let mut fields = Vec::new();
+    let name = name.trim();
+    if !name.is_empty() {
+        fields.push(serde_json::json!({"name": "Имя", "value": name, "inline": true}));
+    }
+    let email = email.trim();
+    if !email.is_empty() {
+        fields.push(serde_json::json!({"name": "Email", "value": email, "inline": true}));
+    }
+    fields.push(serde_json::json!({"name": "Версия", "value": omnispec_core::APP_VERSION, "inline": true}));
+    fields.push(serde_json::json!({"name": "Платформа", "value": std::env::consts::OS, "inline": true}));
     let body = serde_json::json!({
-        "access_key": "df28d34b-585b-4d20-a52a-49518dc8e2be",
-        "subject": subject,
-        "name": name.trim(),
-        "email": email.trim(),
-        "message": message,
-        "version": omnispec_core::APP_VERSION,
-        "platform": std::env::consts::OS,
+        "username": "OmniSpec",
+        "avatar_url": "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/logo.png",
+        "embeds": [{
+            "title": if is_bug { "🐛 Баг-репорт" } else { "💡 Предложение" },
+            "description": message,
+            "color": if is_bug { 0xED4245 } else { 0x57F287 },
+            "thumbnail": {"url": "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/logo.png"},
+            "fields": fields,
+            "footer": {"text": "OmniSpec"},
+        }],
     });
-    let text = state
-        .http
-        .post_json("https://api.web3forms.com/submit", &body)
-        .await
-        .map_err(err)?;
-    // Web3Forms отвечает JSON: {"success":true, ...}
-    if text.contains("\"success\":true") || text.contains("\"success\": true") {
+    let text = state.http.post_json(webhook, &body).await.map_err(err)?;
+    // Успех — объект сообщения с "id"; ошибка — {"message": ..., "code": ...}.
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+    if parsed.get("id").is_some() {
         Ok(())
     } else {
-        Err(format!("сервис отправки не принял сообщение: {text}"))
+        let reason = parsed
+            .get("message")
+            .and_then(|value| value.as_str())
+            .unwrap_or(&text);
+        Err(format!("discord не принял сообщение: {reason}"))
     }
 }
 
