@@ -3519,8 +3519,8 @@
       if (entry) entry.complete = true;
     }
 
-    // Финальные состояния.
-    if (payload.state === "done" || (total > 0 && done >= total && payload.detail === "готово")) {
+    // Финальные состояния: явное событие done или счётчик дошёл до конца.
+    if (payload.state === "done" || (total > 0 && done >= total)) {
       dl.state = "done";
       dl.files.forEach((entry) => { entry.complete = true; entry.done = entry.total; });
       scheduleDlHide();
@@ -3530,10 +3530,10 @@
     } else if (payload.state === "error") {
       dl.state = "error";
       scheduleDlHide();
-    } else if (dl.timer) {
-      // идёт следующая загрузка — отложенное скрытие отменяется
-      clearTimeout(dl.timer);
-      dl.timer = null;
+    } else {
+      // идёт активная загрузка — отложенное скрытие отменяется
+      if (dl.timer) { clearTimeout(dl.timer); dl.timer = null; }
+      dl.state = "active";
     }
 
     renderDownloads();

@@ -587,6 +587,7 @@ pub async fn install_mojang_runtime(
         .await
         .ok_or_else(|| Error::Java(format!("скачанный рантайм не запускается: {}", binary.display())))?;
     reporter.emit("java", 1, 1, format!("Java {major} готова"));
+    reporter.emit_state("java", "done", "готово");
     Ok(JavaInstall {
         source: "mojang".into(),
         ..install

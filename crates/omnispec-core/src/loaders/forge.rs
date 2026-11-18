@@ -167,6 +167,7 @@ async fn run_installer(
     }
 
     reporter.emit("loader", 3, 3, "инсталлятор отработал");
+    reporter.emit_state("loader", "done", "готово");
     let after = list_version_ids(paths);
     let created: Vec<String> = after
         .iter()

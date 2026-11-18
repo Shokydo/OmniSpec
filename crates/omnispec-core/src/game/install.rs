@@ -83,6 +83,7 @@ pub async fn ensure_installed_resolved(
     } else {
         return Err(Error::Other("в профиле нет ссылки на клиент игры".into()));
     }
+    reporter.emit_state("version", "done", "готово");
 
     // 2. Библиотеки + нативные библиотеки
     let mut downloads: Vec<DownloadItem> = Vec::new();
@@ -170,6 +171,7 @@ pub async fn ensure_installed_resolved(
         let _ = std::fs::write(&stamp, format!("{footprint}\n"));
     }
     reporter.emit("libraries", 1, 3, "библиотеки готовы");
+    reporter.emit_state("libraries", "done", "готово");
 
     // 3. Ресурсы (assets)
     let mut asset_index_id = None;
@@ -230,6 +232,7 @@ pub async fn ensure_installed_resolved(
     }
     }
     reporter.emit("assets", 1, 1, "ресурсы готовы");
+    reporter.emit_state("assets", "done", "готово");
 
     // 4. Конфиг логирования (log4j).
     // Официальный конфиг Mojang пишет в консоль XML (`LegacyXMLLayout`) — он нужен

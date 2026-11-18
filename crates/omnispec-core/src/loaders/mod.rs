@@ -71,6 +71,7 @@ pub async fn ensure_profile(
         }
     }
     reporter.emit("loader", 2, 2, "профиль готов");
+    reporter.emit_state("loader", "done", "готово");
     Ok(effective)
 }
 
