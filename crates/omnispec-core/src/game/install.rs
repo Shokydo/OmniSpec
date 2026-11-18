@@ -62,19 +62,27 @@ pub async fn ensure_installed_resolved(
     // 1. Клиентский jar
     reporter.emit("version", 0, 3, format!("профиль {}", resolved.id));
     let client_jar = paths.version_jar(&resolved.jar_id);
-    let client = resolved
-        .client
-        .clone()
-        .ok_or_else(|| Error::Other("в профиле нет ссылки на клиент игры".into()))?;
-    http.download(
-        &client.url,
-        &client_jar,
-        Some(client.size),
-        client.sha1.as_deref(),
-        false,
-    )
-    .await?;
-    reporter.emit("version", 1, 3, "клиент игры загружен");
+    // Forge/NeoForge не наследуют ванильный клиент (см. merge_chain): их
+    // клиентский JAR (SRG/client-extra) ставит инсталлятор в папку библиотек,
+    // а ModLauncher находит его сам. Ванильный JAR на classpath не нужен —
+    // он даёт дубль модулей (_1._x и minecraft) и ResolutionException.
+    let forge_like = resolved.id.to_lowercase().contains("forge");
+    let has_client = resolved.client.is_some();
+    if let Some(client) = resolved.client.clone() {
+        http.download(
+            &client.url,
+            &client_jar,
+            Some(client.size),
+            client.sha1.as_deref(),
+            false,
+        )
+        .await?;
+        reporter.emit("version", 1, 3, "клиент игры загружен");
+    } else if forge_like {
+        reporter.emit("version", 1, 3, "клиент загрузчика (ванильный не нужен)");
+    } else {
+        return Err(Error::Other("в профиле нет ссылки на клиент игры".into()));
+    }
 
     // 2. Библиотеки + нативные библиотеки
     let mut downloads: Vec<DownloadItem> = Vec::new();
@@ -232,7 +240,10 @@ pub async fn ensure_installed_resolved(
         None
     };
 
-    classpath.push(client_jar.clone());
+    // Ванильный клиентский JAR — только если он реально есть (не для Forge/NeoForge).
+    if has_client {
+        classpath.push(client_jar.clone());
+    }
 
     Ok(InstallReport {
         version_id: resolved.id.clone(),

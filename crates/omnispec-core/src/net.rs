@@ -237,12 +237,30 @@ impl Http {
     }
 
     pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
-        let response = self.client.get(url).send().await?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(Error::Other(format!("{url} → HTTP {status}")));
+        // Тело читаем внутри цикла: обрыв соединения посреди стрима
+        // («error decoding response body») не должен ронять скачивание —
+        // повторяем, дальше — запасным HTTP/1.1-клиентом.
+        let mut last: Option<Error> = None;
+        for attempt in 0..3u64 {
+            let client = if attempt == 0 { &self.client } else { &self.fallback };
+            let bytes = async {
+                let response = client.get(url).send().await?;
+                let status = response.status();
+                if !status.is_success() {
+                    return Err(Error::Other(format!("{url} → HTTP {status}")));
+                }
+                Ok::<Vec<u8>, Error>(response.bytes().await?.to_vec())
+            }
+            .await;
+            match bytes {
+                Ok(bytes) => return Ok(bytes),
+                Err(error) => {
+                    last = Some(error);
+                    tokio::time::sleep(Duration::from_millis(300 * (attempt + 1))).await;
+                }
+            }
         }
-        Ok(response.bytes().await?.to_vec())
+        Err(last.unwrap_or_else(|| Error::Other(format!("не удалось скачать {url}"))))
     }
 
     /// Скачать файл. Если файл уже есть и совпадает по размеру — пропускаем.
@@ -295,8 +313,38 @@ impl Http {
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
+        // Повторы: обрыв тела ответа посреди стрима («error decoding response
+        // body») — частая беда на Windows-сетях. Первая попытка обычным
+        // клиентом, дальше — запасной HTTP/1.1 без пула.
+        let mut last: Option<Error> = None;
+        for attempt in 0..3u64 {
+            let client = if attempt == 0 { &self.client } else { &self.fallback };
+            match self
+                .download_once(client, url, dest, sha1, token)
+                .await
+            {
+                Ok(downloaded) => return Ok(downloaded),
+                Err(error) => {
+                    let _ = tokio::fs::remove_file(dest.with_extension("omnispec-part")).await;
+                    last = Some(error);
+                    tokio::time::sleep(Duration::from_millis(300 * (attempt + 1))).await;
+                }
+            }
+        }
+        Err(last.unwrap_or_else(|| Error::Other(format!("не удалось скачать {url}"))))
+    }
+
+    /// Одна попытка скачивания файла во временный `.omnispec-part` + rename.
+    async fn download_once(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+        dest: &Path,
+        sha1: Option<&str>,
+        token: Option<&str>,
+    ) -> Result<bool> {
         let tmp = dest.with_extension("omnispec-part");
-        let mut request = self.client.get(url);
+        let mut request = client.get(url);
         if let Some(token) = token.filter(|value| !value.trim().is_empty()) {
             request = request
                 .header("Authorization", format!("Bearer {token}"))

@@ -404,7 +404,15 @@ pub fn merge_chain(chain: Vec<VersionJson>) -> ResolvedVersion {
                 resolved.main_class = main_class.clone();
             }
         }
-        if resolved.client.is_none() {
+        // Forge/NeoForge подменяют ванильный клиентский JAR своим (SRG/client-extra
+        // из инсталлятора): наследовать downloads.client родителя нельзя — ванильный
+        // JAR рядом с Forge/NeoForge даёт дубль модулей и ResolutionException
+        // («Modules _1._x and minecraft export package …»). Поэтому для forge-*/
+        // neoforge-* клиент берём только из самой версии, не от родителей.
+        // Fabric/Quilt, наоборот, используют ванильный клиент родителя.
+        // NB: id Forge вида "1.20.1-forge-47.4.10" — поэтому contains, не starts_with.
+        let forge_like = resolved.id.to_lowercase().contains("forge");
+        if resolved.client.is_none() && (!forge_like || version.id == resolved.id) {
             if let Some(downloads) = &version.downloads {
                 if let Some(client) = &downloads.client {
                     resolved.client = Some(client.clone());
