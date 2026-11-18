@@ -119,12 +119,24 @@ impl Release {
     }
 }
 
+/// Одна запись списка изменений: версия и её описание из релиза.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangelogEntry {
+    pub version: String,
+    pub notes: String,
+    pub published_at: Option<String>,
+}
+
 /// Информация о доступном обновлении (её получает интерфейс).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInfo {
     pub version: String,
     pub current_version: String,
     pub notes: String,
+    /// Все версии между текущей и новой (по возрастанию) — чтобы интерфейс
+    /// показал список изменений, а не только последний релиз.
+    #[serde(default)]
+    pub changelog: Vec<ChangelogEntry>,
     pub published_at: Option<String>,
     pub page_url: String,
     pub asset_name: String,
@@ -259,6 +271,7 @@ pub fn evaluate(release: &Release, current_version: &str) -> Option<UpdateInfo> 
         version,
         current_version: current_version.to_string(),
         notes: release.body.clone().unwrap_or_default(),
+        changelog: Vec::new(),
         published_at: release.published_at.clone(),
         page_url: release.page_url(),
         asset_name: asset.name.clone(),
@@ -289,7 +302,7 @@ pub async fn check(
     }
     let token = auth_token(config);
 
-    if config.include_prerelease {
+    let mut info = if config.include_prerelease {
         let url = format!(
             "{GITHUB_API}/repos/{}/{}/releases?per_page=10",
             config.owner, config.repo
@@ -298,31 +311,79 @@ pub async fn check(
             .get_json_with_token(&url, token)
             .await
             .map_err(explain_api_error)?;
+        let mut found = None;
         for release in releases.iter() {
             if release.prerelease && !release.draft {
                 if let Some(info) = evaluate(release, current_version) {
-                    return Ok(Some(info));
+                    found = Some(info);
+                    break;
                 }
             }
         }
-    }
+        found
+    } else {
+        let url = format!(
+            "{GITHUB_API}/repos/{}/{}/releases/latest",
+            config.owner, config.repo
+        );
+        let release: Release = match http.get_json_with_token(&url, token).await {
+            Ok(release) => release,
+            Err(error) => {
+                // 404 — релизов ещё нет, это нормально для нового репозитория.
+                let text = error.to_string();
+                if text.contains("404") {
+                    return Ok(None);
+                }
+                return Err(explain_api_error(error));
+            }
+        };
+        evaluate(&release, current_version)
+    };
 
+    // Список изменений всех версий между текущей и новой — чтобы интерфейс
+    // показал, что вошло в каждое обновление, а не только последний релиз.
+    if let Some(info) = info.as_mut() {
+        info.changelog = fetch_changelog(http, config, current_version, &info.version).await;
+    }
+    Ok(info)
+}
+
+/// Все релизы с версией строго больше `current` и не больше `target`,
+/// по возрастанию версии. Ошибки не критичны: без списка просто покажется
+/// описание последнего релиза.
+async fn fetch_changelog(
+    http: &Http,
+    config: &UpdateConfig,
+    current: &str,
+    target: &str,
+) -> Vec<ChangelogEntry> {
+    let token = auth_token(config);
     let url = format!(
-        "{GITHUB_API}/repos/{}/{}/releases/latest",
+        "{GITHUB_API}/repos/{}/{}/releases?per_page=100",
         config.owner, config.repo
     );
-    let release: Release = match http.get_json_with_token(&url, token).await {
-        Ok(release) => release,
-        Err(error) => {
-            // 404 — релизов ещё нет, это нормально для нового репозитория.
-            let text = error.to_string();
-            if text.contains("404") {
-                return Ok(None);
-            }
-            return Err(explain_api_error(error));
-        }
+    let releases: Vec<Release> = match http.get_json_with_token(&url, token).await {
+        Ok(releases) => releases,
+        Err(_) => return Vec::new(),
     };
-    Ok(evaluate(&release, current_version))
+    let mut entries: Vec<ChangelogEntry> = releases
+        .iter()
+        .filter(|release| !release.draft)
+        .filter(|release| config.include_prerelease || !release.prerelease)
+        .map(|release| (release.version(), release))
+        .filter(|(version, _)| {
+            !version.is_empty()
+                && is_newer(version, current)
+                && !is_newer(version, target)
+        })
+        .map(|(version, release)| ChangelogEntry {
+            version,
+            notes: release.body.clone().unwrap_or_default(),
+            published_at: release.published_at.clone(),
+        })
+        .collect();
+    entries.sort_by(|a, b| compare_versions(&a.version, &b.version));
+    entries
 }
 
 /// Понятные сообщения вместо голого JSON от GitHub.

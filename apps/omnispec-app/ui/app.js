@@ -2104,6 +2104,11 @@
     version: "0.2.0",
     current_version: "0.1.0",
     notes: "Что нового в 0.2.0:\n\n• Автообновление через GitHub Releases\n• Кнопка «Обновить и перезапустить» прямо в лаунчере\n• Исправлена установка модов с обязательными зависимостями\n• Ускорена проверка файлов после первого запуска",
+    changelog: [
+      { version: "0.1.1", notes: "Исправлена установка модов с обязательными зависимостями", published_at: new Date().toISOString() },
+      { version: "0.1.2", notes: "Ускорена проверка файлов после первого запуска", published_at: new Date().toISOString() },
+      { version: "0.2.0", notes: "Автообновление через GitHub Releases\nКнопка «Обновить и перезапустить» прямо в лаунчере", published_at: new Date().toISOString() }
+    ],
     published_at: new Date().toISOString(),
     page_url: "https://github.com/Shokydo/OmniSpec/releases",
     asset_name: "OmniSpec.exe",
@@ -8966,6 +8971,38 @@
     }
   }
 
+  /** Список изменений: каждая версия между текущей и новой — отдельным блоком. */
+  function renderUpdateNotes(info) {
+    const box = $("#upd-notes");
+    box.innerHTML = "";
+    const entries = info.changelog && info.changelog.length
+      ? info.changelog
+      : [{ version: info.version, notes: info.notes, published_at: info.published_at }];
+    for (const entry of entries) {
+      const block = document.createElement("div");
+      block.className = "upd-change";
+      const head = document.createElement("div");
+      head.className = "upd-change-head";
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "v" + entry.version;
+      head.appendChild(tag);
+      if (entry.published_at) {
+        const date = document.createElement("span");
+        date.className = "muted";
+        date.textContent = new Date(entry.published_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+        head.appendChild(date);
+      }
+      const pre = document.createElement("pre");
+      pre.textContent = entry.notes && entry.notes.trim()
+        ? entry.notes
+        : "Описание изменений не указано.";
+      block.appendChild(head);
+      block.appendChild(pre);
+      box.appendChild(block);
+    }
+  }
+
   function showUpdate(info) {
     state.update.info = info;
     const pill = $("#btn-update");
@@ -8979,9 +9016,7 @@
       ? new Date(info.published_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })
       : "";
     $("#upd-asset").textContent = info.asset_name || "";
-    $("#upd-notes").textContent = info.notes && info.notes.trim()
-      ? info.notes
-      : "Описание изменений не указано.";
+    renderUpdateNotes(info);
     $("#upd-progress").hidden = true;
     $("#upd-install").disabled = false;
     $("#upd-install").textContent = "Обновить и перезапустить";

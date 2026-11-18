@@ -178,3 +178,57 @@ jobs:
             dist/omnispec-setup.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  announce:
+    name: Анонс в Discord
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Пост анонса с патч-листом в Discord
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISCORD_WEBHOOK: "https://discord.com/api/webhooks/1572444696788209756/8zm8Ra3jzWafBAGlxgIfKSXatMr-c-FgTXEbH8aH0D82JPU8-aw6v9xzLfTDJxNesTRS"
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess, urllib.request
+
+          tag = os.environ["TAG"]
+          webhook = os.environ["DISCORD_WEBHOOK"]
+          logo = "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/logo.png"
+
+          body = subprocess.run(
+              ["gh", "release", "view", tag, "--json", "body", "--jq", ".body"],
+              capture_output=True, text=True,
+          ).stdout
+          # Только список изменений (секция What's Changed), без инструкции по установке.
+          notes = body
+          marker = "## What's Changed"
+          if marker in body:
+              notes = body.split(marker, 1)[1].strip()
+          notes = notes[:4000] or "Описание изменений не указано."
+
+          embed = {
+              "title": f"🚀 OmniSpec {tag}",
+              "description": notes,
+              "color": 0x5865F2,
+              "thumbnail": {"url": logo},
+              "fields": [{
+                  "name": "Скачать",
+                  "value": f"https://github.com/Shokydo/OmniSpec/releases/tag/{tag}",
+                  "inline": False,
+              }],
+              "footer": {"text": "OmniSpec"},
+          }
+          payload = json.dumps({
+              "username": "OmniSpec",
+              "avatar_url": logo,
+              "embeds": [embed],
+          }).encode()
+          req = urllib.request.Request(
+              webhook, data=payload, headers={"Content-Type": "application/json"}
+          )
+          with urllib.request.urlopen(req) as resp:
+              print("Discord анонс отправлен:", resp.status)
+          PYEOF
