@@ -2760,7 +2760,8 @@ fn main() {
         .skip(1)
         .find(|arg| !arg.starts_with('-') && std::path::Path::new(arg).exists());
     // Discord Rich Presence: воркер в фоне, молча ждёт Client ID в настройках.
-    let presence = presence::Presence::new();
+    let presence = presence::Presence::new()
+        .with_log_path(paths.root.join("discord-rpc.log"));
     presence.configure(&settings.discord_client_id, settings.discord_rpc);
     let presence_worker = presence.clone();
     std::thread::spawn(move || presence_worker.run());

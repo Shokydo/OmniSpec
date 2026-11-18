@@ -40,11 +40,32 @@ struct Shared {
 #[derive(Clone, Default)]
 pub struct Presence {
     shared: Arc<Mutex<Shared>>,
+    log_path: Option<std::path::PathBuf>,
 }
 
 impl Presence {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Куда писать ошибки IPC (для диагностики, если RPC не работает).
+    pub fn with_log_path(mut self, path: std::path::PathBuf) -> Self {
+        self.log_path = Some(path);
+        self
+    }
+
+    fn log(&self, message: &str) {
+        eprintln!("[omnispec] discord rpc: {message}");
+        if let Some(path) = &self.log_path {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "{message}");
+            }
+        }
     }
 
     /// Настройки Discord из settings.json (при старте и сохранении).
@@ -84,7 +105,7 @@ impl Presence {
                 continue;
             }
             if let Err(error) = self.session(&client_id) {
-                eprintln!("[omnispec] discord rpc: {error}");
+                self.log(&error);
             }
             std::thread::sleep(Duration::from_secs(3));
         }
@@ -174,6 +195,8 @@ fn activity_value(info: &PresenceInfo) -> serde_json::Value {
     } else {
         info.state.trim()
     };
+    // Без buttons: часть клиентов Discord отклоняет активность целиком,
+    // если кнопки не поддерживаются. Минимальный набор надёжно показывается.
     let mut activity = serde_json::json!({
         "type": 0,
         "details": details,
@@ -181,7 +204,6 @@ fn activity_value(info: &PresenceInfo) -> serde_json::Value {
         // картинка «logo» загружается в портале разработчика Discord
         // (Rich Presence → Art Assets); без неё показывается только текст
         "assets": {"large_image": "logo", "large_text": "OmniSpec"},
-        "buttons": [{"label": "GitHub", "url": "https://github.com/Shokydo/OmniSpec"}],
         "instance": false,
     });
     if let Some(start) = info.started_at {
