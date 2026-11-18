@@ -3462,7 +3462,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-app"
-version = "0.46.7"
+version = "0.46.8"
 dependencies = [
  "futures",
  "omnispec-core",
@@ -3477,7 +3477,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-core"
-version = "0.46.7"
+version = "0.46.8"
 dependencies = [
  "dirs 5.0.1",
  "futures",
@@ -3495,7 +3495,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-setup"
-version = "0.46.7"
+version = "0.46.8"
 dependencies = [
  "eframe",
  "image",
