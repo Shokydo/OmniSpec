@@ -325,7 +325,7 @@ impl Default for Settings {
             proxy: None,
             ms_client_id: None,
             discord_rpc: true,
-            discord_client_id: String::new(),
+            discord_client_id: "1304864863830540439".to_string(),
             wallpaper: None,
             wallpaper_fit: default_wallpaper_fit(),
             wallpaper_blur: 0,
