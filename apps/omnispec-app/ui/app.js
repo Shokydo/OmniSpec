@@ -2048,6 +2048,7 @@
     contentDelete: (instanceId, kind, name) => invoke("content_delete", { instanceId, kind, name }),
     contentUpdates: (instanceId, kind) => invoke("content_updates", { instanceId, kind }),
     contentUpdate: (instanceId, kind, name, update) => invoke("content_update", { instanceId, kind, name, update: update || null }),
+    replaceModVersion: (instanceId, kind, name, versionId) => invoke("content_replace_version", { instanceId, kind, name, versionId }),
     ensureDependencies: (instanceId) => invoke("mods_ensure_dependencies", { instanceId }),
     scanExternal: () => invoke("scan_external_launchers"),
     importExternal: (payload) => invoke("import_external", payload),
@@ -2121,10 +2122,10 @@
   };
 
   const demoMods = [
-    { name: "sodium-fabric-0.6.13+mc1.21.4.jar", size: 1306799, enabled: true },
-    { name: "lithium-fabric-0.14.3+mc1.21.4.jar", size: 645120, enabled: true },
-    { name: "iris-fabric-1.8.8+mc1.21.4.jar", size: 9175040, enabled: true },
-    { name: "modmenu-11.0.4.jar", size: 706560, enabled: false }
+    { name: "sodium-fabric-0.6.13+mc1.21.4.jar", size: 1306799, enabled: true, project_id: "AANobbjH", version_id: "demo-sodium-1" },
+    { name: "lithium-fabric-0.14.3+mc1.21.4.jar", size: 645120, enabled: true, project_id: "GVmQuU3P", version_id: "demo-lithium-1" },
+    { name: "iris-fabric-1.8.8+mc1.21.4.jar", size: 9175040, enabled: true, project_id: "2DkA2pB4", version_id: "demo-iris-1" },
+    { name: "modmenu-11.0.4.jar", size: 706560, enabled: false, project_id: "mOgUt4GM", version_id: "demo-modmenu-1" }
   ];
 
   const demoSearch = (q) => ({
@@ -2378,8 +2379,8 @@
           filename: mod.name,
           enabled: mod.enabled,
           size: mod.size,
-          project_id: null,
-          version_id: null,
+          project_id: mod.project_id || null,
+          version_id: mod.version_id || null,
           version_number: version ? version[1] : null,
           title: pretty ? pretty.charAt(0).toUpperCase() + pretty.slice(1) : null
         };
@@ -2416,6 +2417,7 @@
       return null;
     },
     contentUpdates: async (_id, kind) => demoUpdates(kind),
+    replaceModVersion: async () => ({ installed: ["mod.jar"], skipped: [] }),
     contentUpdate: async (_id, kind, name, passed) => {
       const update = passed || demoUpdates(kind).find((item) => item.filename === name);
       if (!update) throw new Error("обновлений нет");
@@ -4684,10 +4686,13 @@
     const update = updateOf(kind, entry);
     const pageUrl = (update && update.page_url)
       || (entry.project_id ? `https://modrinth.com/${kind === "mod" ? "mod" : kind}/${entry.project_id}` : null);
+    // смену версии умеем только для проектов Modrinth (у CurseForge id — чисто цифры)
+    const canReplace = Boolean(entry.project_id) && !/^\d+$/.test(entry.project_id);
     const html = `
       <div class="ctx-caption">${esc(contentTitle(entry))}${entry.version_number ? ` · v${esc(entry.version_number)}` : ""}</div>
       <button class="ctx-item" data-act="check"><svg class="ic"><use href="#i-refresh"/></svg>Проверить обновления под мою версию</button>
       ${update ? `<button class="ctx-item" data-act="update"><svg class="ic"><use href="#i-download"/></svg>Обновить до ${esc(update.latest)}</button>` : ""}
+      ${canReplace ? `<button class="ctx-item" data-act="replace"><svg class="ic"><use href="#i-list"/></svg>Поменять версию…</button>` : ""}
       ${pageUrl ? `<button class="ctx-item" data-act="page"><svg class="ic"><use href="#i-link"/></svg>${cfg.pageLabel}</button>` : ""}
       <div class="ctx-sep"></div>
       <button class="ctx-item" data-act="toggle"><svg class="ic"><use href="#i-${entry.enabled ? "close" : "check"}"/></svg>${entry.enabled ? "Отключить" : "Включить"}</button>
@@ -4698,6 +4703,7 @@
       try {
         if (act === "check") await checkContentUpdates(kind, entry.filename);
         else if (act === "update") await updateContentFile(kind, entry.filename);
+        else if (act === "replace") await openVersions(entry.project_id, kind, contentTitle(entry), entry);
         else if (act === "page") await api.openUrl(pageUrl);
         else if (act === "toggle") { await api.contentToggle(meta.id, kind, entry.name); renderContent(kind); }
         else if (act === "folder") await api.openPath(`${meta.id}/minecraft/${cfg.folder}`);
@@ -6043,15 +6049,22 @@
     };
   }
 
-  async function openVersions(projectId, kind, title) {
+  async function openVersions(projectId, kind, title, replaceEntry = null) {
     const modal = $("#modal-versions");
     if (!modal) return;
     modal.hidden = false;
-    $("#ver-title").textContent = `${title || "Версии"} — выбор версии`;
+    $("#ver-title").textContent = replaceEntry
+      ? `Поменять версию: ${title || "мод"}`
+      : `${title || "Версии"} — выбор версии`;
     $("#ver-body").innerHTML = `<div class="empty-state">Загружаем версии…</div>`;
     const meta = selected();
-    const mc = kind === "pack" ? null : (state.modrinth.mc || (meta ? meta.mc_version : null));
-    const loader = kind === "pack" ? null : (state.modrinth.loader || (meta && meta.loader ? meta.loader.type : null));
+    // при замене версии фильтруем строго под сборку, а не под вкладку загрузки
+    const mc = replaceEntry
+      ? (meta ? meta.mc_version : null)
+      : (kind === "pack" ? null : (state.modrinth.mc || (meta ? meta.mc_version : null)));
+    const loader = replaceEntry
+      ? (kind === "mod" && meta && meta.loader ? meta.loader.type : null)
+      : (kind === "pack" ? null : (state.modrinth.loader || (meta && meta.loader ? meta.loader.type : null)));
     let versions = [];
     try {
       versions = await api.modrinthVersions(projectId, mc, loader);
@@ -6065,7 +6078,9 @@
     }
     $("#ver-body").innerHTML = `
       <div class="ver-list">
-        ${versions.slice(0, 60).map((version) => `
+        ${versions.slice(0, 60).map((version) => {
+          const isCurrent = Boolean(replaceEntry && replaceEntry.version_id && version.id === replaceEntry.version_id);
+          return `
           <div class="ver-row">
             <div class="ver-main">
               <div class="ver-name">${esc(version.name || version.version_number)}</div>
@@ -6073,13 +6088,36 @@
                 <span class="tag">${esc(version.version_number)}</span>
                 ${(version.game_versions || []).slice(0, 3).map((gv) => `<span class="tag">${esc(gv)}</span>`).join("")}
                 ${(version.loaders || []).slice(0, 2).map((ld) => `<span class="tag">${esc(ld)}</span>`).join("")}
+                ${isCurrent ? `<span class="tag tag-installed">текущая</span>` : ""}
               </div>
             </div>
             <span class="ver-date">${(version.date_published || "").slice(0, 10)}</span>
-            <button class="btn btn-primary" data-install-version="${esc(version.id)}" data-kind="${kind}">Установить</button>
-          </div>`).join("")}
+            <button class="btn btn-primary" data-install-version="${esc(version.id)}" data-kind="${kind}"${replaceEntry ? ` data-replace="${esc(replaceEntry.filename)}"` : ""}${isCurrent ? " disabled" : ""}>${replaceEntry ? "Заменить" : "Установить"}</button>
+          </div>`;
+        }).join("")}
       </div>`;
-    $$("[data-install-version]").forEach((btn) => btn.addEventListener("click", () => installVersion(btn.dataset.installVersion, btn.dataset.kind, btn)));
+    $$("[data-install-version]").forEach((btn) => btn.addEventListener("click", () => {
+      if (btn.dataset.replace) replaceModVersion(btn.dataset.replace, btn.dataset.installVersion, btn.dataset.kind, btn);
+      else installVersion(btn.dataset.installVersion, btn.dataset.kind, btn);
+    }));
+  }
+
+  /** Заменить установленный файл на выбранную версию (ПКМ → «Поменять версию»). */
+  async function replaceModVersion(filename, versionId, kind, btn) {
+    const meta = selected();
+    if (!meta) return toast("Сначала выбери сборку", "err");
+    if (btn) { btn.disabled = true; btn.textContent = "Меняем…"; }
+    try {
+      await withDownloading(null, () => api.replaceModVersion(meta.id, kind, filename, versionId));
+      state.contentUpdates[kind] = (state.contentUpdates[kind] || []).filter((item) => item.filename !== filename);
+      const modal = $("#modal-versions");
+      if (modal) modal.hidden = true;
+      renderContent(kind);
+      toast("Версия мода заменена", "ok");
+    } catch (err) {
+      toast(String(err), "err");
+      if (btn) { btn.disabled = false; btn.textContent = "Заменить"; }
+    }
   }
 
   async function installVersion(versionId, kind, btn) {

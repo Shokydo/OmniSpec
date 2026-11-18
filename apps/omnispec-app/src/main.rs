@@ -1797,6 +1797,35 @@ async fn content_update(
     Ok(json!(update))
 }
 
+/// Заменить файл на конкретную версию (ПКМ по моду → «Поменять версию»).
+#[tauri::command]
+async fn content_replace_version(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    instance_id: String,
+    kind: String,
+    name: String,
+    version_id: String,
+) -> Result<Value, String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let reporter = reporter_for(&app, &meta.id);
+    let outcome = omnispec_core::content::replace_version(
+        &state.modrinth,
+        &state.paths,
+        &meta,
+        &kind,
+        &name,
+        &version_id,
+        &reporter,
+    )
+    .await
+    .map_err(err)?;
+    Ok(json!({
+        "installed": outcome.installed,
+        "skipped": outcome.skipped
+    }))
+}
+
 /// Догрузить обязательные зависимости уже установленных модов.
 #[tauri::command]
 async fn mods_ensure_dependencies(
@@ -2962,6 +2991,7 @@ fn main() {
             content_delete,
             content_updates,
             content_update,
+            content_replace_version,
             mods_ensure_dependencies,
             accounts_info,
             account_add_offline,

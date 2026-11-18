@@ -447,6 +447,87 @@ pub async fn apply_update_with(
     Ok(update.clone())
 }
 
+/// Заменить файл на конкретную версию проекта Modrinth: скачать новый,
+/// убрать старый, обновить картотеку и докачать зависимости новой версии.
+pub async fn replace_version(
+    modrinth: &Modrinth,
+    paths: &Paths,
+    instance: &InstanceMeta,
+    kind: &str,
+    old_filename: &str,
+    version_id: &str,
+    reporter: &Reporter,
+) -> Result<crate::modrinth::install::InstallOutcome> {
+    let version = modrinth.version(version_id).await?;
+    let project = modrinth.project(&version.project_id).await?;
+    let file = version
+        .primary_file()
+        .ok_or_else(|| Error::not_found(format!("у версии {} нет файлов", version.id)))?;
+    let dir = dir_of(paths, instance, kind);
+    std::fs::create_dir_all(&dir)?;
+    let dest = dir.join(&file.filename);
+    // Если имя совпало со старым — качаем во временный файл и переименовываем,
+    // чтобы не потерять мод при обрыве загрузки.
+    let tmp = if file.filename == old_filename {
+        dir.join(format!(".omnispec-new-{}", file.filename))
+    } else {
+        dest.clone()
+    };
+    reporter.emit("mods", 0, 0, format!("скачиваем {}", file.filename));
+    let reporter_progress = reporter.clone();
+    let file_name = file.filename.clone();
+    modrinth
+        .http()
+        .download_tracked(
+            &file.url,
+            &tmp,
+            Some(file.size),
+            None,
+            true,
+            &|done, total| {
+                reporter_progress.emit_bytes("mods", &file_name, done, total);
+            },
+        )
+        .await?;
+    if tmp != dest {
+        std::fs::rename(&tmp, &dest)?;
+    }
+
+    // старый файл убираем (и выключенный вариант)
+    for candidate in [
+        dir.join(old_filename),
+        dir.join(format!("{old_filename}.disabled")),
+    ] {
+        if candidate.exists() && candidate != dest {
+            let _ = std::fs::remove_file(candidate);
+        }
+    }
+
+    let mut store = load_store(paths, instance);
+    store.files.remove(old_filename);
+    store.files.insert(
+        file.filename.clone(),
+        ContentRecord {
+            filename: file.filename.clone(),
+            project_id: Some(version.project_id.clone()),
+            version_id: Some(version.id.clone()),
+            version_number: version.version_number.clone(),
+            title: if project.title.is_empty() {
+                version.name.clone()
+            } else {
+                project.title.clone()
+            },
+            kind: kind.to_string(),
+            sha1: file.hashes.get("sha1").cloned().unwrap_or_default(),
+        },
+    );
+    save_store(paths, instance, &store)?;
+
+    // зависимости новой версии: главный файл уже на месте, install_version
+    // его пропустит и докачает только недостающее
+    crate::modrinth::install::install_version(modrinth, paths, instance, version_id, reporter).await
+}
+
 /// Проекты, которые уже стоят в сборке (по картотеке) — для автодокачки зависимостей.
 pub fn installed_projects(
     paths: &Paths,
