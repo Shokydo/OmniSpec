@@ -24,6 +24,11 @@ pub struct PresenceInfo {
     pub started_at: Option<u64>,
 }
 
+/// Client ID приложения OmniSpec в Discord Developer Portal.
+/// Используется, когда в настройках поле пустое (например, у тех, кто
+/// обновился со старой версии, где ID ещё не было по умолчанию).
+pub const DEFAULT_CLIENT_ID: &str = "1304864863830540439";
+
 #[derive(Default)]
 struct Shared {
     info: PresenceInfo,
@@ -43,9 +48,16 @@ impl Presence {
     }
 
     /// Настройки Discord из settings.json (при старте и сохранении).
+    /// Пустое поле означает «использовать дефолтный ID приложения» —
+    /// так RPC работает и у тех, кто обновился со старой версии.
     pub fn configure(&self, client_id: &str, enabled: bool) {
         let mut shared = self.shared.lock().unwrap();
-        shared.client_id = client_id.trim().to_string();
+        let client_id = client_id.trim();
+        shared.client_id = if client_id.is_empty() {
+            DEFAULT_CLIENT_ID.to_string()
+        } else {
+            client_id.to_string()
+        };
         shared.enabled = enabled;
     }
 

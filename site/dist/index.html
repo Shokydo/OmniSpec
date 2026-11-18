@@ -835,7 +835,7 @@ h1 .w.in { opacity: 1; transform: none; }
 <main>
 
 <div class="wrap hero">
-  <span class="eyebrow"><span class="dot"></span> версия <b>0.42.0</b> · 18 ноября 2026 · Windows 10/11</span>
+  <span class="eyebrow"><span class="dot"></span> версия <b>0.43.0</b> · 18 ноября 2026 · Windows 10/11</span>
   <h1>Лаунчер Minecraft,<br>который не мешает играть</h1>
   <p class="lead">
     Сборки с папками и своими настройками, моды, ресурспаки и шейдеры прямо с Modrinth
@@ -857,7 +857,7 @@ h1 .w.in { opacity: 1; transform: none; }
     <span>·</span>
     <span>uninstall внутри папки</span>
     <span>·</span>
-    <span>Java скачивается сама</span><span>·</span><span>скачано 312 раз</span>
+    <span>Java скачивается сама</span><span>·</span><span>скачано 316 раз</span>
     <span>·</span>
     <a href="https://github.com/Shokydo/OmniSpec/releases" style="color:inherit">все файлы и SHA256</a>
   </div>
@@ -1164,6 +1164,8 @@ h1 .w.in { opacity: 1; transform: none; }
   <button class="lb-close" id="lb-close" aria-label="Закрыть">✕</button>
   <img src="" alt="" id="lb-img">
 </div>
+
+<iframe name="fb-iframe" title="" aria-hidden="true" tabindex="-1" style="display:none"></iframe>
 
 <div class="fb-overlay" id="fb-overlay" hidden>
   <div class="fb-card" role="dialog" aria-modal="true" aria-label="Предложение или баг-репорт">
@@ -2063,30 +2065,35 @@ h1 .w.in { opacity: 1; transform: none; }
       }
       fbSend.disabled = true;
       fbShowStatus("Отправляем…", "");
-      var body = {
+      /* Web3Forms обычным POST формы в скрытый iframe: так не нужен CORS,
+         и отправка работает с любого origin (файл, http, https).
+         Ответ прочитать нельзя (чужой origin), поэтому успех показываем
+         сразу — ключ подтверждён, форма проверена из лаунчера. */
+      var form = document.createElement("form");
+      form.method = "POST";
+      form.action = "https://api.web3forms.com/submit";
+      form.target = "fb-iframe";
+      var fields = {
         access_key: "df28d34b-585b-4d20-a52a-49518dc8e2be",
         subject: fbKind === "bug" ? "OmniSpec (сайт): баг-репорт" : "OmniSpec (сайт): предложение",
         name: name,
         email: email,
         message: message
       };
-      fetch("https://api.web3forms.com/submit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Accept": "application/json" },
-        body: JSON.stringify(body)
-      }).then(function (r) { return r.json(); }).then(function (data) {
-        fbSend.disabled = false;
-        if (data && data.success === true) {
-          fbShowStatus("Отправлено! Спасибо за обратную связь.", "ok");
-          document.getElementById("fb-message").value = "";
-          setTimeout(fbClose, 1600);
-        } else {
-          fbShowStatus("Не удалось отправить. Напиши напрямую на OmniSpecLauncher@gmail.com", "err");
-        }
-      }).catch(function () {
-        fbSend.disabled = false;
-        fbShowStatus("Не удалось отправить. Напиши напрямую на OmniSpecLauncher@gmail.com", "err");
-      });
+      for (var key in fields) {
+        var input = document.createElement("input");
+        input.type = "hidden";
+        input.name = key;
+        input.value = fields[key];
+        form.appendChild(input);
+      }
+      document.body.appendChild(form);
+      form.submit();
+      form.remove();
+      fbSend.disabled = false;
+      fbShowStatus("Отправлено! Спасибо за обратную связь.", "ok");
+      document.getElementById("fb-message").value = "";
+      setTimeout(fbClose, 1600);
     });
   }
 

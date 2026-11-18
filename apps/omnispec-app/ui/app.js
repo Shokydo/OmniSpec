@@ -7321,7 +7321,7 @@
           </div>
           <div class="settings-row">
             <div class="label">Client ID</div>
-            <div><input class="input" style="width:100%" id="set-discord-id" placeholder="например, 123456789012345678" value="${esc(settings.discord_client_id || "")}" spellcheck="false"></div>
+            <div><input class="input" style="width:100%" id="set-discord-id" placeholder="например, 123456789012345678" value="${esc(settings.discord_client_id || "1304864863830540439")}" spellcheck="false"></div>
           </div>
           <div class="settings-row">
             <div class="label">Как включить</div>

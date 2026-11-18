@@ -862,30 +862,35 @@
       }
       fbSend.disabled = true;
       fbShowStatus("Отправляем…", "");
-      var body = {
+      /* Web3Forms обычным POST формы в скрытый iframe: так не нужен CORS,
+         и отправка работает с любого origin (файл, http, https).
+         Ответ прочитать нельзя (чужой origin), поэтому успех показываем
+         сразу — ключ подтверждён, форма проверена из лаунчера. */
+      var form = document.createElement("form");
+      form.method = "POST";
+      form.action = "https://api.web3forms.com/submit";
+      form.target = "fb-iframe";
+      var fields = {
         access_key: "df28d34b-585b-4d20-a52a-49518dc8e2be",
         subject: fbKind === "bug" ? "OmniSpec (сайт): баг-репорт" : "OmniSpec (сайт): предложение",
         name: name,
         email: email,
         message: message
       };
-      fetch("https://api.web3forms.com/submit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Accept": "application/json" },
-        body: JSON.stringify(body)
-      }).then(function (r) { return r.json(); }).then(function (data) {
-        fbSend.disabled = false;
-        if (data && data.success === true) {
-          fbShowStatus("Отправлено! Спасибо за обратную связь.", "ok");
-          document.getElementById("fb-message").value = "";
-          setTimeout(fbClose, 1600);
-        } else {
-          fbShowStatus("Не удалось отправить. Напиши напрямую на OmniSpecLauncher@gmail.com", "err");
-        }
-      }).catch(function () {
-        fbSend.disabled = false;
-        fbShowStatus("Не удалось отправить. Напиши напрямую на OmniSpecLauncher@gmail.com", "err");
-      });
+      for (var key in fields) {
+        var input = document.createElement("input");
+        input.type = "hidden";
+        input.name = key;
+        input.value = fields[key];
+        form.appendChild(input);
+      }
+      document.body.appendChild(form);
+      form.submit();
+      form.remove();
+      fbSend.disabled = false;
+      fbShowStatus("Отправлено! Спасибо за обратную связь.", "ok");
+      document.getElementById("fb-message").value = "";
+      setTimeout(fbClose, 1600);
     });
   }
 

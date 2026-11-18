@@ -108,9 +108,7 @@ async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result
     Ok(())
 }
 
-/// Предложение / баг-репорт: уходит на почту через FormSubmit.
-/// Первый раз FormSubmit пришлёт ссылку активации на этот адрес —
-/// её нужно открыть один раз, иначе отправка не работает.
+/// Предложение / баг-репорт: уходит на почту через Web3Forms.
 #[tauri::command]
 async fn send_feedback(
     state: State<'_, AppState>,
