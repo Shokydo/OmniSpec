@@ -13,9 +13,14 @@ fn default_username() -> String {
 fn default_memory() -> u32 {
     4096
 }
+/// Дефолтные JVM-флаги — набор официального лаунчера Minecraft
+/// (G1GC, настроенный Mojang): меньше статтеров, чем у «голого» JVM.
 fn default_jvm_args() -> String {
-    "-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:G1NewSizePercent=20 -XX:G1MaxNewSizePercent=40 -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=16M".into()
+    "-XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1NewSizePercent=20 -XX:G1ReservePercent=20 -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=32M".into()
 }
+
+/// Старый дефолт JVM-флагов: у кого он остался нетронутым — подтягиваем новый.
+const OLD_JVM_ARGS: &str = "-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:G1NewSizePercent=20 -XX:G1MaxNewSizePercent=40 -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=16M";
 fn default_game_args() -> String {
     String::new()
 }
@@ -369,7 +374,15 @@ impl Settings {
         }
         let text = std::fs::read_to_string(file)?;
         match serenity_parse(&text) {
-            Ok(settings) => Ok(settings),
+            Ok(mut settings) => {
+                // GC-флаги обновлены под набор официального лаунчера:
+                // нетронутый старый дефолт заменяем, свои значения не трогаем.
+                if settings.jvm_args == OLD_JVM_ARGS {
+                    settings.jvm_args = default_jvm_args();
+                    settings.save_to(file).ok();
+                }
+                Ok(settings)
+            }
             Err(err) => {
                 // Битый файл не должен блокировать запуск лаунчера.
                 eprintln!("[omnispec] не удалось прочитать settings.json: {err}");

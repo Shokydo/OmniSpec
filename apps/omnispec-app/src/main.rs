@@ -1462,18 +1462,26 @@ async fn import_external(
 }
 
 /// Экспорт сборки в `.mrpack` или `.zip`.
+/// `include` — что класть в архив (ключи групп); None — всё.
 #[tauri::command]
 async fn export_instance(
     state: State<'_, AppState>,
     instance_id: String,
     path: String,
     format: Option<String>,
+    include: Option<Vec<String>>,
 ) -> Result<String, String> {
     let paths = state.paths.clone();
     let kind = format.unwrap_or_else(|| "mrpack".into());
     let out = PathBuf::from(&path);
     tauri::async_runtime::spawn_blocking(move || {
-        omnispec_core::transfer::export_instance(&paths, &instance_id, &out, &kind)
+        omnispec_core::transfer::export_instance(
+            &paths,
+            &instance_id,
+            &out,
+            &kind,
+            include.as_deref(),
+        )
     })
     .await
     .map_err(err)?

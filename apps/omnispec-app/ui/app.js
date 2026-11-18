@@ -2015,7 +2015,7 @@
     ensureDependencies: (instanceId) => invoke("mods_ensure_dependencies", { instanceId }),
     scanExternal: () => invoke("scan_external_launchers"),
     importExternal: (payload) => invoke("import_external", payload),
-    exportInstance: (instanceId, path, format) => invoke("export_instance", { instanceId, path, format }),
+    exportInstance: (instanceId, path, format, include) => invoke("export_instance", { instanceId, path, format, include }),
     duplicateInstance: (instanceId) => invoke("duplicate_instance", { instanceId }),
     installZip: (payload) => invoke("import_zip", payload),
     toggleMod: (instanceId, name) => invoke("toggle_mod", { instanceId, name }),
@@ -8800,8 +8800,8 @@
       } catch (err) { toast(String(err), "err"); }
     });
     $("#inst-change-version").addEventListener("click", () => openVersionChange());
-    $("#inst-export-mrpack").addEventListener("click", () => exportBuild(meta, "mrpack"));
-    $("#inst-export-zip").addEventListener("click", () => exportBuild(meta, "zip"));
+    $("#inst-export-mrpack").addEventListener("click", () => openExportModal(meta, "mrpack"));
+    $("#inst-export-zip").addEventListener("click", () => openExportModal(meta, "zip"));
     $("#inst-folder").addEventListener("click", () => api.openPath(`${meta.id}/minecraft`).catch((err) => toast(String(err), "err")));
     $("#inst-delete").addEventListener("click", async () => {
       const okDelete2 = await askConfirm({
@@ -8820,22 +8820,24 @@
     });
   }
 
-  /** Экспорт сборки: выбираем куда сохранить и отдаём архиву ядру. */
-  async function exportBuild(meta, format) {
-    const safeName = String(meta.name).replace(/[\\/:*?"<>|]/g, "_").trim() || "build";
-    const path = await api.pickSave(
-      format === "zip" ? "Экспорт сборки в .zip" : "Экспорт сборки в .mrpack",
-      `${safeName}.${format}`,
-      [format]
-    ).catch(() => null);
-    if (!path) return;
-    toast(`Собираем архив «${meta.name}»…`, "info");
-    try {
-      const saved = await api.exportInstance(meta.id, path, format);
-      toast(`Готово: ${saved}`, "ok");
-    } catch (err) {
-      toast(`Не удалось экспортировать: ${err}`, "err");
-    }
+  /** Диалог экспорта: формат, что включить и куда сохранить. */
+  let exportState = null;
+  function openExportModal(meta, format) {
+    exportState = { meta, format: format || "mrpack", path: "" };
+    renderExportModal();
+    $("#modal-export").hidden = false;
+  }
+
+  function renderExportModal() {
+    const st = exportState;
+    if (!st) return;
+    $$("#modal-export [data-exp-format]").forEach((chip) =>
+      chip.classList.toggle("is-active", chip.dataset.expFormat === st.format));
+    $$("#exp-list .imp-check").forEach((box) =>
+      box.closest(".imp-item").classList.toggle("is-picked", box.checked));
+    $("#exp-path").value = st.path || "";
+    $("#exp-go").disabled = !st.path;
+    $("#exp-hint").textContent = st.path ? "" : "сначала выбери, куда сохранить";
   }
 
   function versionId(meta) {
@@ -9908,6 +9910,52 @@
       /* демо-режим без бэкенда — тихо */
     }
   }
+
+  /* диалог экспорта сборки */
+  (() => {
+    const modal = $("#modal-export");
+    if (!modal) return;
+    $$("[data-close-export]", modal).forEach((btn) => btn.addEventListener("click", () => { modal.hidden = true; }));
+    modal.addEventListener("mousedown", (event) => { if (event.target === modal) modal.hidden = true; });
+    $$("[data-exp-format]", modal).forEach((chip) => chip.addEventListener("click", () => {
+      if (!exportState) return;
+      exportState.format = chip.dataset.expFormat;
+      // путь уже выбран — поправляем расширение под новый формат
+      if (exportState.path) {
+        exportState.path = exportState.path.replace(/\.(mrpack|zip)$/i, "") + "." + exportState.format;
+      }
+      renderExportModal();
+    }));
+    $$("#exp-list .imp-check", modal).forEach((box) => box.addEventListener("change", () => {
+      box.closest(".imp-item").classList.toggle("is-picked", box.checked);
+    }));
+    $("#exp-pick").addEventListener("click", async () => {
+      if (!exportState) return;
+      const safeName = String(exportState.meta.name).replace(/[\\/:*?"<>|]/g, "_").trim() || "build";
+      const path = await api.pickSave(
+        exportState.format === "zip" ? "Экспорт сборки в .zip" : "Экспорт сборки в .mrpack",
+        `${safeName}.${exportState.format}`,
+        [exportState.format]
+      ).catch(() => null);
+      if (!path) return;
+      exportState.path = path;
+      renderExportModal();
+    });
+    $("#exp-go").addEventListener("click", async () => {
+      if (!exportState || !exportState.path) return;
+      const { meta, format, path } = exportState;
+      const include = $$("#exp-list .imp-check:checked", modal).map((box) => box.dataset.expKey);
+      modal.hidden = true;
+      toast(`Собираем архив «${meta.name}»…`, "info");
+      try {
+        const saved = await api.exportInstance(meta.id, path, format, include);
+        toast(`Готово: ${saved}. Сборка осталась в лаунчере.`, "ok");
+        await refreshInstances();
+      } catch (err) {
+        toast(`Не удалось экспортировать: ${err}`, "err");
+      }
+    });
+  })();
 
   /* просмотр скриншота */
   (() => {

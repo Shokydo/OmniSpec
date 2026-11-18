@@ -1042,8 +1042,20 @@ fn skip_entry(name: &str) -> bool {
 /* ───────────────────────── экспорт ───────────────────────── */
 
 /// Что кладём в архив: игровая папка сборки без логов и кэшей.
-const EXPORT_DIRS: [&str; 6] = ["mods", "config", "resourcepacks", "shaderpacks", "saves", "defaultconfig"];
-const EXPORT_FILES: [&str; 4] = ["options.txt", "servers.dat", "servers.dat_old", "optionsof.txt"];
+/// Группы для диалога экспорта: ключ → (папки, файлы).
+const EXPORT_GROUPS: &[(&str, &[&str], &[&str])] = &[
+    ("mods", &["mods"], &[]),
+    ("config", &["config", "defaultconfig"], &[]),
+    ("resourcepacks", &["resourcepacks"], &[]),
+    ("shaderpacks", &["shaderpacks"], &[]),
+    ("saves", &["saves"], &[]),
+    ("screenshots", &["screenshots"], &[]),
+    (
+        "options",
+        &[],
+        &["options.txt", "optionsof.txt", "servers.dat", "servers.dat_old"],
+    ),
+];
 
 fn collect(dir: &Path, base: &Path, out: &mut Vec<(String, PathBuf)>, depth: usize) {
     if depth > 24 {
@@ -1085,7 +1097,16 @@ struct Index {
 }
 
 /// Экспорт сборки: `format` = `mrpack` | `zip`.
-pub fn export_instance(paths: &Paths, id: &str, out: &Path, format: &str) -> Result<PathBuf> {
+/// Экспорт сборки в архив. `include` — ключи групп из EXPORT_GROUPS
+/// (и "icon" для иконки сборки); None — всё, как раньше.
+/// Экспорт только ЧИТАЕТ файлы сборки: сама сборка не трогается и не удаляется.
+pub fn export_instance(
+    paths: &Paths,
+    id: &str,
+    out: &Path,
+    format: &str,
+    include: Option<&[String]>,
+) -> Result<PathBuf> {
     let meta = instances::load(paths, id)?;
     let game = instances::game_dir_for(paths, &meta);
     if !game.is_dir() {
@@ -1102,23 +1123,31 @@ pub fn export_instance(paths: &Paths, id: &str, out: &Path, format: &str) -> Res
     // префикс внутри архива: для .mrpack это overrides/, для .zip — корень
     let prefix = if mrpack { "overrides/" } else { "" };
 
+    let wanted = |key: &str| include.is_none_or(|list| list.iter().any(|item| item == key));
     let mut entries: Vec<(String, PathBuf)> = Vec::new();
-    for name in EXPORT_DIRS {
-        let dir = game.join(name);
-        if dir.is_dir() {
-            collect(&dir, &game, &mut entries, 0);
+    for (key, dirs, files) in EXPORT_GROUPS {
+        if !wanted(key) {
+            continue;
         }
-    }
-    for name in EXPORT_FILES {
-        let path = game.join(name);
-        if path.is_file() {
-            entries.push((name.to_string(), path));
+        for name in *dirs {
+            let dir = game.join(name);
+            if dir.is_dir() {
+                collect(&dir, &game, &mut entries, 0);
+            }
+        }
+        for name in *files {
+            let path = game.join(name);
+            if path.is_file() {
+                entries.push((name.to_string(), path));
+            }
         }
     }
     // иконка сборки — рядом с файлами, чтобы форматы её подхватили
-    let icon = paths.instance_dir(id).join("icon.png");
-    if icon.is_file() {
-        entries.push(("icon.png".to_string(), icon));
+    if wanted("icon") {
+        let icon = paths.instance_dir(id).join("icon.png");
+        if icon.is_file() {
+            entries.push(("icon.png".to_string(), icon));
+        }
     }
 
     for (relative, path) in &entries {

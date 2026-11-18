@@ -186,6 +186,47 @@
   </div>
 </div>
 
+<!-- ============ МОДАЛКА ЭКСПОРТА ============ -->
+<div class="modal-backdrop" id="modal-export" hidden>
+  <div class="modal" style="width:min(520px,92vw)">
+    <header class="modal-head">
+      <h2>Экспорт сборки</h2>
+      <button class="icon-btn" data-close-export><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="modal-body">
+      <div class="flex-row" style="align-items:center">
+        <span class="muted">Формат:</span>
+        <div class="chips" style="margin:0">
+          <button class="chip" data-exp-format="mrpack">.mrpack</button>
+          <button class="chip" data-exp-format="zip">.zip</button>
+        </div>
+      </div>
+      <div class="prefs-label" style="margin-top:14px">Что включить</div>
+      <div class="imp-list" id="exp-list">
+        <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="mods" checked><span class="ext-main"><span class="ext-name">Моды</span><span class="ext-sub">папка mods</span></span></label>
+        <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="config" checked><span class="ext-main"><span class="ext-name">Конфиги</span><span class="ext-sub">папки config и defaultconfig</span></span></label>
+        <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="resourcepacks" checked><span class="ext-main"><span class="ext-name">Ресурспаки</span><span class="ext-sub">папка resourcepacks</span></span></label>
+        <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="shaderpacks" checked><span class="ext-main"><span class="ext-name">Шейдеры</span><span class="ext-sub">папка shaderpacks</span></span></label>
+        <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="saves" checked><span class="ext-main"><span class="ext-name">Миры</span><span class="ext-sub">папка saves</span></span></label>
+        <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="screenshots" checked><span class="ext-main"><span class="ext-name">Скриншоты</span><span class="ext-sub">папка screenshots</span></span></label>
+        <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="options" checked><span class="ext-main"><span class="ext-name">Настройки и сервера</span><span class="ext-sub">options.txt, servers.dat</span></span></label>
+        <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="icon" checked><span class="ext-main"><span class="ext-name">Иконка сборки</span><span class="ext-sub">icon.png</span></span></label>
+      </div>
+      <div class="prefs-label" style="margin-top:14px">Куда сохранить</div>
+      <div class="flex-row">
+        <input class="input grow" id="exp-path" readonly placeholder="путь не выбран" spellcheck="false">
+        <button class="btn" id="exp-pick">Выбрать…</button>
+      </div>
+    </div>
+    <footer class="modal-foot">
+      <span class="hint" id="exp-hint"></span>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" data-close-export>Отмена</button>
+      <button class="btn btn-primary" id="exp-go" disabled>Экспортировать</button>
+    </footer>
+  </div>
+</div>
+
 <!-- ============ МОДАЛКА ОБНОВЛЕНИЯ ============ -->
 <div class="modal-backdrop" id="modal-update" hidden>
   <div class="modal" style="width:min(640px,92vw)">
