@@ -1663,7 +1663,7 @@
       if (categoryId) await moveInstanceToCategory(meta.id, categoryId);
       await refreshInstances();
       selectInstance(meta.id);
-      toast(`Сборка «${meta.name}» установлена`, "ok");
+      toast(`Ваша сборка «${meta.name}» установлена`, "ok");
     } catch (err) {
       toast(String(err), "err");
     } finally {
@@ -2045,7 +2045,7 @@
     contentToggle: (instanceId, kind, name) => invoke("content_toggle", { instanceId, kind, name }),
     contentDelete: (instanceId, kind, name) => invoke("content_delete", { instanceId, kind, name }),
     contentUpdates: (instanceId, kind) => invoke("content_updates", { instanceId, kind }),
-    contentUpdate: (instanceId, kind, name) => invoke("content_update", { instanceId, kind, name }),
+    contentUpdate: (instanceId, kind, name, update) => invoke("content_update", { instanceId, kind, name, update: update || null }),
     ensureDependencies: (instanceId) => invoke("mods_ensure_dependencies", { instanceId }),
     scanExternal: () => invoke("scan_external_launchers"),
     importExternal: (payload) => invoke("import_external", payload),
@@ -2414,8 +2414,8 @@
       return null;
     },
     contentUpdates: async (_id, kind) => demoUpdates(kind),
-    contentUpdate: async (_id, kind, name) => {
-      const update = demoUpdates(kind).find((item) => item.filename === name);
+    contentUpdate: async (_id, kind, name, passed) => {
+      const update = passed || demoUpdates(kind).find((item) => item.filename === name);
       if (!update) throw new Error("обновлений нет");
       if (kind === "mod") {
         const mod = demoMods.find((item) => item.name === name);
@@ -2545,6 +2545,9 @@
     modsView: "list",
     external: { list: null, loading: false, error: null },
     iconCache: {},
+    modsSource: "modrinth",
+    modsView: null,
+    dlRoot: null,
     modrinth: {
       query: "", type: "mod", mc: "", loader: "",
       results: [], total: 0, loading: false, loadingMore: false,
@@ -3458,7 +3461,7 @@
 
   /* ==================== ПАНЕЛЬ ЗАГРУЗОК ==================== */
   const DL_STAGE_TITLES = {
-    modpack: "Установка сборки", mods: "Установка модов",
+    modpack: "Установка сборки", mods: "Установка модов", update: "Обновление модов",
     libraries: "Библиотеки игры", assets: "Ресурсы игры",
     version: "Версия игры", java: "Java", loader: "Загрузчик",
     import: "Импорт", unzip: "Распаковка", copy: "Копирование"
@@ -3534,7 +3537,7 @@
     dl.timer = setTimeout(() => {
       dl.active = false;
       renderDownloads();
-    }, 6000);
+    }, 10000);
   }
 
   function renderDownloads() {
@@ -3660,7 +3663,7 @@
     if (!meta) {
       // Сборка не выбрана — в главном окне лента готовых сборок, ничего не
       // подставляем сами: любую сборку пользователь выбирает осознанно.
-      if (state.tab === "modrinth") return renderModrinth();
+      if (state.tab === "download") return renderDownload();
       if (state.tab === "settings") return renderSettings();
       return renderDiscover();
     }
@@ -3674,8 +3677,7 @@
       case "shaders": return renderContent("shader");
       case "worlds": return renderWorlds();
       case "screenshots": return renderScreenshots();
-      case "modrinth": return renderModrinth();
-      case "curseforge": return renderCurseForge();
+      case "download": return renderDownload();
       case "settings": return renderSettings();
     }
   }
@@ -4624,7 +4626,7 @@
         </div>
       </div>`;
 
-    $("#content-add").addEventListener("click", () => { state.modrinth.type = kind; state.tab = "modrinth"; renderTab(); });
+    $("#content-add").addEventListener("click", () => { state.modrinth.type = kind; state.modsSource = "modrinth"; state.tab = "download"; renderTab(); });
     $("#content-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/${cfg.folder}`).catch((err) => toast(String(err), "err")));
     const input = $("#content-query");
     input.addEventListener("input", () => {
@@ -4655,7 +4657,7 @@
       try { await api.contentDelete(meta.id, kind, name); renderContent(kind); toast("Удалено", "ok"); }
       catch (err) { toast(String(err), "err"); }
     }));
-    $$("#tab-body [data-update-one]").forEach((el) => el.addEventListener("click", () => updateContentFile(kind, el.dataset.updateOne)));
+    $$("#tab-body [data-update-one]").forEach((el) => el.addEventListener("click", () => updateContentFile(kind, el.dataset.updateOne, el)));
     $$("#tab-body .content-row").forEach((row) => row.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       const entry = entries.find((item) => item.filename === row.dataset.content);
@@ -4742,12 +4744,16 @@
         </div>
         <button class="btn btn-small btn-primary" data-upd-one="${esc(item.filename)}">Обновить</button>
       </div>`).join("");
-    $$("#upd-list-body [data-upd-one]").forEach((btn) => btn.addEventListener("click", () => updateContentFile(kind, btn.dataset.updOne)));
+    $$("#upd-list-body [data-upd-one]").forEach((btn) => btn.addEventListener("click", () => updateContentFile(kind, btn.dataset.updOne, btn)));
     const all = $("#upd-list-all");
     all.onclick = async () => {
+      all.disabled = true;
+      $$("#upd-list-body [data-upd-one]").forEach((btn) => { btn.disabled = true; });
       for (const item of updates.slice()) {
-        try { await api.contentUpdate(selected().id, kind, item.filename); }
-        catch (err) { toast(String(err), "err"); }
+        try {
+          await api.contentUpdate(selected().id, kind, item.filename, item);
+          removeUpdateRow(item.filename);
+        } catch (err) { toast(String(err), "err"); }
       }
       state.contentUpdates[kind] = [];
       modal.hidden = true;
@@ -4757,18 +4763,32 @@
     modal.hidden = false;
   }
 
-  /** Поставить обновление одного файла. */
-  async function updateContentFile(kind, filename) {
+  /** Убрать строку из окна обновлений; пустое окно закрываем. */
+  function removeUpdateRow(filename) {
+    const row = $(`#upd-list-body [data-upd="${CSS.escape(filename)}"]`);
+    if (row) row.remove();
+    const body = $("#upd-list-body");
+    if (body && !body.querySelector("[data-upd]")) {
+      const modal = $("#modal-updates-list");
+      if (modal) modal.hidden = true;
+    }
+  }
+
+  /** Поставить обновление одного файла: прогресс — в панели загрузок. */
+  async function updateContentFile(kind, filename, btn = null) {
     const meta = selected();
-    toast(`Обновляем «${filename}»…`);
+    const item = (state.contentUpdates[kind] || []).find((entry) => entry.filename === filename) || null;
+    if (btn) { btn.disabled = true; btn.textContent = "Обновляем…"; }
     try {
-      await api.contentUpdate(meta.id, kind, filename);
-      state.contentUpdates[kind] = (state.contentUpdates[kind] || []).filter((item) => item.filename !== filename);
-      const dialog = $("#modal-updates-list");
-      if (dialog && !dialog.hidden) { dialog.hidden = true; }
+      await api.contentUpdate(meta.id, kind, filename, item);
+      state.contentUpdates[kind] = (state.contentUpdates[kind] || []).filter((entry) => entry.filename !== filename);
+      removeUpdateRow(filename);
       renderContent(kind);
       toast("Обновлено", "ok");
-    } catch (err) { toast(String(err), "err"); }
+    } catch (err) {
+      toast(String(err), "err");
+      if (btn) { btn.disabled = false; btn.textContent = "Обновить"; }
+    }
   }
 
   /** Автодокачка зависимостей для уже установленных модов. */
@@ -4905,30 +4925,107 @@
   const DV_PAGE = 24;
   let dvObserver = null;
 
-  /** Размер плитки во вкладке Modrinth внутри сборки: 1 → 12, 2 → 9, 3 → 6 в ряд. */
-  function mrGridLevel() {
-    const level = Number(state.settings && state.settings.mr_grid);
+  /** Общий размер плитки на странице «Скачать моды»: 1 → 12, 2 → 9, 3 → 6 в ряд.
+   *  Один на оба источника; старые ключи mr_grid/cf_grid — для миграции. */
+  function modsGridLevel() {
+    const s = state.settings || {};
+    const level = Number(s.mods_grid ?? s.mr_grid ?? s.cf_grid);
     return level === 1 || level === 2 || level === 3 ? level : 2;
   }
 
-  function mrColumns(level = mrGridLevel()) {
+  function modsColumns(level = modsGridLevel()) {
     return level === 1 ? 12 : level === 3 ? 6 : 9;
   }
 
-  function renderModrinth() {
-    const meta = selected();
-    const cfg = state.modrinth;
-    const view = cfg.view || "list";
-    // Внутри сборки модпаки не нужны — они ставятся только при создании сборки.
-    const types = [["mod", "Моды"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
-    const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
+  function mrGridLevel() { return modsGridLevel(); }
+  function mrColumns(level = modsGridLevel()) { return modsColumns(level); }
+
+  /** Страница «Скачать моды»: общий поиск и вид, источник — Modrinth/CurseForge. */
+  function renderDownload() {
+    const source = state.modsSource === "curseforge" ? "curseforge" : "modrinth";
+    const cfg = source === "curseforge" ? state.curseforge : state.modrinth;
+    const view = state.modsView || cfg.view || "list";
     $("#tab-body").innerHTML = `
       <div class="modrinth-wrap">
         <div class="modrinth-filters">
-          <div class="field" style="flex:1;min-width:220px">
-            <label>Поиск на Modrinth</label>
-            <input class="input grow" id="mr-query" placeholder="sodium, cobblemon, iris…" value="${esc(cfg.query)}" spellcheck="false">
+          <label class="search" style="flex:1;min-width:220px">
+            <svg class="ic"><use href="#i-search"/></svg>
+            <input id="dl-query" type="text" placeholder="Найти мод…" spellcheck="false" value="${esc(cfg.query)}">
+          </label>
+          <label class="feed-source" title="Где искать">
+            <span class="feed-source-label">Искать в</span>
+            <select class="select" id="dl-source">
+              <option value="modrinth" ${source === "modrinth" ? "selected" : ""}>Modrinth</option>
+              <option value="curseforge" ${source === "curseforge" ? "selected" : ""}>CurseForge</option>
+            </select>
+          </label>
+          <div class="mr-view" style="align-self:flex-end" title="Вид списка">
+            <button class="${view === "list" ? "is-active" : ""}" data-dl-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
+            <button class="${view === "grid" ? "is-active" : ""}" data-dl-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
           </div>
+          <label class="feed-size" style="align-self:flex-end" title="Размер плитки: 1 — 12 в ряд, 2 — 9 в ряд, 3 — 6 в ряд">
+            <svg class="ic"><use href="#i-grid"/></svg>
+            <input type="range" id="dl-size" min="1" max="3" step="1" value="${modsGridLevel()}" aria-label="Размер плитки">
+            <span class="mono" id="dl-size-val">${modsGridLevel()}</span>
+          </label>
+        </div>
+        <div id="dl-source-body"></div>
+      </div>`;
+
+    $("#dl-query").addEventListener("keydown", (event) => { if (event.key === "Enter") dlRunSearch(); });
+    $("#dl-source").addEventListener("change", (event) => {
+      state.modsSource = event.target.value === "curseforge" ? "curseforge" : "modrinth";
+      renderDownload();
+    });
+    $$("#tab-body [data-dl-view]").forEach((btn) => btn.addEventListener("click", () => {
+      state.modsView = btn.dataset.dlView;
+      renderDownload();
+    }));
+    const dlSize = $("#dl-size");
+    if (dlSize) {
+      dlSize.addEventListener("input", () => {
+        const level = Number(dlSize.value) || 2;
+        const label = $("#dl-size-val");
+        if (label) label.textContent = String(level);
+        const results = $("#mr-results") || $("#cf-results");
+        if (results) {
+          results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
+          results.classList.add(`feed-grid-${level}`);
+          results.style.setProperty("--feed-cols", String(modsColumns(level)));
+        }
+        state.settings = { ...(state.settings || {}), mods_grid: level };
+        api.saveSettings(state.settings).catch(() => {});
+      });
+    }
+
+    state.dlRoot = $("#dl-source-body");
+    if (source === "curseforge") renderCurseForge(state.dlRoot);
+    else renderModrinth(state.dlRoot);
+  }
+
+  /** Поиск на странице «Скачать моды» — как на главной: ввод + Enter. */
+  function dlRunSearch() {
+    const query = $("#dl-query") ? $("#dl-query").value : "";
+    if ((state.modsSource || "modrinth") === "curseforge") {
+      state.curseforge.query = query;
+      cfRunSearch();
+    } else {
+      state.modrinth.query = query;
+      runSearch();
+    }
+  }
+
+  function renderModrinth(container) {
+    const root = container || state.dlRoot || $("#tab-body");
+    const meta = selected();
+    const cfg = state.modrinth;
+    const view = state.modsView || cfg.view || "list";
+    // Внутри сборки модпаки не нужны — они ставятся только при создании сборки.
+    const types = [["mod", "Моды"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
+    const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
+    root.innerHTML = `
+      <div class="modrinth-wrap">
+        <div class="modrinth-filters">
           <div class="field">
             <label>Тип</label>
             <select class="select" id="mr-type">
@@ -4949,48 +5046,16 @@
               ${Object.entries(LOADER_NAMES).map(([value, label]) => `<option value="${value}" ${cfg.loader === value ? "selected" : ""}>${label}</option>`).join("")}
             </select>
           </div>` : ""}
-          <button class="btn" id="mr-search" style="align-self:flex-end">Найти</button>
-          <div class="mr-view" style="align-self:flex-end" title="Вид списка">
-            <button class="${view === "list" ? "is-active" : ""}" data-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
-            <button class="${view === "grid" ? "is-active" : ""}" data-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
-          </div>
-          <label class="feed-size" style="align-self:flex-end" title="Размер плитки: 1 — 12 в ряд, 2 — 9 в ряд, 3 — 6 в ряд">
-            <svg class="ic"><use href="#i-grid"/></svg>
-            <input type="range" id="mr-size" min="1" max="3" step="1" value="${mrGridLevel()}" aria-label="Размер плитки">
-            <span class="mono" id="mr-size-val">${mrGridLevel()}</span>
-          </label>
         </div>
-        <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${mrGridLevel()}` : ""}" id="mr-results" style="--feed-cols:${mrColumns()}">
+        <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${modsGridLevel()}` : ""}" id="mr-results" style="--feed-cols:${modsColumns()}">
           ${resultsHtml()}
         </div>
       </div>`;
 
-    $("#mr-search").addEventListener("click", () => runSearch());
-    $("#mr-query").addEventListener("keydown", (event) => { if (event.key === "Enter") runSearch(); });
     $("#mr-type").addEventListener("change", (event) => { state.modrinth.type = event.target.value; runSearch(); });
     $("#mr-mc").addEventListener("change", (event) => { state.modrinth.mc = event.target.value; runSearch(); });
     const loaderSelect = $("#mr-loader");
     if (loaderSelect) loaderSelect.addEventListener("change", (event) => { state.modrinth.loader = event.target.value; runSearch(); });
-    $$("#tab-body [data-view]").forEach((btn) => btn.addEventListener("click", () => {
-      state.modrinth.view = btn.dataset.view;
-      renderModrinth();
-    }));
-    const mrSize = $("#mr-size");
-    if (mrSize) {
-      mrSize.addEventListener("input", () => {
-        const level = Number(mrSize.value) || 2;
-        const label = $("#mr-size-val");
-        if (label) label.textContent = String(level);
-        const results = $("#mr-results");
-        if (results) {
-          results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
-          results.classList.add(`feed-grid-${level}`);
-          results.style.setProperty("--feed-cols", String(mrColumns(level)));
-        }
-        state.settings = { ...(state.settings || {}), mr_grid: level };
-        api.saveSettings(state.settings).catch(() => {});
-      });
-    }
     bindResultEvents();
     const retry = $("#mr-retry");
     if (retry) retry.addEventListener("click", () => runSearch());
@@ -5673,7 +5738,7 @@
         <button class="btn" id="mr-retry">Повторить</button>
       </div>`;
     }
-    if (!cfg.results.length) return `<div class="empty-state">Введи запрос и нажми «Найти»</div>`;
+    if (!cfg.results.length) return `<div class="empty-state">Введи запрос и нажми Enter</div>`;
     return `${cfg.results.map(cardHtml).join("")}<div class="mr-sentinel" id="mr-sentinel">${sentinelText()}</div>`;
   }
 
@@ -5947,13 +6012,13 @@
         const meta = await api.installModpack(versionId);
         await refreshInstances();
         selectInstance(meta.id);
-        toast(`Сборка «${meta.name}» установлена`, "ok");
+        toast(`Ваша сборка «${meta.name}» установлена`, "ok");
       } else {
         const meta = selected();
         if (!meta) { toast("Сначала выбери сборку", "err"); return; }
         const outcome = await api.installModVersion(meta.id, versionId);
-        toast(outcome.installed.length ? `Установлено: ${outcome.installed.join(", ")}` : "Уже установлено", "ok");
-        if (state.tab === "modrinth") renderModrinth();
+        toast(outcome.installed.length ? `Ваш мод установлен: ${outcome.installed.join(", ")}` : "Ваш мод уже установлен", "ok");
+        if (state.tab === "download") renderDownload();
       }
       if (modal) modal.hidden = true;
     } catch (err) {
@@ -5963,7 +6028,7 @@
   }
 
   async function runSearch() {
-    if ($("#mr-query")) state.modrinth.query = $("#mr-query").value;
+    if ($("#dl-query")) state.modrinth.query = $("#dl-query").value;
     if ($("#mr-mc")) state.modrinth.mc = $("#mr-mc").value;
     if ($("#mr-loader")) state.modrinth.loader = $("#mr-loader").value;
     const cfg = state.modrinth;
@@ -5997,7 +6062,7 @@
         const meta = await api.installModpack(versions[0].id);
         await refreshInstances();
         selectInstance(meta.id);
-        toast(`Сборка «${meta.name}» установлена`, "ok");
+        toast(`Ваша сборка «${meta.name}» установлена`, "ok");
       } catch (err) { toast(String(err), "err"); }
       return;
     }
@@ -6005,8 +6070,8 @@
     if (!meta) return toast("Сначала выбери сборку", "err");
     try {
       const outcome = await withDownloading(projectId, () => api.installMod(meta.id, projectId));
-      toast(outcome.installed.length ? `Установлено: ${outcome.installed.join(", ")}` : "Уже установлено", "ok");
-      if (state.tab === "modrinth") renderTab();
+      toast(outcome.installed.length ? `Ваш мод установлен: ${outcome.installed.join(", ")}` : "Ваш мод уже установлен", "ok");
+      if (state.tab === "download") renderTab();
     } catch (err) { toast(String(err), "err"); }
   }
 
@@ -6015,15 +6080,8 @@
   const CF_PAGE = 24;
   let cfObserver = null;
 
-  /** Размер плитки во вкладке CurseForge: 1 → 12, 2 → 9, 3 → 6 в ряд. */
-  function cfGridLevel() {
-    const level = Number(state.settings && state.settings.cf_grid);
-    return level === 1 || level === 2 || level === 3 ? level : 2;
-  }
-
-  function cfColumns(level = cfGridLevel()) {
-    return level === 1 ? 12 : level === 3 ? 6 : 9;
-  }
+  function cfGridLevel() { return modsGridLevel(); }
+  function cfColumns(level = modsGridLevel()) { return modsColumns(level); }
 
   /** Куда ведёт страница проекта на curseforge.com. */
   function cfPath(projectType) {
@@ -6035,20 +6093,17 @@
 
   const CF_SORTS = [["downloads", "По загрузкам"], ["updated", "Обновлённые"], ["newest", "Новые"], ["follows", "Популярные"]];
 
-  function renderCurseForge() {
+  function renderCurseForge(container) {
+    const root = container || state.dlRoot || $("#tab-body");
     const meta = selected();
     const cfg = state.curseforge;
-    const view = cfg.view || "grid";
+    const view = state.modsView || cfg.view || "grid";
     // модпаки ставим отдельной сборкой, моды/ресурспаки/шейдеры — в текущую
     const types = [["mod", "Моды"], ["modpack", "Модпаки"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
     const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
-    $("#tab-body").innerHTML = `
+    root.innerHTML = `
       <div class="modrinth-wrap">
         <div class="modrinth-filters">
-          <div class="field" style="flex:1;min-width:220px">
-            <label>Поиск на CurseForge</label>
-            <input class="input grow" id="cf-query" placeholder="create, jei, journeyMap…" value="${esc(cfg.query)}" spellcheck="false">
-          </div>
           <div class="field">
             <label>Тип</label>
             <select class="select" id="cf-type">
@@ -6075,49 +6130,17 @@
               ${CF_SORTS.map(([value, label]) => `<option value="${value}" ${cfg.sort === value ? "selected" : ""}>${label}</option>`).join("")}
             </select>
           </div>
-          <button class="btn" id="cf-search" style="align-self:flex-end">Найти</button>
-          <div class="mr-view" style="align-self:flex-end" title="Вид">
-            <button class="${view === "list" ? "is-active" : ""}" data-cf-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
-            <button class="${view === "grid" ? "is-active" : ""}" data-cf-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
-          </div>
-          <label class="feed-size" style="align-self:flex-end" title="Размер плитки: 1 — 12 в ряд, 2 — 9 в ряд, 3 — 6 в ряд">
-            <svg class="ic"><use href="#i-grid"/></svg>
-            <input type="range" id="cf-size" min="1" max="3" step="1" value="${cfGridLevel()}" aria-label="Размер плитки">
-            <span class="mono" id="cf-size-val">${cfGridLevel()}</span>
-          </label>
         </div>
-        <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${cfGridLevel()}` : ""}" id="cf-results" style="--feed-cols:${cfColumns()}">
+        <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${modsGridLevel()}` : ""}" id="cf-results" style="--feed-cols:${modsColumns()}">
           ${cfResultsHtml()}
         </div>
       </div>`;
 
-    $("#cf-search").addEventListener("click", () => cfRunSearch());
-    $("#cf-query").addEventListener("keydown", (event) => { if (event.key === "Enter") cfRunSearch(); });
     $("#cf-type").addEventListener("change", (event) => { state.curseforge.type = event.target.value; cfRunSearch(); });
     $("#cf-mc").addEventListener("change", (event) => { state.curseforge.mc = event.target.value; cfRunSearch(); });
     $("#cf-sort").addEventListener("change", (event) => { state.curseforge.sort = event.target.value; cfRunSearch(); });
     const loaderSelect = $("#cf-loader");
     if (loaderSelect) loaderSelect.addEventListener("change", (event) => { state.curseforge.loader = event.target.value; cfRunSearch(); });
-    $$("#tab-body [data-cf-view]").forEach((btn) => btn.addEventListener("click", () => {
-      state.curseforge.view = btn.dataset.cfView;
-      renderCurseForge();
-    }));
-    const cfSize = $("#cf-size");
-    if (cfSize) {
-      cfSize.addEventListener("input", () => {
-        const level = Number(cfSize.value) || 2;
-        const label = $("#cf-size-val");
-        if (label) label.textContent = String(level);
-        const results = $("#cf-results");
-        if (results) {
-          results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
-          results.classList.add(`feed-grid-${level}`);
-          results.style.setProperty("--feed-cols", String(cfColumns(level)));
-        }
-        state.settings = { ...(state.settings || {}), cf_grid: level };
-        api.saveSettings(state.settings).catch(() => {});
-      });
-    }
     bindCfEvents();
     const retry = $("#cf-retry");
     if (retry) retry.addEventListener("click", () => cfRunSearch());
@@ -6134,7 +6157,7 @@
         <button class="btn" id="cf-retry">Повторить</button>
       </div>`;
     }
-    if (!cfg.results.length) return `<div class="empty-state">Введи запрос и нажми «Найти»</div>`;
+    if (!cfg.results.length) return `<div class="empty-state">Введи запрос и нажми Enter</div>`;
     return `${cfg.results.map(cfCardHtml).join("")}<div class="mr-sentinel" id="cf-sentinel">${cfSentinelText()}</div>`;
   }
 
@@ -6278,7 +6301,7 @@
         renderSidebar();
       } catch (_) { /* список обновится при следующем рендере */ }
       if ($("#modal-versions")) $("#modal-versions").hidden = true;
-      if (state.tab === "discover" || state.tab === "curseforge") renderTab();
+      if (state.tab === "discover" || state.tab === "download") renderTab();
       else if (state.tab === "console") renderSidebar();
     } catch (err) {
       toast(String(err), "err");
@@ -6347,7 +6370,7 @@
   }
 
   async function cfRunSearch() {
-    if ($("#cf-query")) state.curseforge.query = $("#cf-query").value;
+    if ($("#dl-query")) state.curseforge.query = $("#dl-query").value;
     if ($("#cf-mc")) state.curseforge.mc = $("#cf-mc").value;
     if ($("#cf-loader")) state.curseforge.loader = $("#cf-loader").value;
     const cfg = state.curseforge;
@@ -6380,11 +6403,11 @@
       const outcome = await withDownloading(projectId, () => api.installCurseforge(meta.id, projectId, null));
       toast(
         outcome.installed.length
-          ? `Установлено: ${outcome.installed.join(", ")}`
-          : `Уже установлено${outcome.skipped.length ? `: ${outcome.skipped.join(", ")}` : ""}`,
+          ? `Ваш мод установлен: ${outcome.installed.join(", ")}`
+          : `Ваш мод уже установлен${outcome.skipped.length ? `: ${outcome.skipped.join(", ")}` : ""}`,
         "ok"
       );
-      if (state.tab === "curseforge") renderCurseForge();
+      if (state.tab === "download") renderDownload();
     } catch (err) {
       toast(String(err), "err");
     } finally {
@@ -6498,9 +6521,9 @@
     const modal = $("#modal-versions");
     try {
       const outcome = await api.installCurseforge(meta.id, projectId, fileId);
-      toast(outcome.installed.length ? `Установлено: ${outcome.installed.join(", ")}` : "Уже установлено", "ok");
+      toast(outcome.installed.length ? `Ваш мод установлен: ${outcome.installed.join(", ")}` : "Ваш мод уже установлен", "ok");
       if (modal) modal.hidden = true;
-      if (state.tab === "curseforge") renderCurseForge();
+      if (state.tab === "download") renderDownload();
     } catch (err) {
       toast(String(err), "err");
       if (btn) { btn.disabled = false; btn.textContent = "Установить"; }
@@ -9748,7 +9771,7 @@
   function bindEvents() {
     $$(".tab").forEach((tab) => tab.addEventListener("click", () => {
       state.tab = tab.dataset.tab;
-      if (state.tab === "modrinth" || state.tab === "curseforge") refreshInstalledProjects();
+      if (state.tab === "download") refreshInstalledProjects();
       renderTab();
     }));
     on("#btn-play", "click", play);

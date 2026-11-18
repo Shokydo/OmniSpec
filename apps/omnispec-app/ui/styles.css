@@ -796,6 +796,8 @@ input, select, textarea { font: inherit; color: inherit; }
 /* только в строке фильтров Modrinth поля прижаты к низу и подписи капсом */
 .modrinth-filters .field { align-self: flex-end; }
 .modrinth-filters .field > label { text-transform: uppercase; letter-spacing: .5px; font-size: 10px; }
+/* страница «Скачать моды»: общий поиск стоит вровень с фильтрами */
+.modrinth-filters > .search { margin-bottom: 0; align-self: flex-end; }
 
 .input, .select {
   height: var(--h); padding: 0 9px; min-width: 110px;

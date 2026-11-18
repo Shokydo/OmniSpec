@@ -1696,19 +1696,40 @@ async fn content_updates(
     Ok(json!(updates))
 }
 
-/// Поставить обновление одного файла.
+/// Поставить обновление одного файла. Данные обновления приходят из UI
+/// (список, который уже показала проверка) — повторная проверка не нужна.
 #[tauri::command]
 async fn content_update(
+    app: AppHandle,
     state: State<'_, AppState>,
     instance_id: String,
     kind: String,
     name: String,
+    update: Option<Value>,
 ) -> Result<Value, String> {
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    let update =
-        omnispec_core::content::apply_update(&state.modrinth, &state.paths, &meta, &kind, &name)
+    let reporter = reporter_for(&app, &meta.id);
+    let update = match update {
+        Some(value) => {
+            let parsed: omnispec_core::content::ContentUpdate =
+                serde_json::from_value(value).map_err(err)?;
+            omnispec_core::content::apply_update_with(
+                &state.modrinth,
+                &state.paths,
+                &meta,
+                &kind,
+                &parsed,
+                Some(&reporter),
+            )
             .await
-            .map_err(err)?;
+            .map_err(err)?
+        }
+        None => {
+            omnispec_core::content::apply_update(&state.modrinth, &state.paths, &meta, &kind, &name)
+                .await
+                .map_err(err)?
+        }
+    };
     Ok(json!(update))
 }
 

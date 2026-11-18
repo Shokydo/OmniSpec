@@ -15,6 +15,7 @@ use sha1::{Digest, Sha1};
 
 use crate::error::{Error, Result};
 use crate::instances::InstanceMeta;
+use crate::net::Reporter;
 use crate::paths::Paths;
 
 use crate::modrinth::Modrinth;
@@ -375,12 +376,45 @@ pub async fn apply_update(
         .into_iter()
         .find(|item| item.filename == filename)
         .ok_or_else(|| Error::not_found(format!("для «{filename}» обновлений нет")))?;
+    apply_update_with(modrinth, paths, instance, kind, &update, None).await
+}
+
+/// Поставить готовое обновление: данные берутся из списка, который уже
+/// показала проверка, — повторная проверка не нужна и не может «потерять»
+/// файл. Скачивание идёт с построчным прогрессом и отменой.
+pub async fn apply_update_with(
+    modrinth: &Modrinth,
+    paths: &Paths,
+    instance: &InstanceMeta,
+    kind: &str,
+    update: &ContentUpdate,
+    reporter: Option<&Reporter>,
+) -> Result<ContentUpdate> {
     let dir = dir_of(paths, instance, kind);
     let dest = dir.join(&update.new_filename);
-    modrinth
-        .http()
-        .download(&update.download_url, &dest, Some(update.size), None, true)
-        .await?;
+    if let Some(reporter) = reporter {
+        reporter.emit("update", 0, 0, format!("обновляем {}", update.new_filename));
+        let reporter_progress = reporter.clone();
+        let file_name = update.new_filename.clone();
+        modrinth
+            .http()
+            .download_tracked(
+                &update.download_url,
+                &dest,
+                Some(update.size),
+                None,
+                true,
+                &|done, total| {
+                    reporter_progress.emit_bytes("update", &file_name, done, total);
+                },
+            )
+            .await?;
+    } else {
+        modrinth
+            .http()
+            .download(&update.download_url, &dest, Some(update.size), None, true)
+            .await?;
+    }
 
     // старый файл мог быть выключен — убираем оба варианта
     for candidate in [
@@ -407,7 +441,7 @@ pub async fn apply_update(
         },
     );
     save_store(paths, instance, &store)?;
-    Ok(update)
+    Ok(update.clone())
 }
 
 /// Проекты, которые уже стоят в сборке (по картотеке) — для автодокачки зависимостей.
