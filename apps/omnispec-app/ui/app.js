@@ -89,6 +89,34 @@
   /** Сюда движок частиц кладёт пересчёт цвета (тема меняется раньше его создания). */
   let ambientInkRefresh = null;
 
+  /** Последние применённые переменные темы — чтобы не писать одно и то же. */
+  let lastThemeVars = null;
+
+  /** Живое обновление во время перетаскивания в пикере/ползунке:
+   *  полный пересчёт стилей приложения стоит ~30 мс, поэтому не чаще
+   *  раза в 40 мс (~25 fps) — превью всё равно плавное, а пролагов нет. */
+  function liveThrottle(fn) {
+    let queued = false;
+    let last = 0;
+    const run = () => {
+      queued = false;
+      const now = performance.now();
+      if (now - last < 40) {
+        queued = true;
+        requestAnimationFrame(run);
+        return;
+      }
+      last = now;
+      fn();
+    };
+    return () => {
+      if (!queued) {
+        queued = true;
+        requestAnimationFrame(run);
+      }
+    };
+  }
+
   /** live=true — живое обновление во время перетаскивания в пикере:
    *  без перерисовки слоя и перечитывания чернил частиц (getComputedStyle
    *  на каждый тик — главный источник лагов). */
@@ -135,12 +163,14 @@
     vars["--bg-1a"] = rgbaOf(vars["--bg-2"], 0.9);
     vars["--bg-2a"] = rgbaOf(vars["--bg-2"], 0.78);
     vars["--bg-3a"] = rgbaOf(vars["--bg-3"], 0.82);
-    // пишем и на :root, иначе переменные, объявленные в :root через другие переменные
-    // (например --modal-solid), считались бы от старой тёмной палитры
+    // Пишем только изменившиеся переменные и только на :root (все переменные
+    // объявлены там же, --modal-solid считается от них же): лишние записи
+    // дёргают пересчёт стилей всего приложения, а это ~30 мс на каждый тик пикера.
     for (const [key, value] of Object.entries(vars)) {
+      if (lastThemeVars && lastThemeVars[key] === value) continue;
       document.documentElement.style.setProperty(key, value);
-      document.body.style.setProperty(key, value);
     }
+    lastThemeVars = vars;
     const valid = name === "custom" || Boolean(THEMES[name]);
     document.body.dataset.theme = valid ? name : "dark";
     // подложка поверх обоев по умолчанию берёт цвет темы
@@ -4565,11 +4595,6 @@
   async function renderScreenshots() {
     const meta = selected();
     const entries = await api.listScreenshots(meta.id).catch(() => []);
-    const badge = $("#badge-screenshots");
-    if (badge) {
-      badge.hidden = !entries.length;
-      badge.textContent = String(entries.length);
-    }
     // Картинка приходит data URI из бэкенда (file:// в webview не грузится).
     const srcOf = (entry) => (IS_APP ? (entry.src || "") : demoPixelImage());
     $("#tab-body").innerHTML = `
@@ -7314,11 +7339,7 @@
     const bindColor = (key, id) => {
       const input = $(`#${id}`);
       if (!input) return;
-      let queued = false;
-      const paintLive = () => {
-        queued = false;
-        state.theme = applyTheme("custom", true);
-      };
+      const paintLive = liveThrottle(() => { state.theme = applyTheme("custom", true); });
       const apply = (value, final) => {
         if (!/^#[0-9a-f]{6}$/i.test(String(value))) return;
         state.customTheme[key] = String(value).toLowerCase();
@@ -7329,8 +7350,8 @@
           state.theme = applyTheme("custom");
           saveCustomTheme();
         } else {
-          // живое обновление — не чаще раза в кадр и без записи на диск
-          if (!queued) { queued = true; requestAnimationFrame(paintLive); }
+          // живое обновление — троттлинг по времени и без записи на диск
+          paintLive();
           saveCustomThemeSoon();
         }
       };
@@ -7355,7 +7376,7 @@
     };
     const tintColor = $("#tint-color");
     if (tintColor) {
-      let tintQueued = false;
+      const paintTint = liveThrottle(applyThemeTint);
       const applyTint = (value, final) => {
         if (!/^#[0-9a-f]{6}$/i.test(String(value))) return;
         state.settings = { ...(state.settings || {}), theme_tint: String(value).toLowerCase() };
@@ -7366,10 +7387,7 @@
           applyThemeTint();
           api.saveSettings(state.settings).catch(() => {});
         } else {
-          if (!tintQueued) {
-            tintQueued = true;
-            requestAnimationFrame(() => { tintQueued = false; applyThemeTint(); });
-          }
+          paintTint();
           saveSettingsSoon();
         }
       };
@@ -7385,18 +7403,15 @@
     }
     const tintAlpha = $("#tint-alpha");
     if (tintAlpha) {
-      let alphaQueued = false;
+      // applyWallpaper тянет подготовку слоя — троттлинг по времени
+      const paintWall = liveThrottle(() => applyWallpaper(state.wall));
       tintAlpha.addEventListener("input", (event) => {
         const value = Math.min(100, Math.max(0, Number(event.target.value)));
         state.wall.dim = value;
         state.settings = { ...(state.settings || {}), wallpaper_dim: value };
         const label = $("#tint-alpha-val");
         if (label) label.textContent = `${value}%`;
-        // applyWallpaper тянет подготовку слоя — не чаще раза в кадр
-        if (!alphaQueued) {
-          alphaQueued = true;
-          requestAnimationFrame(() => { alphaQueued = false; applyWallpaper(state.wall); });
-        }
+        paintWall();
       });
     }
     bindColor("bg", "theme-bg");
