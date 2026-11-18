@@ -74,6 +74,7 @@ impl Presence {
     /// в код (DEFAULT_CLIENT_ID) и из настроек убран.
     pub fn configure(&self, enabled: bool) {
         self.shared.lock().unwrap().enabled = enabled;
+        self.log(&format!("configure: enabled={enabled}"));
     }
 
     /// Новое состояние от фронта.
@@ -88,6 +89,7 @@ impl Presence {
 
     /// Цикл воркера: сессия → пауза → снова. Молча ждёт, пока не включат RPC.
     pub fn run(&self) {
+        self.log("воркер запущен");
         loop {
             let (enabled, _) = self.snapshot();
             if !enabled {
@@ -103,6 +105,7 @@ impl Presence {
 
     /// Одна сессия: handshake, затем SET_ACTIVITY при изменениях до обрыва.
     fn session(&self, client_id: &str) -> Result<(), String> {
+        self.log("сессия: ищу Discord IPC…");
         let mut stream = connect_ipc().map_err(|error| format!("нет Discord IPC: {error}"))?;
         self.log("IPC подключён, шлём handshake");
         // client_id дублируется на верхний уровень: часть сборок Discord
