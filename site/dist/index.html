@@ -604,62 +604,6 @@ section { padding: 56px 0; }
 .ftr nav a { color: var(--dim); font-size: 12px; text-decoration: none; }
 .ftr nav a:hover { color: var(--text); }
 
-/* ── предложение / баг-репорт ──────────────────────────────── */
-.fb-overlay {
-  position: fixed; inset: 0; z-index: 200;
-  display: flex; align-items: center; justify-content: center;
-  padding: 20px;
-  background: rgba(4, 4, 6, .72);
-}
-.fb-overlay[hidden] { display: none; }
-.fb-card {
-  width: min(520px, 100%);
-  background: var(--bg-2);
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-lg);
-  overflow: hidden;
-}
-.fb-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--line);
-  font-size: 14px;
-}
-.fb-close {
-  background: none; border: 0; color: var(--dim);
-  font-size: 15px; cursor: pointer; padding: 4px 6px;
-}
-.fb-close:hover { color: var(--text); }
-.fb-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-.fb-chips { display: flex; gap: 8px; }
-.fb-chip {
-  height: 32px; padding: 0 14px;
-  border: 1px solid var(--line-2); border-radius: var(--r-pill);
-  background: var(--bg-3); color: var(--dim);
-  font-family: inherit; font-size: 12.5px; cursor: pointer;
-}
-.fb-chip.is-active { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
-.fb-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--dim); }
-.fb-field em { font-style: normal; color: var(--dim-2); }
-.fb-field input, .fb-field textarea {
-  height: 38px; padding: 0 12px;
-  border: 1px solid var(--line-2); border-radius: 10px;
-  background: var(--bg-3); color: var(--text);
-  font-family: inherit; font-size: 13px;
-}
-.fb-field textarea { height: auto; min-height: 110px; padding: 10px 12px; resize: vertical; }
-.fb-field input:focus, .fb-field textarea:focus { outline: none; border-color: #4a4a56; background: var(--bg-4); }
-.fb-note { margin: 0; font-size: 11.5px; color: var(--dim-2); }
-.fb-status { margin: 0; font-size: 12.5px; }
-.fb-status.ok { color: var(--green); }
-.fb-status.err { color: var(--red); }
-.fb-foot {
-  display: flex; justify-content: flex-end; gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--line);
-}
-.fb-foot .btn[disabled] { opacity: .5; pointer-events: none; }
-
 .ftr .fine {
   width: 100%;
   margin: 6px 0 0;
@@ -1151,7 +1095,6 @@ h1 .w.in { opacity: 1; transform: none; }
       <a href="./changelog.html">Изменения</a>
       <a href="https://github.com/Shokydo/OmniSpec/issues">Issues</a>
     </nav>
-    <button class="btn" id="fb-open" type="button">Предложить / Баг-репорт</button>
     <p class="fine">
       OmniSpec — лаунчер Minecraft на Rust и Tauri 2, интерфейс на чистом HTML/CSS/JS.
       Проект не связан с Mojang Studios и Microsoft. Minecraft — торговая марка Mojang Studios.
@@ -1163,39 +1106,6 @@ h1 .w.in { opacity: 1; transform: none; }
 <div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Скриншот">
   <button class="lb-close" id="lb-close" aria-label="Закрыть">✕</button>
   <img src="" alt="" id="lb-img">
-</div>
-
-<div class="fb-overlay" id="fb-overlay" hidden>
-  <div class="fb-card" role="dialog" aria-modal="true" aria-label="Предложение или баг-репорт">
-    <div class="fb-head">
-      <strong>Предложение / баг-репорт</strong>
-      <button class="fb-close" id="fb-close" type="button" aria-label="Закрыть">✕</button>
-    </div>
-    <div class="fb-body">
-      <div class="fb-chips" role="group" aria-label="Тип сообщения">
-        <button class="fb-chip is-active" type="button" data-fb-kind="idea">Предложение</button>
-        <button class="fb-chip" type="button" data-fb-kind="bug">Баг-репорт</button>
-      </div>
-      <label class="fb-field">
-        <span>Имя <em>(необязательно)</em></span>
-        <input type="text" id="fb-name" placeholder="Как к тебе обращаться" autocomplete="name">
-      </label>
-      <label class="fb-field">
-        <span>Email <em>(для ответа, необязательно)</em></span>
-        <input type="email" id="fb-email" placeholder="you@example.com" autocomplete="email">
-      </label>
-      <label class="fb-field">
-        <span>Сообщение</span>
-        <textarea id="fb-message" rows="5" placeholder="Что случилось или что предлагаешь?"></textarea>
-      </label>
-      <p class="fb-note">Сообщение придёт на почту разработчика.</p>
-      <p class="fb-status" id="fb-status" hidden></p>
-    </div>
-    <div class="fb-foot">
-      <button class="btn" id="fb-cancel" type="button">Отмена</button>
-      <button class="btn btn-primary" id="fb-send" type="button">Отправить</button>
-    </div>
-  </div>
 </div>
 
 <script>
@@ -2004,105 +1914,6 @@ h1 .w.in { opacity: 1; transform: none; }
     }, { passive: true });
     window.addEventListener("resize", apply, { passive: true });
     apply();
-  }
-
-  /* предложение / баг-репорт: уходит на почту разработчика через FormSubmit */
-  var fbOverlay = document.getElementById("fb-overlay");
-  if (fbOverlay) {
-    var fbKind = "idea";
-    var fbStatus = document.getElementById("fb-status");
-    var fbSend = document.getElementById("fb-send");
-    function fbShowStatus(text, kind) {
-      fbStatus.hidden = false;
-      fbStatus.textContent = text;
-      fbStatus.className = "fb-status " + kind;
-    }
-    function fbOpen() {
-      fbKind = "idea";
-      var chips = fbOverlay.querySelectorAll("[data-fb-kind]");
-      for (var i = 0; i < chips.length; i++) {
-        chips[i].classList.toggle("is-active", chips[i].getAttribute("data-fb-kind") === "idea");
-      }
-      document.getElementById("fb-name").value = "";
-      document.getElementById("fb-email").value = "";
-      document.getElementById("fb-message").value = "";
-      fbStatus.hidden = true;
-      fbSend.disabled = false;
-      fbOverlay.hidden = false;
-      document.body.style.overflow = "hidden";
-    }
-    function fbClose() {
-      fbOverlay.hidden = true;
-      document.body.style.overflow = "";
-    }
-    document.getElementById("fb-open").addEventListener("click", fbOpen);
-    document.getElementById("fb-close").addEventListener("click", fbClose);
-    document.getElementById("fb-cancel").addEventListener("click", fbClose);
-    fbOverlay.addEventListener("click", function (e) {
-      if (e.target === fbOverlay) fbClose();
-    });
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && !fbOverlay.hidden) fbClose();
-    });
-    var fbChips = fbOverlay.querySelectorAll("[data-fb-kind]");
-    for (var j = 0; j < fbChips.length; j++) {
-      fbChips[j].addEventListener("click", function () {
-        fbKind = this.getAttribute("data-fb-kind");
-        for (var k = 0; k < fbChips.length; k++) {
-          fbChips[k].classList.toggle("is-active", fbChips[k] === this);
-        }
-      });
-    }
-    fbSend.addEventListener("click", function () {
-      var name = document.getElementById("fb-name").value.trim();
-      var email = document.getElementById("fb-email").value.trim();
-      var message = document.getElementById("fb-message").value.trim();
-      if (!message) {
-        fbShowStatus("Напиши сообщение.", "err");
-        return;
-      }
-      fbSend.disabled = true;
-      fbShowStatus("Отправляем…", "");
-      /* Discord-вебхук: баг-репорты и предложения — в разные каналы.
-         Вебхуки Discord поддерживают CORS, поэтому fetch работает
-         и с сайта, и из файла. ?wait=true — ответ с объектом сообщения. */
-      var isBug = fbKind === "bug";
-      var webhook = isBug
-        ? "https://discord.com/api/webhooks/1572444315311931493/lqeEjurJAu6dJ1u-lvm9YktzxSkMk5Ig6c2ec56BVB3p9XWYEZB4GdQch7pebo6wE05v?wait=true"
-        : "https://discord.com/api/webhooks/1572444462750113883/cfZw4QCYiilG7YGsKb-Fk5cNOQp4WkFM-rrglPZRKjkhb9DSM9vdZwpDvh7hH3vI_60B?wait=true";
-      var fields = [];
-      if (name) fields.push({ name: "Имя", value: name, inline: true });
-      if (email) fields.push({ name: "Email", value: email, inline: true });
-      var body = {
-        username: "OmniSpec",
-        avatar_url: "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/logo.png",
-        embeds: [{
-          title: isBug ? "🐛 Баг-репорт" : "💡 Предложение",
-          description: message,
-          color: isBug ? 0xED4245 : 0x57F287,
-          thumbnail: { url: "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/logo.png" },
-          fields: fields,
-          footer: { text: "OmniSpec" }
-        }]
-      };
-      fetch(webhook, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      }).then(function (r) { return r.json(); }).then(function (data) {
-        fbSend.disabled = false;
-        if (data && data.id) {
-          fbShowStatus("Отправлено! Спасибо за обратную связь.", "ok");
-          document.getElementById("fb-message").value = "";
-          setTimeout(fbClose, 1600);
-        } else {
-          fbShowStatus("Не удалось отправить. Напиши напрямую на OmniSpecLauncher@gmail.com", "err");
-        }
-      }).catch(function () {
-        fbSend.disabled = false;
-        fbShowStatus("Не удалось отправить. Напиши напрямую на OmniSpecLauncher@gmail.com", "err");
-      });
-    });
   }
 
   drawPlexus();

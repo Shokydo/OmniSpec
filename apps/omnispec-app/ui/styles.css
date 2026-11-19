@@ -1007,29 +1007,6 @@ input[type="range"] {
 .modal-foot .hint { font-size: 11px; color: var(--dim-2); }
 .form-grid { display: flex; flex-direction: column; gap: 11px; }
 .chips { display: flex; flex-wrap: wrap; gap: 5px; }
-/* ── модалка предложения / баг-репорта ─────────────────────── */
-.fb-body { display: flex; flex-direction: column; gap: 12px; }
-.fb-kinds { display: flex; gap: 8px; }
-.fb-kind {
-  flex: 1;
-  height: 40px;
-  border: 1px solid var(--line-2);
-  border-radius: 10px;
-  background: var(--bg-3);
-  color: var(--dim);
-  font-family: inherit;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
-}
-.fb-kind:hover { background: var(--bg-4); color: var(--text); }
-.fb-kind.is-active { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
-.fb-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--dim); }
-.fb-field em { font-style: normal; color: var(--dim-2); }
-.fb-field .input { width: 100%; }
-.fb-field textarea.input { min-height: 110px; resize: vertical; }
-.fb-note { font-size: 11px; }
-
 .chip {
   height: var(--h-sm); padding: 0 10px;
   display: inline-flex; align-items: center;

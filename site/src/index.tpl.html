@@ -355,7 +355,6 @@ setTimeout(function () { document.documentElement.classList.remove("js-boot"); }
       <a href="./changelog.html">Изменения</a>
       <a href="{{URL_ISSUES}}">Issues</a>
     </nav>
-    <button class="btn" id="fb-open" type="button">Предложить / Баг-репорт</button>
     <p class="fine">
       OmniSpec — лаунчер Minecraft на Rust и Tauri 2, интерфейс на чистом HTML/CSS/JS.
       Проект не связан с Mojang Studios и Microsoft. Minecraft — торговая марка Mojang Studios.
@@ -367,39 +366,6 @@ setTimeout(function () { document.documentElement.classList.remove("js-boot"); }
 <div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Скриншот">
   <button class="lb-close" id="lb-close" aria-label="Закрыть">✕</button>
   <img src="" alt="" id="lb-img">
-</div>
-
-<div class="fb-overlay" id="fb-overlay" hidden>
-  <div class="fb-card" role="dialog" aria-modal="true" aria-label="Предложение или баг-репорт">
-    <div class="fb-head">
-      <strong>Предложение / баг-репорт</strong>
-      <button class="fb-close" id="fb-close" type="button" aria-label="Закрыть">✕</button>
-    </div>
-    <div class="fb-body">
-      <div class="fb-chips" role="group" aria-label="Тип сообщения">
-        <button class="fb-chip is-active" type="button" data-fb-kind="idea">Предложение</button>
-        <button class="fb-chip" type="button" data-fb-kind="bug">Баг-репорт</button>
-      </div>
-      <label class="fb-field">
-        <span>Имя <em>(необязательно)</em></span>
-        <input type="text" id="fb-name" placeholder="Как к тебе обращаться" autocomplete="name">
-      </label>
-      <label class="fb-field">
-        <span>Email <em>(для ответа, необязательно)</em></span>
-        <input type="email" id="fb-email" placeholder="you@example.com" autocomplete="email">
-      </label>
-      <label class="fb-field">
-        <span>Сообщение</span>
-        <textarea id="fb-message" rows="5" placeholder="Что случилось или что предлагаешь?"></textarea>
-      </label>
-      <p class="fb-note">Сообщение придёт на почту разработчика.</p>
-      <p class="fb-status" id="fb-status" hidden></p>
-    </div>
-    <div class="fb-foot">
-      <button class="btn" id="fb-cancel" type="button">Отмена</button>
-      <button class="btn btn-primary" id="fb-send" type="button">Отправить</button>
-    </div>
-  </div>
 </div>
 
 <script>

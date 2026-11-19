@@ -110,9 +110,6 @@
       <button class="pill update-pill sidebar-update" id="btn-update" hidden>
         <span class="update-dot"></span><span id="btn-update-text">Обновление</span>
       </button>
-      <button class="btn btn-small sidebar-quick" id="btn-feedback" title="Предложение или баг-репорт">
-        <svg class="ic"><use href="#i-pencil"/></svg><span>Предложить / Баг</span>
-      </button>
       <button class="btn btn-small sidebar-quick" id="btn-quick-settings" title="Настройки лаунчера">
         <svg class="ic"><use href="#i-settings"/></svg><span>Настройки</span>
       </button>
@@ -247,41 +244,6 @@
       <div class="spacer"></div>
       <button class="btn btn-ghost" data-close-export>Отмена</button>
       <button class="btn btn-primary" id="exp-go" disabled>Экспортировать</button>
-    </footer>
-  </div>
-</div>
-
-<!-- ============ МОДАЛКА ПРЕДЛОЖЕНИЯ / БАГ-РЕПОРТА ============ -->
-<div class="modal-backdrop" id="modal-feedback" hidden>
-  <div class="modal" style="width:min(520px,92vw)">
-    <header class="modal-head">
-      <h2>Предложение / баг-репорт</h2>
-      <button class="icon-btn" data-close-feedback><svg class="ic"><use href="#i-close"/></svg></button>
-    </header>
-    <div class="modal-body fb-body">
-      <div class="fb-kinds">
-        <button class="fb-kind is-active" data-fb-kind="idea">Предложение</button>
-        <button class="fb-kind" data-fb-kind="bug">Баг-репорт</button>
-      </div>
-      <label class="fb-field">
-        <span>Имя <em>(необязательно)</em></span>
-        <input class="input" id="fb-name" placeholder="Как к тебе обращаться" spellcheck="false">
-      </label>
-      <label class="fb-field">
-        <span>Email <em>(для ответа, необязательно)</em></span>
-        <input class="input" id="fb-email" placeholder="you@example.com" spellcheck="false">
-      </label>
-      <label class="fb-field">
-        <span>Сообщение</span>
-        <textarea class="input" id="fb-message" placeholder="Что случилось или что предлагаешь?"></textarea>
-      </label>
-      <div class="muted fb-note">Сообщение придёт на почту разработчика. Версия лаунчера приложится автоматически.</div>
-    </div>
-    <footer class="modal-foot">
-      <span class="hint" id="fb-hint"></span>
-      <div class="spacer"></div>
-      <button class="btn btn-ghost" data-close-feedback>Отмена</button>
-      <button class="btn btn-primary" id="fb-send">Отправить</button>
     </footer>
   </div>
 </div>

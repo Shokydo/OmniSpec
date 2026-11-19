@@ -2,6 +2,8 @@ name: Release
 
 # Собираем OmniSpec.exe на Windows и публикуем релиз.
 # Лаунчер сам находит этот релиз через GitHub API и обновляется.
+# Адрес Discord хранится только в GitHub Actions Secret DISCORD_WEBHOOK.
+# Если адрес когда-либо попал в репозиторий, нужен новый webhook и отзыв старого.
 
 on:
   push:
@@ -188,14 +190,26 @@ jobs:
       - name: Пост анонса с патч-листом в Discord
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DISCORD_WEBHOOK: "https://discord.com/api/webhooks/1572444696788209756/8zm8Ra3jzWafBAGlxgIfKSXatMr-c-FgTXEbH8aH0D82JPU8-aw6v9xzLfTDJxNesTRS"
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           TAG: ${{ github.ref_name }}
         run: |
           python3 - <<'PYEOF'
-          import json, os, subprocess, urllib.request
+          import json, os, re, subprocess, urllib.error, urllib.parse, urllib.request
 
+          webhook = os.environ.get("DISCORD_WEBHOOK", "").strip()
+          if not webhook:
+              raise SystemExit("GitHub Secret DISCORD_WEBHOOK не настроен; анонс не отправлен.")
+          try:
+              url = urllib.parse.urlsplit(webhook)
+              valid = (url.scheme == "https"
+                       and url.hostname in {"discord.com", "discordapp.com", "canary.discord.com", "ptb.discord.com"}
+                       and not url.username and not url.password and url.port is None and not url.fragment
+                       and re.fullmatch(r"/api/webhooks/\d{15,24}/[A-Za-z0-9._-]{8,200}/?", url.path))
+          except ValueError:
+              valid = False
+          if not valid:
+              raise SystemExit("GitHub Secret DISCORD_WEBHOOK содержит некорректный адрес Discord.")
           tag = os.environ["TAG"]
-          webhook = os.environ["DISCORD_WEBHOOK"]
           logo = "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/logo.png"
 
           body = subprocess.run(
@@ -224,9 +238,14 @@ jobs:
           payload = json.dumps({
               "username": "OmniSpec",
               "avatar_url": logo,
+              "allowed_mentions": {"parse": []},
               "embeds": [embed],
           }).encode()
-          # Discord режет дефолтный User-Agent Python (403) — нужен браузерный.
+          # Не передаём секрет через редирект и не печатаем его при ошибках.
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
           req = urllib.request.Request(
               webhook,
               data=payload,
@@ -235,6 +254,11 @@ jobs:
                   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
               },
           )
-          with urllib.request.urlopen(req) as resp:
-              print("Discord анонс отправлен:", resp.status)
+          try:
+              with urllib.request.build_opener(NoRedirect).open(req, timeout=20) as resp:
+                  print("Discord анонс отправлен:", resp.status)
+          except urllib.error.HTTPError as exc:
+              raise SystemExit(f"Discord не принял анонс (HTTP {exc.code}).")
+          except Exception:
+              raise SystemExit("Не удалось связаться с Discord; анонс не отправлен.")
           PYEOF

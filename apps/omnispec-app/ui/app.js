@@ -2066,7 +2066,6 @@
     exportInstance: (instanceId, path, format, include) => invoke("export_instance", { instanceId, path, format, include }),
     setPresence: (mode, details, stateText, startedAt, smallImage) => invoke("set_presence", { mode, details, stateText, startedAt, smallImage: smallImage || null }),
     resolvePresenceIcon: (instanceId) => invoke("resolve_presence_icon", { instanceId }),
-    sendFeedback: (name, email, kind, message) => invoke("send_feedback", { name, email, kind, message }),
     duplicateInstance: (instanceId) => invoke("duplicate_instance", { instanceId }),
     installZip: (payload) => invoke("import_zip", payload),
     toggleMod: (instanceId, name) => invoke("toggle_mod", { instanceId, name }),
@@ -2476,7 +2475,6 @@
     exportInstance: async (_id, path) => path,
     setPresence: async () => null,
     resolvePresenceIcon: async () => null,
-    sendFeedback: async () => null,
     duplicateInstance: async (instanceId) => {
       const meta = DEMO.instances.find((item) => item.id === instanceId);
       const copy = meta ? { ...meta, id: meta.id + "-copy", name: meta.name + " (копия)" } : { id: "copy", name: "Копия" };
@@ -10576,52 +10574,6 @@
       /* демо-режим без бэкенда — тихо */
     }
   }
-
-  /* предложение / баг-репорт: уходит на почту разработчика */
-  let feedbackKind = "idea";
-  (() => {
-    const modal = $("#modal-feedback");
-    if (!modal) return;
-    const open = () => {
-      feedbackKind = "idea";
-      $$("[data-fb-kind]", modal).forEach((chip) => chip.classList.toggle("is-active", chip.dataset.fbKind === "idea"));
-      $("#fb-name").value = "";
-      $("#fb-email").value = "";
-      $("#fb-message").value = "";
-      $("#fb-hint").textContent = "";
-      $("#fb-send").disabled = false;
-      modal.hidden = false;
-      setTimeout(() => $("#fb-message").focus(), 50);
-    };
-    $("#btn-feedback").addEventListener("click", open);
-    $$("[data-close-feedback]", modal).forEach((btn) => btn.addEventListener("click", () => { modal.hidden = true; }));
-    modal.addEventListener("mousedown", (event) => { if (event.target === modal) modal.hidden = true; });
-    $$("[data-fb-kind]", modal).forEach((chip) => chip.addEventListener("click", () => {
-      feedbackKind = chip.dataset.fbKind;
-      $$("[data-fb-kind]", modal).forEach((el) => el.classList.toggle("is-active", el === chip));
-    }));
-    $("#fb-send").addEventListener("click", async () => {
-      const name = $("#fb-name").value.trim();
-      const email = $("#fb-email").value.trim();
-      const message = $("#fb-message").value.trim();
-      if (!message) {
-        $("#fb-hint").textContent = "напиши сообщение";
-        return;
-      }
-      const btn = $("#fb-send");
-      btn.disabled = true;
-      $("#fb-hint").textContent = "отправляем…";
-      try {
-        await api.sendFeedback(name, email, feedbackKind, message);
-        modal.hidden = true;
-        toast("Отправлено! Спасибо за обратную связь.", "ok");
-      } catch (err) {
-        $("#fb-hint").textContent = "";
-        btn.disabled = false;
-        toast(`Не удалось отправить: ${err}. Напиши напрямую на OmniSpecLauncher@gmail.com`, "err");
-      }
-    });
-  })();
 
   /* диалог экспорта сборки */
   (() => {
