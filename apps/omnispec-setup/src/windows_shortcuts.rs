@@ -78,19 +78,27 @@ fn create_shortcut(link_path: &Path, exe: &Path, dir: &Path) -> Result<(), Strin
     let path_wide = wide(link_path);
     let exe_wide = wide(exe);
     let dir_wide = wide(dir);
-    let result = unsafe {
-        (|| -> windows::core::Result<()> {
-            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
-            link.SetPath(PCWSTR(exe_wide.as_ptr()))?;
-            link.SetWorkingDirectory(PCWSTR(dir_wide.as_ptr()))?;
-            link.SetIconLocation(PCWSTR(exe_wide.as_ptr()), 0)?;
-            link.SetDescription(windows::core::w!("OmniSpec"))?;
-            let file: IPersistFile = link.cast()?;
-            file.Save(PCWSTR(path_wide.as_ptr()), true)?;
-            Ok(())
-        })()
+    let context = |stage: &str, error: windows::core::Error| {
+        format!(
+            "не создался ярлык {} ({stage}): {error}",
+            link_path.display()
+        )
     };
-    result.map_err(|error| format!("не создался ярлык {}: {error}", link_path.display()))?;
+    unsafe {
+        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| context("объект Shell", error))?;
+        link.SetPath(PCWSTR(exe_wide.as_ptr()))
+            .map_err(|error| context("путь к лаунчеру", error))?;
+        link.SetWorkingDirectory(PCWSTR(dir_wide.as_ptr()))
+            .map_err(|error| context("рабочая папка", error))?;
+        link.SetIconLocation(PCWSTR(exe_wide.as_ptr()), 0)
+            .map_err(|error| context("иконка", error))?;
+        link.SetDescription(windows::core::w!("OmniSpec"))
+            .map_err(|error| context("описание", error))?;
+        let file: IPersistFile = link.cast().map_err(|error| context("файл", error))?;
+        file.Save(PCWSTR(path_wide.as_ptr()), true)
+            .map_err(|error| context("сохранение", error))?;
+    }
     if !link_path.is_file() {
         return Err(format!(
             "ярлык {} не появился после сохранения",
@@ -177,7 +185,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("omnispec-{}-{unique}", std::process::id()));
         let desktop = root.join("Рабочий стол ' $(test) & 100%");
         let programs = root.join("Меню, программы");
-        let dir = root.join("Сборка ' $var & (тест); 100% 🛠");
+        let dir = root.join("Сборка ' $(name) & 100%PATH% (тест), 🛠");
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("OmniSpec.exe");
         std::fs::write(&exe, b"test payload").unwrap();

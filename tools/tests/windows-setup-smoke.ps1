@@ -93,6 +93,18 @@ try {
     $owned = $true
     New-Item -ItemType Directory -Force -Path $root, $desktop, $programs, (Join-Path $root 'LocalAppData') | Out-Null
 
+    # Контроль: системный рабочий стол доступен для записи на этом runner.
+    $control = Join-Path $desktop ('omnispec-control-' + [Guid]::NewGuid().ToString('N') + '.lnk')
+    try {
+        $controlLink = (New-Object -ComObject WScript.Shell).CreateShortcut($control)
+        $controlLink.TargetPath = $Launcher
+        $controlLink.Save()
+        if (-not (Test-Path -LiteralPath $control -PathType Leaf)) { throw 'Desktop COM control failed' }
+    } finally {
+        if (Test-Path -LiteralPath $control) { Remove-Item -LiteralPath $control -Force }
+    }
+    Write-Host 'WINDOWS_DESKTOP_COM_CONTROL_OK'
+
     # Quotes, $, &, %, comma, spaces and non-ASCII characters must remain data,
     # not become PowerShell/cmd expressions or disappear in an ANSI conversion.
     $special = Join-Path $root 'Сборка ''quote'' $(name) & 100%PATH% (папка), test 🛠'
