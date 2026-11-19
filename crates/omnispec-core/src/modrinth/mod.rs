@@ -102,10 +102,12 @@ impl Modrinth {
         }
         if let Some(loader) = loader {
             let loaders: Vec<String> = match loader {
+                // Похожий загрузчик не гарантирует совместимость конкретного JAR.
+                // Фильтр и проверка при установке должны использовать одно правило.
                 "fabric" => vec!["fabric".into()],
-                "quilt" => vec!["quilt".into(), "fabric".into()],
+                "quilt" => vec!["quilt".into()],
                 "forge" => vec!["forge".into()],
-                "neoforge" => vec!["neoforge".into(), "forge".into()],
+                "neoforge" => vec!["neoforge".into()],
                 _ => vec![],
             };
             if !loaders.is_empty() {

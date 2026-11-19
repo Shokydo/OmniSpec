@@ -3255,3 +3255,95 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 .initial-tab-option .initial-tab-check { visibility: hidden; color: var(--accent); }
 .initial-tab-option.is-active .initial-tab-check { visibility: visible; }
 @media (max-width: 420px) { .initial-tab-options { grid-template-columns: 1fr; } }
+
+/* Каталог главной: моды рядом с модпаками и фильтры в колонке, как у источника. */
+.home-feed-head { display: flex; flex-wrap: wrap; align-items: center; }
+.home-catalog-tabs { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.home-catalog-tabs button {
+  min-height: var(--h-sm); padding: 0 9px; border: 1px solid transparent;
+  border-radius: var(--r-sm); color: var(--dim-2); font-size: 12px; font-weight: 600;
+}
+.home-catalog-tabs button:hover { color: var(--text); background: var(--bg-3); }
+.home-catalog-tabs button.is-active { color: var(--text); border-color: var(--line-2); background: var(--bg-4); }
+.home-catalog-tabs button:focus-visible, .home-category:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.home-feed-head .home-search { flex: 1 1 160px; min-width: 120px; width: auto; }
+.home-catalog-layout { display: flex; align-items: flex-start; gap: 10px; padding: 10px var(--pad) 0; min-width: 0; }
+.home-catalog-sidebar {
+  position: sticky; top: 6px; flex: 0 0 190px; min-width: 0;
+  max-height: calc(88vh / var(--ui-zoom, 1)); overflow-y: auto;
+  padding: 12px; border: 1px solid var(--line-2); border-radius: var(--r-lg); background: var(--bg-2);
+}
+.home-filter-group { display: flex; flex-direction: column; gap: 7px; }
+.home-filter-label, .home-category-group summary { font-size: 12px; font-weight: 650; color: var(--text); }
+.home-filter-group .select { width: 100%; min-width: 0; }
+.home-category-group { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.home-category-group summary { display: flex; align-items: center; justify-content: space-between; cursor: pointer; list-style: none; }
+.home-category-group summary::-webkit-details-marker { display: none; }
+.home-category-group summary .ic { width: 14px; height: 14px; transform: rotate(-90deg); color: var(--dim-2); }
+.home-category-group[open] summary .ic { transform: rotate(180deg); }
+.home-category-list { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.home-category {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 4px 6px;
+  border: 1px solid transparent; border-radius: var(--r-sm); color: var(--dim-2); text-align: left; font-size: 11.5px;
+}
+.home-category .ic { width: 14px; height: 14px; flex: none; }
+.home-category:hover { background: var(--bg-3); color: var(--text); }
+.home-category.is-active { color: var(--text); background: var(--bg-4); border-color: var(--line-2); }
+.home-filter-note { margin-top: 12px; color: var(--dim-2); font-size: 11px; line-height: 1.5; }
+.home .home-catalog-layout .modrinth-results { flex: 1 1 0; min-width: 0; padding: 0 0 28px; }
+@media (max-width: 1100px) {
+  .home-catalog-sidebar { flex-basis: 155px; padding: 10px; }
+}
+
+/* Все изображения проекта доступны во вкладке и открываются поверх описания. */
+.proj-box { width: min(880px, calc(96vw / var(--ui-zoom, 1))); height: min(660px, calc(90vh / var(--ui-zoom, 1))); }
+.proj-panel { display: flex; flex-direction: column; gap: 12px; }
+.proj-shot { cursor: zoom-in; padding: 0; text-align: left; }
+.proj-shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.proj-shot-hint {
+  position: absolute; right: 8px; bottom: 8px; padding: 4px 7px;
+  border-radius: var(--r-sm); background: rgba(0,0,0,.68); color: white; font-size: 10px;
+  opacity: 0; transition: opacity var(--t-fast);
+}
+.proj-shot:hover .proj-shot-hint, .proj-shot:focus-visible .proj-shot-hint { opacity: 1; }
+.proj-show-all { align-self: flex-start; }
+.project-image-backdrop { z-index: 70; background: rgba(0,0,0,.82); }
+.project-image-modal {
+  width: min(1200px, calc(96vw / var(--ui-zoom, 1)));
+  height: min(850px, calc(94vh / var(--ui-zoom, 1)));
+  max-height: calc(94vh / var(--ui-zoom, 1));
+}
+.project-image-stage { flex: 1; min-height: 0; display: grid; place-items: center; padding: 12px; background: #090a0c; }
+.project-image-stage img { width: 100%; height: 100%; object-fit: contain; }
+.project-image-controls { display: flex; align-items: center; justify-content: center; gap: 18px; padding: 10px; }
+.project-image-controls span { min-width: 55px; text-align: center; color: var(--dim); }
+
+/* Явный выбор цели или подтверждение новой совместимой сборки. */
+.mod-target-backdrop { z-index: 65; }
+.mod-target-box {
+  width: min(690px, calc(94vw / var(--ui-zoom, 1)));
+  max-height: min(740px, calc(90vh / var(--ui-zoom, 1)));
+}
+.mod-target-body { display: flex; flex-direction: column; gap: 12px; }
+.mod-target-intro { margin: 0; color: var(--dim); font-size: 12px; line-height: 1.5; }
+.mod-target-note { color: var(--dim-2); font-size: 11.5px; line-height: 1.5; }
+.mod-target-error { color: var(--red); font-size: 11.5px; line-height: 1.5; }
+.mod-target-note .text-btn, .mod-target-error .text-btn { color: var(--accent); text-decoration: underline; padding: 0; }
+.mod-target-list { display: flex; flex-direction: column; gap: 6px; }
+.mod-target-instance {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-3);
+}
+.mod-target-instance.is-compatible { cursor: pointer; }
+.mod-target-instance.is-compatible:hover, .mod-target-instance:has(input:checked) { border-color: var(--accent); background: var(--bg-4); }
+.mod-target-instance input { accent-color: var(--accent); flex: none; }
+.mod-target-instance-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mod-target-instance-main strong { overflow-wrap: anywhere; font-size: 12px; color: var(--text); }
+.mod-target-instance-main > span { color: var(--dim-2); font-size: 11px; }
+.mod-target-status { text-align: right; color: var(--dim-2); font-size: 10.5px; }
+.mod-target-status.is-ok { color: var(--green); }
+.mod-target-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.mod-target-fields .field > span { color: var(--dim-2); font-size: 11px; }
+.mod-target-fields .input, .mod-target-fields .select { width: 100%; min-width: 0; }
+.mod-target-switch { align-self: flex-start; }
+@media (max-width: 520px) { .mod-target-fields { grid-template-columns: 1fr; } }

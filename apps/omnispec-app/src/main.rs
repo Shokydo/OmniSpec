@@ -451,6 +451,84 @@ async fn create_instance(
     instances::load(&state.paths, &meta.id).map_err(err)
 }
 
+#[derive(Serialize)]
+struct ModCreateOutcome {
+    instance: InstanceMeta,
+    outcome: Option<modrinth_install::InstallOutcome>,
+    /// Не удаляем созданную сборку автоматически: там уже могут появиться данные.
+    install_error: Option<String>,
+    profile_warning: Option<String>,
+}
+
+/// Создание по подтверждённому варианту мода. Все проверки выполняются ДО
+/// создания каталога: тип проекта, принадлежность файла, совместимость,
+/// настоящий Minecraft и доступная версия загрузчика.
+#[tauri::command]
+async fn create_instance_for_mod(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: CreateInstanceRequest,
+    source: String,
+    project_id: String,
+    version_id: String,
+    op_id: Option<String>,
+) -> Result<ModCreateOutcome, String> {
+    let _create = reserve_content_write("__create__", &state.content_access)?;
+    if req.game_dir.is_some() || req.id.is_some() {
+        return Err("новая сборка с модом создаётся только в отдельной папке лаунчера".into());
+    }
+    let loader_version = req.loader.version().filter(|version| !version.trim().is_empty())
+        .ok_or_else(|| "для мода нужен поддерживаемый загрузчик".to_string())?;
+    let (project, version) = match source.as_str() {
+        "modrinth" => (
+            state.modrinth.project(&project_id).await.map_err(err)?,
+            state.modrinth.version(&version_id).await.map_err(err)?,
+        ),
+        "curseforge" => (
+            state.curseforge.project(&project_id).await.map_err(err)?,
+            state.curseforge.file(&project_id, &version_id).await.map_err(err)?,
+        ),
+        _ => return Err("неизвестный каталог модов".into()),
+    };
+    if project.project_type != "mod" || version.project_id != project.id || version.id != version_id {
+        return Err("выбранный файл не принадлежит этому моду".into());
+    }
+    if version.primary_file().is_none() { return Err("у выбранной версии нет файла".into()); }
+    modrinth_install::validate_mod_compatibility(&version, req.mc_version.trim(), req.loader.kind()).map_err(err)?;
+    let manifest = game::fetch_manifest(&state.http, &state.paths, Duration::from_secs(1800)).await.map_err(err)?;
+    if !manifest.versions.iter().any(|item| item.id == req.mc_version.trim()) {
+        return Err("эта версия Minecraft отсутствует в официальном манифесте".into());
+    }
+    let choices = loaders::loader_versions(&state.http, req.loader.kind(), req.mc_version.trim()).await.map_err(err)?;
+    if !choices.iter().any(|option| option.version == loader_version) {
+        return Err("эта версия загрузчика недоступна для выбранного Minecraft".into());
+    }
+
+    let meta = instances::create(&state.paths, req).map_err(err)?;
+    let _instance = match reserve_content_write(&meta.id, &state.content_access) {
+        Ok(guard) => guard,
+        Err(error) => return Ok(ModCreateOutcome { instance: meta, outcome: None, install_error: Some(error), profile_warning: None }),
+    };
+    let reporter = reporter_for_content(&app, &meta.id, op_id);
+    let profile_warning = loaders::ensure_profile(&state.http, &state.paths, &meta, &reporter)
+        .await.err().map(|error| error.to_string());
+    let current = match instances::load(&state.paths, &meta.id) {
+        Ok(value) => value,
+        Err(error) => return Ok(ModCreateOutcome { instance: meta, outcome: None, install_error: Some(error.to_string()), profile_warning }),
+    };
+    let installed = match source.as_str() {
+        "modrinth" => modrinth_install::install_version(&state.modrinth, &state.paths, &current, &version_id, &reporter).await,
+        "curseforge" => curseforge_install::install(&state.curseforge, &state.paths, &current, &project_id, Some(&version_id), &reporter).await,
+        _ => unreachable!(),
+    };
+    let (outcome, install_error) = match installed {
+        Ok(outcome) => (Some(outcome), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    let instance = instances::load(&state.paths, &meta.id).unwrap_or(current);
+    Ok(ModCreateOutcome { instance, outcome, install_error, profile_warning })
+}
+
 #[tauri::command]
 fn delete_instance(state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
@@ -895,6 +973,7 @@ async fn search_modrinth(
     // (в параметрах команды doc-комментарии Rust не разрешает).
     sort: Option<String>,
     limit: Option<u32>,
+    categories: Option<Vec<String>>,
 ) -> Result<omnispec_core::modrinth::SearchResults, String> {
     state
         .modrinth
@@ -903,7 +982,7 @@ async fn search_modrinth(
             project_type,
             game_version: mc_version,
             loader,
-            categories: Vec::new(),
+            categories: categories.unwrap_or_default(),
             limit: limit.unwrap_or(24),
             offset: offset.unwrap_or(0),
             sort: sort.unwrap_or_else(|| "relevance".into()),
@@ -948,6 +1027,7 @@ async fn search_curseforge(
     offset: Option<u32>,
     sort: Option<String>,
     limit: Option<u32>,
+    categories: Option<Vec<String>>,
 ) -> Result<omnispec_core::modrinth::SearchResults, String> {
     state
         .curseforge
@@ -956,7 +1036,7 @@ async fn search_curseforge(
             project_type,
             game_version: mc_version,
             loader,
-            categories: Vec::new(),
+            categories: categories.unwrap_or_default(),
             limit: limit.unwrap_or(24),
             offset: offset.unwrap_or(0),
             sort: sort.unwrap_or_else(|| "downloads".into()),
@@ -977,6 +1057,16 @@ async fn curseforge_versions(
         .files(&project_id, mc_version.as_deref(), loader.as_deref())
         .await
         .map_err(err)
+}
+
+/// Последние файлы для разных версий игры и загрузчиков (не только первая
+/// страница `/files`), для выбора параметров новой сборки с модом.
+#[tauri::command]
+async fn curseforge_compatibility_versions(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<omnispec_core::modrinth::Version>, String> {
+    state.curseforge.compatibility_versions(&project_id).await.map_err(err)
 }
 
 #[tauri::command]
@@ -1107,9 +1197,17 @@ async fn install_mod_version(
     instance_id: String,
     version_id: String,
     op_id: Option<String>,
+    project_id: Option<String>,
 ) -> Result<modrinth_install::InstallOutcome, String> {
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    if let Some(project_id) = project_id {
+        let project = state.modrinth.project(&project_id).await.map_err(err)?;
+        let version = state.modrinth.version(&version_id).await.map_err(err)?;
+        if version.project_id != project.id || version.id != version_id {
+            return Err("выбранная версия принадлежит другому проекту".into());
+        }
+    }
     let reporter = reporter_for_content(&app, &instance_id, op_id);
     modrinth_install::install_version(&state.modrinth, &state.paths, &meta, &version_id, &reporter)
         .await
@@ -3429,6 +3527,7 @@ fn main() {
             list_instances,
             acknowledge_instance_renames,
             create_instance,
+            create_instance_for_mod,
             delete_instance,
             duplicate_instance,
             update_instance,
@@ -3443,6 +3542,7 @@ fn main() {
             modrinth_project,
             search_curseforge,
             curseforge_versions,
+            curseforge_compatibility_versions,
             curseforge_project,
             curseforge_ready,
             install_curseforge,

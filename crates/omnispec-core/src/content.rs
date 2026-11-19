@@ -506,6 +506,9 @@ pub async fn replace_version(
 ) -> Result<crate::modrinth::install::InstallOutcome> {
     let version = modrinth.version(version_id).await?;
     let project = modrinth.project(&version.project_id).await?;
+    // Сначала проверяем выбранную версию, до скачивания и удаления старого файла.
+    let project_type = if project.project_type.is_empty() { "mod" } else { &project.project_type };
+    crate::modrinth::install::validate_project_version(&version, &project.id, project_type, instance)?;
     let file = version
         .primary_file()
         .ok_or_else(|| Error::not_found(format!("у версии {} нет файлов", version.id)))?;

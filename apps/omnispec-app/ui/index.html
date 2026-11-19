@@ -427,12 +427,16 @@
 
 <!-- ============ СВЕДЕНИЯ О ПРОЕКТЕ MODRINTH ============ -->
 <div class="modal-backdrop" id="modal-project" hidden>
-  <div class="modal proj-box">
+  <div class="modal proj-box" role="dialog" aria-modal="true" aria-labelledby="proj-title">
     <header class="modal-head">
       <h2 id="proj-title">Проект</h2>
       <div class="spacer"></div>
       <button class="icon-btn" data-close-project title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
     </header>
+    <div class="modal-tabs" id="proj-tabs" role="tablist" aria-label="Сведения о проекте" hidden>
+      <button type="button" class="mtab is-active" role="tab" id="proj-tab-description" data-proj-tab="description" aria-selected="true" aria-controls="proj-panel-description">Описание</button>
+      <button type="button" class="mtab" role="tab" id="proj-tab-gallery" data-proj-tab="gallery" aria-selected="false" aria-controls="proj-panel-gallery">Картинки</button>
+    </div>
     <div class="modal-body proj-body" id="proj-body"></div>
     <footer class="modal-foot">
       <button class="btn" id="proj-site"><svg class="ic"><use href="#i-link"/></svg><span>Перейти на сайт</span></button>
@@ -440,6 +444,41 @@
       <div class="spacer"></div>
       <button class="btn btn-primary" id="proj-install"><svg class="ic"><use href="#i-download"/></svg><span>Установить</span></button>
     </footer>
+  </div>
+</div>
+
+<!-- ============ КУДА УСТАНОВИТЬ МОД ============ -->
+<div class="modal-backdrop mod-target-backdrop" id="modal-mod-target" hidden>
+  <div class="modal mod-target-box" role="dialog" aria-modal="true" aria-labelledby="mod-target-title">
+    <header class="modal-head">
+      <h2 id="mod-target-title">Установить мод</h2>
+      <div class="spacer"></div>
+      <button class="icon-btn" id="mod-target-close" title="Закрыть" aria-label="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="modal-body mod-target-body" id="mod-target-body"></div>
+    <footer class="modal-foot">
+      <span class="hint" id="mod-target-hint"></span>
+      <div class="spacer"></div>
+      <button class="btn" id="mod-target-cancel" type="button">Отмена</button>
+      <button class="btn btn-primary" id="mod-target-submit" type="button" disabled>Установить</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ============ ИЗОБРАЖЕНИЕ ПРОЕКТА ============ -->
+<div class="modal-backdrop project-image-backdrop" id="modal-project-image" hidden>
+  <div class="modal project-image-modal" role="dialog" aria-modal="true" aria-labelledby="project-image-title">
+    <header class="modal-head">
+      <h2 id="project-image-title">Изображение</h2>
+      <div class="spacer"></div>
+      <button class="icon-btn" id="project-image-close" title="Закрыть" aria-label="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="project-image-stage"><img id="project-image-full" alt=""></div>
+    <div class="project-image-controls">
+      <button class="btn" id="project-image-prev" type="button">← Предыдущее</button>
+      <span id="project-image-count" class="mono"></span>
+      <button class="btn" id="project-image-next" type="button">Следующее →</button>
+    </div>
   </div>
 </div>
 

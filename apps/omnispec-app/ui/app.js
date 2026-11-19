@@ -2087,6 +2087,7 @@
     instances: () => invoke("list_instances"),
     acknowledgeInstanceRenames: (acknowledgements) => invoke("acknowledge_instance_renames", { acknowledgements }),
     createInstance: (req) => invoke("create_instance", { req }),
+    createInstanceForMod: (req, source, projectId, versionId, opId = null) => invoke("create_instance_for_mod", { req, source, projectId, versionId, opId }),
     deleteInstance: (id) => invoke("delete_instance", { instanceId: id }),
     updateInstance: (meta) => invoke("update_instance", { meta }),
     versions: (snapshots) => invoke("minecraft_versions", { snapshots }),
@@ -2099,7 +2100,7 @@
     modrinthVersions: (projectId, mc, loader) => invoke("modrinth_versions", { projectId, mcVersion: mc, loader }),
     installMod: (instanceId, projectId, opId = null) => invoke("install_mod", { instanceId, projectId, opId }),
     installDiagnosticMod: (instanceId, attemptId, request) => invoke("install_diagnostic_mod", { instanceId, attemptId, request }),
-    installModVersion: (instanceId, versionId, opId = null) => invoke("install_mod_version", { instanceId, versionId, opId }),
+    installModVersion: (instanceId, versionId, opId = null, projectId = null) => invoke("install_mod_version", { instanceId, versionId, opId, projectId }),
     installModpack: (versionId, opId = null) => invoke("install_modpack", { versionId, opId }),
     cancelDownload: () => invoke("cancel_download"),
     listDir: (instanceId, sub) => invoke("list_dir", { instanceId, sub }),
@@ -2165,6 +2166,7 @@
     searchCurseforge: (q) => invoke("search_curseforge", q),
     installCurseforgeModpack: (projectId, fileId, opId = null) => invoke("install_curseforge_modpack", { projectId, fileId: fileId || null, opId }),
     curseforgeVersions: (projectId, mc, loader) => invoke("curseforge_versions", { projectId, mcVersion: mc, loader }),
+    curseforgeCompatibilityVersions: (projectId) => invoke("curseforge_compatibility_versions", { projectId }),
     curseforgeProject: (projectId) => invoke("curseforge_project", { projectId }),
     curseforgeReady: () => invoke("curseforge_ready"),
     installCurseforge: (instanceId, projectId, fileId, opId = null) => invoke("install_curseforge", { instanceId, projectId, fileId: fileId || null, opId }),
@@ -2230,6 +2232,11 @@
       const meta = { ...DEMO.instances[0], id: "demo-" + Date.now(), name: req.name, mc_version: req.mc_version, loader: req.loader || { type: "vanilla" }, last_played: null };
       DEMO.instances.unshift(meta);
       return meta;
+    },
+    createInstanceForMod: async (req, _source, _projectId, versionId) => {
+      const meta = { ...(DEMO.instances[0] || {}), id: `demo-${Date.now()}`, name: req.name, mc_version: req.mc_version, loader: req.loader, last_played: null };
+      DEMO.instances.unshift(meta);
+      return { instance: meta, outcome: { installed: [`${versionId}.jar`], skipped: [] }, install_error: null, profile_warning: null };
     },
     deleteInstance: async (id) => { DEMO.instances = DEMO.instances.filter((i) => i.id !== id); return null; },
     updateInstance: async (meta) => { const i = DEMO.instances.findIndex((x) => x.id === meta.id); if (i >= 0) DEMO.instances[i] = meta; return null; },
@@ -2322,11 +2329,12 @@
       const limit = (q && q.limit) || 24;
       return { hits: all.slice(offset, offset + limit), offset, limit, total_hits: all.length };
     },
-    curseforgeVersions: async () => ([
-      { id: "cf-file-1", project_id: "cf", name: "create-1.21.1-6.0.4.jar", version_number: "create-1.21.1-6.0.4.jar", version_type: "release", game_versions: ["1.21.1"], loaders: ["neoforge"], date_published: "2026-10-02T12:00:00Z", files: [], dependencies: [] },
-      { id: "cf-file-2", project_id: "cf", name: "create-1.21.1-6.0.2.jar", version_number: "create-1.21.1-6.0.2.jar", version_type: "release", game_versions: ["1.21.1"], loaders: ["neoforge"], date_published: "2026-08-19T12:00:00Z", files: [], dependencies: [] },
-      { id: "cf-file-3", project_id: "cf", name: "create-1.20.1-0.5.1.f.jar", version_number: "create-1.20.1-0.5.1.f.jar", version_type: "beta", game_versions: ["1.20.1"], loaders: ["forge"], date_published: "2025-11-05T12:00:00Z", files: [], dependencies: [] }
+    curseforgeVersions: async (projectId) => ([
+      { id: "cf-file-1", project_id: projectId, name: "create-1.21.1-6.0.4.jar", version_number: "create-1.21.1-6.0.4.jar", version_type: "release", game_versions: ["1.21.1"], loaders: ["neoforge"], date_published: "2026-10-02T12:00:00Z", files: [], dependencies: [] },
+      { id: "cf-file-2", project_id: projectId, name: "create-1.21.1-6.0.2.jar", version_number: "create-1.21.1-6.0.2.jar", version_type: "release", game_versions: ["1.21.1"], loaders: ["neoforge"], date_published: "2026-08-19T12:00:00Z", files: [], dependencies: [] },
+      { id: "cf-file-3", project_id: projectId, name: "create-1.20.1-0.5.1.f.jar", version_number: "create-1.20.1-0.5.1.f.jar", version_type: "beta", game_versions: ["1.20.1"], loaders: ["forge"], date_published: "2025-11-05T12:00:00Z", files: [], dependencies: [] }
     ]),
+    curseforgeCompatibilityVersions: async (projectId) => demoApi.curseforgeVersions(projectId, null, null),
     installCurseforge: async (_i, projectId, fileId) => ({ installed: [`${fileId || projectId}.jar`], skipped: [] }),
     installCurseforgeModpack: async (projectId, fileId) => {
       await new Promise((resolve) => setTimeout(resolve, 400));
@@ -2652,8 +2660,8 @@
       error: null, tried: false
     },
     discover: {
-      query: "", results: [], total: 0,
-      loading: false, loadingMore: false, error: null, moreError: null,
+      query: "", type: "modpack", loader: "", categories: { modrinth: "", curseforge: "" },
+      results: [], total: 0, loading: false, loadingMore: false, error: null, moreError: null,
       retrySeconds: 0, tried: false, view: "grid", source: "modrinth"
     },
     wall: { wallpaper: null, fit: "cover", blur: 0, dim: 40 },
@@ -6002,10 +6010,14 @@
     const id = ownsFocus && active.id;
     const dlView = ownsFocus && active.dataset.dlView;
     const dvView = ownsFocus && active.dataset.dvView;
+    const dvType = ownsFocus && active.dataset.dvType;
+    const dvSource = ownsFocus && active.dataset.dvSource;
     root.innerHTML = html;
     let replacement = id ? document.getElementById(id) : null;
     if (!replacement && dlView) replacement = $$("[data-dl-view]", root).find((el) => el.dataset.dlView === dlView);
     if (!replacement && dvView) replacement = $$("[data-dv-view]", root).find((el) => el.dataset.dvView === dvView);
+    if (!replacement && dvType) replacement = $$("[data-dv-type]", root).find((el) => el.dataset.dvType === dvType);
+    if (!replacement && dvSource) replacement = $$("[data-dv-source]", root).find((el) => el.dataset.dvSource === dvSource);
     if (replacement && root.contains(replacement) && document.activeElement === document.body) {
       replacement.focus({ preventScroll: true });
     }
@@ -6119,7 +6131,7 @@
             <label>Загрузчик</label>
             <select class="select" id="mr-loader">
               <option value="">любой</option>
-              ${Object.entries(LOADER_NAMES).map(([value, label]) => `<option value="${value}" ${cfg.loader === value ? "selected" : ""}>${label}</option>`).join("")}
+              ${CATALOG_LOADERS.map((value) => `<option value="${value}" ${cfg.loader === value ? "selected" : ""}>${LOADER_NAMES[value]}</option>`).join("")}
             </select>
           </div>` : ""}
         </div>
@@ -6317,8 +6329,10 @@
 
   /** Сколько карточек в ряд при текущей ширине окна и выбранном размере. */
   /** Сколько карточек в ряд: 1 → 12, 2 → 9 (стандарт), 3 → 6 — как написано в подсказке к ползунку. */
-  function feedColumns(level = feedGridLevel()) {
-    return level === 1 ? 12 : level === 3 ? 6 : 9;
+  function feedColumns(level = feedGridLevel(), width = 0) {
+    const wanted = level === 1 ? 12 : level === 3 ? 6 : 9;
+    // Фильтры занимают часть ширины: не сжимаем кнопки карточки до наложения.
+    return width > 0 ? Math.max(1, Math.min(wanted, Math.floor((width + 8) / 120))) : wanted;
   }
 
   /** Пересчитать число колонок у уже отрисованной ленты. */
@@ -6331,7 +6345,8 @@
 
   let feedResizeBound = false;
   function bindFeedResize() {
-    if (feedResizeBound) { syncFeedColumns(); return; }
+    syncFeedColumns();
+    if (feedResizeBound) return;
     feedResizeBound = true;
     window.addEventListener("resize", () => syncFeedColumns());
   }
@@ -6362,6 +6377,52 @@
     api.saveSettings(state.settings).catch(() => {});
   }
 
+  // Категории у источников разные: используем реальные фасеты Modrinth и
+  // categoryId CurseForge, а не подменяем похожие категории друг другом.
+  const PACK_CATEGORIES = {
+    modrinth: [
+      ["adventure", "Приключения", "i-globe"], ["challenging", "Испытания", "i-crown"],
+      ["combat", "Бои", "i-shield"], ["kitchen-sink", "Всего понемногу", "i-cube"],
+      ["lightweight", "Лёгкие", "i-leaf"], ["magic", "Магия", "i-gem"],
+      ["multiplayer", "Мультиплеер", "i-user"], ["optimization", "Оптимизация", "i-bolt"],
+      ["quests", "Квесты", "i-list"], ["technology", "Технологии", "i-settings"]
+    ],
+    curseforge: [
+      ["4475", "Приключения и RPG", "i-globe"], ["4476", "Исследование", "i-globe"],
+      ["4479", "Хардкор", "i-crown"], ["9243", "Для опытных", "i-crown"],
+      ["4483", "Бои и PvP", "i-shield"], ["4481", "Лёгкие", "i-leaf"],
+      ["4482", "Большие", "i-cube"], ["4473", "Магия", "i-gem"],
+      ["4484", "Мультиплеер", "i-user"], ["4477", "Мини-игры", "i-star"],
+      ["4478", "Квесты", "i-list"], ["4472", "Технологии", "i-settings"],
+      ["4474", "Научная фантастика", "i-bolt"], ["4480", "На основе карты", "i-globe"],
+      ["4736", "Skyblock", "i-cube"], ["5128", "Vanilla+", "i-leaf"],
+      ["7418", "Хоррор", "i-flame"], ["4487", "FTB Official", "i-star"],
+      ["10683", "RLCraft", "i-shield"]
+    ]
+  };
+  const CATALOG_LOADERS = ["fabric", "quilt", "forge", "neoforge"];
+
+  function homeCatalogFiltersHtml(cfg, source) {
+    const categories = PACK_CATEGORIES[source] || PACK_CATEGORIES.modrinth;
+    const active = cfg.categories[source] || "";
+    return `<aside class="home-catalog-sidebar" aria-label="Фильтры каталога">
+      <div class="home-filter-group">
+        <label class="home-filter-label" for="dv-loader">Загрузчик</label>
+        <select class="select" id="dv-loader">
+          <option value="">Любой загрузчик</option>
+          ${CATALOG_LOADERS.map((loader) => `<option value="${loader}" ${cfg.loader === loader ? "selected" : ""}>${LOADER_NAMES[loader]}</option>`).join("")}
+        </select>
+      </div>
+      ${cfg.type === "modpack" ? `<details class="home-category-group" open>
+        <summary>Категория <svg class="ic"><use href="#i-chev"/></svg></summary>
+        <div class="home-category-list" role="group" aria-label="Категории сборок">
+          <button type="button" data-dv-category="" class="home-category ${!active ? "is-active" : ""}" aria-pressed="${!active}"><svg class="ic"><use href="#i-grid"/></svg>Все категории</button>
+          ${categories.map(([id, label, icon]) => `<button type="button" data-dv-category="${id}" class="home-category ${active === id ? "is-active" : ""}" aria-pressed="${active === id}"><svg class="ic"><use href="#${icon}"/></svg>${esc(label)}</button>`).join("")}
+        </div>
+      </details>` : `<div class="home-filter-note">Выбирай загрузчик, чтобы найти подходящие моды.</div>`}
+    </aside>`;
+  }
+
   function renderDiscover() {
     const cfg = state.discover;
     const view = cfg.view || "grid";
@@ -6375,14 +6436,17 @@
           ${instances.length ? `<div class="home-section-title">Недавнее</div><div class="home-grid" id="home-grid">${instances.map(homeInstanceHtml).join("")}</div>` : ""}
           ${homeImportHtml()}
           <div class="home-feed-head">
-            <div class="home-title">Готовые сборки</div>
+            <div class="home-catalog-tabs" role="group" aria-label="Что искать">
+              <button type="button" data-dv-type="modpack" class="${cfg.type === "modpack" ? "is-active" : ""}" aria-pressed="${cfg.type === "modpack"}">Готовые сборки</button>
+              <button type="button" data-dv-type="mod" class="${cfg.type === "mod" ? "is-active" : ""}" aria-pressed="${cfg.type === "mod"}">Моды</button>
+            </div>
             <label class="search home-search">
               <svg class="ic"><use href="#i-search"/></svg>
-              <input id="dv-query" type="text" aria-label="Поиск готовых сборок" placeholder="Найти сборку" spellcheck="false" value="${esc(cfg.query)}">
+              <input id="dv-query" type="text" aria-label="${cfg.type === "mod" ? "Поиск модов" : "Поиск готовых сборок"}" placeholder="${cfg.type === "mod" ? "Найти мод" : "Найти сборку"}" spellcheck="false" value="${esc(cfg.query)}">
             </label>
             ${sourceButtonsHtml("dv", source)}
             <div class="home-tools">
-              <div class="mr-view" role="group" aria-label="Вид готовых сборок">
+              <div class="mr-view" role="group" aria-label="Вид каталога">
                 <button type="button" class="${view === "list" ? "is-active" : ""}" data-dv-view="list" aria-pressed="${view === "list"}"><svg class="ic"><use href="#i-list"/></svg>Список</button>
                 <button type="button" class="${view === "grid" ? "is-active" : ""}" data-dv-view="grid" aria-pressed="${view === "grid"}"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
               </div>
@@ -6393,7 +6457,10 @@
               </label>
             </div>
           </div>
-          <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${feedGridLevel()}` : ""}" id="dv-results" style="--feed-cols:${feedColumns()}">${dvResultsHtml()}</div>
+          <div class="home-catalog-layout">
+            ${homeCatalogFiltersHtml(cfg, source)}
+            <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${feedGridLevel()}` : ""}" id="dv-results" style="--feed-cols:${feedColumns()}">${dvResultsHtml()}</div>
+          </div>
         </div>
       </div>`);
 
@@ -6413,6 +6480,27 @@
     }));
     syncRecentRow();
     bindLiveSearch($("#dv-query"), scheduleDiscoverSearch, dvReset);
+    $$("#tab-body [data-dv-type]").forEach((button) => button.addEventListener("click", () => {
+      if (cfg.type === button.dataset.dvType) return;
+      cfg.type = button.dataset.dvType;
+      renderDiscover();
+      dvReset();
+    }));
+    $("#dv-loader").addEventListener("change", (event) => {
+      cfg.loader = event.target.value;
+      dvReset();
+    });
+    $$("#tab-body [data-dv-category]").forEach((button) => button.addEventListener("click", () => {
+      const category = button.dataset.dvCategory || "";
+      if ((cfg.categories[source] || "") === category) return;
+      cfg.categories[source] = category;
+      $$("#tab-body [data-dv-category]").forEach((item) => {
+        const active = (item.dataset.dvCategory || "") === category;
+        item.classList.toggle("is-active", active);
+        item.setAttribute("aria-pressed", String(active));
+      });
+      dvReset();
+    }));
     $$("#tab-body [data-dv-source]").forEach((button) => button.addEventListener("click", () => {
       const source = button.dataset.dvSource;
       if (source === state.discover.source) {
@@ -6420,9 +6508,9 @@
         return;
       }
       state.discover.source = source;
-      updateSourceButtons("dv", source);
       state.settings = { ...(state.settings || {}), feed_source: source };
       api.saveSettings(state.settings).catch(() => {});
+      renderDiscover();
       dvReset();
     }));
     $$("#tab-body [data-dv-view]").forEach((btn) => btn.addEventListener("click", () => {
@@ -6759,13 +6847,14 @@
 
   function dvResultsHtml() {
     const cfg = state.discover;
-    if (cfg.loading && !cfg.results.length) return `<div class="empty-state">Загружаем готовые сборки…</div>`;
+    const label = cfg.type === "mod" ? "моды" : "готовые сборки";
+    if (cfg.loading && !cfg.results.length) return `<div class="empty-state">Загружаем ${label}…</div>`;
     if (cfg.error) {
       const retryHint = cfg.retrySeconds
         ? `Повторим автоматически через ${cfg.retrySeconds} сек.`
         : "Проверь подключение, источник и настройки прокси.";
       return `<div class="empty-state dv-error" role="status">
-        <strong>Не удалось загрузить готовые сборки</strong>
+        <strong>Не удалось загрузить ${label}</strong>
         <span>${retryHint}</span>
         <button class="btn" id="dv-retry">Повторить сейчас</button>
         <details><summary>Подробнее об ошибке</summary><pre>${esc(cfg.error)}</pre></details>
@@ -6780,7 +6869,7 @@
     if (cfg.loadingMore) return `<span class="mr-more-spinner"></span>Загружаем ещё…`;
     if (cfg.moreError) {
       const hint = cfg.retrySeconds ? `Повторим через ${cfg.retrySeconds} сек.` : "Проверь подключение.";
-      return `<span>Не удалось загрузить остальные сборки. ${hint}</span> <button class="btn" id="dv-more-retry">Повторить сейчас</button>`;
+      return `<span>Не удалось загрузить остальные ${cfg.type === "mod" ? "моды" : "сборки"}. ${hint}</span> <button class="btn" id="dv-more-retry">Повторить сейчас</button>`;
     }
     if (cfg.results.length >= cfg.total) return `Показано всё: ${cfg.results.length}`;
     return `Прокрути вниз — ещё ${Math.max(0, cfg.total - cfg.results.length)}`;
@@ -6822,19 +6911,28 @@
     dvWatch();
   }
 
-  /** Карточка ленты: у Modrinth и CurseForge свои обработчики кнопок. */
+  /** Карточка ленты: тип проекта и источник не зависят от вкладки сборки. */
   function discCardHtml(hit) {
-    if ((state.discover.source || "modrinth") === "curseforge") return cfPackCardHtml(hit);
-    return cardHtml(hit, "pack");
+    const cfg = state.discover;
+    const pack = cfg.type !== "mod";
+    if ((cfg.source || "modrinth") === "curseforge") return pack ? cfPackCardHtml(hit) : cfCardHtml(hit, "mod");
+    return cardHtml(hit, pack ? "pack" : "mod");
   }
 
-  /** Снимок параметров не меняется, пока запрос находится в полёте. */
-  async function dvFetch(offset, query, source) {
-    const params = {
-      query, projectType: "modpack", mcVersion: null, loader: null,
+  /** Снимок фильтров не меняется, пока запрос находится в полёте. */
+  function dvQuery(offset) {
+    const cfg = state.discover;
+    const source = cfg.source || "modrinth";
+    const category = cfg.type === "modpack" ? (cfg.categories[source] || "") : "";
+    return { source, params: {
+      query: cfg.query, projectType: cfg.type || "modpack", mcVersion: null,
+      loader: cfg.loader || null, categories: category ? [category] : [],
       offset, limit: DV_PAGE, sort: "downloads"
-    };
-    return source === "curseforge" ? api.searchCurseforge(params) : api.search(params);
+    } };
+  }
+
+  async function dvFetch(snapshot) {
+    return snapshot.source === "curseforge" ? api.searchCurseforge(snapshot.params) : api.search(snapshot.params);
   }
 
   async function dvLoadMore(force = false) {
@@ -6845,12 +6943,10 @@
     cfg.moreError = null;
     cfg.loadingMore = true;
     const generation = dvGeneration;
-    const offset = cfg.results.length;
-    const query = cfg.query;
-    const source = cfg.source || "modrinth";
+    const snapshot = dvQuery(cfg.results.length);
     dvUpdateSentinel();
     try {
-      const page = await dvFetch(offset, query, source);
+      const page = await dvFetch(snapshot);
       if (generation !== dvGeneration) return;
       const known = new Set(cfg.results.map((hit) => hit.project_id));
       const fresh = (page.hits || []).filter((hit) => !known.has(hit.project_id));
@@ -6886,11 +6982,10 @@
     cfg.results = [];
     cfg.total = 0;
     const generation = ++dvGeneration;
-    const query = cfg.query;
-    const source = cfg.source || "modrinth";
+    const snapshot = dvQuery(0);
     dvRenderResults();
     try {
-      const page = await dvFetch(0, query, source);
+      const page = await dvFetch(snapshot);
       if (generation !== dvGeneration) return;
       cfg.results = page.hits || [];
       cfg.total = page.total_hits ?? cfg.results.length;
@@ -7025,7 +7120,7 @@
         const id = card.dataset.project;
         const kind = card.dataset.kind;
         const title = card.dataset.title;
-        const type = kind === "pack" ? "modpack" : (state.modrinth.type || "mod");
+        const type = card.dataset.projectType || (kind === "pack" ? "modpack" : "mod");
         const url = `https://modrinth.com/${type}/${card.dataset.slug}`;
         fillCtxMenu(event.clientX, event.clientY, `
           <div class="ctx-caption">${esc(title)}</div>
@@ -7035,7 +7130,7 @@
           <button class="ctx-item" data-act="page"><svg class="ic"><use href="#i-link"/></svg>Открыть страницу</button>
           <button class="ctx-item" data-act="copy"><svg class="ic"><use href="#i-copy"/></svg>Копировать ссылку</button>`,
         (act) => {
-          if (act === "install") installFromModrinth(id, kind);
+          if (act === "install") installFromModrinth(id, kind, title);
           else if (act === "versions") openVersions(id, kind, title);
           else if (act === "page") api.openUrl(url).catch((error) => toast(String(error), "err"));
           else if (act === "copy") copyText(url);
@@ -7045,7 +7140,7 @@
     $$("[data-install]").forEach((btn) => {
       if (btn.dataset.bound) return;
       btn.dataset.bound = "1";
-      btn.addEventListener("click", () => installFromModrinth(btn.dataset.install, btn.dataset.kind));
+      btn.addEventListener("click", () => installFromModrinth(btn.dataset.install, btn.dataset.kind, btn.dataset.title));
     });
     $$("[data-versions]").forEach((btn) => {
       if (btn.dataset.bound) return;
@@ -7065,7 +7160,7 @@
 
   function cardHtml(hit, kind) {
     const isPack = kind === "pack" || (!kind && state.modrinth.type === "modpack");
-    const openType = isPack ? "modpack" : (state.modrinth.type || "mod");
+    const openType = isPack ? "modpack" : (kind === "mod" ? "mod" : (state.modrinth.type || "mod"));
     return `<div class="card${projectInstalled(hit.project_id, "modrinth", openType) ? " is-installed" : ""}${projectStatus(hit.project_id, "modrinth", openType) === "downloading" ? " is-downloading" : ""}" role="group" aria-label="${esc(projectLabel(hit.title, hit.project_id, "modrinth", openType))}" data-project="${esc(hit.project_id)}" data-project-type="${esc(openType)}" data-kind="${isPack ? "pack" : "mod"}" data-slug="${esc(hit.slug || hit.project_id)}" data-title="${esc(hit.title)}">
       <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
       <div class="card-body">
@@ -7077,7 +7172,7 @@
           <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
         </div>
         <div class="card-actions">
-          <button class="icon-btn card-icon-btn is-primary" data-install="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}" title="Скачать и установить" aria-label="Скачать">
+          <button class="icon-btn card-icon-btn is-primary" data-install="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}" data-title="${esc(hit.title)}" title="Скачать и установить" aria-label="Скачать">
             <svg class="ic"><use href="#i-download"/></svg>
           </button>
           <button class="icon-btn card-icon-btn" data-versions="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}" data-title="${esc(hit.title)}" title="Версии" aria-label="Версии">
@@ -7089,6 +7184,298 @@
         </div>
       </div>
     </div>`;
+  }
+
+  /* ---------- куда поставить мод с главной ---------- */
+  let activeModTarget = null;
+
+  function modVersionMatches(version, mc, loader) {
+    if (!version || !mc || !loader || loader === "vanilla") return false;
+    return (version.game_versions || []).includes(mc)
+      && (version.loaders || []).some((value) => String(value).toLowerCase() === loader);
+  }
+
+  function modVersionFor(cfg, mc, loader) {
+    return (cfg.versions || []).find((version) => modVersionMatches(version, mc, loader)
+      && (!version.project_id || String(version.project_id) === String(cfg.projectId)));
+  }
+
+  function closeModTarget(result = null) {
+    const cfg = activeModTarget;
+    if (!cfg) return;
+    activeModTarget = null;
+    $("#modal-mod-target").hidden = true;
+    if (cfg.returnFocus && cfg.returnFocus.isConnected) cfg.returnFocus.focus();
+    cfg.resolve(result);
+  }
+
+  function modTargetRefreshSubmit(cfg) {
+    if (activeModTarget !== cfg) return;
+    const button = $("#mod-target-submit");
+    if (cfg.mode === "existing") {
+      const status = cfg.statuses.get(cfg.selectedId);
+      button.textContent = "Установить";
+      button.disabled = !status || status.state !== "ok";
+      $("#mod-target-hint").textContent = "Выбери подходящую сборку";
+    } else {
+      button.textContent = "Создать и установить";
+      button.disabled = cfg.newLoading || cfg.loaderLoading || !cfg.name.trim() || !cfg.mc || !cfg.loader
+        || !cfg.loaderVersion || !modVersionFor(cfg, cfg.mc, cfg.loader);
+      $("#mod-target-hint").textContent = "Новая сборка будет создана после подтверждения";
+    }
+  }
+
+  function modTargetLoaders(cfg, mc) {
+    return CATALOG_LOADERS.filter((loader) => modVersionFor(cfg, mc, loader));
+  }
+
+  function renderModTarget(cfg) {
+    if (activeModTarget !== cfg) return;
+    const body = $("#mod-target-body");
+    $("#mod-target-title").textContent = `Установить: ${cfg.title || "мод"}`;
+    const versionText = cfg.specific ? `<div class="mod-target-note">Выбрана версия: <strong>${esc(cfg.specific.name || cfg.specific.version_number || cfg.specific.id)}</strong></div>` : "";
+    if (cfg.mode === "existing") {
+      const rows = cfg.instances.map((instance) => {
+        const status = cfg.statuses.get(instance.id) || { state: "checking" };
+        const ok = status.state === "ok";
+        const message = ok ? "Подходит" : status.state === "no" ? "Нет совместимой версии"
+          : status.state === "error" ? "Не удалось проверить" : "Проверяем…";
+        return `<label class="mod-target-instance ${ok ? "is-compatible" : "is-unavailable"}">
+          <input type="radio" name="mod-target-instance" value="${esc(instance.id)}" ${cfg.selectedId === instance.id ? "checked" : ""} ${ok ? "" : "disabled"}>
+          <span class="mod-target-instance-main"><strong>${esc(instance.name)}</strong><span>MC ${esc(instance.mc_version)} · ${esc(loaderLabel(instance.loader))}</span></span>
+          <span class="mod-target-status ${ok ? "is-ok" : ""}" title="${esc(status.error || message)}">${esc(message)}</span>
+        </label>`;
+      }).join("");
+      body.innerHTML = `${versionText}
+        <p class="mod-target-intro">Выбери сборку, в которую установить мод. Несовместимые сборки недоступны.</p>
+        <div class="mod-target-list" role="radiogroup" aria-label="Сборки">${rows}</div>
+        ${[...cfg.statuses.values()].some((item) => item.state === "error") ? `<div class="mod-target-note">Не все сборки удалось проверить. Проверь сеть и <button type="button" class="text-btn" id="mod-target-retry-existing">повтори проверку</button>.</div>` : ""}
+        <button type="button" class="btn mod-target-switch" id="mod-target-create">Создать новую сборку</button>`;
+      $$("input[name='mod-target-instance']", body).forEach((input) => input.addEventListener("change", () => {
+        cfg.selectedId = input.value;
+        modTargetRefreshSubmit(cfg);
+      }));
+      $("#mod-target-retry-existing")?.addEventListener("click", () => checkModTargetInstances(cfg));
+      $("#mod-target-create").addEventListener("click", () => {
+        cfg.mode = "create";
+        renderModTarget(cfg);
+        if (!cfg.newLoaded && !cfg.newLoading) loadModTargetNew(cfg);
+      });
+    } else {
+      const availableGames = cfg.games || [];
+      const loaders = modTargetLoaders(cfg, cfg.mc);
+      const noVersions = cfg.newLoaded && !availableGames.length;
+      body.innerHTML = `${versionText}
+        <p class="mod-target-intro">${cfg.instances.length ? "Создадим отдельную сборку с этим модом." : "Сборок пока нет. Выбери совместимые параметры новой сборки."}</p>
+        ${cfg.newLoading ? `<div class="mod-target-note">Получаем совместимые версии Minecraft и загрузчики…</div>` : ""}
+        ${cfg.newError ? `<div class="mod-target-error">Не удалось получить совместимость: ${esc(cfg.newError)} <button type="button" class="text-btn" id="mod-target-retry-new">Повторить</button></div>` : ""}
+        ${noVersions ? `<div class="mod-target-error">Для этой версии мода нет подтверждённых сочетаний Minecraft и поддерживаемого загрузчика.</div>` : ""}
+        <div class="mod-target-fields">
+          <label class="field"><span>Название сборки</span><input class="input" id="mod-target-name" maxlength="100" value="${esc(cfg.name)}" autocomplete="off"></label>
+          <label class="field"><span>Версия Minecraft</span><select class="select" id="mod-target-mc" ${availableGames.length ? "" : "disabled"}>
+            ${availableGames.length ? availableGames.map((game) => `<option value="${esc(game.id)}" ${game.id === cfg.mc ? "selected" : ""}>${esc(game.id)}${game.type && game.type !== "release" ? " · снимок" : ""}</option>`).join("") : `<option value="">Нет доступных версий</option>`}
+          </select></label>
+          <label class="field"><span>Загрузчик</span><select class="select" id="mod-target-loader" ${loaders.length ? "" : "disabled"}>
+            ${loaders.length ? loaders.map((loader) => `<option value="${loader}" ${loader === cfg.loader ? "selected" : ""}>${LOADER_NAMES[loader]}</option>`).join("") : `<option value="">Нет подходящих загрузчиков</option>`}
+          </select></label>
+          <label class="field"><span>Версия загрузчика</span><select class="select" id="mod-target-loader-version" ${cfg.loaderOptions.length ? "" : "disabled"}>
+            ${cfg.loaderOptions.length ? cfg.loaderOptions.map((option) => `<option value="${esc(option.version)}" ${option.version === cfg.loaderVersion ? "selected" : ""}>${esc(option.version)}${option.stable ? " · стабильная" : ""}</option>`).join("") : `<option value="">${cfg.loaderLoading ? "Проверяем…" : "Недоступна"}</option>`}
+          </select></label>
+        </div>
+        ${cfg.loaderError ? `<div class="mod-target-error">${esc(cfg.loaderError)} <button type="button" class="text-btn" id="mod-target-retry-loader">Повторить</button></div>` : ""}
+        ${cfg.instances.length ? `<button type="button" class="btn mod-target-switch" id="mod-target-existing">Выбрать существующую сборку</button>` : ""}`;
+      $("#mod-target-name").addEventListener("input", (event) => { cfg.name = event.target.value; modTargetRefreshSubmit(cfg); });
+      $("#mod-target-mc").addEventListener("change", (event) => {
+        cfg.mc = event.target.value;
+        const choices = modTargetLoaders(cfg, cfg.mc);
+        if (!choices.includes(cfg.loader)) cfg.loader = choices[0] || "";
+        loadModTargetLoader(cfg);
+      });
+      $("#mod-target-loader").addEventListener("change", (event) => { cfg.loader = event.target.value; loadModTargetLoader(cfg); });
+      $("#mod-target-loader-version").addEventListener("change", (event) => { cfg.loaderVersion = event.target.value; modTargetRefreshSubmit(cfg); });
+      $("#mod-target-retry-new")?.addEventListener("click", () => loadModTargetNew(cfg));
+      $("#mod-target-retry-loader")?.addEventListener("click", () => loadModTargetLoader(cfg));
+      $("#mod-target-existing")?.addEventListener("click", () => { cfg.mode = "existing"; renderModTarget(cfg); });
+    }
+    modTargetRefreshSubmit(cfg);
+  }
+
+  async function checkModTargetInstances(cfg) {
+    if (activeModTarget !== cfg || cfg.checking) return;
+    cfg.checking = true;
+    const groups = new Map();
+    for (const instance of cfg.instances) {
+      const loader = instance.loader?.type || "vanilla";
+      if (!CATALOG_LOADERS.includes(loader)) {
+        cfg.statuses.set(instance.id, { state: "no" });
+        continue;
+      }
+      const key = `${instance.mc_version}\u0000${loader}`;
+      if (!groups.has(key)) groups.set(key, { mc: instance.mc_version, loader, ids: [] });
+      groups.get(key).ids.push(instance.id);
+      cfg.statuses.set(instance.id, { state: "checking" });
+    }
+    cfg.selectedId = null;
+    renderModTarget(cfg);
+    const queue = [...groups.values()];
+    // Не посылаем сотни запросов сразу, если у пользователя много сборок.
+    async function worker() {
+      while (queue.length && activeModTarget === cfg) {
+        const group = queue.shift();
+        let status;
+        try {
+          const versions = cfg.specific ? [cfg.specific] : await (cfg.source === "curseforge"
+            ? api.curseforgeVersions(cfg.projectId, group.mc, group.loader)
+            : api.modrinthVersions(cfg.projectId, group.mc, group.loader));
+          if (!Array.isArray(versions)) throw new Error("каталог вернул неполный ответ");
+          const version = versions.find((item) => modVersionMatches(item, group.mc, group.loader)
+            && (!item.project_id || String(item.project_id) === String(cfg.projectId)));
+          status = version ? { state: "ok", versionId: version.id } : { state: "no" };
+        } catch (error) { status = { state: "error", error: String(error) }; }
+        if (activeModTarget !== cfg) return;
+        group.ids.forEach((id) => cfg.statuses.set(id, status));
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker));
+    if (activeModTarget !== cfg) return;
+    cfg.checking = false;
+    renderModTarget(cfg);
+  }
+
+  async function loadModTargetNew(cfg) {
+    if (activeModTarget !== cfg || cfg.newLoading) return;
+    cfg.newLoading = true;
+    cfg.newError = "";
+    cfg.newLoaded = false;
+    cfg.games = [];
+    cfg.versions = [];
+    cfg.mc = cfg.loader = cfg.loaderVersion = "";
+    cfg.loaderOptions = [];
+    renderModTarget(cfg);
+    try {
+      const [versions, manifest] = await Promise.all([
+        cfg.specific ? Promise.resolve([cfg.specific]) : (cfg.source === "curseforge"
+          ? api.curseforgeCompatibilityVersions(cfg.projectId)
+          : api.modrinthVersions(cfg.projectId, null, null)),
+        api.versions(true)
+      ]);
+      if (activeModTarget !== cfg) return;
+      if (!Array.isArray(versions) || !Array.isArray(manifest)) throw new Error("каталог или манифест Minecraft вернул неполный ответ");
+      cfg.versions = versions;
+      cfg.games = manifest.filter((game) => game?.id && CATALOG_LOADERS.some((loader) => modVersionFor(cfg, game.id, loader)));
+      cfg.newLoaded = true;
+      cfg.mc = cfg.games[0]?.id || "";
+      const choices = modTargetLoaders(cfg, cfg.mc);
+      cfg.loader = choices.includes(state.discover.loader) ? state.discover.loader : (choices[0] || "");
+    } catch (error) {
+      if (activeModTarget !== cfg) return;
+      cfg.newError = String(error);
+    }
+    cfg.newLoading = false;
+    renderModTarget(cfg);
+    if (cfg.mc && cfg.loader) loadModTargetLoader(cfg);
+  }
+
+  async function loadModTargetLoader(cfg) {
+    if (activeModTarget !== cfg) return;
+    const request = ++cfg.loaderRequest;
+    const mc = cfg.mc, loader = cfg.loader;
+    cfg.loaderOptions = [];
+    cfg.loaderVersion = "";
+    cfg.loaderError = "";
+    cfg.loaderLoading = Boolean(mc && loader);
+    renderModTarget(cfg);
+    if (!cfg.loaderLoading) return;
+    try {
+      const options = await api.loaderVersions(loader, mc);
+      if (activeModTarget !== cfg || request !== cfg.loaderRequest) return;
+      if (!Array.isArray(options)) throw new Error("список версий загрузчика недоступен");
+      cfg.loaderOptions = options.filter((option) => option?.version);
+      cfg.loaderVersion = recommendedLoader(cfg.loaderOptions)?.version || "";
+      if (!cfg.loaderVersion) cfg.loaderError = "Для этого Minecraft нет доступной версии загрузчика.";
+    } catch (error) {
+      if (activeModTarget !== cfg || request !== cfg.loaderRequest) return;
+      cfg.loaderError = `Не удалось проверить версии загрузчика: ${String(error)}`;
+    }
+    cfg.loaderLoading = false;
+    renderModTarget(cfg);
+  }
+
+  function chooseModTarget(source, projectId, title, specific = null) {
+    if (activeModTarget) closeModTarget();
+    return new Promise((resolve) => {
+      const instances = state.instances.map((item) => ({ ...item, loader: { ...(item.loader || { type: "vanilla" }) } }));
+      const cfg = activeModTarget = {
+        source, projectId, title: title || "Мод", specific, instances, resolve,
+        returnFocus: document.activeElement, mode: instances.length ? "existing" : "create",
+        statuses: new Map(), selectedId: null, checking: false,
+        name: `${title || "Мод"} — сборка`, versions: [], games: [], mc: "", loader: "",
+        loaderOptions: [], loaderVersion: "", loaderRequest: 0, loaderLoading: false, loaderError: "",
+        newLoading: false, newLoaded: false, newError: ""
+      };
+      $("#modal-mod-target").hidden = false;
+      renderModTarget(cfg);
+      $("#mod-target-close").focus();
+      if (instances.length) checkModTargetInstances(cfg);
+      else loadModTargetNew(cfg);
+    });
+  }
+
+  function confirmModTarget() {
+    const cfg = activeModTarget;
+    if (!cfg || $("#mod-target-submit").disabled) return;
+    if (cfg.mode === "existing") {
+      const instance = cfg.instances.find((item) => item.id === cfg.selectedId);
+      const status = cfg.statuses.get(cfg.selectedId);
+      if (!instance || status?.state !== "ok" || !status.versionId) return;
+      closeModTarget({ mode: "existing", instance, versionId: status.versionId });
+      return;
+    }
+    const version = modVersionFor(cfg, cfg.mc, cfg.loader);
+    if (!version || !cfg.loaderOptions.some((option) => option.version === cfg.loaderVersion) || !cfg.name.trim()) return;
+    closeModTarget({ mode: "create", versionId: version.id, req: {
+      name: cfg.name.trim(), mc_version: cfg.mc, loader: { type: cfg.loader, version: cfg.loaderVersion },
+      icon: null, memory_mb: null, java_path: null, game_dir: null
+    } });
+  }
+
+  async function installHomeMod(source, projectId, title, specific = null) {
+    const target = await chooseModTarget(source, projectId, title, specific);
+    if (!target) return false;
+    try {
+      if (target.mode === "existing") {
+        const meta = target.instance;
+        const outcome = await withDownloading(projectId, (op) => source === "curseforge"
+          ? api.installCurseforge(meta.id, projectId, target.versionId, op)
+          : api.installModVersion(meta.id, target.versionId, op, projectId), { instanceId: meta.id, source });
+        if (!outcome || !Array.isArray(outcome.installed) || !Array.isArray(outcome.skipped)) throw new Error("нет подтверждения установки");
+        if (outcome.skipped.length) {
+          const added = outcome.installed.length ? `Загружено: ${outcome.installed.join(", ")}. ` : "";
+          toast(`Установка в «${meta.name}»: ${added}существующие файлы не перезаписаны: ${outcome.skipped.join(", ")}`);
+        } else if (outcome.installed.length) {
+          toast(`Мод установлен в «${meta.name}»: ${outcome.installed.join(", ")}`, "ok");
+        } else throw new Error("нет подтверждения установки");
+      } else {
+        const result = await withInstallProgress("new-mod", "mods", (op) => api.createInstanceForMod(target.req, source, projectId, target.versionId, op));
+        await refreshInstances();
+        if (result.instance && state.instances.some((item) => item.id === result.instance.id)) openInstance(result.instance.id);
+        if (result.install_error || !result.outcome) {
+          toast(`Сборка «${result.instance?.name || target.req.name}» создана, но установка мода не завершена: ${result.install_error || "нет подтверждения установки"}`, "err");
+          return false;
+        }
+        if (result.profile_warning) toast(`Профиль загрузчика подготовится при запуске: ${result.profile_warning}`, "err");
+        if (!Array.isArray(result.outcome.installed) || !Array.isArray(result.outcome.skipped)) throw new Error("сборка создана, но нет подтверждения установки мода");
+        if (result.outcome.skipped.length) {
+          toast(`Сборка «${result.instance?.name || target.req.name}» создана; существующие файлы не перезаписаны: ${result.outcome.skipped.join(", ")}`);
+        } else if (result.outcome.installed.length) {
+          toast(`Сборка «${result.instance?.name || target.req.name}» создана, мод установлен`, "ok");
+        } else throw new Error("сборка создана, но нет подтверждения установки мода");
+      }
+      return true;
+    } catch (error) {
+      toast(String(error), "err");
+      return false;
+    }
   }
 
   /* ---------- выбор версии мода / модпака ---------- */
@@ -7105,60 +7492,143 @@
     return body.length > 4000 ? `${body.slice(0, 4000)}…` : body;
   }
 
-  async function openProjectModal(projectId, kind, slug, title) {
-    const modal = $("#modal-project");
-    if (!modal) return;
-    const isPack = kind === "pack";
+  let projectRequestGeneration = 0;
+  let projectImages = [];
+  let projectImageIndex = 0;
+  let projectImageReturnFocus = null;
+
+  function closeProjectModal() {
+    projectRequestGeneration += 1;
+    $("#modal-project").hidden = true;
+    closeProjectImage();
+  }
+
+  function beginProjectModal(title, source) {
+    const generation = ++projectRequestGeneration;
     $("#proj-title").textContent = title || "Проект";
-    const body = $("#proj-body");
-    body.innerHTML = `<div class="empty-state">Загружаем сведения с Modrinth…</div>`;
-    modal.hidden = false;
+    $("#proj-body").innerHTML = `<div class="empty-state">Загружаем сведения с ${esc(source)}…</div>`;
+    $("#proj-tabs").hidden = true;
+    ["#proj-site", "#proj-versions", "#proj-install"].forEach((id) => { $(id).disabled = true; });
+    projectImages = [];
+    $("#modal-project").hidden = false;
+    return generation;
+  }
 
-    let project = null;
-    try {
-      project = await api.modrinthProject(projectId);
-    } catch (err) {
-      body.innerHTML = `<div class="proj-empty" style="color:var(--red)">Не удалось получить сведения: ${esc(String(err))}</div>`;
-    }
+  function setProjectTab(tab, focus = false) {
+    const active = tab === "gallery" ? "gallery" : "description";
+    $$("[data-proj-tab]", $("#proj-tabs")).forEach((button) => {
+      const selected = button.dataset.projTab === active;
+      button.classList.toggle("is-active", selected);
+      button.setAttribute("aria-selected", String(selected));
+      button.tabIndex = selected ? 0 : -1;
+      if (selected && focus) button.focus();
+    });
+    const description = $("#proj-panel-description");
+    const gallery = $("#proj-panel-gallery");
+    if (description) description.hidden = active !== "description";
+    if (gallery) gallery.hidden = active !== "gallery";
+    $("#proj-body").scrollTop = 0;
+  }
 
-    const projectType = (project && project.project_type) || (isPack ? "modpack" : "mod");
-    const slugOrId = (project && (project.slug || project.id)) || slug || projectId;
-    const siteUrl = `https://modrinth.com/${projectType === "modpack" ? "modpack" : projectType}/${slugOrId}`;
+  function updateProjectImage() {
+    const image = projectImages[projectImageIndex];
+    if (!image) return;
+    $("#project-image-title").textContent = image.title || `Изображение ${projectImageIndex + 1}`;
+    $("#project-image-full").src = image.url;
+    $("#project-image-full").alt = image.title || `Изображение ${projectImageIndex + 1}`;
+    $("#project-image-count").textContent = `${projectImageIndex + 1} / ${projectImages.length}`;
+    $("#project-image-prev").disabled = projectImages.length < 2;
+    $("#project-image-next").disabled = projectImages.length < 2;
+  }
 
-    if (project) {
-      const shots = (project.gallery || [])
-        .map((shot) => (typeof shot === "string" ? shot : shot && shot.url))
-        .filter(Boolean);
-      const tags = (project.categories || []).slice(0, 8);
-      const loads = (project.downloads || 0).toLocaleString("ru-RU");
-      const desc = plainDescription(project.body) || project.description || "";
-      body.innerHTML = `
+  function openProjectImage(index, trigger) {
+    if (!projectImages[index]) return;
+    projectImageReturnFocus = trigger || document.activeElement;
+    projectImageIndex = index;
+    updateProjectImage();
+    $("#modal-project-image").hidden = false;
+    $("#project-image-close").focus();
+  }
+
+  function closeProjectImage() {
+    const modal = $("#modal-project-image");
+    if (!modal || modal.hidden) return;
+    modal.hidden = true;
+    $("#project-image-full").removeAttribute("src");
+    if (projectImageReturnFocus && projectImageReturnFocus.isConnected) projectImageReturnFocus.focus();
+    projectImageReturnFocus = null;
+  }
+
+  function renderProjectDetails(project, title, source) {
+    projectImages = (Array.isArray(project.gallery) ? project.gallery : [])
+      .map((shot) => typeof shot === "string" ? { url: shot, title: "" } : { url: shot?.url, title: shot?.title || "" })
+      .filter((shot) => typeof shot.url === "string" && /^(?:https?:\/\/|data:image\/)/i.test(shot.url));
+    const tags = (project.categories || []).slice(0, 8);
+    const downloads = (project.downloads || 0).toLocaleString("ru-RU");
+    const desc = plainDescription(project.body) || project.description || "";
+    const subtitle = source === "modrinth"
+      ? (project.license?.name ? ` · ${esc(project.license.name)}` : "")
+      : ((project.loaders || []).length ? ` · ${esc(project.loaders.join(", "))}` : "");
+    const gallery = (shots) => shots.map((shot, index) => `
+      <button type="button" class="proj-shot" data-project-image="${index}" aria-label="Увеличить ${esc(shot.title || `изображение ${index + 1}`)}">
+        <img src="${esc(shot.url)}" alt="${esc(shot.title || "")}" loading="lazy">
+        <span class="proj-shot-hint">Увеличить</span>
+      </button>`).join("");
+    $("#proj-body").innerHTML = `
+      <section id="proj-panel-description" class="proj-panel" role="tabpanel" aria-labelledby="proj-tab-description">
         <div class="proj-top">
           <div class="proj-icon">${project.icon_url
-            ? `<img src="${esc(project.icon_url)}" alt="" />`
+            ? `<img src="${esc(project.icon_url)}" alt="">`
             : `<span class="card-letter">${esc(String(project.title || title || "?").charAt(0).toUpperCase())}</span>`}</div>
           <div class="proj-head">
             <div class="proj-title">${esc(project.title || title || "")}</div>
             <div class="proj-sub">${esc(project.description || "")}</div>
-            <div class="proj-sub">${loads} загрузок${project.license && project.license.name ? ` · ${esc(project.license.name)}` : ""}</div>
+            <div class="proj-sub">${downloads} загрузок${subtitle}</div>
           </div>
         </div>
         ${tags.length ? `<div class="proj-tags">${tags.map((tag) => `<span class="tag">${esc(tag)}</span>`).join("")}</div>` : ""}
-        ${shots.length ? `<div class="proj-gallery">${shots.slice(0, 6).map((url) => `
-          <div class="proj-shot"><img src="${esc(url)}" alt="" loading="lazy" /></div>`).join("")}</div>` : ""}
-        ${desc ? `<div class="proj-desc">${esc(desc)}</div>` : `<div class="proj-empty">Описание пустое — смотри страницу проекта.</div>`}`;
-    }
+        ${projectImages.length ? `<div class="proj-gallery">${gallery(projectImages.slice(0, 6))}</div>` : ""}
+        ${projectImages.length > 6 ? `<button type="button" class="btn proj-show-all" id="proj-show-all">Все изображения (${projectImages.length})</button>` : ""}
+        ${desc ? `<div class="proj-desc">${esc(desc)}</div>` : `<div class="proj-empty">Описание пустое — смотри страницу проекта.</div>`}
+      </section>
+      <section id="proj-panel-gallery" class="proj-panel" role="tabpanel" aria-labelledby="proj-tab-gallery" hidden>
+        ${projectImages.length ? `<div class="proj-gallery">${gallery(projectImages)}</div>` : `<div class="proj-empty">Изображений пока нет.</div>`}
+      </section>`;
+    $("#proj-tab-gallery").textContent = `Картинки${projectImages.length ? ` (${projectImages.length})` : ""}`;
+    $("#proj-tabs").hidden = false;
+    setProjectTab("description");
+    $$("[data-project-image]", $("#proj-body")).forEach((button) => button.addEventListener("click", () => openProjectImage(Number(button.dataset.projectImage), button)));
+    $("#proj-show-all")?.addEventListener("click", () => setProjectTab("gallery", true));
+  }
 
+  async function openProjectModal(projectId, kind, slug, title) {
+    const modal = $("#modal-project");
+    if (!modal) return;
+    const isPack = kind === "pack";
+    const generation = beginProjectModal(title, "Modrinth");
+    let project = null;
+    let error = null;
+    try { project = await api.modrinthProject(projectId); }
+    catch (err) { error = String(err); }
+    if (generation !== projectRequestGeneration || modal.hidden) return;
+    const projectType = project?.project_type || (isPack ? "modpack" : "mod");
+    const slugOrId = project?.slug || project?.id || slug || projectId;
+    const siteUrl = `https://modrinth.com/${projectType}/${slugOrId}`;
+    if (project) renderProjectDetails(project, title, "modrinth");
+    else $("#proj-body").innerHTML = `<div class="proj-empty" style="color:var(--red)">Не удалось получить сведения: ${esc(error || "нет данных")}</div>`;
+    const projectTitle = title || project?.title || "Проект";
+    $("#proj-site").disabled = false;
     $("#proj-site").onclick = () => api.openUrl(siteUrl).catch((error) => toast(String(error), "err"));
+    $("#proj-versions").disabled = false;
     $("#proj-versions").onclick = () => {
-      modal.hidden = true;
-      openVersions(projectId, isPack ? "pack" : "mod", title || (project && project.title) || "Версии");
+      closeProjectModal();
+      openVersions(projectId, isPack ? "pack" : "mod", projectTitle);
     };
     const installBtn = $("#proj-install");
     installBtn.disabled = !project;
     installBtn.onclick = () => {
-      modal.hidden = true;
-      installFromModrinth(projectId, isPack ? "pack" : "mod");
+      closeProjectModal();
+      installFromModrinth(projectId, isPack ? "pack" : "mod", projectTitle);
     };
   }
 
@@ -7171,13 +7641,12 @@
       : `${title || "Версии"} — выбор версии`;
     $("#ver-body").innerHTML = `<div class="empty-state">Загружаем версии…</div>`;
     const meta = selected();
-    // при замене версии фильтруем строго под сборку, а не под вкладку загрузки
-    const mc = replaceEntry
-      ? (meta ? meta.mc_version : null)
-      : (kind === "pack" ? null : (state.modrinth.mc || (meta ? meta.mc_version : null)));
-    const loader = replaceEntry
-      ? (kind === "mod" && meta && meta.loader ? meta.loader.type : null)
-      : (kind === "pack" ? null : (state.modrinth.loader || (meta && meta.loader ? meta.loader.type : null)));
+    // На главной ещё не выбрана цель: старые фильтры вкладки сборки не
+    // должны скрывать версии, подходящие для других или новой сборки.
+    const mc = !meta || kind === "pack" ? null : (replaceEntry ? meta.mc_version : (state.modrinth.mc || meta.mc_version));
+    const loader = !meta || kind === "pack" ? null : (replaceEntry
+      ? (kind === "mod" ? meta.loader?.type || null : null)
+      : (state.modrinth.loader || meta.loader?.type || null));
     let versions = [];
     try {
       versions = await api.modrinthVersions(projectId, mc, loader);
@@ -7211,7 +7680,8 @@
       </div>`;
     $$("[data-install-version]").forEach((btn) => btn.addEventListener("click", () => {
       if (btn.dataset.replace) replaceModVersion(btn.dataset.replace, btn.dataset.installVersion, btn.dataset.kind, btn);
-      else installVersion(btn.dataset.installVersion, btn.dataset.kind, btn, projectId);
+      else installVersion(btn.dataset.installVersion, btn.dataset.kind, btn, projectId,
+        versions.find((version) => String(version.id) === btn.dataset.installVersion), title);
     }));
   }
 
@@ -7233,7 +7703,7 @@
     }
   }
 
-  async function installVersion(versionId, kind, btn, projectId) {
+  async function installVersion(versionId, kind, btn, projectId, version, title) {
     const modal = $("#modal-versions");
     if (btn) { btn.disabled = true; btn.textContent = "Ставим…"; }
     try {
@@ -7244,13 +7714,18 @@
         toast(`Ваша сборка «${meta.name}» установлена`, "ok");
       } else {
         const meta = selected();
-        if (!meta) { toast("Сначала выбери сборку", "err"); return; }
-        const outcome = await withDownloading(projectId, (op) => api.installModVersion(meta.id, versionId, op), { instanceId: meta.id, source: "modrinth" });
-        toast(outcome.installed.length ? `Ваш мод установлен: ${outcome.installed.join(", ")}` : "Ваш мод уже установлен", "ok");
+        if (!meta) {
+          if (!version || String(version.id) !== String(versionId)) throw new Error("Не удалось проверить выбранную версию мода");
+          if (await installHomeMod("modrinth", projectId, title, version)) { if (modal) modal.hidden = true; }
+          return;
+        }
+        const outcome = await withDownloading(projectId, (op) => api.installModVersion(meta.id, versionId, op, projectId), { instanceId: meta.id, source: "modrinth" });
+        toast(outcome.installed.length ? `Ваш мод установлен: ${outcome.installed.join(", ")}` : "Файл уже существует и не был перезаписан", outcome.installed.length ? "ok" : "");
       }
       if (modal) modal.hidden = true;
     } catch (err) {
       toast(String(err), "err");
+    } finally {
       if (btn) { btn.disabled = false; btn.textContent = "Установить"; }
     }
   }
@@ -7286,7 +7761,7 @@
     renderCatalogSource("modrinth");
   }
 
-  async function installFromModrinth(projectId, kind) {
+  async function installFromModrinth(projectId, kind, title) {
     if (kind === "pack") {
       try {
         const meta = await withInstallProgress("modpack", "modpack", async (op) => {
@@ -7302,10 +7777,10 @@
       return;
     }
     const meta = selected();
-    if (!meta) return toast("Сначала выбери сборку", "err");
+    if (!meta) return installHomeMod("modrinth", projectId, title);
     try {
       const outcome = await withDownloading(projectId, (op) => api.installMod(meta.id, projectId, op), { instanceId: meta.id, source: "modrinth" });
-      toast(outcome.installed.length ? `Ваш мод установлен: ${outcome.installed.join(", ")}` : "Ваш мод уже установлен", "ok");
+      toast(outcome.installed.length ? `Ваш мод установлен: ${outcome.installed.join(", ")}` : "Файл уже существует и не был перезаписан", outcome.installed.length ? "ok" : "");
     } catch (err) { toast(String(err), "err"); }
   }
 
@@ -7351,11 +7826,11 @@
               ${mcOptions.map((value) => `<option value="${esc(value)}" ${cfg.mc === value ? "selected" : ""}>${esc(value)}</option>`).join("")}
             </select>
           </div>
-          ${cfg.type === "mod" ? `<div class="field">
+          ${["mod", "modpack"].includes(cfg.type) ? `<div class="field">
             <label>Загрузчик</label>
             <select class="select" id="cf-loader">
               <option value="">любой</option>
-              ${Object.entries(LOADER_NAMES).map(([value, label]) => `<option value="${value}" ${cfg.loader === value ? "selected" : ""}>${label}</option>`).join("")}
+              ${CATALOG_LOADERS.map((value) => `<option value="${value}" ${cfg.loader === value ? "selected" : ""}>${LOADER_NAMES[value]}</option>`).join("")}
             </select>
           </div>` : ""}
           <div class="field">
@@ -7466,15 +7941,17 @@
       query: cfg.query,
       projectType: cfg.type,
       mcVersion: cfg.mc || (meta ? meta.mc_version : null),
-      loader: cfg.type === "mod" ? (cfg.loader || (meta && meta.loader ? meta.loader.type : null)) : null,
+      loader: ["mod", "modpack"].includes(cfg.type)
+        ? (cfg.loader || (cfg.type === "mod" && meta && meta.loader ? meta.loader.type : null)) : null,
       offset: offset || 0,
       limit: CF_PAGE,
       sort: cfg.sort || "downloads"
     };
   }
 
-  function cfCardHtml(hit) {
-    const openType = state.curseforge.type || "mod";
+  function cfCardHtml(hit, forcedType = null) {
+    // Array.map передаёт вторым аргументом индекс; явный тип нужен ленте.
+    const openType = typeof forcedType === "string" ? forcedType : (state.curseforge.type || "mod");
     return `<div class="card${projectInstalled(hit.project_id, "curseforge", openType) ? " is-installed" : ""}${projectStatus(hit.project_id, "curseforge", openType) === "downloading" ? " is-downloading" : ""}" role="group" aria-label="${esc(projectLabel(hit.title, hit.project_id, "curseforge", openType))}" data-cf-project="${esc(hit.project_id)}" data-project-type="${esc(openType)}" data-cf-slug="${esc(hit.slug || hit.project_id)}" data-cf-title="${esc(hit.title)}">
       <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
       <div class="card-body">
@@ -7489,7 +7966,7 @@
         <div class="card-actions">
           ${openType === "modpack"
             ? `<button class="icon-btn card-icon-btn is-primary" data-cf-pack-install="${esc(hit.project_id)}" data-cf-title="${esc(hit.title)}" title="Установить как сборку" aria-label="Установить"><svg class="ic"><use href="#i-download"/></svg></button>`
-            : `<button class="icon-btn card-icon-btn is-primary" data-cf-install="${esc(hit.project_id)}" title="Скачать и установить" aria-label="Скачать"><svg class="ic"><use href="#i-download"/></svg></button>`}
+            : `<button class="icon-btn card-icon-btn is-primary" data-cf-install="${esc(hit.project_id)}" data-cf-title="${esc(hit.title)}" title="Скачать и установить" aria-label="Скачать"><svg class="ic"><use href="#i-download"/></svg></button>`}
           <button class="icon-btn card-icon-btn" data-cf-versions="${esc(hit.project_id)}" data-cf-title="${esc(hit.title)}" title="Версии" aria-label="Версии">
             <svg class="ic"><use href="#i-list"/></svg>
           </button>
@@ -7503,7 +7980,7 @@
 
   /** Карточка модпака CurseForge: ставится отдельной сборкой, а не в текущую. */
   function cfPackCardHtml(hit) {
-    return `<div class="card" data-cf-project="${esc(hit.project_id)}" data-cf-slug="${esc(hit.slug || hit.project_id)}" data-cf-title="${esc(hit.title)}">
+    return `<div class="card" role="group" aria-label="${esc(hit.title)}" data-project-type="modpack" data-cf-project="${esc(hit.project_id)}" data-cf-slug="${esc(hit.slug || hit.project_id)}" data-cf-title="${esc(hit.title)}">
       <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
       <div class="card-body">
         <div class="card-title">${esc(hit.title)}</div>
@@ -7557,23 +8034,25 @@
       card.dataset.cfBound = "1";
       card.addEventListener("click", (event) => {
         if (event.target.closest("button")) return;
-        openCfProjectModal(card.dataset.cfProject, card.dataset.cfTitle, card.dataset.cfSlug);
+        openCfProjectModal(card.dataset.cfProject, card.dataset.cfTitle, card.dataset.cfSlug, card.dataset.projectType);
       });
       card.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         const id = card.dataset.cfProject;
         const title = card.dataset.cfTitle;
-        const url = `https://www.curseforge.com/minecraft/${cfPath("modpack")}/${card.dataset.cfSlug}`;
+        const type = card.dataset.projectType || "mod";
+        const pack = type === "modpack";
+        const url = `https://www.curseforge.com/minecraft/${cfPath(type)}/${card.dataset.cfSlug}`;
         fillCtxMenu(event.clientX, event.clientY, `
           <div class="ctx-caption">${esc(title)}</div>
-          <button class="ctx-item" data-act="install"><svg class="ic"><use href="#i-download"/></svg>Установить как сборку</button>
-          <button class="ctx-item" data-act="versions"><svg class="ic"><use href="#i-list"/></svg>Версии модпака</button>
+          <button class="ctx-item" data-act="install"><svg class="ic"><use href="#i-download"/></svg>${pack ? "Установить как сборку" : "Установить"}</button>
+          <button class="ctx-item" data-act="versions"><svg class="ic"><use href="#i-list"/></svg>Версии</button>
           <div class="ctx-sep"></div>
           <button class="ctx-item" data-act="page"><svg class="ic"><use href="#i-link"/></svg>Открыть страницу</button>
           <button class="ctx-item" data-act="copy"><svg class="ic"><use href="#i-copy"/></svg>Копировать ссылку</button>`,
         (act) => {
-          if (act === "install") installCfPack(id, null, null, title);
-          else if (act === "versions") openCfVersions(id, title, "modpack");
+          if (act === "install") pack ? installCfPack(id, null, null, title) : installFromCurseForge(id, null, title);
+          else if (act === "versions") openCfVersions(id, title, type);
           else if (act === "page") api.openUrl(url).catch((error) => toast(String(error), "err"));
           else if (act === "copy") copyText(url);
         });
@@ -7582,12 +8061,12 @@
     $$("[data-cf-install]").forEach((btn) => {
       if (btn.dataset.cfBound) return;
       btn.dataset.cfBound = "1";
-      btn.addEventListener("click", () => installFromCurseForge(btn.dataset.cfInstall, btn));
+      btn.addEventListener("click", () => installFromCurseForge(btn.dataset.cfInstall, btn, btn.dataset.cfTitle));
     });
     $$("[data-cf-versions]").forEach((btn) => {
       if (btn.dataset.cfBound) return;
       btn.dataset.cfBound = "1";
-      btn.addEventListener("click", () => openCfVersions(btn.dataset.cfVersions, btn.dataset.cfTitle));
+      btn.addEventListener("click", () => openCfVersions(btn.dataset.cfVersions, btn.dataset.cfTitle, btn.closest(".card")?.dataset.projectType));
     });
     $$("[data-cf-pack-install]").forEach((btn) => {
       if (btn.dataset.cfBound) return;
@@ -7641,17 +8120,17 @@
     renderCatalogSource("curseforge");
   }
 
-  async function installFromCurseForge(projectId, btn) {
+  async function installFromCurseForge(projectId, btn, title) {
     const meta = selected();
-    if (!meta) return toast("Сначала выбери сборку", "err");
+    if (!meta) return installHomeMod("curseforge", projectId, title);
     if (btn) { btn.disabled = true; }
     try {
       const outcome = await withDownloading(projectId, (op) => api.installCurseforge(meta.id, projectId, null, op), { instanceId: meta.id, source: "curseforge" });
       toast(
         outcome.installed.length
           ? `Ваш мод установлен: ${outcome.installed.join(", ")}`
-          : `Ваш мод уже установлен${outcome.skipped.length ? `: ${outcome.skipped.join(", ")}` : ""}`,
-        "ok"
+          : `Файл уже существует и не был перезаписан${outcome.skipped.length ? `: ${outcome.skipped.join(", ")}` : ""}`,
+        outcome.installed.length ? "ok" : ""
       );
     } catch (err) {
       toast(String(err), "err");
@@ -7660,57 +8139,34 @@
     }
   }
 
-  async function openCfProjectModal(projectId, title, slug) {
+  async function openCfProjectModal(projectId, title, slug, typeHint) {
     const modal = $("#modal-project");
     if (!modal) return;
-    $("#proj-title").textContent = title || "Проект";
-    const body = $("#proj-body");
-    body.innerHTML = `<div class="empty-state">Загружаем сведения с CurseForge…</div>`;
-    modal.hidden = false;
-
+    const generation = beginProjectModal(title, "CurseForge");
     let project = null;
-    try {
-      project = await api.curseforgeProject(projectId);
-    } catch (err) {
-      body.innerHTML = `<div class="proj-empty" style="color:var(--red)">Не удалось получить сведения: ${esc(String(err))}</div>`;
-    }
-
-    const projectType = (project && project.project_type) || state.curseforge.type || "mod";
-    const slugOrId = (project && (project.slug || project.id)) || slug || projectId;
+    let error = null;
+    try { project = await api.curseforgeProject(projectId); }
+    catch (err) { error = String(err); }
+    if (generation !== projectRequestGeneration || modal.hidden) return;
+    const projectType = project?.project_type || typeHint || state.curseforge.type || "mod";
+    const slugOrId = project?.slug || project?.id || slug || projectId;
     const siteUrl = `https://www.curseforge.com/minecraft/${cfPath(projectType)}/${slugOrId}`;
-
-    if (project) {
-      const shots = (project.gallery || []).map((shot) => (typeof shot === "string" ? shot : shot && shot.url)).filter(Boolean);
-      const tags = (project.categories || []).slice(0, 8);
-      const loads = (project.downloads || 0).toLocaleString("ru-RU");
-      const desc = plainDescription(project.body) || project.description || "";
-      body.innerHTML = `
-        <div class="proj-top">
-          <div class="proj-icon">${project.icon_url
-            ? `<img src="${esc(project.icon_url)}" alt="" />`
-            : `<span class="card-letter">${esc(String(project.title || title || "?").charAt(0).toUpperCase())}</span>`}</div>
-          <div class="proj-head">
-            <div class="proj-title">${esc(project.title || title || "")}</div>
-            <div class="proj-sub">${esc(project.description || "")}</div>
-            <div class="proj-sub">${loads} загрузок${(project.loaders || []).length ? ` · ${esc(project.loaders.join(", "))}` : ""}</div>
-          </div>
-        </div>
-        ${tags.length ? `<div class="proj-tags">${tags.map((tag) => `<span class="tag">${esc(tag)}</span>`).join("")}</div>` : ""}
-        ${shots.length ? `<div class="proj-gallery">${shots.slice(0, 6).map((url) => `
-          <div class="proj-shot"><img src="${esc(url)}" alt="" loading="lazy" /></div>`).join("")}</div>` : ""}
-        ${desc ? `<div class="proj-desc">${esc(desc)}</div>` : `<div class="proj-empty">Описание пустое — смотри страницу проекта.</div>`}`;
-    }
-
+    if (project) renderProjectDetails(project, title, "curseforge");
+    else $("#proj-body").innerHTML = `<div class="proj-empty" style="color:var(--red)">Не удалось получить сведения: ${esc(error || "нет данных")}</div>`;
+    const projectTitle = title || project?.title || "Проект";
+    $("#proj-site").disabled = false;
     $("#proj-site").onclick = () => api.openUrl(siteUrl).catch((error) => toast(String(error), "err"));
+    $("#proj-versions").disabled = false;
     $("#proj-versions").onclick = () => {
-      modal.hidden = true;
-      openCfVersions(projectId, title || (project && project.title) || "Версии");
+      closeProjectModal();
+      openCfVersions(projectId, projectTitle, projectType);
     };
     const installBtn = $("#proj-install");
     installBtn.disabled = !project;
     installBtn.onclick = () => {
-      modal.hidden = true;
-      installFromCurseForge(projectId);
+      closeProjectModal();
+      if (projectType === "modpack") installCfPack(projectId, null, null, projectTitle);
+      else installFromCurseForge(projectId, null, projectTitle);
     };
   }
 
@@ -7720,11 +8176,11 @@
     modal.hidden = false;
     $("#ver-title").textContent = `${title || "Версии"} — выбор версии`;
     $("#ver-body").innerHTML = `<div class="empty-state">Загружаем файлы с CurseForge…</div>`;
-    // режим модпака: из ленты, из вкладки с типом «Модпаки» — всегда отдельная сборка
-    const pack = kind === "modpack" || state.curseforge.type === "modpack";
+    // Явный тип карточки важнее старого фильтра другой вкладки.
+    const pack = kind ? kind === "modpack" : state.curseforge.type === "modpack";
     const meta = pack ? null : selected();
-    const mc = pack ? null : (state.curseforge.mc || (meta ? meta.mc_version : null));
-    const loader = pack ? null : (state.curseforge.loader || (meta && meta.loader ? meta.loader.type : null));
+    const mc = meta ? (state.curseforge.mc || meta.mc_version) : null;
+    const loader = meta ? (state.curseforge.loader || meta.loader?.type || null) : null;
     let versions = [];
     try {
       versions = await api.curseforgeVersions(projectId, mc, loader);
@@ -7755,21 +8211,27 @@
     $$("[data-cf-install-version]").forEach((btn) => btn.addEventListener("click", () => (
       pack
         ? installCfPack(projectId, btn.dataset.cfInstallVersion, btn, title)
-        : installCfFile(projectId, btn.dataset.cfInstallVersion, btn)
+        : installCfFile(projectId, btn.dataset.cfInstallVersion, btn,
+          versions.find((version) => String(version.id) === btn.dataset.cfInstallVersion), title)
     )));
   }
 
-  async function installCfFile(projectId, fileId, btn) {
+  async function installCfFile(projectId, fileId, btn, version, title) {
     const meta = selected();
-    if (!meta) return toast("Сначала выбери сборку", "err");
     if (btn) { btn.disabled = true; btn.textContent = "Ставим…"; }
     const modal = $("#modal-versions");
     try {
+      if (!meta) {
+        if (!version || String(version.id) !== String(fileId)) throw new Error("Не удалось проверить выбранную версию мода");
+        if (await installHomeMod("curseforge", projectId, title, version)) { if (modal) modal.hidden = true; }
+        return;
+      }
       const outcome = await withDownloading(projectId, (op) => api.installCurseforge(meta.id, projectId, fileId, op), { instanceId: meta.id, source: "curseforge" });
-      toast(outcome.installed.length ? `Ваш мод установлен: ${outcome.installed.join(", ")}` : "Ваш мод уже установлен", "ok");
+      toast(outcome.installed.length ? `Ваш мод установлен: ${outcome.installed.join(", ")}` : "Файл уже существует и не был перезаписан", outcome.installed.length ? "ok" : "");
       if (modal) modal.hidden = true;
     } catch (err) {
       toast(String(err), "err");
+    } finally {
       if (btn) { btn.disabled = false; btn.textContent = "Установить"; }
     }
   }
@@ -11227,9 +11689,42 @@
     });
     on("#btn-quick-settings", "click", () => openPrefs());
     on("#btn-new-build", "click", openCreate);
-    $$("[data-close-project]").forEach((el) => el.addEventListener("click", () => { $("#modal-project").hidden = true; }));
+    on("#mod-target-close", "click", () => closeModTarget());
+    on("#mod-target-cancel", "click", () => closeModTarget());
+    on("#mod-target-submit", "click", confirmModTarget);
+    const targetModal = $("#modal-mod-target");
+    targetModal.addEventListener("mousedown", (event) => { if (event.target === targetModal) closeModTarget(); });
+    targetModal.addEventListener("keydown", (event) => {
+      if (event.key !== "Tab") return;
+      const controls = $$("button:not([disabled]), input:not([disabled]), select:not([disabled])", targetModal).filter((element) => element.offsetParent !== null);
+      if (!controls.length) return;
+      if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls[controls.length - 1].focus(); }
+      else if (!event.shiftKey && document.activeElement === controls[controls.length - 1]) { event.preventDefault(); controls[0].focus(); }
+    });
+    $$("[data-close-project]").forEach((el) => el.addEventListener("click", closeProjectModal));
     const projectModal = $("#modal-project");
-    if (projectModal) projectModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-project") projectModal.hidden = true; });
+    if (projectModal) projectModal.addEventListener("mousedown", (event) => { if (event.target === projectModal) closeProjectModal(); });
+    $$("[data-proj-tab]").forEach((button) => button.addEventListener("click", () => setProjectTab(button.dataset.projTab)));
+    $("#proj-tabs").addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === "Home" ? "description" : event.key === "End" ? "gallery"
+        : (document.activeElement?.dataset.projTab === "gallery" ? "description" : "gallery");
+      setProjectTab(next, true);
+    });
+    on("#project-image-close", "click", closeProjectImage);
+    const imageModal = $("#modal-project-image");
+    imageModal.addEventListener("mousedown", (event) => { if (event.target === imageModal) closeProjectImage(); });
+    on("#project-image-prev", "click", () => { projectImageIndex = (projectImageIndex + projectImages.length - 1) % projectImages.length; updateProjectImage(); });
+    on("#project-image-next", "click", () => { projectImageIndex = (projectImageIndex + 1) % projectImages.length; updateProjectImage(); });
+    imageModal.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowLeft") { event.preventDefault(); $("#project-image-prev").click(); }
+      if (event.key === "ArrowRight") { event.preventDefault(); $("#project-image-next").click(); }
+      if (event.key !== "Tab") return;
+      const controls = $$("button:not([disabled])", imageModal);
+      if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls[controls.length - 1].focus(); }
+      else if (!event.shiftKey && document.activeElement === controls[controls.length - 1]) { event.preventDefault(); controls[0].focus(); }
+    });
     $$("[data-close-dup]").forEach((el) => el.addEventListener("click", () => { $("#modal-dup").hidden = true; }));
     const dupModal = $("#modal-dup");
     if (dupModal) dupModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-dup") dupModal.hidden = true; });
@@ -11323,6 +11818,9 @@
       if (event.ctrlKey && event.key.toLowerCase() === "r") { event.preventDefault(); refreshInstances(); }
       if (event.ctrlKey && event.key.toLowerCase() === "l") { event.preventDefault(); state.logs[state.selectedId] = []; renderLogs(state.selectedId); }
       if (event.key === "Escape") {
+        if (!$("#modal-project-image").hidden) { event.preventDefault(); closeProjectImage(); return; }
+        if (!$("#modal-mod-target").hidden) { event.preventDefault(); closeModTarget(); return; }
+        if (!$("#modal-project").hidden) { event.preventDefault(); closeProjectModal(); return; }
         const initialTabModal = $("#modal-initial-tab");
         if (initialTabModal && !initialTabModal.hidden) {
           event.preventDefault();

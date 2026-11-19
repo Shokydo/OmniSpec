@@ -139,28 +139,7 @@ impl CurseForge {
             query.project_type.trim()
         };
         let page_size = query.limit.clamp(1, 50);
-        let mut params: Vec<(&str, String)> = vec![
-            ("gameId", GAME_ID.to_string()),
-            ("classId", class_id_for(project_type).to_string()),
-            ("index", query.offset.to_string()),
-            ("pageSize", page_size.to_string()),
-            ("sortField", sort_field(&query.sort).to_string()),
-            ("sortOrder", "desc".into()),
-        ];
-        if !query.query.trim().is_empty() {
-            params.push(("searchFilter", query.query.trim().to_string()));
-        }
-        if let Some(game_version) = &query.game_version {
-            let value = game_version.trim();
-            if !value.is_empty() && value != "любая" {
-                params.push(("gameVersion", value.to_string()));
-            }
-        }
-        if let Some(loader) = &query.loader {
-            if let Some(kind) = loader_type(loader) {
-                params.push(("modLoaderType", kind.to_string()));
-            }
-        }
+        let params = search_params(query)?;
 
         let url = format!("{BASE_URL}/mods/search");
         let response: SearchResponse = self.get(&url, &params).await?;
@@ -203,12 +182,50 @@ impl CurseForge {
                 params.push(("modLoaderType", kind.to_string()));
             }
         }
+        let project: u32 = id.parse().map_err(|_| Error::other("неверный id проекта CurseForge"))?;
         let url = format!("{BASE_URL}/mods/{id}/files");
         let response: Envelope<Vec<CfFile>> = self.get(&url, &params).await?;
         Ok(response
             .data
             .iter()
+            .filter(|file| file.mod_id.is_none_or(|owner| owner == project)
+                && file.game_id.is_none_or(|game| game == GAME_ID))
             .map(|file| version_of(id, file))
+            .collect())
+    }
+
+    /// Совместимые варианты для новой сборки. Обычный `/files` возвращает лишь
+    /// первую страницу (у популярных модов тысячи файлов), поэтому берём
+    /// индексы последних файлов по версиям и проверяем каждый полный файл.
+    pub async fn compatibility_versions(&self, id: &str) -> Result<Vec<Version>> {
+        let project: u32 = id.parse().map_err(|_| Error::other("неверный id проекта CurseForge"))?;
+        let response: Envelope<CfMod> = self.get(&format!("{BASE_URL}/mods/{id}"), &[]).await?;
+        let item = response.data;
+        if item.id != project || item.class_id != Some(CLASS_MODS) {
+            return Err(Error::other("проект CurseForge не является модом Minecraft"));
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut ids: Vec<u32> = item.latest_files_indexes.iter()
+            .filter(|index| index.file_id != 0 && index.mod_loader.is_none_or(|kind| matches!(kind, 0 | 1 | 4 | 5 | 6)))
+            .map(|index| index.file_id)
+            .filter(|file_id| seen.insert(*file_id))
+            .collect();
+        for file in &item.latest_files {
+            if file.id != 0 && seen.insert(file.id) { ids.push(file.id); }
+        }
+        let mut files = HashMap::new();
+        for chunk in ids.chunks(100) {
+            let response: Envelope<Vec<CfFile>> = self.post("/mods/files", &serde_json::json!({"fileIds":chunk})).await?;
+            for file in response.data {
+                if chunk.contains(&file.id) && file.mod_id == Some(project)
+                    && file.game_id.is_none_or(|game| game == GAME_ID) {
+                    files.insert(file.id, file);
+                }
+            }
+        }
+        Ok(ids.into_iter().filter_map(|file_id| files.get(&file_id))
+            .map(|file| version_of(id, file))
+            .filter(|version| !version.game_versions.is_empty() && !version.loaders.is_empty())
             .collect())
     }
 
@@ -261,8 +278,14 @@ impl CurseForge {
 
     /// Один файл по id — когда версия выбрана вручную.
     pub async fn file(&self, mod_id: &str, file_id: &str) -> Result<Version> {
+        let project: u32 = mod_id.parse().map_err(|_| Error::other("неверный id проекта CurseForge"))?;
+        let wanted: u32 = file_id.parse().map_err(|_| Error::other("неверный id файла CurseForge"))?;
         let url = format!("{BASE_URL}/mods/{mod_id}/files/{file_id}");
         let response: Envelope<CfFile> = self.get(&url, &[]).await?;
+        if response.data.id != wanted || response.data.mod_id.is_some_and(|id| id != project)
+            || response.data.game_id.is_some_and(|id| id != GAME_ID) {
+            return Err(Error::other("CurseForge вернул файл другого проекта или игры"));
+        }
         Ok(version_of(mod_id, &response.data))
     }
 
@@ -396,11 +419,12 @@ fn project_of(item: &CfMod) -> Project {
             .screenshots
             .iter()
             .map(|shot| GalleryImage {
+                // Для увеличения нужен оригинал, а миниатюра — запасной вариант.
                 url: shot
-                    .thumbnail_url
+                    .url
                     .clone()
                     .filter(|value| !value.is_empty())
-                    .or_else(|| shot.url.clone())
+                    .or_else(|| shot.thumbnail_url.clone())
                     .unwrap_or_default(),
                 featured: false,
                 title: shot.title.clone(),
@@ -519,6 +543,48 @@ fn version_of(mod_id: &str, file: &CfFile) -> Version {
 }
 
 /* ==================== мелочи ==================== */
+
+/// CurseForge принимает один числовой categoryId, в отличие от фасетов Modrinth.
+/// Не игнорируем неизвестный фильтр: иначе интерфейс показал бы неверную выдачу.
+fn search_params(query: &SearchQuery) -> Result<Vec<(&'static str, String)>> {
+    let project_type = match query.project_type.trim() {
+        "" => "mod",
+        other => other,
+    };
+    let mut params = vec![
+        ("gameId", GAME_ID.to_string()),
+        ("classId", class_id_for(project_type).to_string()),
+        ("index", query.offset.to_string()),
+        ("pageSize", query.limit.clamp(1, 50).to_string()),
+        ("sortField", sort_field(&query.sort).to_string()),
+        ("sortOrder", "desc".into()),
+    ];
+    if !query.query.trim().is_empty() {
+        params.push(("searchFilter", query.query.trim().to_string()));
+    }
+    if let Some(game_version) = &query.game_version {
+        let value = game_version.trim();
+        if !value.is_empty() && value != "любая" {
+            params.push(("gameVersion", value.to_string()));
+        }
+    }
+    if matches!(project_type, "mod" | "modpack") {
+        if let Some(kind) = query.loader.as_deref().and_then(loader_type) {
+            params.push(("modLoaderType", kind.to_string()));
+        }
+    }
+    let categories: Vec<_> = query.categories.iter().map(|value| value.trim())
+        .filter(|value| !value.is_empty()).collect();
+    if categories.len() > 1 {
+        return Err(Error::Other("CurseForge поддерживает одну категорию за запрос".into()));
+    }
+    if let Some(category) = categories.first() {
+        let id: u32 = category.parse().map_err(|_| Error::Other("Неверная категория CurseForge".into()))?;
+        if id == 0 { return Err(Error::Other("Неверная категория CurseForge".into())); }
+        params.push(("categoryId", id.to_string()));
+    }
+    Ok(params)
+}
 
 /// classId в терминах лаунчера.
 pub fn class_id_for(project_type: &str) -> u32 {
@@ -752,6 +818,43 @@ struct CfDependency {
 mod catalog_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn search_passes_pack_category_and_loader_without_silent_fallback() {
+        let query = SearchQuery {
+            query: "magic".into(), project_type: "modpack".into(),
+            game_version: Some("1.21.1".into()), loader: Some("neoforge".into()),
+            categories: vec!["4473".into()], limit: 24, offset: 48, sort: "downloads".into(),
+        };
+        let params = search_params(&query).unwrap();
+        assert!(params.contains(&("classId", "4471".into())));
+        assert!(params.contains(&("categoryId", "4473".into())));
+        assert!(params.contains(&("modLoaderType", "6".into())));
+        assert!(params.contains(&("gameVersion", "1.21.1".into())));
+        assert!(params.contains(&("index", "48".into())));
+        let mut bad = query.clone();
+        bad.categories = vec!["magic".into()];
+        assert!(search_params(&bad).is_err());
+        bad.categories = vec!["4472".into(), "4473".into()];
+        assert!(search_params(&bad).is_err());
+        bad.categories.clear();
+        bad.project_type = "resourcepack".into();
+        assert!(!search_params(&bad).unwrap().iter().any(|(key, _)| *key == "modLoaderType"));
+    }
+
+    #[test]
+    fn gallery_prefers_full_screenshot_and_falls_back_to_thumbnail() {
+        let item: CfMod = serde_json::from_value(json!({"id": 42, "screenshots": [
+            {"url": "https://example.org/full.png", "thumbnailUrl": "https://example.org/thumb.png", "title": "First"},
+            {"url": "", "thumbnailUrl": "https://example.org/only-thumb.png"},
+            {"url": "", "thumbnailUrl": ""}
+        ]})).unwrap();
+        let gallery = project_of(&item).gallery;
+        assert_eq!(gallery.len(), 2);
+        assert_eq!(gallery[0].url, "https://example.org/full.png");
+        assert_eq!(gallery[0].title.as_deref(), Some("First"));
+        assert_eq!(gallery[1].url, "https://example.org/only-thumb.png");
+    }
 
     #[test]
     fn latest_index_selection_is_compatible_complete_and_uses_dates() {

@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use crate::error::{Error, Result};
 use crate::instances::InstanceMeta;
-use crate::modrinth::install::target_dir;
+use crate::modrinth::install::{download_new_content, target_dir, validate_project_version};
 // наружу отдаём тот же тип, что у Modrinth: интерфейсу не нужно различать источники
 pub use crate::modrinth::install::InstallOutcome;
 use crate::net::Reporter;
@@ -78,14 +78,15 @@ async fn install_recursive(
             .files(project_ref, Some(&instance.mc_version), loader)
             .await?
             .into_iter()
-            .next()
+            .find(|version| validate_project_version(version, &project.id, &project_type, instance).is_ok())
             .ok_or_else(|| {
                 Error::not_found(format!(
-                    "у «{}» нет файлов для Minecraft {}",
-                    project.title, instance.mc_version
+                    "у «{}» нет совместимых файлов для Minecraft {} и {}",
+                    project.title, instance.mc_version, instance.loader.label()
                 ))
             })?,
     };
+    validate_project_version(&version, &project.id, &project_type, instance)?;
 
     let file = version
         .primary_file()
@@ -101,29 +102,15 @@ async fn install_recursive(
     let game = crate::instances::ensure_game_dir(paths, instance)?;
     let dir = target_dir(paths, instance, &project_type);
     crate::instances::create_dir_beneath(&game, &dir)?;
-    let dest = dir.join(&file.filename);
-
-    if dest.exists() {
+    reporter.emit("mods", 0, 0, format!("проверяем {}", file.filename));
+    let downloaded = download_new_content(
+        curseforge.http(), &dir, &file.filename, &url, Some(file.size),
+        file.hashes.get("sha1").map(String::as_str), reporter,
+    ).await?;
+    if !downloaded {
         outcome.skipped.push(file.filename.clone());
-        reporter.emit("mods", 0, 0, format!("уже установлен: {}", file.filename));
+        reporter.emit("mods", 0, 0, format!("файл уже существует: {}", file.filename));
     } else {
-        reporter.emit("mods", 0, 0, format!("скачиваем {}", file.filename));
-        let sha1 = file.hashes.get("sha1").cloned();
-        let reporter_progress = reporter.clone();
-        let file_name = file.filename.clone();
-        curseforge
-            .http()
-            .download_existing_dir(
-                &url,
-                &dest,
-                Some(file.size),
-                sha1.as_deref(),
-                true,
-                Some(&|done, total| {
-                    reporter_progress.emit_bytes("mods", &file_name, done, total);
-                }),
-            )
-            .await?;
         outcome.installed.push(file.filename.clone());
         crate::content::remember(
             paths,
