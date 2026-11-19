@@ -709,7 +709,8 @@ fn commit_file(
     if !valid_filename(filename) {
         return Err(Error::other("небезопасное имя загружаемого файла"));
     }
-    fs::create_dir_all(mods)?;
+    let base = mods.parent().ok_or_else(|| Error::other("не найдена папка сборки"))?;
+    instances::create_dir_beneath(base, mods)?;
     let destination = mods.join(filename);
     let old_path = old.map(|item| mods.join(&item.name));
     if destination.exists() && old_path.as_deref() != Some(destination.as_path()) {
@@ -732,11 +733,8 @@ fn commit_file(
                 "зависимость встроена в другой мод; автоматически заменить её нельзя",
             ));
         }
-        let base = mods
-            .parent()
-            .ok_or_else(|| Error::other("не найдена папка сборки"))?;
         let backup_dir = base.join("omnispec-backups").join("mods");
-        fs::create_dir_all(&backup_dir)?;
+        instances::create_dir_beneath(base, &backup_dir)?;
         let backup_path = backup_dir.join(format!("{}-{}.bak", item.name, unique_id()));
         // Копия создана и сброшена на диск до удаления исходного файла.
         let mut backup_file = OpenOptions::new()
@@ -804,7 +802,8 @@ pub async fn install_missing(
     if request.replace_file.is_some() && request.enable_file.is_some() {
         return Err(Error::other("нельзя одновременно включать и заменять файл"));
     }
-    let mods = instances::game_dir_for(paths, instance).join("mods");
+    let game = instances::ensure_game_dir(paths, instance)?;
+    let mods = game.join("mods");
     let before_mods = snapshot_mods(&mods)?;
     let existing = scan_existing(&mods, request)?;
     if request.replace_file.is_none() && request.enable_file.is_none() && !existing.is_empty() {
@@ -1342,6 +1341,8 @@ mod tests {
         let tmp = TestDir::new();
         let paths = Paths::new(tmp.0.join("home")).unwrap();
         let meta = instance();
+        fs::create_dir_all(paths.instance_dir(&meta.id)).unwrap();
+        fs::write(paths.instance_file(&meta.id), serde_json::to_vec(&meta).unwrap()).unwrap();
         instances::save(&paths, &meta).unwrap();
         let mods = instances::game_dir_for(&paths, &meta).join("mods");
         fs::create_dir_all(&mods).unwrap();
@@ -1376,6 +1377,8 @@ mod tests {
         let tmp = TestDir::new();
         let paths = Paths::new(tmp.0.join("home")).unwrap();
         let meta = instance();
+        fs::create_dir_all(paths.instance_dir(&meta.id)).unwrap();
+        fs::write(paths.instance_file(&meta.id), serde_json::to_vec(&meta).unwrap()).unwrap();
         instances::save(&paths, &meta).unwrap();
         let client = Modrinth::new(crate::net::Http::new());
         let reporter = Reporter::none();
@@ -1441,6 +1444,8 @@ mod tests {
         meta.loader = Loader::Fabric {
             version: "0.16.10".into(),
         };
+        fs::create_dir_all(paths.instance_dir(&meta.id)).unwrap();
+        fs::write(paths.instance_file(&meta.id), serde_json::to_vec(&meta).unwrap()).unwrap();
         instances::save(&paths, &meta).unwrap();
         let mut req = request();
         req.mod_id = "sodium".into();

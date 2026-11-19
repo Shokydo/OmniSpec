@@ -116,6 +116,21 @@ impl CurseForge {
         })
     }
 
+    async fn post<T: serde::de::DeserializeOwned>(
+        &self, endpoint: &str, body: &serde_json::Value,
+    ) -> Result<T> {
+        if !self.has_key() { return Err(Error::other("CurseForge: не задан API-ключ")); }
+        let url = format!("{BASE_URL}{endpoint}");
+        let response = self.http.inner().post(&url).header("x-api-key", self.key.trim())
+            .header("Accept", "application/json").json(body)
+            .timeout(std::time::Duration::from_secs(25)).send().await
+            .map_err(|error| Error::http(&url, error))?;
+        if !response.status().is_success() {
+            return Err(Error::other(format!("CurseForge {endpoint} → HTTP {}", response.status())));
+        }
+        Ok(response.json::<T>().await?)
+    }
+
     /// Поиск модов, ресурспаков, шейдеров и модпаков.
     pub async fn search(&self, query: &SearchQuery) -> Result<SearchResults> {
         let project_type = if query.project_type.trim().is_empty() {
@@ -197,6 +212,53 @@ impl CurseForge {
             .collect())
     }
 
+    /// Точные совпадения отпечатков; вызывающий код дополнительно сверяет SHA-1/MD5,
+    /// потому что 32-битный fingerprint пропускает пробелы и может столкнуться.
+    pub async fn fingerprint_matches(&self, fingerprints: &[u32]) -> Result<Vec<FingerprintMatch>> {
+        let mut result = Vec::new();
+        for chunk in fingerprints.chunks(500) {
+            let response: Envelope<CfFingerprintResponse> = self.post(
+                &format!("/fingerprints/{GAME_ID}"), &serde_json::json!({"fingerprints":chunk})
+            ).await?;
+            for item in response.data.exact_matches {
+                let Some(fingerprint) = item.file.file_fingerprint else { continue; };
+                if !chunk.contains(&fingerprint) || item.id == 0
+                    || item.file.mod_id.is_some_and(|id| id != item.id)
+                    || item.file.game_id.is_some_and(|id| id != GAME_ID) { continue; }
+                result.push(FingerprintMatch {
+                    fingerprint,
+                    version: version_of(&item.id.to_string(), &item.file),
+                });
+            }
+        }
+        Ok(result)
+    }
+
+    /// Последний совместимый файл каждого проекта. Используем пакетные индексы
+    /// и даты из полных файлов; ни filename, ни числовой порядок id не являются
+    /// достоверным номером версии. Неполный ответ не подтверждает проект.
+    pub async fn latest_compatible_files(
+        &self, projects: &[u32], game_version: &str, loader: &str,
+    ) -> Result<HashMap<String, String>> {
+        let Some(loader_id) = loader_type(loader) else { return Ok(HashMap::new()); };
+        let mut mods = Vec::new();
+        for chunk in projects.chunks(100) {
+            let response: Envelope<Vec<CfMod>> = self.post("/mods", &serde_json::json!({"modIds":chunk})).await?;
+            mods.extend(response.data.into_iter().filter(|item| chunk.contains(&item.id)));
+        }
+        let indexes = compatible_indexes(&mods, game_version, loader_id);
+        let mut file_ids: Vec<u32> = indexes.values().flatten().map(|(id, _)| *id).collect();
+        file_ids.sort_unstable(); file_ids.dedup();
+        let mut files = HashMap::new();
+        for chunk in file_ids.chunks(100) {
+            let response: Envelope<Vec<CfFile>> = self.post("/mods/files", &serde_json::json!({"fileIds":chunk})).await?;
+            for file in response.data {
+                if chunk.contains(&file.id) { files.insert(file.id, file); }
+            }
+        }
+        Ok(choose_latest_compatible(indexes, &files, loader))
+    }
+
     /// Один файл по id — когда версия выбрана вручную.
     pub async fn file(&self, mod_id: &str, file_id: &str) -> Result<Version> {
         let url = format!("{BASE_URL}/mods/{mod_id}/files/{file_id}");
@@ -216,6 +278,69 @@ impl CurseForge {
         }
         Ok(response.data)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct FingerprintMatch {
+    pub fingerprint: u32,
+    pub version: Version,
+}
+
+// bool: индекс явно называет нужный загрузчик; остальные проверяем по полному файлу.
+fn compatible_indexes(mods: &[CfMod], game_version: &str, loader: u32) -> HashMap<u32, Vec<(u32, bool)>> {
+    let mut indexes = HashMap::new();
+    for item in mods {
+        if item.class_id.is_some_and(|id| id != CLASS_MODS) { continue; }
+        let mut ids: HashMap<u32, bool> = HashMap::new();
+        for index in item.latest_files_indexes.iter().filter(|index|
+            index.game_version == game_version && index.file_id != 0
+                && index.mod_loader.is_none_or(|kind| kind == 0 || kind == loader)
+        ) {
+            let explicit = index.mod_loader == Some(loader);
+            ids.entry(index.file_id).and_modify(|value| *value |= explicit).or_insert(explicit);
+        }
+        if !ids.is_empty() {
+            let mut ids: Vec<_> = ids.into_iter().collect();
+            ids.sort_unstable_by_key(|(id, _)| *id);
+            indexes.insert(item.id, ids);
+        }
+    }
+    indexes
+}
+
+fn choose_latest_compatible(
+    indexes: HashMap<u32, Vec<(u32, bool)>>, files: &HashMap<u32, CfFile>, loader: &str,
+) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+    for (project, ids) in indexes {
+        let mut latest = None;
+        let mut complete = true;
+        for (id, explicit) in ids {
+            let Some(file) = files.get(&id) else { complete = false; break; };
+            if file.mod_id != Some(project) || file.game_id.is_some_and(|game| game != GAME_ID) {
+                complete = false; break;
+            }
+            let file_loaders: Vec<_> = file.game_versions.iter().filter(|value| is_loader_name(value))
+                .map(normalize_loader).collect();
+            if !file_loaders.is_empty() && !file_loaders.iter().any(|value| value == loader) {
+                if explicit { complete = false; break; } // противоречие индекса и файла
+                continue; // индекс без загрузчика относится к другому загрузчику
+            }
+            if !explicit && file_loaders.is_empty() {
+                complete = false; break; // не знаем, не новее ли совместимый файл
+            }
+            let Some(date) = file.file_date.as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok()) else {
+                complete = false; break;
+            };
+            let candidate = (date, id);
+            if latest.as_ref().is_none_or(|current| candidate > *current) { latest = Some(candidate); }
+        }
+        if complete {
+            if let Some((_, file_id)) = latest { result.insert(project.to_string(), file_id.to_string()); }
+        }
+    }
+    result
 }
 
 /* ==================== преобразование в типы Modrinth ==================== */
@@ -504,6 +629,8 @@ struct CfMod {
     #[serde(default)]
     latest_files: Vec<CfFile>,
     #[serde(default)]
+    latest_files_indexes: Vec<CfFileIndex>,
+    #[serde(default)]
     screenshots: Vec<CfScreenshot>,
     #[serde(default)]
     links: Option<CfLinks>,
@@ -552,8 +679,38 @@ struct CfLinks {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CfFileIndex {
+    #[serde(default)]
+    game_version: String,
+    #[serde(default)]
+    file_id: u32,
+    #[serde(default)]
+    mod_loader: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfFingerprintResponse {
+    #[serde(default)]
+    exact_matches: Vec<CfFingerprintMatch>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CfFingerprintMatch {
+    id: u32,
+    file: CfFile,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CfFile {
     pub id: u32,
+    #[serde(default)]
+    mod_id: Option<u32>,
+    #[serde(default)]
+    game_id: Option<u32>,
+    #[serde(default)]
+    file_fingerprint: Option<u32>,
     #[serde(default)]
     display_name: String,
     #[serde(default)]
@@ -589,4 +746,67 @@ struct CfDependency {
     mod_id: u32,
     #[serde(default)]
     relation_type: u32,
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn latest_index_selection_is_compatible_complete_and_uses_dates() {
+        let mods: Vec<CfMod> = serde_json::from_value(json!([
+            {"id":10,"classId":6,"latestFilesIndexes":[
+                {"gameVersion":"1.21.1","fileId":100,"modLoader":4},
+                {"gameVersion":"1.21.1","fileId":90,"modLoader":4},
+                {"gameVersion":"1.21.1","fileId":999,"modLoader":1},
+                {"gameVersion":"1.20.1","fileId":998,"modLoader":4}
+            ]},
+            {"id":11,"classId":6,"latestFilesIndexes":[
+                {"gameVersion":"1.21.1","fileId":101,"modLoader":4},
+                {"gameVersion":"1.21.1","fileId":102,"modLoader":4}
+            ]},
+            {"id":12,"classId":12,"latestFilesIndexes":[
+                {"gameVersion":"1.21.1","fileId":103,"modLoader":4}
+            ]},
+            {"id":13,"classId":6,"latestFilesIndexes":[
+                {"gameVersion":"1.21.1","fileId":110,"modLoader":4},
+                {"gameVersion":"1.21.1","fileId":111}
+            ]},
+            {"id":14,"classId":6,"latestFilesIndexes":[
+                {"gameVersion":"1.21.1","fileId":120,"modLoader":4},
+                {"gameVersion":"1.21.1","fileId":121,"modLoader":0}
+            ]},
+            {"id":15,"classId":6,"latestFilesIndexes":[
+                {"gameVersion":"1.21.1","fileId":130,"modLoader":4},
+                {"gameVersion":"1.21.1","fileId":131}
+            ]},
+            {"id":16,"classId":6,"latestFilesIndexes":[
+                {"gameVersion":"1.21.1","fileId":140,"modLoader":4}
+            ]}
+        ])).unwrap();
+        let indexes = compatible_indexes(&mods, "1.21.1", 4);
+        assert_eq!(indexes.get(&10), Some(&vec![(90,true),(100,true)]));
+        assert!(!indexes.contains_key(&12));
+        let files: Vec<CfFile> = serde_json::from_value(json!([
+            {"id":100,"modId":10,"gameId":432,"fileDate":"2026-01-01T00:00:00.1Z"},
+            {"id":90,"modId":10,"gameId":432,"fileDate":"2026-01-01T00:00:00.14Z"},
+            {"id":101,"modId":11,"gameId":432,"fileDate":"2026-01-01T00:00:00Z"},
+            {"id":110,"modId":13,"gameId":432,"fileDate":"2026-01-01T00:00:00Z"},
+            {"id":111,"modId":13,"gameId":432,"fileDate":"2026-02-01T00:00:00Z","gameVersions":["Forge","1.21.1"]},
+            {"id":120,"modId":14,"gameId":432,"fileDate":"2026-01-01T00:00:00Z"},
+            {"id":121,"modId":14,"gameId":432,"fileDate":"2026-02-01T00:00:00Z","gameVersions":["1.21.1"]},
+            {"id":130,"modId":15,"gameId":432,"fileDate":"2026-01-01T00:00:00Z"},
+            {"id":131,"modId":15,"gameId":432,"fileDate":"2026-02-01T00:00:00Z","gameVersions":["Fabric","1.21.1"]},
+            {"id":140,"modId":16,"gameId":432,"fileDate":"2026-01-01T00:00:00Z","gameVersions":["NeoForge","1.21.1"]}
+        ])).unwrap();
+        let files: HashMap<_,_> = files.into_iter().map(|file| (file.id,file)).collect();
+        let result = choose_latest_compatible(indexes, &files, "fabric");
+        assert_eq!(result.get("10").map(String::as_str), Some("90"), "время важнее числа fileId");
+        assert!(!result.contains_key("11"), "неполный ответ не подтверждает актуальность");
+        assert_eq!(result.get("13").map(String::as_str), Some("110"), "новый Forge-файл не считается Fabric");
+        assert!(!result.contains_key("14"), "индекс без загрузчика может быть новее");
+        assert_eq!(result.get("15").map(String::as_str), Some("131"), "загрузчик можно подтвердить по полному файлу");
+        assert!(!result.contains_key("16"), "противоречие индекса и файла не подтверждает версию");
+    }
 }

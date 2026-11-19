@@ -233,7 +233,7 @@ mod tests {
     use omnispec_core::instances::Loader;
 
     fn meta() -> InstanceMeta {
-        InstanceMeta { id: "sample".into(), name: "Sample".into(), mc_version: "1.21.1".into(),
+        InstanceMeta { id: "sample".into(), renamed_from: None, renamed_froms: Vec::new(), name: "Sample".into(), mc_version: "1.21.1".into(),
             loader: Loader::Vanilla, created: 0, last_played: None, playtime_secs: 0,
             memory_mb: None, java_path: None, jvm_args: None, icon: None,
             notes: String::new(), version_override: None, source: "manual".into(), source_url: None,

@@ -3910,6 +3910,7 @@ dependencies = [
 name = "omnispec-core"
 version = "0.49.4"
 dependencies = [
+ "chrono",
  "dirs 5.0.1",
  "futures",
  "hex",

@@ -828,8 +828,7 @@ pub fn import_external(
         },
     )?;
 
-    let target = instances::game_dir_for(paths, &meta);
-    std::fs::create_dir_all(&target)?;
+    let target = instances::ensure_game_dir(paths, &meta)?;
     copy_tree(&source, &target, 0)?;
 
     let mut meta = meta;
@@ -849,6 +848,7 @@ pub fn import_external(
             }
         }
     }
+    instances::load(paths, &meta.id)?;
     Ok(meta)
 }
 
@@ -926,8 +926,7 @@ pub fn import_zip(
         },
     )?;
 
-    let target = instances::game_dir_for(paths, &meta);
-    std::fs::create_dir_all(&target)?;
+    let target = instances::ensure_game_dir(paths, &meta)?;
 
     let mut icon: Option<(String, Vec<u8>)> = None;
     for index in 0..archive.len() {
@@ -963,7 +962,7 @@ pub fn import_zip(
         }
         let dest = target.join(&relative);
         if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)?;
+            instances::create_dir_beneath(&target, parent)?;
         }
         std::fs::write(&dest, buffer)?;
     }
@@ -975,6 +974,7 @@ pub fn import_zip(
             let _ = instances::save(paths, &meta);
         }
     }
+    instances::load(paths, &meta.id)?;
     Ok(meta)
 }
 
@@ -1018,13 +1018,16 @@ fn copy_tree(from: &Path, to: &Path, depth: usize) -> Result<()> {
         }
         let dest = to.join(&name);
         if path.is_dir() {
-            std::fs::create_dir_all(&dest)?;
+            match std::fs::create_dir(&dest) {
+                Ok(()) => {},
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && dest.is_dir() => {},
+                Err(error) => return Err(error.into()),
+            }
             copy_tree(&path, &dest, depth + 1)?;
         } else if path.is_file() {
-            if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let _ = std::fs::copy(&path, &dest);
+            // Родитель уже существует; его нельзя создавать рекурсивно, если
+            // пользователь переместил всю сборку во время импорта.
+            std::fs::copy(&path, &dest)?;
         }
     }
     Ok(())

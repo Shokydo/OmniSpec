@@ -211,29 +211,35 @@ async function newPage(browser, scenario, rpc = false) {
       assert(!events.slice(atmFirst).some(e=>e[1]==='Fabulously Optimized'), 'late icon overwrote selection');
       await page.click('#btn-quick-settings');
       await page.click('.prefs-tab[data-pref="discord"]');
-      assert(await page.locator('#set-discord-icon').isChecked());
-      assert(!(await page.locator('#set-discord-upload').isChecked()));
+      for (const id of ['rpc','icon','upload']) {
+        assert.equal(await page.locator(`#set-discord-${id}`).getAttribute('role'),'switch');
+        assert(await page.locator(`#set-discord-${id}`).evaluate(el => el.classList.contains('switch')));
+      }
+      assert.equal(await page.locator('#set-discord-icon').getAttribute('aria-checked'),'true');
+      assert.equal(await page.locator('#set-discord-upload').getAttribute('aria-checked'),'false');
       const copy = await page.locator('#prefs-body').innerText();
       assert(copy.includes('tmpfile.link') && copy.includes('7 дней') && copy.includes('досрочно'));
-      await page.locator('#set-discord-icon').uncheck();
+      await page.locator('#set-discord-icon').focus();
+      await page.locator('#set-discord-icon').press('Space');
       await page.waitForFunction(() => window.__rpcTest.events.at(-1)?.[4] === null);
-      await page.locator('#set-discord-icon').check();
+      assert.equal(await page.locator('#set-discord-icon').getAttribute('aria-checked'),'false');
+      await page.locator('#set-discord-icon + span').click();
       await page.waitForFunction(() => String(window.__rpcTest.events.at(-1)?.[4]).includes('/atm10/'));
       // A failed attempt to grant permission must be visible and rolled back.
       await page.evaluate(() => { window.__rpcTest.failSaves = 1; });
       await page.locator('#set-discord-upload').click();
       await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some(e=>e.textContent.includes('Не удалось сохранить настройки Discord')));
-      assert(!(await page.locator('#set-discord-upload').isChecked()));
+      assert.equal(await page.locator('#set-discord-upload').getAttribute('aria-checked'),'false');
       await page.evaluate(() => document.querySelectorAll('.toast').forEach(el => el.remove()));
-      await page.locator('#set-discord-upload').check();
+      await page.locator('#set-discord-upload').click();
       await page.click('.prefs-tab[data-pref="look"]');
       await page.click('.prefs-tab[data-pref="discord"]');
-      assert(await page.locator('#set-discord-upload').isChecked());
+      assert.equal(await page.locator('#set-discord-upload').getAttribute('aria-checked'),'true');
       // On a failed revocation, leave it off in the UI and warn about persistence.
       await page.evaluate(() => { window.__rpcTest.failSaves = 1; });
-      await page.locator('#set-discord-upload').uncheck();
+      await page.locator('#set-discord-upload').click();
       await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some(e=>e.textContent.includes('Не удалось сохранить настройки Discord')));
-      assert(!(await page.locator('#set-discord-upload').isChecked()));
+      assert.equal(await page.locator('#set-discord-upload').getAttribute('aria-checked'),'false');
       await page.click('[data-close-prefs]');
       await page.locator('.instance[data-id="atm10"]').click({button:'right'});
       await page.locator('#ctx-menu [data-act="icon-reset"]').click();
@@ -248,7 +254,7 @@ async function newPage(browser, scenario, rpc = false) {
       await page.locator('#inst-icon-reset').click();
       await page.waitForFunction(() => String(window.__rpcTest.events.at(-1)?.[4]).endsWith('/letter-0041.png'));
       assert.deepEqual(errors,[]);
-      console.log('RPC_UI', JSON.stringify({lastImage:last[4], staleGuard:true, imageCheckbox:true, uploadDefault:false, privacyNotice:true, saveFailures:true, iconResetAndChanges:true}));
+      console.log('RPC_UI', JSON.stringify({lastImage:last[4], staleGuard:true, switches:true, keyboard:true, uploadDefault:false, privacyNotice:true, saveFailures:true, iconResetAndChanges:true}));
       await page.close();
     }
   } finally {

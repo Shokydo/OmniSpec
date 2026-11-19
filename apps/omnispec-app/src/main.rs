@@ -268,10 +268,20 @@ async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     Ok(state.settings.lock().await.clone())
 }
 
+fn preserve_recovered_last_instance(paths: &Paths, current: &Settings, incoming: &mut Settings) {
+    if let (Some(old), Some(new)) = (&incoming.last_instance, &current.last_instance) {
+        if old != new && instances::load(paths, old).is_err() && instances::load(paths, new).is_ok() {
+            incoming.last_instance = Some(new.clone());
+        }
+    }
+}
+
 #[tauri::command]
-async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
+async fn save_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<(), String> {
     // Записи settings.json не должны обгонять друг друга или видеть частичный файл.
     let mut current = state.settings.lock().await;
+    // Снимок настроек мог попасть в очередь ещё до переноса id сборки.
+    preserve_recovered_last_instance(&state.paths, &current, &mut settings);
     // Запрет действует сразу, даже если сохранить файл не удалось: до перезапуска
     // не начнём новых отправок и попытаемся отменить уже начатую.
     if !settings.discord_rpc { current.discord_rpc = false; }
@@ -366,8 +376,54 @@ async fn resolve_presence_icon(
 /* ==================== СБОРКИ ==================== */
 
 #[tauri::command]
-fn list_instances(state: State<'_, AppState>) -> Result<Vec<InstanceMeta>, String> {
-    instances::list(&state.paths).map_err(err)
+async fn list_instances(state: State<'_, AppState>) -> Result<Vec<InstanceMeta>, String> {
+    // Не переназначаем id процесса или незаконченной установки. Тот же порядок
+    // блокировок, что у запуска: running → content → launching.
+    let list = {
+        let running = state.running.lock().await;
+        let content = state.content_access.lock().unwrap_or_else(|e| e.into_inner());
+        let launching = state.launching.lock().unwrap_or_else(|e| e.into_inner());
+        let mut blocked: HashSet<String> = running.keys()
+            .map(|key| run_instance_id(key).to_string()).collect();
+        blocked.extend(launching.keys().cloned());
+        blocked.extend(content.writers.keys().cloned());
+        blocked.extend(content.repairing.iter().cloned());
+        instances::list_with_blocked(&state.paths, &blocked).map_err(err)?
+    };
+    // Сохраняем ссылку в настройках, если её можно перенести однозначно.
+    let mut settings = state.settings.lock().await;
+    if let Some(old) = settings.last_instance.clone() {
+        if !list.iter().any(|item| item.id == old) {
+            let candidates: Vec<_> = list.iter().filter(|item| item.renamed_froms.contains(&old)).collect();
+            if candidates.len() == 1 {
+                let mut updated = settings.clone();
+                updated.last_instance = Some(candidates[0].id.clone());
+                // Если запись не удалась, не подтверждаем переименование: маркер
+                // позволит повторить перенос последней сборки при следующем списке.
+                updated.save(&state.paths).map_err(|error| format!("не удалось обновить последнюю сборку в настройках: {error}"))?;
+                *settings = updated;
+            }
+        }
+    }
+    Ok(list)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameAcknowledgement {
+    id: String,
+    previous_ids: Vec<String>,
+}
+
+/// UI подтвердил обработанные связи; новые изменения не стираем.
+#[tauri::command]
+fn acknowledge_instance_renames(
+    state: State<'_, AppState>, acknowledgements: Vec<RenameAcknowledgement>,
+) -> Result<(), String> {
+    for item in acknowledgements {
+        instances::acknowledge_renames(&state.paths, &item.id, &item.previous_ids).map_err(err)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -482,7 +538,7 @@ async fn launch_instance(
         let running = state.running.lock().await;
         let has_running = running
             .keys()
-            .any(|key| key.split_once('#').map(|(id, _)| id) == Some(instance_id.as_str()));
+            .any(|key| run_instance_id(key) == instance_id.as_str());
         // Порядок блокировок совпадает с установкой: running → content → launching.
         let _content = state.content_access.lock().unwrap_or_else(|e| e.into_inner());
         if !_content.repairing.is_empty() { return Err("дождись окончания установки из диагностики".into()); }
@@ -753,6 +809,10 @@ async fn finish_pumps(mut pumps: Vec<tokio::task::JoinHandle<()>>, limit: Durati
     finished
 }
 
+fn run_instance_id(key: &str) -> &str {
+    key.rsplit_once('#').map(|(id, _)| id).unwrap_or(key)
+}
+
 /// Ключ сессии в `state.running` — «id#2». Из интерфейса приходит уже полный
 /// ключ, но принимаем и короткий номер: раньше «id#2» превращался в «id#id#2»,
 /// и дубликат не выключался («сборка не запущена»).
@@ -779,7 +839,7 @@ async fn stop_instance(
             .iter()
             .filter(|(key, _)| match &exact {
                 Some(target) => key.as_str() == target,
-                None => key.split_once('#').map(|(id, _)| id) == Some(instance_id.as_str()),
+                None => run_instance_id(key) == instance_id.as_str(),
             })
             .map(|(_, handle)| handle.clone())
             .collect()
@@ -806,11 +866,7 @@ async fn running_instances(state: State<'_, AppState>) -> Result<Vec<String>, St
     let running = state.running.lock().await;
     let mut result: Vec<String> = Vec::new();
     for key in running.keys() {
-        let id = key
-            .split_once('#')
-            .map(|(id, _)| id)
-            .unwrap_or(key.as_str())
-            .to_string();
+        let id = run_instance_id(key).to_string();
         if !result.contains(&id) {
             result.push(id);
         }
@@ -1149,7 +1205,7 @@ fn safe_join(base: &Path, relative: &str) -> Result<PathBuf, String> {
         return Err("абсолютные пути запрещены".into());
     }
     for component in candidate.components() {
-        if matches!(component, std::path::Component::ParentDir) {
+        if matches!(component, std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_)) {
             return Err("путь за пределами сборки запрещён".into());
         }
     }
@@ -1162,17 +1218,15 @@ fn list_dir(
     instance_id: String,
     sub: String,
 ) -> Result<Vec<FileEntry>, String> {
-    let base = instances::game_dir(&state.paths, &instance_id);
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let base = instances::ensure_game_dir(&state.paths, &meta).map_err(err)?;
     let dir = if sub.trim().is_empty() {
-        base
+        base.clone()
     } else {
         safe_join(&base, &sub)?
     };
-    // Папки вроде resourcepacks/shaderpacks могут ещё не существовать — создаём,
-    // чтобы список был пустым, а не ошибкой.
-    if !dir.exists() {
-        let _ = std::fs::create_dir_all(&dir);
-    }
+    // Создаём только потомков существующей папки: rename не создаст призрак.
+    instances::create_dir_beneath(&base, &dir).map_err(err)?;
     let mut result = Vec::new();
     for entry in std::fs::read_dir(&dir).map_err(err)?.flatten() {
         let meta = match entry.metadata() {
@@ -1208,7 +1262,7 @@ fn read_text_file(
     instance_id: String,
     path: String,
 ) -> Result<String, String> {
-    let base = instances::game_dir(&state.paths, &instance_id);
+    let base = instances::game_dir(&state.paths, &instance_id).map_err(err)?;
     let file = safe_join(&base, &path)?;
     let meta = std::fs::metadata(&file).map_err(err)?;
     const LIMIT: u64 = 512 * 1024;
@@ -1233,7 +1287,7 @@ fn delete_file(
     path: String,
 ) -> Result<(), String> {
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
-    let base = instances::game_dir(&state.paths, &instance_id);
+    let base = instances::game_dir(&state.paths, &instance_id).map_err(err)?;
     let target = safe_join(&base, &path)?;
     if target.is_dir() {
         std::fs::remove_dir_all(&target).map_err(err)
@@ -1411,9 +1465,10 @@ fn fm_create_dir(
     path: String,
 ) -> Result<(), String> {
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
-    let base = instances::game_dir(&state.paths, &instance_id);
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let base = instances::ensure_game_dir(&state.paths, &meta).map_err(err)?;
     let target = safe_join(&base, &path)?;
-    std::fs::create_dir_all(&target).map_err(err)
+    instances::create_dir_beneath(&base, &target).map_err(err)
 }
 
 /// Переименовать файл или папку; возвращаем новый относительный путь.
@@ -1434,7 +1489,7 @@ fn fm_rename(
     {
         return Err("имя не годится: нужны буквы, цифры, точка, дефис".into());
     }
-    let base = instances::game_dir(&state.paths, &instance_id);
+    let base = instances::game_dir(&state.paths, &instance_id).map_err(err)?;
     let from = safe_join(&base, &path)?;
     let parent = path.rsplit_once('/').map(|(head, _)| head).unwrap_or("");
     let relative = if parent.is_empty() {
@@ -1462,9 +1517,10 @@ fn fm_move(
     dir: String,
 ) -> Result<usize, String> {
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
-    let base = instances::game_dir(&state.paths, &instance_id);
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let base = instances::ensure_game_dir(&state.paths, &meta).map_err(err)?;
     let target = safe_join(&base, &dir)?;
-    std::fs::create_dir_all(&target).map_err(err)?;
+    instances::create_dir_beneath(&base, &target).map_err(err)?;
     let mut moved = 0usize;
     for path in paths {
         let from = safe_join(&base, &path)?;
@@ -1502,7 +1558,7 @@ fn fm_read_image(
     instance_id: String,
     path: String,
 ) -> Result<String, String> {
-    let base = instances::game_dir(&state.paths, &instance_id);
+    let base = instances::game_dir(&state.paths, &instance_id).map_err(err)?;
     let file = safe_join(&base, &path)?;
     let mime = image_mime(&file).ok_or_else(|| "это не картинка".to_string())?;
     let meta = std::fs::metadata(&file).map_err(err)?;
@@ -1522,7 +1578,7 @@ fn archive_list(
     instance_id: String,
     path: String,
 ) -> Result<Vec<ArchiveEntry>, String> {
-    let base = instances::game_dir(&state.paths, &instance_id);
+    let base = instances::game_dir(&state.paths, &instance_id).map_err(err)?;
     let file = safe_join(&base, &path)?;
     archive_list_entries(&file)
 }
@@ -1535,7 +1591,7 @@ fn archive_read(
     path: String,
     entry: String,
 ) -> Result<ArchivePreview, String> {
-    let base = instances::game_dir(&state.paths, &instance_id);
+    let base = instances::game_dir(&state.paths, &instance_id).map_err(err)?;
     let file = safe_join(&base, &path)?;
     let bytes = archive_bytes(&file, &entry)?;
     let lower = entry.to_lowercase();
@@ -1580,7 +1636,7 @@ struct ModEntry {
 
 #[tauri::command]
 fn list_mods(state: State<'_, AppState>, instance_id: String) -> Result<Vec<ModEntry>, String> {
-    let dir = instances::game_dir(&state.paths, &instance_id).join("mods");
+    let dir = instances::game_dir(&state.paths, &instance_id).map_err(err)?.join("mods");
     let mut result = Vec::new();
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Ok(result);
@@ -1620,7 +1676,7 @@ fn list_screenshots(
     state: State<'_, AppState>,
     instance_id: String,
 ) -> Result<Vec<ScreenshotEntry>, String> {
-    let dir = instances::game_dir(&state.paths, &instance_id).join("screenshots");
+    let dir = instances::game_dir(&state.paths, &instance_id).map_err(err)?.join("screenshots");
     let mut result = Vec::new();
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Ok(result);
@@ -1660,7 +1716,7 @@ fn screenshot_path(
     let file_name = std::path::Path::new(name)
         .file_name()
         .ok_or_else(|| "неверное имя файла".to_string())?;
-    let dir = instances::game_dir(&state.paths, instance_id).join("screenshots");
+    let dir = instances::game_dir(&state.paths, instance_id).map_err(err)?.join("screenshots");
     let path = dir.join(file_name);
     if !path.is_file() {
         return Err("скриншот не найден".to_string());
@@ -1730,7 +1786,7 @@ fn world_icons(
     state: State<'_, AppState>,
     instance_id: String,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    let saves = instances::game_dir(&state.paths, &instance_id).join("saves");
+    let saves = instances::game_dir(&state.paths, &instance_id).map_err(err)?.join("saves");
     let mut result = std::collections::HashMap::new();
     let Ok(entries) = std::fs::read_dir(&saves) else {
         return Ok(result);
@@ -1762,7 +1818,7 @@ async fn mod_icons(
     state: State<'_, AppState>,
     instance_id: String,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    let mods_dir = instances::game_dir(&state.paths, &instance_id).join("mods");
+    let mods_dir = instances::game_dir(&state.paths, &instance_id).map_err(err)?.join("mods");
     let cache_file = state.paths.cache().join("mod-icons.json");
     let mut cache: std::collections::HashMap<String, String> = std::fs::read_to_string(&cache_file)
         .ok()
@@ -1792,7 +1848,7 @@ async fn mod_icons(
 
     // Ресурспаки и шейдеры: сначала pack.png изнутри zip (как в самой игре),
     // если его нет — ищем проект на Modrinth по имени файла.
-    let game_dir = instances::game_dir(&state.paths, &instance_id);
+    let game_dir = instances::game_dir(&state.paths, &instance_id).map_err(err)?;
     for (dir_name, project_type) in [("resourcepacks", "resourcepack"), ("shaderpacks", "shader")] {
         let dir = game_dir.join(dir_name);
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -2088,6 +2144,17 @@ async fn pick_save_path(
 }
 
 /* ==================== СОДЕРЖИМОЕ СБОРКИ ==================== */
+
+/// Подтвердить актуальные моды по содержимому реальных файлов и каталогу.
+#[tauri::command]
+async fn catalog_current_mods(
+    state: State<'_, AppState>, instance_id: String, source: String,
+) -> Result<Vec<String>, String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    omnispec_core::catalog_installed::current_projects(
+        &state.paths, &meta, &source, &state.modrinth, &state.curseforge,
+    ).await.map_err(err)
+}
 
 /// Файлы сборки нужного вида: моды, шейдеры или ресурспаки.
 #[tauri::command]
@@ -2925,13 +2992,12 @@ fn set_instance_icon_file(
     if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp") {
         return Err("подойдёт PNG, JPG или WebP".into());
     }
+    let mut meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let dir = state.paths.instance_dir(&instance_id);
-    std::fs::create_dir_all(&dir).map_err(err)?;
     let file_name = format!("icon.{extension}");
     std::fs::copy(&source, dir.join(&file_name))
         .map_err(|error| format!("не удалось скопировать картинку: {error}"))?;
 
-    let mut meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     meta.icon = Some(file_name);
     instances::save(&state.paths, &meta).map_err(err)?;
     Ok(meta)
@@ -2992,12 +3058,13 @@ fn copy_instance_file(
     if !allowed.iter().any(|ext| lower.ends_with(*ext)) {
         return Err("подойдёт .jar, .zip или .mrpack".into());
     }
-    let target_dir = state
-        .paths
-        .instance_dir(&instance_id)
-        .join("minecraft")
-        .join(&sub);
-    std::fs::create_dir_all(&target_dir).map_err(err)?;
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    if !matches!(sub.as_str(), "mods" | "resourcepacks" | "shaderpacks" | "modpacks") {
+        return Err("неизвестная папка содержимого".into());
+    }
+    let game = instances::ensure_game_dir(&state.paths, &meta).map_err(err)?;
+    let target_dir = game.join(&sub);
+    instances::create_dir_beneath(&game, &target_dir).map_err(err)?;
     std::fs::copy(&source, target_dir.join(&name))
         .map_err(|error| format!("не удалось скопировать: {error}"))?;
     Ok(name)
@@ -3072,7 +3139,9 @@ async fn list_java(state: State<'_, AppState>) -> Result<Vec<JavaInstall>, Strin
 /// Служебный путь интерфейса (`<id>/minecraft/mods`, `/instances/<id>/minecraft`)
 /// → настоящая папка игры. Уважает своё «место установки» сборки.
 fn resolve_game_path(paths: &omnispec_core::paths::Paths, raw: &str) -> Option<PathBuf> {
-    let trimmed = raw.trim().trim_start_matches('/');
+    let raw = raw.trim();
+    if raw.starts_with('/') && !raw.starts_with("/instances/") { return None; }
+    let trimmed = raw.trim_start_matches('/');
     let rest = trimmed.strip_prefix("instances/").unwrap_or(trimmed);
     let mut parts = rest.splitn(2, '/');
     let id = parts.next()?;
@@ -3085,36 +3154,53 @@ fn resolve_game_path(paths: &omnispec_core::paths::Paths, raw: &str) -> Option<P
     let tail = tail.strip_prefix("minecraft").unwrap_or(tail);
     let tail = tail.trim_start_matches('/');
     let base = instances::game_dir_for(paths, &meta);
-    Some(if tail.is_empty() { base } else { base.join(tail) })
+    if tail.is_empty() { Some(base) } else { safe_join(&base, tail).ok() }
 }
 
-#[tauri::command]
-fn open_path(state: State<'_, AppState>, path: String) -> Result<(), String> {
-    let root = &state.paths.root;
+fn prepare_open_path(paths: &Paths, path: &str) -> Result<PathBuf, String> {
+    let root = &paths.root;
     let trimmed = path.trim();
+    let resolved_game = resolve_game_path(paths, trimmed);
+    let instance_id = resolved_game.as_ref().map(|_| {
+        trimmed.trim_start_matches('/').strip_prefix("instances/")
+            .unwrap_or(trimmed).split('/').next().unwrap_or("").to_string()
+    });
     let target = if trimmed.is_empty() {
         root.clone()
-    } else if let Some(game_path) = resolve_game_path(&state.paths, trimmed) {
+    } else if let Some(game_path) = resolved_game {
         game_path
+    } else if trimmed.trim_start_matches('/').starts_with("instances/") {
+        // Не создаём старую папку, если её переименовали вне лаунчера.
+        return Err("сборка не найдена; обнови список сборок".into());
     } else if let Some(rest) = trimmed.strip_prefix('/') {
-        root.join(rest)
+        if Path::new(trimmed).exists() { PathBuf::from(trimmed) } else { root.join(rest) }
     } else {
         let first = trimmed.split('/').next().unwrap_or(trimmed);
-        if state.paths.instance_dir(first).exists() {
-            state.paths.instances().join(trimmed)
+        if paths.instance_dir(first).exists() {
+            paths.instances().join(trimmed)
         } else {
             root.join(trimmed)
         }
     };
 
-    // Папку сборки создаём, если её ещё нет: иначе проводник Windows
-    // молча открывает «Документы» вместо нужного места.
-    if !target.exists() && (target.starts_with(root) || target.is_absolute()) {
-        let _ = std::fs::create_dir_all(&target);
+    // Только служебный путь проверенной сборки может создавать игровые папки.
+    // Произвольный абсолютный путь может быть устаревшим после переименования.
+    if !target.exists() {
+        if let Some(id) = instance_id {
+            let meta = instances::load(paths, &id).map_err(err)?;
+            let base = instances::ensure_game_dir(paths, &meta).map_err(err)?;
+            instances::create_dir_beneath(&base, &target).map_err(err)?;
+        }
     }
     if !target.exists() {
         return Err(format!("путь не найден: {}", target.display()));
     }
+    Ok(target)
+}
+
+#[tauri::command]
+fn open_path(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let target = prepare_open_path(&state.paths, &path)?;
     // Если подсунули файл — открываем папку, где он лежит.
     let folder = if target.is_dir() {
         target
@@ -3223,6 +3309,7 @@ fn custom_wallpaper(state: State<'_, AppState>) -> Result<Option<String>, String
 /// Где лежит сборка — строка «папка: …» в главном окне.
 #[tauri::command]
 fn instance_path(state: State<'_, AppState>, instance_id: String) -> Result<String, String> {
+    instances::load(&state.paths, &instance_id).map_err(err)?;
     Ok(state.paths.instance_dir(&instance_id).display().to_string())
 }
 
@@ -3332,6 +3419,7 @@ fn main() {
             set_presence,
             resolve_presence_icon,
             list_instances,
+            acknowledge_instance_renames,
             create_instance,
             delete_instance,
             duplicate_instance,
@@ -3393,6 +3481,7 @@ fn main() {
             version_info,
             check_update,
             net_check,
+            catalog_current_mods,
             content_list,
             content_toggle,
             content_delete,
@@ -3422,11 +3511,50 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{finish_pumps, pump_lines, reserve_launch, run_key};
+    use super::{finish_pumps, pump_lines, reserve_launch, run_key, run_instance_id};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn queued_settings_do_not_undo_recovered_last_instance() {
+        use super::{instances, preserve_recovered_last_instance, Paths, Settings};
+        let root = std::env::temp_dir().join(format!("omnispec-last-instance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::new(&root).unwrap();
+        let meta = instances::create(&paths, serde_json::from_value(serde_json::json!({
+            "id":"new", "name":"New", "mc_version":"1.21.1"
+        })).unwrap()).unwrap();
+        let current = Settings { last_instance: Some(meta.id.clone()), ..Settings::default() };
+        let mut stale = Settings { last_instance: Some("old".into()), ..Settings::default() };
+        preserve_recovered_last_instance(&paths, &current, &mut stale);
+        assert_eq!(stale.last_instance, Some(meta.id));
+        let mut clear = Settings { last_instance: None, ..Settings::default() };
+        preserve_recovered_last_instance(&paths, &current, &mut clear);
+        assert_eq!(clear.last_instance, None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn opening_a_stale_absolute_path_never_recreates_a_moved_instance() {
+        use super::{instances, prepare_open_path, Paths};
+        let root = std::env::temp_dir().join(format!("omnispec-open-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::new(&root).unwrap();
+        let meta = instances::create(&paths, serde_json::from_value(serde_json::json!({
+            "id":"old", "name":"Old", "mc_version":"1.21.1"
+        })).unwrap()).unwrap();
+        let old = paths.instance_dir(&meta.id);
+        let missing = old.join("minecraft").join("screenshots").join("missing.png");
+        let created = prepare_open_path(&paths, "/instances/old/minecraft/logs/created").unwrap();
+        assert!(created.is_dir());
+        std::fs::rename(&old, paths.instance_dir("new")).unwrap();
+        assert!(prepare_open_path(&paths, "/instances/old/minecraft/logs/created").is_err());
+        assert!(prepare_open_path(&paths, &missing.to_string_lossy()).is_err());
+        assert!(!old.exists(), "opening a stale path recreated the old instance");
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn diagnostic_reservation_excludes_running_preparing_and_concurrent_writes() {
@@ -3477,6 +3605,8 @@ mod tests {
     #[test]
     fn run_key_prefixes_short_number() {
         assert_eq!(run_key("atm10", Some("2".into())).as_deref(), Some("atm10#2"));
+        assert_eq!(run_key("Сборка #1", Some("2".into())).as_deref(), Some("Сборка #1#2"));
+        assert_eq!(run_instance_id("Сборка #1#2"), "Сборка #1");
     }
 
     #[test]

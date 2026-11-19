@@ -110,8 +110,7 @@ pub async fn prepare(
     .await?;
 
     let memory_mb = instance.memory_or(settings.memory_clamped());
-    let game_dir = crate::instances::game_dir_for(paths, instance);
-    std::fs::create_dir_all(&game_dir)?;
+    let game_dir = crate::instances::ensure_game_dir(paths, instance)?;
 
     let classpath: Vec<String> = report
         .classpath

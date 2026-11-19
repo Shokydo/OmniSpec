@@ -143,8 +143,9 @@ pub fn load_store(paths: &Paths, instance: &InstanceMeta) -> ContentStore {
 
 pub fn save_store(paths: &Paths, instance: &InstanceMeta, store: &ContentStore) -> Result<()> {
     let path = store_path(paths, instance);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let current = crate::instances::load(paths, &instance.id)?;
+    if crate::instances::game_dir_for(paths, &current) != crate::instances::game_dir_for(paths, instance) {
+        return Err(Error::other("папка игры изменилась; обнови список сборок"));
     }
     let text = serde_json::to_string_pretty(store)?;
     std::fs::write(path, text)?;
@@ -432,7 +433,9 @@ pub async fn apply_update_with(
     update: &ContentUpdate,
     reporter: Option<&Reporter>,
 ) -> Result<ContentUpdate> {
+    let game = crate::instances::ensure_game_dir(paths, instance)?;
     let dir = dir_of(paths, instance, kind);
+    crate::instances::create_dir_beneath(&game, &dir)?;
     let dest = dir.join(&update.new_filename);
     if let Some(reporter) = reporter {
         reporter.emit("update", 0, 0, format!("обновляем {}", update.new_filename));
@@ -440,21 +443,21 @@ pub async fn apply_update_with(
         let file_name = update.new_filename.clone();
         modrinth
             .http()
-            .download_tracked(
+            .download_existing_dir(
                 &update.download_url,
                 &dest,
                 Some(update.size),
                 None,
                 true,
-                &|done, total| {
+                Some(&|done, total| {
                     reporter_progress.emit_bytes("update", &file_name, done, total);
-                },
+                }),
             )
             .await?;
     } else {
         modrinth
             .http()
-            .download(&update.download_url, &dest, Some(update.size), None, true)
+            .download_existing_dir(&update.download_url, &dest, Some(update.size), None, true, None)
             .await?;
     }
 
@@ -506,8 +509,9 @@ pub async fn replace_version(
     let file = version
         .primary_file()
         .ok_or_else(|| Error::not_found(format!("у версии {} нет файлов", version.id)))?;
+    let game = crate::instances::ensure_game_dir(paths, instance)?;
     let dir = dir_of(paths, instance, kind);
-    std::fs::create_dir_all(&dir)?;
+    crate::instances::create_dir_beneath(&game, &dir)?;
     let dest = dir.join(&file.filename);
     // Если имя совпало со старым — качаем во временный файл и переименовываем,
     // чтобы не потерять мод при обрыве загрузки.
@@ -521,15 +525,15 @@ pub async fn replace_version(
     let file_name = file.filename.clone();
     modrinth
         .http()
-        .download_tracked(
+        .download_existing_dir(
             &file.url,
             &tmp,
             Some(file.size),
             None,
             true,
-            &|done, total| {
+            Some(&|done, total| {
                 reporter_progress.emit_bytes("mods", &file_name, done, total);
-            },
+            }),
         )
         .await?;
     if tmp != dest {
@@ -665,6 +669,8 @@ mod tests {
         .unwrap();
         let mods = paths.instance_game_dir("pack").join("mods");
         std::fs::create_dir_all(&mods).unwrap();
+        std::fs::write(paths.instance_file(&instance.id), serde_json::to_vec(&instance).unwrap()).unwrap();
+        crate::instances::save(&paths, &instance).unwrap();
         std::fs::write(mods.join("first.jar"), b"first").unwrap();
         std::fs::write(mods.join("second.jar.disabled"), b"second").unwrap();
         let mut store = ContentStore::default();
@@ -710,6 +716,8 @@ mod tests {
             "loader": {"type":"fabric", "version":"0.16.10"}
         }))
         .unwrap();
+        std::fs::create_dir_all(paths.instance_dir(&meta.id)).unwrap();
+        std::fs::write(paths.instance_file(&meta.id), serde_json::to_vec(&meta).unwrap()).unwrap();
         crate::instances::save(&paths, &meta).unwrap();
         (LiveRoot(root), paths, meta)
     }
@@ -764,6 +772,8 @@ mod tests {
             id: "direct".into(),
             ..meta.clone()
         };
+        std::fs::create_dir_all(paths.instance_dir(&direct.id)).unwrap();
+        std::fs::write(paths.instance_file(&direct.id), serde_json::to_vec(&direct).unwrap()).unwrap();
         crate::instances::save(&paths, &direct).unwrap();
         let direct_result =
             crate::modrinth::install::install_project(&client, &paths, &direct, project, &reporter)
@@ -825,6 +835,8 @@ mod tests {
             id: "direct".into(),
             ..meta.clone()
         };
+        std::fs::create_dir_all(paths.instance_dir(&direct.id)).unwrap();
+        std::fs::write(paths.instance_file(&direct.id), serde_json::to_vec(&direct).unwrap()).unwrap();
         crate::instances::save(&paths, &direct).unwrap();
         let direct_result =
             crate::curseforge::install::install(&client, &paths, &direct, project, None, &reporter)

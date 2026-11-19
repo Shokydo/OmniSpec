@@ -2,7 +2,7 @@
   "name": "omnispec-ui-tests",
   "private": true,
   "scripts": {
-    "test": "node diagnostics-unit.cjs && node diagnostics-ui.cjs && node feed-rpc-regression.cjs && node catalog-install-ui.cjs && node keyboard-catalog-ui.cjs"
+    "test": "node diagnostics-unit.cjs && node diagnostics-ui.cjs && node feed-rpc-regression.cjs && node catalog-install-ui.cjs && node keyboard-catalog-ui.cjs && node rename-instance-ui.cjs"
   },
   "devDependencies": {
     "playwright": "1.49.1"

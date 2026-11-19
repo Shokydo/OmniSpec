@@ -32,6 +32,8 @@ async function createPage(browser) {
       entries: {
         'pack-a': [
           {project_id:'m-5',source:'modrinth',enabled:true}, {project_id:'m-6',source:'modrinth',enabled:false},
+          {project_id:'m-7',source:'modrinth',enabled:true,latest:false},
+          {project_id:'m-8',source:'modrinth',enabled:true,imported:true},
           {project_id:'c-5',source:'curseforge',enabled:true}, {project_id:'12345678',source:'curseforge',enabled:true},
           {project_id:'87654321',source:'modrinth',enabled:true}, {project_id:'11111111',source:null,enabled:true}
         ],
@@ -72,11 +74,14 @@ async function createPage(browser) {
           case 'version_info': return {version:'test',enabled:false};
           case 'list_java': return [];
           case 'instance_path': return `/test/${args.instanceId}`;
-          case 'content_list': {
-            const snapshot = (this.entries[args.instanceId] || []).map(x => ({...x}));
+          case 'content_list': return (this.entries[args.instanceId] || []).map(x => ({...x}));
+          case 'catalog_current_mods': {
+            if (this.failCatalog) throw 'сеть недоступна';
+            const snapshot = (this.entries[args.instanceId] || [])
+              .filter(x => x.source === args.source && x.latest !== false).map(x => x.project_id);
             if (this.holdNext[args.instanceId] > 0) {
               this.holdNext[args.instanceId]--;
-              return new Promise(resolve => this.held.push({id:args.instanceId,snapshot,resolve}));
+              return new Promise(resolve => this.held.push({id:args.instanceId,source:args.source,snapshot,resolve}));
             }
             return snapshot;
           }
@@ -214,10 +219,33 @@ async function verifyInstallation(page, source, view, mode, number) {
   const browser = await chromium.launch({headless:true});
   try {
     const {page,errors} = await createPage(browser);
-    // Existing enabled and disabled JARs are outlined after the asynchronous content list arrives.
+    // Current enabled/disabled and imported files are outlined; outdated versions are not.
     await page.waitForFunction(() => document.querySelector('[data-project="m-5"]')?.classList.contains('is-installed'));
     assert(await page.locator('[data-project="m-6"]').evaluate(el => el.classList.contains('is-installed')));
+    assert(await page.locator('[data-project="m-8"]').evaluate(el => el.classList.contains('is-installed')));
     assert(!(await page.locator('[data-project="m-7"]').evaluate(el => el.classList.contains('is-installed'))));
+    assert((await page.locator('#dl-installed-check').innerText()).includes('последняя версия'));
+    assert((await page.locator('[data-project="m-8"]').getAttribute('aria-label')).includes('актуальная версия'));
+    // A delayed answer from the other source must not overwrite the current one.
+    await page.evaluate(() => { window.__catalogTest.holdNext['pack-a'] = 1; });
+    await page.selectOption('#dl-source','curseforge');
+    await page.waitForFunction(() => window.__catalogTest.held.some(x => x.source === 'curseforge'));
+    await page.selectOption('#dl-source','modrinth');
+    await page.waitForFunction(() => document.querySelector('[data-project="m-5"]')?.classList.contains('is-installed'));
+    await page.evaluate(() => window.__catalogTest.releaseHeld('pack-a'));
+    await page.waitForTimeout(150);
+    assert(await page.locator('[data-project="m-5"]').evaluate(el => el.classList.contains('is-installed')));
+    // An unavailable service must clear old marks and say the check failed; online retries.
+    await page.evaluate(() => { window.__catalogTest.failCatalog = true; });
+    await page.selectOption('#dl-source','curseforge');
+    await page.waitForFunction(() => document.querySelector('#dl-installed-check')?.textContent.includes('Не удалось'));
+    await page.waitForSelector('[data-cf-project="c-5"]');
+    assert(!(await page.locator('[data-cf-project="c-5"]').evaluate(el => el.classList.contains('is-installed'))));
+    await page.evaluate(() => { window.__catalogTest.failCatalog = false; window.dispatchEvent(new Event('online')); });
+    await page.waitForFunction(() => document.querySelector('[data-cf-project="c-5"]')?.classList.contains('is-installed'));
+    await page.selectOption('#dl-source','modrinth');
+    await page.waitForFunction(() => document.querySelector('[data-project="m-5"]')?.classList.contains('is-installed'));
+    console.log('CATALOG_CURRENT: imported/disabled/old, source races, offline retry — OK');
     await ensureCard(page,'#mr-results','[data-project="11111111"]');
     assert(!(await page.locator('[data-project="12345678"]').evaluate(el => el.classList.contains('is-installed'))),'чужой источник с таким же id не отмечается');
     assert(await page.locator('[data-project="87654321"]').evaluate(el => el.classList.contains('is-installed')));

@@ -2041,6 +2041,7 @@
     settings: () => invoke("get_settings"),
     saveSettings: saveSettingsInOrder,
     instances: () => invoke("list_instances"),
+    acknowledgeInstanceRenames: (acknowledgements) => invoke("acknowledge_instance_renames", { acknowledgements }),
     createInstance: (req) => invoke("create_instance", { req }),
     deleteInstance: (id) => invoke("delete_instance", { instanceId: id }),
     updateInstance: (meta) => invoke("update_instance", { meta }),
@@ -2073,6 +2074,7 @@
     screenshotThumb: (instanceId, name) => invoke("screenshot_thumb", { instanceId, name }),
     screenshotFull: (instanceId, name) => invoke("screenshot_full", { instanceId, name }),
     // содержимое сборки: моды, ресурспаки, шейдеры
+    catalogCurrentMods: (instanceId, source) => invoke("catalog_current_mods", { instanceId, source }),
     contentList: (instanceId, kind) => invoke("content_list", { instanceId, kind }),
     contentToggle: (instanceId, kind, name) => invoke("content_toggle", { instanceId, kind, name }),
     contentDelete: (instanceId, kind, name) => invoke("content_delete", { instanceId, kind, name }),
@@ -2178,6 +2180,7 @@
     settings: async () => ({ ...DEMO.settings }),
     saveSettings: async (s) => { DEMO.settings = s; return null; },
     instances: async () => DEMO.instances.map((i) => ({ ...i })),
+    acknowledgeInstanceRenames: async () => null,
     createInstance: async (req) => {
       const meta = { ...DEMO.instances[0], id: "demo-" + Date.now(), name: req.name, mc_version: req.mc_version, loader: req.loader || { type: "vanilla" }, last_played: null };
       DEMO.instances.unshift(meta);
@@ -2400,6 +2403,8 @@
       return { kind: "text", size: found.size, data_url: null, text: `# ${entry}\n# демо-содержимое внутри архива\n` };
     },
     mods: async () => demoMods.map((m) => ({ ...m })),
+    // В демо-режиме пример статусов, без обращения к сети и локальным файлам.
+    catalogCurrentMods: async (_id, source) => source === "modrinth" ? demoMods.map((mod) => mod.project_id).filter(Boolean) : [],
     // содержимое сборки в демо-режиме
     contentList: async (_id, kind) => (kind === "mod"
       ? demoMods.map((mod) => {
@@ -3481,8 +3486,8 @@
       pathbar.hidden = !meta;
       if (meta) {
         api.instancePath(meta.id)
-          .then((path) => { pathbar.querySelector("span").textContent = path; })
-          .catch(() => { pathbar.querySelector("span").textContent = "папка сборки"; });
+          .then((path) => { if (state.selectedId === meta.id) pathbar.querySelector("span").textContent = path; })
+          .catch(() => { if (state.selectedId === meta.id) pathbar.querySelector("span").textContent = "папка сборки"; });
       }
     }
     updateStatus();
@@ -3817,8 +3822,16 @@
 
   /* ==================== ПРИЗНАКИ УСТАНОВЛЕННЫХ МОДОВ ==================== */
   let installedProjectsInstance = null;
+  let installedProjectsSource = null;
   let installedProjectsGeneration = 0;
+  let installedProjectsMessage = "";
   let contentOperationSerial = 0;
+
+  function installedMessage(text) {
+    installedProjectsMessage = text;
+    const label = $("#dl-installed-check");
+    if (label) label.textContent = text;
+  }
 
   function projectKey(source, projectId) {
     return JSON.stringify([source, String(projectId)]);
@@ -3841,7 +3854,7 @@
 
   function projectLabel(title, projectId, source, type) {
     const parts = [title || "Проект"];
-    if (projectInstalled(projectId, source, type)) parts.push("установлен в этой сборке");
+    if (projectInstalled(projectId, source, type)) parts.push("установлен в этой сборке, актуальная версия");
     if (projectStatus(projectId, source, type) === "downloading") parts.push("скачивается");
     return parts.join(" — ");
   }
@@ -3881,24 +3894,30 @@
     });
   }
 
-  /** Запрос относится к конкретной сборке; запоздавший ответ нельзя применить к другой. */
+  /** Запрос относится к сборке И источнику; опоздавший ответ нельзя применить к другому. */
   async function refreshInstalledProjects() {
     const generation = ++installedProjectsGeneration;
     const instanceId = selected()?.id || null;
-    if (installedProjectsInstance !== instanceId) {
-      installedProjectsInstance = instanceId;
-      state.installedProjects = new Set();
-      updateCatalogProjectStates();
-    }
-    if (!instanceId) return;
+    const source = state.modsSource === "curseforge" ? "curseforge" : "modrinth";
+    installedProjectsInstance = instanceId;
+    installedProjectsSource = source;
+    // Старые результаты нельзя выдавать за актуальные после удаления или изменения файла.
+    state.installedProjects = new Set();
+    updateCatalogProjectStates();
+    if (!instanceId || state.tab !== "download") { installedMessage(""); return; }
+    installedMessage("Проверяем установленные версии модов…");
     try {
-      const entries = await api.contentList(instanceId, "mod");
-      if (generation !== installedProjectsGeneration || state.selectedId !== instanceId) return;
-      state.installedProjects = new Set((entries || [])
-        .filter((entry) => entry.project_id && ["modrinth", "curseforge"].includes(entry.source))
-        .map((entry) => projectKey(entry.source, entry.project_id)));
+      const ids = await api.catalogCurrentMods(instanceId, source);
+      if (generation !== installedProjectsGeneration || state.selectedId !== instanceId
+          || installedProjectsSource !== source || state.modsSource !== source) return;
+      state.installedProjects = new Set((ids || []).filter(Boolean).map((id) => projectKey(source, id)));
+      installedMessage("Обводка: в сборке установлена последняя версия под её Minecraft и загрузчик.");
       updateCatalogProjectStates();
-    } catch (_) { /* прежнее состояние той же сборки остаётся на экране */ }
+    } catch (_) {
+      if (generation !== installedProjectsGeneration || state.selectedId !== instanceId
+          || installedProjectsSource !== source || state.modsSource !== source) return;
+      installedMessage("Не удалось проверить установленные версии. Вернись в каталог или проверь соединение.");
+    }
   }
 
   /** Показываем операцию от её начала до ответа команды, включая зависимости. */
@@ -5290,8 +5309,8 @@
         </div>
       </div>`;
 
-    $("#content-add").addEventListener("click", () => { state.modrinth.type = kind; state.modsSource = "modrinth"; state.tab = "download"; renderTab(); });
-    $("#content-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/${cfg.folder}`).catch((err) => toast(String(err), "err")));
+    $("#content-add").addEventListener("click", () => { state.modrinth.type = kind; state.modsSource = "modrinth"; state.tab = "download"; refreshInstalledProjects(); renderTab(); });
+    $("#content-open").addEventListener("click", () => api.openPath(`/instances/${meta.id}/minecraft/${cfg.folder}`).catch((err) => toast(String(err), "err")));
     const input = $("#content-query");
     input.addEventListener("input", () => {
       state.contentQuery[kind] = input.value;
@@ -5360,7 +5379,7 @@
         else if (act === "replace") await openVersions(entry.project_id, kind, contentTitle(entry), entry);
         else if (act === "page") await api.openUrl(pageUrl);
         else if (act === "toggle") { await api.contentToggle(meta.id, kind, entry.name); renderContent(kind); }
-        else if (act === "folder") await api.openPath(`${meta.id}/minecraft/${cfg.folder}`);
+        else if (act === "folder") await api.openPath(`/instances/${meta.id}/minecraft/${cfg.folder}`);
         else if (act === "delete") {
           const ok = await askConfirm({ title: "Удалить файл?", text: `«${entry.filename}» будет удалён из сборки.`, ok: "Удалить", danger: true });
           if (ok) { await api.contentDelete(meta.id, kind, entry.filename); renderContent(kind); toast("Удалено", "ok"); }
@@ -5497,7 +5516,7 @@
           }).join("") : `<div class="item-row"><div class="item-main muted">Миров пока нет — создай их в игре</div></div>`}
         </div>
       </div>`;
-    $("#worlds-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/saves`).catch(() => {}));
+    $("#worlds-open").addEventListener("click", () => api.openPath(`/instances/${meta.id}/minecraft/saves`).catch(() => {}));
   }
 
   /* ---------- Скриншоты ---------- */
@@ -5524,7 +5543,7 @@
           : `<div class="item-row"><div class="item-main muted">Скриншотов пока нет — нажми F2 в игре</div></div>`}
         </div>
       </div>`;
-    $("#shots-open").addEventListener("click", () => api.openPath(`${meta.id}/minecraft/screenshots`).catch(() => {}));
+    $("#shots-open").addEventListener("click", () => api.openPath(`/instances/${meta.id}/minecraft/screenshots`).catch(() => {}));
     if (entries.length) {
       appendShotBatch();
       watchShotsMore();
@@ -5724,12 +5743,14 @@
             <span class="mono" id="dl-size-val">${modsGridLevel()}</span>
           </label>
         </div>
+        <div class="hint" id="dl-installed-check" role="status">${esc(installedProjectsMessage)}</div>
         <div id="dl-source-body"></div>
       </div>`);
 
     $("#dl-query").addEventListener("keydown", (event) => { if (event.key === "Enter") dlRunSearch(); });
     $("#dl-source").addEventListener("change", (event) => {
       state.modsSource = event.target.value === "curseforge" ? "curseforge" : "modrinth";
+      refreshInstalledProjects();
       // Сам select не пересоздаём: на Windows/WebKit change может прийти
       // прямо посреди работы с раскрытым списком клавиатурой.
       const cfg = state.modsSource === "curseforge" ? state.curseforge : state.modrinth;
@@ -6569,6 +6590,7 @@
 
   // Когда сеть вернулась, не ждём оставшуюся паузу backoff.
   window.addEventListener("online", () => {
+    if (state.tab === "download" && state.selectedId) refreshInstalledProjects();
     const cfg = state.discover;
     if (!dvVisible() || cfg.loading || cfg.loadingMore) return;
     if (cfg.error && dvRetryable(cfg.error)) {
@@ -8419,7 +8441,7 @@
         <div class="prefs-rows">
           <div class="settings-row">
             <div class="label">Показывать статус</div>
-            <div><div class="switch-row"><button class="switch ${settings.discord_rpc !== false ? "on" : ""}" id="set-discord-rpc"></button><span class="muted">«В ожидании / Запускает / Играет» + сборка</span></div></div>
+            <div><div class="switch-row"><button type="button" class="switch ${settings.discord_rpc !== false ? "on" : ""}" id="set-discord-rpc" role="switch" aria-label="Показывать статус в Discord" aria-checked="${settings.discord_rpc !== false}"></button><span class="muted">«В ожидании / Запускает / Играет» + сборка</span></div></div>
           </div>
           <div class="settings-row">
             <div class="label">Изображения</div>
@@ -8428,15 +8450,15 @@
           <div class="settings-row">
             <div class="label">Иконка сборки</div>
             <div>
-              <label class="rpc-check"><input type="checkbox" id="set-discord-icon" ${settings.discord_instance_icon !== false ? "checked" : ""}><span>Показывать маленькую иконку сборки</span></label>
+              <div class="switch-row"><button type="button" class="switch ${settings.discord_instance_icon !== false ? "on" : ""}" id="set-discord-icon" role="switch" aria-label="Показывать маленькую иконку сборки" aria-checked="${settings.discord_instance_icon !== false}"></button><span class="muted">Показывать маленькую иконку сборки</span></div>
               <div class="hint">Для Modrinth и CurseForge используется публичная иконка проекта, если она совпадает с иконкой сборки. Встроенные значки и буквы работают без загрузки файлов.</div>
             </div>
           </div>
           <div class="settings-row">
             <div class="label">Свои картинки</div>
             <div>
-              <label class="rpc-check"><input type="checkbox" id="set-discord-upload" ${settings.discord_upload_local_icon === true ? "checked" : ""}><span>Разрешить публикацию локальных иконок для Discord</span></label>
-              <div class="hint rpc-privacy">По умолчанию выключено. При включении выбранная иконка уменьшится и отправится на публичный сторонний сервис tmpfile.link: её сможет открыть любой, у кого есть ссылка. Сервис заявляет удаление через 7 дней; досрочно удалить файл нельзя, а Discord может кэшировать его дольше. Отключение галочки не удаляет уже отправленные файлы. Без разрешения вместо своей картинки показывается буква сборки.</div>
+              <div class="switch-row"><button type="button" class="switch ${settings.discord_upload_local_icon === true ? "on" : ""}" id="set-discord-upload" role="switch" aria-label="Разрешить публикацию локальных иконок для Discord" aria-checked="${settings.discord_upload_local_icon === true}"></button><span class="muted">Разрешить публикацию локальных иконок для Discord</span></div>
+              <div class="hint rpc-privacy">По умолчанию выключено. При включении выбранная иконка уменьшится и отправится на публичный сторонний сервис tmpfile.link: её сможет открыть любой, у кого есть ссылка. Сервис заявляет удаление через 7 дней; досрочно удалить файл нельзя, а Discord может кэшировать его дольше. Отключение переключателя не удаляет уже отправленные файлы. Без разрешения вместо своей картинки показывается буква сборки.</div>
             </div>
           </div>
         </div>
@@ -8806,8 +8828,16 @@
     if (memory) memory.addEventListener("input", (event) => { $("#set-memory-value").textContent = `${event.target.value} МБ`; });
     const autoJava = $("#set-auto-java");
     if (autoJava) autoJava.addEventListener("click", () => autoJava.classList.toggle("on"));
-    const discordRpc = $("#set-discord-rpc");
-    if (discordRpc) discordRpc.addEventListener("click", () => discordRpc.classList.toggle("on"));
+    [$("#set-discord-rpc"), $("#set-discord-icon"), $("#set-discord-upload")].forEach((control) => {
+      if (!control) return;
+      control.addEventListener("click", () => {
+        const enabled = control.classList.toggle("on");
+        control.setAttribute("aria-checked", String(enabled));
+      });
+      control.parentElement?.addEventListener("click", (event) => {
+        if (!control.contains(event.target)) control.click();
+      });
+    });
     const updEnabled = $("#set-upd-enabled");
     const updAuto = $("#set-upd-auto");
     // «авто-обновление» невозможно без проверки, а выключение проверки гасит и его
@@ -8913,8 +8943,8 @@
         // Не оставляем отмеченным разрешение, которое не удалось сохранить.
         if (enabled && state.settings?.[key] === enabled) {
           state.settings = { ...(state.settings || {}), [key]: previous };
-          if (control.type === "checkbox") control.checked = previous;
-          else control.classList.toggle("on", previous);
+          control.classList.toggle("on", previous);
+          control.setAttribute("aria-checked", String(previous));
           // Перезаписываем возможные изменения других настроек, уже стоящие в очереди.
           try { await api.saveSettings(state.settings); } catch (_) { /* покажем ошибку ниже */ }
         }
@@ -8927,10 +8957,10 @@
     };
     if (discordToggle) discordToggle.addEventListener("click", () =>
       commitDiscord("discord_rpc", discordToggle.classList.contains("on"), discordToggle));
-    if (discordIcon) discordIcon.addEventListener("change", () =>
-      commitDiscord("discord_instance_icon", discordIcon.checked, discordIcon));
-    if (discordUpload) discordUpload.addEventListener("change", () =>
-      commitDiscord("discord_upload_local_icon", discordUpload.checked, discordUpload));
+    if (discordIcon) discordIcon.addEventListener("click", () =>
+      commitDiscord("discord_instance_icon", discordIcon.classList.contains("on"), discordIcon));
+    if (discordUpload) discordUpload.addEventListener("click", () =>
+      commitDiscord("discord_upload_local_icon", discordUpload.classList.contains("on"), discordUpload));
     bindField("#set-memory", "memory_mb", { number: true });
     bindField("#set-jvm", "jvm_args");
     bindField("#set-java", "java_path", { trim: true });
@@ -8987,8 +9017,8 @@
       proxy: value("#set-proxy") !== undefined ? (value("#set-proxy").trim() || null) : settings.proxy,
       ms_client_id: value("#set-ms-client") !== undefined ? (value("#set-ms-client").trim() || null) : settings.ms_client_id,
       discord_rpc: flag("#set-discord-rpc", settings.discord_rpc),
-      discord_instance_icon: $("#set-discord-icon") ? $("#set-discord-icon").checked : settings.discord_instance_icon,
-      discord_upload_local_icon: $("#set-discord-upload") ? $("#set-discord-upload").checked : settings.discord_upload_local_icon,
+      discord_instance_icon: flag("#set-discord-icon", settings.discord_instance_icon),
+      discord_upload_local_icon: flag("#set-discord-upload", settings.discord_upload_local_icon),
       update_enabled: flag("#set-upd-enabled", settings.update_enabled),
       update_auto: flag("#set-upd-auto", settings.update_auto),
       update_prerelease: flag("#set-upd-pre", settings.update_prerelease),
@@ -10028,7 +10058,7 @@
     $("#inst-change-version").addEventListener("click", () => openVersionChange());
     $("#inst-export-mrpack").addEventListener("click", () => openExportModal(meta, "mrpack"));
     $("#inst-export-zip").addEventListener("click", () => openExportModal(meta, "zip"));
-    $("#inst-folder").addEventListener("click", () => api.openPath(`${meta.id}/minecraft`).catch((err) => toast(String(err), "err")));
+    $("#inst-folder").addEventListener("click", () => api.openPath(`/instances/${meta.id}/minecraft`).catch((err) => toast(String(err), "err")));
     $("#inst-delete").addEventListener("click", async () => {
       const okDelete2 = await askConfirm({
         title: "Удалить сборку",
@@ -10202,24 +10232,60 @@
   }
 
   /* ==================== ДЕЙСТВИЯ ==================== */
-  async function refreshInstances() {
-    const runningRevision = state.runningRevision;
-    try {
-      const instances = await api.instances();
-      const running = await api.running();
-      state.instances = instances;
-      // Ответ может запоздать за game-exit или запуском другого окна.
-      if (state.runningRevision === runningRevision) {
-        state.running = new Set([...(running || []), ...state.sessions.keys()]);
-        state.runningRevision += 1;
+  let instancesRefreshPending = null;
+  function previousInstanceIds(item) {
+    return Array.isArray(item.renamed_froms) ? item.renamed_froms : (item.renamed_from ? [item.renamed_from] : []);
+  }
+  function refreshInstances() {
+    // Два одновременных запроса не должны применять старый список поверх нового.
+    if (instancesRefreshPending) return instancesRefreshPending;
+    instancesRefreshPending = (async () => {
+      const runningRevision = state.runningRevision;
+      let selectionChanged = false;
+      try {
+        const instances = await api.instances();
+        const running = await api.running().catch(() => null);
+        const previous = state.selectedId;
+        state.instances = instances;
+        // Ответ может запоздать за game-exit или запуском другого окна.
+        if (running && state.runningRevision === runningRevision) {
+          state.running = new Set([...running, ...state.sessions.keys()]);
+          state.runningRevision += 1;
+        }
+        const last = state.settings?.last_instance;
+        if (last && !instances.some((item) => item.id === last)) {
+          const candidates = instances.filter((item) => previousInstanceIds(item).includes(last));
+          if (candidates.length === 1) state.settings.last_instance = candidates[0].id;
+        }
+        if (previous && !instances.some((item) => item.id === previous)) {
+          const candidates = instances.filter((item) => previousInstanceIds(item).includes(previous));
+          const next = candidates.length === 1 ? candidates[0].id : null;
+          if (next) {
+            if (state.logs[previous] && !state.logs[next]) state.logs[next] = state.logs[previous];
+            delete state.logs[previous];
+            diagnostics.rename(previous, next);
+            if (state.settings?.last_instance === previous) state.settings.last_instance = next;
+          }
+          state.selectedId = next;
+          selectionChanged = true;
+        }
+        // Подтверждаем только после обработки ответа. При сбое повторный список
+        // снова передаст незаконченные переименования, в том числе цепочки.
+        const acknowledgements = instances.map((item) => ({ id: item.id, previousIds: previousInstanceIds(item) }))
+          .filter((item) => item.previousIds.length);
+        if (acknowledgements.length) api.acknowledgeInstanceRenames(acknowledgements).catch(() => {});
+      } catch (err) {
+        toast(String(err), "err");
       }
-    } catch (err) {
-      toast(String(err), "err");
-    }
-    await loadInstanceIcons();
-    renderSidebar();
-    renderBuildIcon(selected());
-    syncPresence();
+      await loadInstanceIcons();
+      if (selectionChanged) selectInstance(state.selectedId);
+      else {
+        renderSidebar();
+        renderBuildIcon(selected());
+        syncPresence();
+      }
+    })().finally(() => { instancesRefreshPending = null; });
+    return instancesRefreshPending;
   }
 
   /** Двойной клик по сборке в списке или на главной: выбрать её и запустить игру. */
@@ -11177,6 +11243,18 @@
     await loadAccounts();
     bindFileDrop();
     await refreshInstances();
+    // После возвращения из проводника замечаем внешнее переименование папки.
+    // Ожидание объединяет серию событий фокуса от системного диалога.
+    if (IS_APP) {
+      let focusRefresh = 0;
+      window.addEventListener("focus", () => {
+        clearTimeout(focusRefresh);
+        focusRefresh = setTimeout(async () => {
+          await refreshInstances();
+          if (state.tab === "download" && state.selectedId) refreshInstalledProjects();
+        }, 300);
+      });
+    }
     // ничего не выбираем автоматически: стартовый экран — готовые сборки
     if (!state.selectedId) state.tab = "discover";
     updateStatus();

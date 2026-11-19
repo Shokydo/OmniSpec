@@ -127,7 +127,7 @@ fn extract_overrides(archive_path: &Path, game_dir: &Path) -> Result<usize> {
         };
         let dest = game_dir.join(relative);
         if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::instances::create_dir_beneath(game_dir, parent)?;
         }
         let mut buffer = Vec::new();
         entry.read_to_end(&mut buffer)?;
@@ -166,6 +166,7 @@ pub async fn install(
 
     // Иконка сборки — та же картинка, что у проекта на Modrinth.
     set_project_icon(modrinth, paths, &mut meta, &version.project_id).await;
+    instances::load(paths, &meta.id)?;
     Ok(meta)
 }
 
@@ -227,14 +228,14 @@ async fn set_project_icon(
         _ => "png",
     };
     let dir = paths.instance_dir(&meta.id);
-    if std::fs::create_dir_all(&dir).is_err() {
+    if instances::load(paths, &meta.id).is_err() || !dir.is_dir() {
         return;
     }
     let file_name = format!("icon.{extension}");
     let dest = dir.join(&file_name);
     if modrinth
         .http()
-        .download(&url, &dest, None, None, false)
+        .download_existing_dir(&url, &dest, None, None, false, None)
         .await
         .is_err()
     {
@@ -289,15 +290,14 @@ pub async fn install_archive(
     let mut meta = meta;
     if let Some((file_name, bytes)) = read_icon(archive) {
         let dir = paths.instance_dir(&meta.id);
-        if std::fs::create_dir_all(&dir).is_ok()
-            && std::fs::write(dir.join(&file_name), bytes).is_ok()
+        if dir.is_dir() && std::fs::write(dir.join(&file_name), bytes).is_ok()
         {
             meta.icon = Some(file_name);
             let _ = instances::save(paths, &meta);
         }
     }
 
-    let game_dir = crate::instances::game_dir_for(paths, &meta);
+    let game_dir = crate::instances::ensure_game_dir(paths, &meta)?;
     let mut items = Vec::new();
     for entry in &index.files {
         if entry
@@ -328,15 +328,20 @@ pub async fn install_archive(
         4,
         format!("скачиваем файлов: {}", items.len()),
     );
-    // download_all сам проверяет, что уже лежит на диске, шлёт построчный
-    // и общий прогресс и умеет отмену по флагу.
+    // Готовим вложенные папки без воссоздания корня после внешнего rename.
+    for item in &items {
+        if let Some(parent) = item.dest.parent() {
+            crate::instances::create_dir_beneath(&game_dir, parent)?;
+        }
+    }
     modrinth
         .http()
-        .download_all(items, 8, reporter, "modpack")
+        .download_all_existing_dirs(items, 8, reporter, "modpack")
         .await?;
 
     reporter.emit("modpack", 3, 4, "распаковываем overrides");
     let extracted = extract_overrides(archive, &game_dir)?;
+    instances::load(paths, &meta.id)?;
     reporter.emit("modpack", 4, 4, format!("готово (overrides: {extracted})"));
 
     Ok(meta)

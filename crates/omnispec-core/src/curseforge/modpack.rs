@@ -136,7 +136,7 @@ fn extract_overrides(archive_path: &Path, game_dir: &Path, folder: &str) -> Resu
         };
         let dest = game_dir.join(relative);
         if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::instances::create_dir_beneath(game_dir, parent)?;
         }
         let mut buffer = Vec::new();
         entry.read_to_end(&mut buffer)?;
@@ -157,7 +157,7 @@ async fn set_project_icon(
         return;
     };
     let dir = paths.instance_dir(&meta.id);
-    if std::fs::create_dir_all(&dir).is_err() {
+    if instances::load(paths, &meta.id).is_err() || !dir.is_dir() {
         return;
     }
     let extension = match url
@@ -179,7 +179,7 @@ async fn set_project_icon(
     let dest = dir.join(&file_name);
     if curseforge
         .http()
-        .download(url, &dest, None, None, false)
+        .download_existing_dir(url, &dest, None, None, false, None)
         .await
         .is_err()
     {
@@ -273,7 +273,7 @@ pub async fn install(
         },
     )?;
 
-    let game_dir = crate::instances::game_dir_for(paths, &meta);
+    let game_dir = crate::instances::ensure_game_dir(paths, &meta)?;
     let overrides_folder = manifest
         .overrides
         .clone()
@@ -284,7 +284,7 @@ pub async fn install(
 
     // Файлы из манифеста: ссылок там нет, поэтому берём их через API.
     let mods_dir = game_dir.join("mods");
-    std::fs::create_dir_all(&mods_dir)?;
+    crate::instances::create_dir_beneath(&game_dir, &mods_dir)?;
     let mut items: Vec<DownloadItem> = Vec::new();
     let required: Vec<&ManifestFile> = manifest
         .files
@@ -334,7 +334,7 @@ pub async fn install(
     reporter.emit("modpack", 3, 4, "качаем моды модпака");
     curseforge
         .http()
-        .download_all(items, 4, reporter, "modpack")
+        .download_all_existing_dirs(items, 4, reporter, "modpack")
         .await?;
 
     set_project_icon(
@@ -344,6 +344,7 @@ pub async fn install(
         project.icon_url.as_deref(),
     )
     .await;
+    instances::load(paths, &meta.id)?;
 
     reporter.emit(
         "modpack",

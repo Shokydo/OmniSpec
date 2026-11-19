@@ -496,6 +496,15 @@
       return run;
     }
 
+    rename(from, to) {
+      if (!from || !to || from === to || this.groups.has(to)) return;
+      const group = this.groups.get(from);
+      if (!group) return;
+      this.groups.set(to, group);
+      this.groups.delete(from);
+      this.onChange(to);
+    }
+
     forget(instance) { this.groups.delete(instance); }
   }
 

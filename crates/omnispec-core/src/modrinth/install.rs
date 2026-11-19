@@ -51,6 +51,7 @@ pub async fn install_project(
         &mut outcome,
     )
     .await?;
+    crate::instances::load(paths, &instance.id)?;
     reporter.emit_state("mods", "done", "готово");
     Ok(outcome)
 }
@@ -77,6 +78,7 @@ pub async fn install_version(
         &mut outcome,
     )
     .await?;
+    crate::instances::load(paths, &instance.id)?;
     reporter.emit_state("mods", "done", "готово");
     Ok(outcome)
 }
@@ -129,8 +131,9 @@ async fn install_recursive(
         .primary_file()
         .ok_or_else(|| Error::not_found(format!("у версии {} нет файлов", version.id)))?;
 
+    let game = crate::instances::ensure_game_dir(paths, instance)?;
     let dir = target_dir(paths, instance, &project_type);
-    std::fs::create_dir_all(&dir)?;
+    crate::instances::create_dir_beneath(&game, &dir)?;
     let dest = dir.join(&file.filename);
 
     if dest.exists() {
@@ -142,15 +145,15 @@ async fn install_recursive(
         let file_name = file.filename.clone();
         modrinth
             .http()
-            .download_tracked(
+            .download_existing_dir(
                 &file.url,
                 &dest,
                 Some(file.size),
                 None,
                 true,
-                &|done, total| {
+                Some(&|done, total| {
                     reporter_progress.emit_bytes("mods", &file_name, done, total);
-                },
+                }),
             )
             .await?;
         outcome.installed.push(file.filename.clone());

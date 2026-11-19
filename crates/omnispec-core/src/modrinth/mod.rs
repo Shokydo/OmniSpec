@@ -129,6 +129,38 @@ impl Modrinth {
         Ok(response.json::<Vec<Version>>().await?)
     }
 
+    /// Последние версии для фактических SHA-1 файлов, с фильтром сборки.
+    /// Неизвестные файлы и версии без подходящего обновления отсутствуют в ответе.
+    pub async fn latest_versions_for_hashes(
+        &self,
+        hashes: &[String],
+        game_version: &str,
+        loader: &str,
+    ) -> Result<HashMap<String, Version>> {
+        let loaders: Vec<&str> = match loader {
+            "fabric" => vec!["fabric"],
+            // Сходство загрузчиков не гарантирует совместимость конкретного JAR.
+            "quilt" => vec!["quilt"],
+            "forge" => vec!["forge"],
+            "neoforge" => vec!["neoforge"],
+            _ => return Ok(HashMap::new()),
+        };
+        let url = format!("{BASE_URL}/version_files/update");
+        let mut result = HashMap::new();
+        for chunk in hashes.chunks(500) {
+            let response = self.http.inner().post(&url)
+                .json(&serde_json::json!({"hashes":chunk, "algorithm":"sha1", "loaders":loaders, "game_versions":[game_version]}))
+                .timeout(std::time::Duration::from_secs(25))
+                .send().await.map_err(|error| Error::http(&url, error))?;
+            if !response.status().is_success() {
+                return Err(Error::other(format!("Modrinth /version_files/update → HTTP {}", response.status())));
+            }
+            let versions: HashMap<String, Version> = response.json().await?;
+            result.extend(versions);
+        }
+        Ok(result)
+    }
+
     /// Версия по SHA-1 файла: так узнаём, что за мод уже лежит в папке.
     pub async fn version_file_by_hash(&self, hash: &str) -> Result<Version> {
         let url = format!("{BASE_URL}/version_file/{hash}?algorithm=sha1");

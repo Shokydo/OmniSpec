@@ -389,7 +389,7 @@ impl Http {
         sha1: Option<&str>,
         force: bool,
     ) -> Result<bool> {
-        self.download_inner(url, dest, expected_size, sha1, force, None, None)
+        self.download_inner(url, dest, expected_size, sha1, force, None, None, true)
             .await
     }
 
@@ -403,8 +403,17 @@ impl Http {
         force: bool,
         on_progress: &(dyn Fn(u64, u64) + Send + Sync),
     ) -> Result<bool> {
-        self.download_inner(url, dest, expected_size, sha1, force, None, Some(on_progress))
+        self.download_inner(url, dest, expected_size, sha1, force, None, Some(on_progress), true)
             .await
+    }
+
+    /// Для содержимого сборки: родитель подготовлен заранее. Не создаём его
+    /// заново, если пользователь переместил сборку во время загрузки.
+    pub async fn download_existing_dir(
+        &self, url: &str, dest: &Path, expected_size: Option<u64>, sha1: Option<&str>, force: bool,
+        on_progress: Option<&(dyn Fn(u64, u64) + Send + Sync)>,
+    ) -> Result<bool> {
+        self.download_inner(url, dest, expected_size, sha1, force, None, on_progress, false).await
     }
 
     /// Скачивание с заголовком `Authorization` (ассеты приватных релизов GitHub).
@@ -415,7 +424,7 @@ impl Http {
         expected_size: Option<u64>,
         token: Option<&str>,
     ) -> Result<bool> {
-        self.download_inner(url, dest, expected_size, None, true, token, None)
+        self.download_inner(url, dest, expected_size, None, true, token, None, true)
             .await
     }
 
@@ -428,6 +437,7 @@ impl Http {
         force: bool,
         token: Option<&str>,
         on_progress: Option<&(dyn Fn(u64, u64) + Send + Sync)>,
+        create_parent: bool,
     ) -> Result<bool> {
         if !force && token.is_none() {
             if let Ok(meta) = tokio::fs::metadata(dest).await {
@@ -443,7 +453,11 @@ impl Http {
         }
 
         if let Some(parent) = dest.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+            if create_parent {
+                tokio::fs::create_dir_all(parent).await?;
+            } else if !parent.is_dir() {
+                return Err(Error::other("папка загрузки перемещена или удалена"));
+            }
         }
         // Повторы: обрыв тела ответа посреди стрима («error decoding response
         // body») — частая беда на Windows-сетях. Первая попытка обычным
@@ -533,6 +547,20 @@ impl Http {
         reporter: &Reporter,
         stage: &str,
     ) -> Result<()> {
+        self.download_all_inner(items, concurrency, reporter, stage, true).await
+    }
+
+    /// Массовая загрузка в уже подготовленные папки сборки, без их пересоздания.
+    pub async fn download_all_existing_dirs(
+        &self, items: Vec<DownloadItem>, concurrency: usize, reporter: &Reporter, stage: &str,
+    ) -> Result<()> {
+        self.download_all_inner(items, concurrency, reporter, stage, false).await
+    }
+
+    async fn download_all_inner(
+        &self, items: Vec<DownloadItem>, concurrency: usize, reporter: &Reporter, stage: &str,
+        create_parent: bool,
+    ) -> Result<()> {
         check_cancel()?;
         let total_files = items.len() as u64;
         if total_files == 0 {
@@ -581,15 +609,17 @@ impl Http {
                         .unwrap_or_else(|| item.dest.display().to_string());
                     // Построчный байтовый прогресс — UI рисует полосу по файлу.
                     let res = client
-                        .download_tracked(
+                        .download_inner(
                             &item.url,
                             &item.dest,
                             item.size,
                             item.sha1.as_deref(),
                             false,
-                            &|done, total| {
+                            None,
+                            Some(&|done, total| {
                                 reporter.emit_bytes(&stage, &file_name, done, total);
-                            },
+                            }),
+                            create_parent,
                         )
                         .await
                         .map(|_| ());
@@ -640,6 +670,40 @@ mod query_tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn download_does_not_recreate_parent_moved_while_request_is_in_flight() {
+        let root = std::env::temp_dir().join(format!("omnispec-moved-download-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let old = root.join("old");
+        let new = root.join("new");
+        std::fs::create_dir_all(old.join("mods")).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (go_tx, go_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut request = [0u8; 4096];
+            socket.read(&mut request).unwrap();
+            let _ = ready_tx.send(());
+            go_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\njar");
+        });
+        let dest = old.join("mods/file.jar");
+        let task = tokio::spawn(async move {
+            Http::new().download_existing_dir(&format!("http://{address}/file"), &dest, Some(3), None, true, None).await
+        });
+        ready_rx.await.unwrap();
+        std::fs::rename(&old, &new).unwrap();
+        go_tx.send(()).unwrap();
+        assert!(task.await.unwrap().is_err());
+        server.join().unwrap();
+        assert!(!old.exists(), "скачивание не создаёт старую папку заново");
+        assert!(new.is_dir());
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[tokio::test]
     async fn interrupted_search_is_retried_with_the_same_query() {
