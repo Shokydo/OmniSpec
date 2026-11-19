@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import subprocess
 import tempfile
@@ -88,6 +89,7 @@ class DiscordReleaseTests(unittest.TestCase):
         self.assertIn("начальную вкладку", preferences)
         self.assertIn("CurseForge", preferences)
         self.assertIn("физическую ОЗУ", preferences)
+        self.assertIn("omnispec-setup.bin", preferences)
         self.assertNotIn("без обязательного Enter", preferences)
         with tempfile.TemporaryDirectory() as tmp:
             notes = Path(tmp) / "notes"
@@ -106,6 +108,18 @@ class DiscordReleaseTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((Path(tmp) / "dist/release-notes.md").read_text(encoding="utf-8"), body)
         self.assertIn("body_path: dist/release-notes.md", WORKFLOW)
+
+    def test_release_assets_are_safe_for_legacy_linux_updaters(self):
+        # Versions through v0.49.5 considered every omnispec* name without a dot
+        # to be a launcher. The installer must not match, regardless of order.
+        files = re.findall(r"^\s+dist/([^/\s]+)\s*$", WORKFLOW, re.MULTILINE)
+        self.assertIn("omnispec-setup.bin", files)
+        self.assertIn("omnispec-setup.bin.sha256", files)
+        legacy_candidates = [name for name in files
+                             if not name.endswith((".sha256", ".sig"))
+                             and (name.lower() == "omnispec"
+                                  or (name.lower().startswith("omnispec") and "." not in name))]
+        self.assertEqual(legacy_candidates, ["OmniSpec"])
 
     def test_success_posts_blue_embed_without_mentions_or_redirects(self):
         opener = FakeOpener()

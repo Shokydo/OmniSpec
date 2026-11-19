@@ -168,10 +168,12 @@ jobs:
         run: |
           mkdir -p dist
           cp target/release/omnispec-app dist/OmniSpec
-          cp target/release/omnispec-setup dist/omnispec-setup
-          chmod +x dist/OmniSpec dist/omnispec-setup
+          # Старые Linux-версии выбирают для автообновления все имена
+          # omnispec* без точки. Расширение защищает их от выбора установщика.
+          cp target/release/omnispec-setup dist/omnispec-setup.bin
+          chmod +x dist/OmniSpec dist/omnispec-setup.bin
           sha256sum dist/OmniSpec | sed 's|dist/||' > dist/OmniSpec.sha256
-          sha256sum dist/omnispec-setup | sed 's|dist/||' > dist/omnispec-setup.sha256
+          sha256sum dist/omnispec-setup.bin | sed 's|dist/||' > dist/omnispec-setup.bin.sha256
 
       - name: Добавить файлы в релиз
         uses: softprops/action-gh-release@v2
@@ -179,8 +181,8 @@ jobs:
           files: |
             dist/OmniSpec
             dist/OmniSpec.sha256
-            dist/omnispec-setup
-            dist/omnispec-setup.sha256
+            dist/omnispec-setup.bin
+            dist/omnispec-setup.bin.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

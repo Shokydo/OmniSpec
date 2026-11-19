@@ -199,8 +199,9 @@ fn numeric_parts(core: &str) -> Vec<u64> {
 
 /// Выбрать подходящий ассет релиза для текущей ОС.
 ///
-/// Приоритет: портативный бинарник (`OmniSpec.exe`, `OmniSpec`, `.AppImage`),
-/// установщик берём только если больше нечего.
+/// Приоритет: портативный бинарник (`OmniSpec.exe`, `OmniSpec`, `.AppImage`).
+/// На Windows установщик остаётся запасным вариантом, на Linux его нельзя
+/// подставлять вместо исполняемого файла лаунчера.
 pub fn pick_asset(assets: &[ReleaseAsset]) -> Option<ReleaseAsset> {
     let candidates: Vec<&ReleaseAsset> = assets
         .iter()
@@ -236,9 +237,15 @@ pub fn pick_asset(assets: &[ReleaseAsset]) -> Option<ReleaseAsset> {
             }
             return 0;
         }
-        // Linux
-        if name == "omnispec" || (name.starts_with("omnispec") && !name.contains('.')) {
+        // Linux: установщик нельзя подставлять вместо текущего лаунчера.
+        if name.contains("setup") || name.contains("installer") {
+            return 0;
+        }
+        if name == "omnispec" {
             return 100;
+        }
+        if name.starts_with("omnispec") && !name.contains('.') {
+            return 95;
         }
         if name.ends_with(".appimage") {
             return 90;
@@ -689,6 +696,21 @@ mod tests {
         } else {
             assert!(chosen.is_none());
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_update_never_replaces_launcher_with_installer() {
+        for names in [
+            vec!["OmniSpec", "omnispec-setup"],
+            vec!["omnispec-setup", "OmniSpec"],
+            vec!["OmniSpec", "omnispec-setup.bin", "omnispec-portable"],
+        ] {
+            let assets = names.into_iter().map(asset).collect::<Vec<_>>();
+            assert_eq!(pick_asset(&assets).unwrap().name, "OmniSpec");
+        }
+        assert!(pick_asset(&[asset("omnispec-setup")]).is_none());
+        assert!(pick_asset(&[asset("omnispec-setup.bin")]).is_none());
     }
 
     #[test]
