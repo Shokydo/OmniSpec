@@ -4,7 +4,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Setup,
     [Parameter(Mandatory = $true)][string]$Launcher,
-    [string]$ExpectedVersion = ''
+    [string]$ExpectedVersion = '',
+    [switch]$LaunchProbe
 )
 $ErrorActionPreference = 'Stop'
 $Setup = [IO.Path]::GetFullPath($Setup)
@@ -73,6 +74,30 @@ function Assert-Pair([string]$Destination) {
         if ($link.Description -ne 'OmniSpec' -or $link.Arguments -ne '') { throw "Unexpected shortcut properties: $file" }
     }
 }
+function Assert-ShortcutLaunch([string]$Destination) {
+    # Только для собственного безопасного тестового payload в CI. Проверяем
+    # не только содержимое .lnk, но и фактическую работу Shell при открытии.
+    $probe = Join-Path $Destination 'shortcut-probe.txt'
+    foreach ($file in @($desktopLink, $startLink)) {
+        if (Test-Path -LiteralPath $probe) { Remove-Item -LiteralPath $probe -Force }
+        $process = Start-Process -FilePath $file -PassThru
+        if ($process -and -not $process.WaitForExit(15000)) {
+            $process.Kill()
+            throw "Shortcut target did not exit: $file"
+        }
+        $deadline = [DateTime]::UtcNow.AddSeconds(15)
+        while (-not (Test-Path -LiteralPath $probe -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
+            Start-Sleep -Milliseconds 100
+        }
+        if (-not (Test-Path -LiteralPath $probe -PathType Leaf)) { throw "Shortcut did not launch payload: $file" }
+        $lines = @(Get-Content -LiteralPath $probe -Encoding utf8)
+        if ($lines.Count -ne 2) { throw "Invalid shortcut launch probe: $file" }
+        Assert-PathEqual $lines[0] (Join-Path $Destination 'OmniSpec.exe') 'Launched executable'
+        Assert-PathEqual $lines[1] $Destination 'Launched working directory'
+    }
+    Remove-Item -LiteralPath $probe -Force
+}
+
 function Assert-Installation([string]$Destination, [bool]$Portable) {
     $exe = Join-Path $Destination 'OmniSpec.exe'
     $uninstall = Join-Path $Destination 'uninstall.exe'
@@ -112,6 +137,10 @@ try {
     Assert-Success $result 'Special-path install'
     Assert-Installation $special $true
     Write-Host 'WINDOWS_SHORTCUT_SPECIAL_PATH_OK: desktop and Start menu target, working directory, icon, description'
+    if ($LaunchProbe) {
+        Assert-ShortcutLaunch $special
+        Write-Host 'WINDOWS_SHORTCUT_SHELL_LAUNCH_OK: both shortcuts start the expected executable in the expected directory'
+    }
 
     $result = Invoke-Setup $Setup @('--yes', '--portable', '--dir', $special)
     Assert-Success $result 'Reinstall'

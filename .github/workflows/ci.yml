@@ -50,7 +50,8 @@ jobs:
         shell: pwsh
         run: |
           $file = Join-Path $env:RUNNER_TEMP 'omnispec-test-payload.exe'
-          [IO.File]::WriteAllBytes($file, [byte[]](0x4d, 0x5a, 1, 2, 3, 4))
+          rustc --edition 2021 -o $file tools/tests/windows-shortcut-probe.rs
+          if ($LASTEXITCODE -ne 0) { throw 'Shortcut probe did not compile' }
           "OMNISPEC_SETUP_PAYLOAD=$file" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Собрать установщик с тестовой нагрузкой
         run: cargo build -p omnispec-setup --locked
@@ -59,7 +60,7 @@ jobs:
         run: |
           $meta = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
           $version = ($meta.packages | Where-Object { $_.name -eq 'omnispec-setup' }).version
-          ./tools/tests/windows-setup-smoke.ps1 -Setup 'target/debug/omnispec-setup.exe' -Launcher $env:OMNISPEC_SETUP_PAYLOAD -ExpectedVersion $version
+          ./tools/tests/windows-setup-smoke.ps1 -Setup 'target/debug/omnispec-setup.exe' -Launcher $env:OMNISPEC_SETUP_PAYLOAD -ExpectedVersion $version -LaunchProbe
 
   ui-test:
     name: Интерфейс, диагностика и сетевые сбои

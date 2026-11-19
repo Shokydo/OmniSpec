@@ -11,8 +11,8 @@ use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::UI::Shell::{
-    FOLDERID_Desktop, FOLDERID_Programs, IShellLinkW, SHGetKnownFolderPath, ShellLink,
-    KF_FLAG_DONT_VERIFY,
+    FOLDERID_Desktop, FOLDERID_Programs, IShellLinkW, SHGetKnownFolderPath, SHParseDisplayName,
+    ShellLink, KF_FLAG_DONT_VERIFY,
 };
 
 use crate::common::APP_NAME;
@@ -87,8 +87,18 @@ fn create_shortcut(link_path: &Path, exe: &Path, dir: &Path) -> Result<(), Strin
     unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
             .map_err(|error| context("объект Shell", error))?;
-        link.SetPath(PCWSTR(exe_wide.as_ptr()))
-            .map_err(|error| context("путь к лаунчеру", error))?;
+        // SetPath интерпретирует %ИМЯ% в буквальном пути как переменную
+        // окружения. Для уже записанного exe передаём объект Shell (PIDL),
+        // чтобы путь с такими символами не изменился.
+        let mut target = std::ptr::null_mut();
+        SHParseDisplayName(PCWSTR(exe_wide.as_ptr()), None, &mut target, 0, None)
+            .map_err(|error| context("поиск лаунчера", error))?;
+        if target.is_null() {
+            return Err(format!("не найден объект Shell для {}", exe.display()));
+        }
+        let set_target = link.SetIDList(target);
+        CoTaskMemFree(Some(target.cast()));
+        set_target.map_err(|error| context("путь к лаунчеру", error))?;
         link.SetWorkingDirectory(PCWSTR(dir_wide.as_ptr()))
             .map_err(|error| context("рабочая папка", error))?;
         link.SetIconLocation(PCWSTR(exe_wide.as_ptr()), 0)
