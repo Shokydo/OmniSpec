@@ -3249,6 +3249,14 @@ fn window_action(window: tauri::WebviewWindow, action: String) -> Result<(), Str
 }
 
 fn main() {
+    // На томах без коротких имён Shell не может буквально сохранить путь с
+    // %ИМЯ% в рабочей папке .lnk. Исправляем её только по специальному аргументу
+    // ярлыка; обычный запуск и относительные аргументы остаются без изменений.
+    #[cfg(windows)]
+    if let Err(error) = omnispec_core::windows_shortcut::enter_shortcut_directory() {
+        eprintln!("[omnispec] не удалось установить рабочую папку ярлыка: {error}");
+    }
+
     // Режим помощника обновления: заменяем exe уже после выхода лаунчера.
     let args: Vec<String> = std::env::args().collect();
     if let Some(index) = args.iter().position(|arg| arg == update::HELPER_FLAG) {

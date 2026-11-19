@@ -18,6 +18,8 @@ pub mod paths;
 pub mod settings;
 pub mod transfer;
 pub mod update;
+#[cfg(windows)]
+pub mod windows_shortcut;
 
 pub use error::{Error, Result};
 pub use net::{Http, ProgressEvent, Reporter};

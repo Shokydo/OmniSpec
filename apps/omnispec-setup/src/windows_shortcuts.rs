@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use windows::core::{Interface, GUID, PCWSTR};
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+use windows::Win32::Storage::FileSystem::GetShortPathNameW;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile,
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
@@ -16,6 +17,7 @@ use windows::Win32::UI::Shell::{
 };
 
 use crate::common::APP_NAME;
+use omnispec_core::windows_shortcut::SHORTCUT_CWD_ARG;
 
 /// COM инициализируется в вызывающем потоке и освобождается ровно один раз.
 struct ComApartment {
@@ -74,10 +76,38 @@ fn wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
+// Shell разворачивает %ИМЯ% в рабочей папке и пути иконки при открытии
+// ярлыка. Возвращаем буквальный путь либо безопасное короткое имя 8.3.
+// На томах без 8.3 вызывающий код использует запасной способ без подстановки.
+fn shell_safe_path(path: &Path) -> Option<PathBuf> {
+    let has_pair = |value: &Path| {
+        value
+            .as_os_str()
+            .encode_wide()
+            .filter(|&c| c == b'%' as u16)
+            .count()
+            >= 2
+    };
+    if !has_pair(path) {
+        return Some(path.to_path_buf());
+    }
+    let input = wide(path);
+    let mut buffer = vec![0u16; 32768];
+    let size = unsafe { GetShortPathNameW(PCWSTR(input.as_ptr()), Some(&mut buffer)) } as usize;
+    if size > 0 && size < buffer.len() {
+        let short = PathBuf::from(OsString::from_wide(&buffer[..size]));
+        if !has_pair(&short) {
+            return Some(short);
+        }
+    }
+    None
+}
+
 fn create_shortcut(link_path: &Path, exe: &Path, dir: &Path) -> Result<(), String> {
     let path_wide = wide(link_path);
     let exe_wide = wide(exe);
-    let dir_wide = wide(dir);
+    let dir_wide = shell_safe_path(dir).map(|safe| wide(&safe));
+    let icon_wide = shell_safe_path(exe).map(|safe| wide(&safe));
     let context = |stage: &str, error: windows::core::Error| {
         format!(
             "не создался ярлык {} ({stage}): {error}",
@@ -99,10 +129,21 @@ fn create_shortcut(link_path: &Path, exe: &Path, dir: &Path) -> Result<(), Strin
         let set_target = link.SetIDList(target);
         CoTaskMemFree(Some(target.cast()));
         set_target.map_err(|error| context("путь к лаунчеру", error))?;
-        link.SetWorkingDirectory(PCWSTR(dir_wide.as_ptr()))
-            .map_err(|error| context("рабочая папка", error))?;
-        link.SetIconLocation(PCWSTR(exe_wide.as_ptr()), 0)
-            .map_err(|error| context("иконка", error))?;
+        if let Some(dir_wide) = &dir_wide {
+            link.SetWorkingDirectory(PCWSTR(dir_wide.as_ptr()))
+                .map_err(|error| context("рабочая папка", error))?;
+        } else {
+            // Нельзя передать буквальный %ИМЯ% в WorkingDirectory: Shell его
+            // развернёт. Лаунчер установит папку своего exe сам при запуске.
+            let argument: Vec<u16> = SHORTCUT_CWD_ARG.encode_utf16().chain(Some(0)).collect();
+            link.SetArguments(PCWSTR(argument.as_ptr()))
+                .map_err(|error| context("аргумент рабочей папки", error))?;
+        }
+        if let Some(icon_wide) = &icon_wide {
+            link.SetIconLocation(PCWSTR(icon_wide.as_ptr()), 0)
+                .map_err(|error| context("иконка", error))?;
+        }
+        // Без безопасного пути иконки Shell возьмёт её из целевого PIDL.
         link.SetDescription(windows::core::w!("OmniSpec"))
             .map_err(|error| context("описание", error))?;
         let file: IPersistFile = link.cast().map_err(|error| context("файл", error))?;
@@ -153,10 +194,11 @@ mod tests {
 
     fn assert_properties(path: &Path, exe: &Path, dir: &Path) {
         let _com = ComApartment::enter().unwrap();
-        let (mut target, mut work, mut icon, mut description) = (
+        let (mut target, mut work, mut icon, mut description, mut arguments) = (
             vec![0u16; 32768],
             vec![0u16; 32768],
             vec![0u16; 32768],
+            vec![0u16; 256],
             vec![0u16; 256],
         );
         let mut icon_index = -1;
@@ -170,10 +212,10 @@ mod tests {
             link.GetWorkingDirectory(&mut work).unwrap();
             link.GetIconLocation(&mut icon, &mut icon_index).unwrap();
             link.GetDescription(&mut description).unwrap();
+            link.GetArguments(&mut arguments).unwrap();
         }
         // Shell может развернуть короткое имя профиля RUNNER~1 в runneradmin.
-        // Сравниваем реальные пути, а не их разные строковые представления.
-        for (actual, expected) in [(&target, exe), (&work, dir), (&icon, exe)] {
+        let same_path = |actual: &[u16], expected: &Path| {
             let actual = PathBuf::from(read_wide(actual));
             assert_eq!(
                 std::fs::canonicalize(&actual).unwrap(),
@@ -181,6 +223,17 @@ mod tests {
                 "путь ярлыка {}",
                 actual.display()
             );
+        };
+        same_path(&target, exe);
+        if read_wide(&work).is_empty() {
+            assert_eq!(read_wide(&arguments), SHORTCUT_CWD_ARG);
+        } else {
+            same_path(&work, dir);
+            assert!(read_wide(&arguments).is_empty());
+        }
+        // Пустой путь иконки означает стандартную иконку целевого exe.
+        if !read_wide(&icon).is_empty() {
+            same_path(&icon, exe);
         }
         assert_eq!(icon_index, 0);
         assert_eq!(read_wide(&description), APP_NAME);
@@ -195,7 +248,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("omnispec-{}-{unique}", std::process::id()));
         let desktop = root.join("Рабочий стол ' $(test) & 100%");
         let programs = root.join("Меню, программы");
-        let dir = root.join("Сборка ' $(name) & 100%PATH% (тест), 🛠");
+        let dir = root.join("Сборка ' $(name) & 100% (тест), 🛠");
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("OmniSpec.exe");
         std::fs::write(&exe, b"test payload").unwrap();
@@ -217,6 +270,30 @@ mod tests {
         std::fs::create_dir(desktop.join("OmniSpec.lnk")).unwrap();
         let error = make_in_folders(&exe, &dir, &desktop, &programs).unwrap_err();
         assert!(error.contains("OmniSpec.lnk"), "{error}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn environment_like_path_uses_safe_or_self_correcting_shortcuts() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("omnispec-env-{}-{unique}", std::process::id()));
+        let dir = root.join("Сборка 100%PATH% 🛠");
+        let desktop = root.join("Desktop");
+        let programs = root.join("Programs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("OmniSpec.exe");
+        std::fs::write(&exe, b"test payload").unwrap();
+        make_in_folders(&exe, &dir, &desktop, &programs).unwrap();
+        for link in [
+            desktop.join("OmniSpec.lnk"),
+            programs.join("OmniSpec/OmniSpec.lnk"),
+        ] {
+            assert_properties(&link, &exe, &dir);
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -44,6 +44,15 @@ public interface IOmniSpecShellLinkW {
 }
 
 public static class OmniSpecShortcutReader {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetLongPathNameW(string input, StringBuilder output, uint size);
+    public static string LongPath(string path) {
+        var output = new StringBuilder(32768);
+        uint size = GetLongPathNameW(path, output, (uint)output.Capacity);
+        if (size == 0 || size >= output.Capacity)
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        return output.ToString();
+    }
     public static string[] Read(string path) {
         var link = (IOmniSpecShellLinkW)new OmniSpecShellLink();
         try {
@@ -112,7 +121,10 @@ function Assert-Success($Result, [string]$Label) {
     if ($Result.ExitCode -ne 0) { throw "$Label exited $($Result.ExitCode): $($Result.Stderr)" }
 }
 function Assert-PathEqual([string]$Actual, [string]$Expected, [string]$Label) {
-    if (-not [String]::Equals($Actual, $Expected, [StringComparison]::OrdinalIgnoreCase)) {
+    # Shell вправе сохранить короткое 8.3-имя, эквивалентное длинному пути.
+    $longActual = [OmniSpecShortcutReader]::LongPath($Actual)
+    $longExpected = [OmniSpecShortcutReader]::LongPath($Expected)
+    if (-not [String]::Equals($longActual, $longExpected, [StringComparison]::OrdinalIgnoreCase)) {
         throw "$Label mismatch: got [$Actual], expected [$Expected]"
     }
 }
@@ -122,9 +134,21 @@ function Assert-Pair([string]$Destination) {
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing shortcut: $file" }
         $link = [OmniSpecShortcutReader]::Read($file)
         Assert-PathEqual $link[0] $exe 'TargetPath'
-        Assert-PathEqual $link[1] $Destination 'WorkingDirectory'
-        Assert-PathEqual $link[2] $exe 'IconLocation'
-        if ($link[3] -ne '0' -or $link[4] -ne 'OmniSpec' -or $link[5] -ne '') { throw "Unexpected shortcut properties: $file" }
+        if ($link[1]) {
+            Assert-PathEqual $link[1] $Destination 'WorkingDirectory'
+            if ($link[5]) { throw "Unexpected shortcut arguments: $file" }
+        } else {
+            # На томе без 8.3 для %ИМЯ% лаунчер сам устанавливает рабочую папку.
+            if (($Destination.ToCharArray() | Where-Object { $_ -eq '%' } | Measure-Object).Count -lt 2 -or $link[5] -ne '--omnispec-shortcut-cwd') {
+                throw "Unexpected empty shortcut working directory: $file"
+            }
+        }
+        if ($link[2]) {
+            Assert-PathEqual $link[2] $exe 'IconLocation'
+        } elseif (($Destination.ToCharArray() | Where-Object { $_ -eq '%' } | Measure-Object).Count -lt 2) {
+            throw "Unexpected empty shortcut icon: $file"
+        } # Иначе Shell использует иконку самой цели через PIDL.
+        if ($link[3] -ne '0' -or $link[4] -ne 'OmniSpec') { throw "Unexpected shortcut properties: $file" }
     }
 }
 function Assert-ShortcutLaunch([string]$Destination) {
@@ -185,7 +209,7 @@ try {
 
     # Quotes, $, &, %, comma, spaces and non-ASCII characters must remain data,
     # not become PowerShell/cmd expressions or disappear in an ANSI conversion.
-    $special = Join-Path $root 'Сборка ''quote'' $(name) & 100%PATH% !name! (папка), test 🛠'
+    $special = Join-Path $root 'Сборка ''quote'' $(name) & 100% !name! (папка), test 🛠'
     $result = Invoke-Setup $Setup @('--yes', '--portable', '--dir', $special)
     Assert-Success $result 'Special-path install'
     Assert-Installation $special $true
@@ -217,8 +241,8 @@ try {
     Remove-Item -LiteralPath $startLink -Force
     Write-Host 'WINDOWS_SHORTCUT_FAILURES_OK: both errors return nonzero and name the shortcut'
 
-    # Удаление себя — отдельный отложенный процесс. Проверяем и путь с %PATH%,
-    # иначе cmd может развернуть часть имени папки и оставить uninstall.exe.
+    # Удаление себя — отдельный отложенный процесс. В пути есть Unicode,
+    # %, ! и &, которые не должны превращаться в команды или переменные.
     $result = Invoke-Setup $Setup @('--yes', '--portable', '--dir', $special)
     Assert-Success $result 'Restore special-path shortcuts'
     $specialData = Join-Path $special 'OmniSpecData'
@@ -236,6 +260,26 @@ try {
     }
     if (Test-Path -LiteralPath $specialUninstall) { throw 'Special-path uninstaller did not delete itself' }
     Write-Host 'WINDOWS_SPECIAL_UNINSTALL_OK: self-delete and shortcuts removed, user data preserved'
+
+    # %PATH% в имени каталога Windows может подставить как переменную среды.
+    # Проверяем установку и реальный запуск и на томах без коротких имён 8.3.
+    $envPath = Join-Path $root 'Сборка 100%PATH% & !name! 🛠'
+    $result = Invoke-Setup $Setup @('--yes', '--portable', '--dir', $envPath)
+    Assert-Success $result 'Environment-like-path install'
+    Assert-Installation $envPath $true
+    if ($LaunchProbe) { Assert-ShortcutLaunch $envPath }
+    $envLink = [OmniSpecShortcutReader]::Read($desktopLink)
+    $mode = if ($envLink[1]) { 'safe short path' } else { 'launcher restores its working directory' }
+    Write-Host "WINDOWS_ENV_PATH_OK: $mode"
+    # Фактическое удаление себя тоже не должно разворачивать %PATH%.
+    $envUninstall = Join-Path $envPath 'uninstall.exe'
+    $result = Invoke-Setup $envUninstall @('--uninstall', '--yes', '--dir', $envPath)
+    Assert-Success $result 'Environment-like-path uninstall'
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    while ((Test-Path -LiteralPath $envUninstall) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    if (Test-Path -LiteralPath $envUninstall) { throw 'Environment-like-path uninstaller did not delete itself' }
+    if ((Test-Path -LiteralPath $desktopLink) -or (Test-Path -LiteralPath $startLink)) { throw 'Environment-like-path uninstall left shortcuts behind' }
+    Write-Host 'WINDOWS_ENV_PATH_UNINSTALL_OK'
 
     # Проверяем удаление на обычном пути; пользовательские файлы в меню и данные
     # сборок должны остаться. Удаление себя — отдельный отложенный процесс.
