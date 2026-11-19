@@ -58,6 +58,13 @@ jobs:
           }
           "Установщик: $([math]::Round($setup.Length / 1MB, 1)) МБ (лаунчер $([math]::Round($app.Length / 1MB, 1)) МБ)"
 
+      - name: Проверить готовый установщик и настоящие ярлыки
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($meta.packages | Where-Object { $_.name -eq 'omnispec-setup' }).version
+          ./tools/tests/windows-setup-smoke.ps1 -Setup 'target/release/omnispec-setup.exe' -Launcher 'target/release/omnispec-app.exe' -ExpectedVersion $version
+
       - name: Проверка иконки установщика
         shell: pwsh
         run: |

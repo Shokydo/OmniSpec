@@ -72,9 +72,12 @@ class DiscordReleaseTests(unittest.TestCase):
         self.assertIn("OmniSpec-Setup.exe", body)
         self.assertNotIn("SHA-512", body)
         self.assertIn("SHA-512", build("v0.49.2"))
-        latest = build("v0.49.3")
-        self.assertIn("каталог больше не возвращается наверх", latest)
-        self.assertIn("через 3 секунды", latest)
+        previous = build("v0.49.3")
+        self.assertIn("каталог больше не возвращается наверх", previous)
+        self.assertIn("через 3 секунды", previous)
+        latest = build("v0.49.4")
+        self.assertIn("ярлыков Windows", latest)
+        self.assertIn("Enter в пустой области", latest)
         self.assertNotIn("SHA-512", latest)
         with tempfile.TemporaryDirectory() as tmp:
             notes = Path(tmp) / "notes"

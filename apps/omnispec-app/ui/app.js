@@ -5678,12 +5678,29 @@
   function mrGridLevel() { return modsGridLevel(); }
   function mrColumns(level = modsGridLevel()) { return modsColumns(level); }
 
+  // Перерисовка фильтров/переключателей не должна выбрасывать фокус на BODY.
+  // Не переносим фокус, если до замены он был вне контейнера.
+  function replaceCatalogHtml(root, html) {
+    const active = document.activeElement;
+    const ownsFocus = active && root.contains(active);
+    const id = ownsFocus && active.id;
+    const dlView = ownsFocus && active.dataset.dlView;
+    const dvView = ownsFocus && active.dataset.dvView;
+    root.innerHTML = html;
+    let replacement = id ? document.getElementById(id) : null;
+    if (!replacement && dlView) replacement = $$("[data-dl-view]", root).find((el) => el.dataset.dlView === dlView);
+    if (!replacement && dvView) replacement = $$("[data-dv-view]", root).find((el) => el.dataset.dvView === dvView);
+    if (replacement && root.contains(replacement) && document.activeElement === document.body) {
+      replacement.focus({ preventScroll: true });
+    }
+  }
+
   /** Страница «Скачать моды»: общий поиск и вид, источник — Modrinth/CurseForge. */
   function renderDownload() {
     const source = state.modsSource === "curseforge" ? "curseforge" : "modrinth";
     const cfg = source === "curseforge" ? state.curseforge : state.modrinth;
     const view = state.modsView || cfg.view || "list";
-    $("#tab-body").innerHTML = `
+    replaceCatalogHtml($("#tab-body"), `
       <div class="modrinth-wrap">
         <div class="modrinth-filters">
           <label class="search" style="flex:1;min-width:220px">
@@ -5708,12 +5725,17 @@
           </label>
         </div>
         <div id="dl-source-body"></div>
-      </div>`;
+      </div>`);
 
     $("#dl-query").addEventListener("keydown", (event) => { if (event.key === "Enter") dlRunSearch(); });
     $("#dl-source").addEventListener("change", (event) => {
       state.modsSource = event.target.value === "curseforge" ? "curseforge" : "modrinth";
-      renderDownload();
+      // Сам select не пересоздаём: на Windows/WebKit change может прийти
+      // прямо посреди работы с раскрытым списком клавиатурой.
+      const cfg = state.modsSource === "curseforge" ? state.curseforge : state.modrinth;
+      $("#dl-query").value = cfg.query;
+      if (state.modsSource === "curseforge") renderCurseForge(state.dlRoot);
+      else renderModrinth(state.dlRoot);
     });
     $$("#tab-body [data-dl-view]").forEach((btn) => btn.addEventListener("click", () => {
       state.modsView = btn.dataset.dlView;
@@ -5761,7 +5783,7 @@
     // Внутри сборки модпаки не нужны — они ставятся только при создании сборки.
     const types = [["mod", "Моды"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
     const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
-    root.innerHTML = `
+    replaceCatalogHtml(root, `
       <div class="modrinth-wrap">
         <div class="modrinth-filters">
           <div class="field">
@@ -5788,7 +5810,7 @@
         <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${modsGridLevel()}` : ""}" id="mr-results" style="--feed-cols:${modsColumns()}">
           ${resultsHtml()}
         </div>
-      </div>`;
+      </div>`);
 
     $("#mr-type").addEventListener("change", (event) => { state.modrinth.type = event.target.value; runSearch(); });
     $("#mr-mc").addEventListener("change", (event) => { state.modrinth.mc = event.target.value; runSearch(); });
@@ -6031,7 +6053,7 @@
     const source = cfg.source;
     // «Недавнее» — сборки по времени последнего запуска
     const instances = (state.instances || []).slice().sort((a, b) => (b.last_played || b.created || 0) - (a.last_played || a.created || 0));
-    $("#tab-body").innerHTML = `
+    replaceCatalogHtml($("#tab-body"), `
       <div class="home">
         <div class="home-scroll" id="home-scroll">
           ${instances.length ? `<div class="home-section-title">Недавнее</div><div class="home-grid" id="home-grid">${instances.map(homeInstanceHtml).join("")}</div>` : ""}
@@ -6063,7 +6085,7 @@
           </div>
           <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${feedGridLevel()}` : ""}" id="dv-results" style="--feed-cols:${feedColumns()}">${dvResultsHtml()}</div>
         </div>
-      </div>`;
+      </div>`);
 
     $$("#tab-body [data-home-id]").forEach((card) => card.addEventListener("click", () => {
       selectInstance(card.dataset.homeId);
@@ -6910,7 +6932,8 @@
       state.modrinth.error = String(err);
     }
     state.modrinth.loading = false;
-    renderModrinth();
+    // Ответ старого источника не должен перерисовать уже переключённый каталог.
+    if (state.tab === "download" && state.modsSource !== "curseforge" && state.dlRoot?.isConnected) renderModrinth();
   }
 
   async function installFromModrinth(projectId, kind) {
@@ -6962,7 +6985,7 @@
     // модпаки ставим отдельной сборкой, моды/ресурспаки/шейдеры — в текущую
     const types = [["mod", "Моды"], ["modpack", "Модпаки"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
     const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
-    root.innerHTML = `
+    replaceCatalogHtml(root, `
       <div class="modrinth-wrap">
         <div class="modrinth-filters">
           <div class="field">
@@ -6995,7 +7018,7 @@
         <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${modsGridLevel()}` : ""}" id="cf-results" style="--feed-cols:${modsColumns()}">
           ${cfResultsHtml()}
         </div>
-      </div>`;
+      </div>`);
 
     $("#cf-type").addEventListener("change", (event) => { state.curseforge.type = event.target.value; cfRunSearch(); });
     $("#cf-mc").addEventListener("change", (event) => { state.curseforge.mc = event.target.value; cfRunSearch(); });
@@ -7253,7 +7276,7 @@
       state.curseforge.error = String(err);
     }
     state.curseforge.loading = false;
-    renderCurseForge();
+    if (state.tab === "download" && state.modsSource === "curseforge" && state.dlRoot?.isConnected) renderCurseForge();
   }
 
   async function installFromCurseForge(projectId, btn) {
@@ -10838,8 +10861,9 @@
         api.window("fullscreen").catch(() => {});
         return;
       }
-      // Enter на интерактивных элементах не должен вдобавок запускать игру.
-      if (event.key === "Enter" && !event.target.closest("input, select, textarea, button, a, summary, [contenteditable], [role='button'], [role='link']") && $("#modal-create").hidden) play();
+      // Enter без фокуса на кнопке не запускает игру: после перерисовки
+      // элементов фокус может оказаться на BODY. Кнопка «Играть» по-прежнему
+      // работает с Enter и пробелом штатным поведением браузера.
     });
   }
 

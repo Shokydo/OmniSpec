@@ -37,6 +37,30 @@ jobs:
       - name: Проверка всего workspace
         run: cargo check --workspace
 
+  windows-setup:
+    name: Windows — ярлыки и установщик
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+      - name: Проверить Windows Shell Link и ошибки записи
+        run: cargo test -p omnispec-setup --locked
+      - name: Подготовить тестовую полезную нагрузку
+        shell: pwsh
+        run: |
+          $file = Join-Path $env:RUNNER_TEMP 'omnispec-test-payload.exe'
+          [IO.File]::WriteAllBytes($file, [byte[]](0x4d, 0x5a, 1, 2, 3, 4))
+          "OMNISPEC_SETUP_PAYLOAD=$file" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Собрать установщик с тестовой нагрузкой
+        run: cargo build -p omnispec-setup --locked
+      - name: Проверить фактическую установку, свойства ярлыков и ошибки
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($meta.packages | Where-Object { $_.name -eq 'omnispec-setup' }).version
+          ./tools/tests/windows-setup-smoke.ps1 -Setup 'target/debug/omnispec-setup.exe' -Launcher $env:OMNISPEC_SETUP_PAYLOAD -ExpectedVersion $version
+
   ui-test:
     name: Интерфейс, диагностика и сетевые сбои
     runs-on: ubuntu-latest

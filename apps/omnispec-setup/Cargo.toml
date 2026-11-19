@@ -25,6 +25,15 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# IShellLinkW / IPersistFile создают .lnk напрямую, без интерпретации путей оболочкой.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
+
 # Иконка и сведения о файле для установщика: без секции ресурсов
 # OmniSpec-Setup.exe показывается со стандартным значком консоли.
 [target.'cfg(windows)'.build-dependencies]

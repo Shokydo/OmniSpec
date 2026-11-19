@@ -234,6 +234,7 @@ pub fn expand_path(text: &str) -> PathBuf {
         .unwrap_or(path)
 }
 
+#[cfg(not(windows))]
 pub fn desktop_dir() -> Option<PathBuf> {
     if let Some(home) = dirs_home() {
         let one_drive = home.join("OneDrive").join("Desktop");
@@ -307,7 +308,14 @@ pub fn install(dir: &Path, portable: bool, report: &mut dyn FnMut(Progress)) -> 
     }
 
     report(Progress::Begin { step: 2 });
-    make_shortcuts(&exe, dir);
+    if let Err(error) = make_shortcuts(&exe, dir) {
+        let error = format!("Файлы уже лежат в {}. {error}", dir.display());
+        report(Progress::Fail {
+            step: 2,
+            error: error.clone(),
+        });
+        return Err(error);
+    }
     report(Progress::Ok {
         step: 2,
         note: "рабочий стол и «Пуск»".to_string(),
@@ -399,9 +407,10 @@ pub fn uninstall(dir: &Path, remove_data: bool, report: &mut dyn FnMut(Progress)
 
     let portable = dir.join(PORTABLE_FILE).exists();
     let data = data_dir(dir, portable);
-    remove_shortcuts();
-
     let mut failures: Vec<String> = Vec::new();
+    if let Err(error) = remove_shortcuts() {
+        failures.push(error);
+    }
     for name in [APP_EXE, "icon.png", INFO_FILE, PORTABLE_FILE] {
         let path = dir.join(name);
         if path.exists() {
@@ -415,14 +424,21 @@ pub fn uninstall(dir: &Path, remove_data: bool, report: &mut dyn FnMut(Progress)
             failures.push(format!("{}: {error}", data.display()));
         }
     }
-    report(Progress::Ok {
-        step: 0,
-        note: if remove_data {
-            "файлы и данные удалены".to_string()
-        } else {
-            "файлы удалены, сборки оставлены".to_string()
-        },
-    });
+    if failures.is_empty() {
+        report(Progress::Ok {
+            step: 0,
+            note: if remove_data {
+                "файлы и данные удалены".to_string()
+            } else {
+                "файлы удалены, сборки оставлены".to_string()
+            },
+        });
+    } else {
+        report(Progress::Fail {
+            step: 0,
+            error: failures.join("; "),
+        });
+    }
 
     report(Progress::Begin { step: 1 });
     // сам деинсталлятор занят нами — удаляем его после выхода
@@ -476,21 +492,38 @@ fn schedule_self_delete(path: &Path) {
     }
 }
 
-/// Убрать ярлыки с рабочего стола и из меню «Пуск».
-fn remove_shortcuts() {
+/// Убрать только наши ярлыки из тех же системных папок, в которые ставили.
+fn remove_shortcuts() -> Result<(), String> {
+    #[allow(unused_mut)]
+    let mut failures: Vec<String> = Vec::new();
     #[cfg(windows)]
     {
-        if let Some(desktop) = desktop_dir() {
-            let _ = std::fs::remove_file(desktop.join(format!("{APP_NAME}.lnk")));
+        let mut links = Vec::new();
+        match crate::windows_shortcuts::desktop_folder() {
+            Ok(folder) => links.push(folder.join(format!("{APP_NAME}.lnk"))),
+            Err(error) => failures.push(error),
         }
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let folder = PathBuf::from(appdata)
-                .join("Microsoft")
-                .join("Windows")
-                .join("Start Menu")
-                .join("Programs")
-                .join(APP_NAME);
-            let _ = std::fs::remove_dir_all(folder);
+        let start = match crate::windows_shortcuts::programs_folder() {
+            Ok(folder) => {
+                let folder = folder.join(APP_NAME);
+                links.push(folder.join(format!("{APP_NAME}.lnk")));
+                Some(folder)
+            }
+            Err(error) => {
+                failures.push(error);
+                None
+            }
+        };
+        for link in links {
+            if let Err(error) = std::fs::remove_file(&link) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    failures.push(format!("не удалился ярлык {}: {error}", link.display()));
+                }
+            }
+        }
+        if let Some(folder) = start {
+            // Чужие файлы в папке пользователя не трогаем.
+            let _ = std::fs::remove_dir(folder);
         }
     }
 
@@ -508,46 +541,20 @@ fn remove_shortcuts() {
             let _ = std::fs::remove_file(desktop.join("OmniSpec.desktop"));
         }
     }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 /* ───────────────────────── ярлыки и запуск ───────────────────────── */
 
-/// Ярлыки: рабочий стол + меню «Пуск». Windows — через PowerShell (WScript.Shell).
-fn make_shortcuts(exe: &Path, dir: &Path) {
+/// Ярлыки: рабочий стол + меню «Пуск».
+fn make_shortcuts(exe: &Path, dir: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
-        let script = |lnk: &Path| {
-            format!(
-                "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \
-                 \"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}');\
-                 $s.TargetPath='{}';$s.WorkingDirectory='{}';$s.IconLocation='{},0';$s.Description='{}';$s.Save()\"",
-                lnk.display(),
-                exe.display(),
-                dir.display(),
-                exe.display(),
-                APP_NAME
-            )
-        };
-        let run = |command: String| {
-            let _ = std::process::Command::new("cmd")
-                .args(["/C", &command])
-                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW — без мигания консоли
-                .status();
-        };
-
-        if let Some(desktop) = desktop_dir() {
-            run(script(&desktop.join(format!("{APP_NAME}.lnk"))));
-        }
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let programs = PathBuf::from(appdata)
-                .join("Microsoft")
-                .join("Windows")
-                .join("Start Menu")
-                .join("Programs");
-            let folder = programs.join(APP_NAME);
-            let _ = std::fs::create_dir_all(&folder);
-            run(script(&folder.join(format!("{APP_NAME}.lnk"))));
-        }
+        crate::windows_shortcuts::make_shortcuts(exe, dir)
     }
 
     #[cfg(unix)]
@@ -569,11 +576,13 @@ fn make_shortcuts(exe: &Path, dir: &Path) {
         if let Some(desktop) = desktop_dir() {
             let _ = std::fs::write(desktop.join("OmniSpec.desktop"), &entry);
         }
+        Ok(())
     }
 
     #[cfg(not(any(windows, unix)))]
     {
         let _ = (exe, dir);
+        Ok(())
     }
 }
 

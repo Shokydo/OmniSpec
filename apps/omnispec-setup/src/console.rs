@@ -206,7 +206,11 @@ pub fn run(reinstall: bool, assume_yes: bool, dir_override: Option<String>) {
                 finish("ошибка");
             }
             warn(&format!("  {error}"));
-            warn("  Скачай OmniSpec.exe вручную — он работает и без установки.");
+            if common::installed_in(&dir) {
+                warn("  Файл лаунчера уже находится в выбранной папке. Проверь ошибку и повтори.");
+            } else {
+                warn("  Скачай OmniSpec.exe вручную — он работает и без установки.");
+            }
             println!();
             pause();
         }

@@ -782,13 +782,18 @@ impl Setup {
 
     fn failed(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.blank(ui, 10.0);
-        self.strong_line(ui, "  Не получилось установить.");
+        self.strong_line(ui, "  Не получилось завершить установку.");
         self.blank(ui, 8.0);
         if let Some(error) = &self.error {
             self.body_line(ui, &format!("  {error}"));
         }
         self.blank(ui, 8.0);
-        self.body_line(ui, "  Можно скачать OmniSpec.exe вручную — он работает и без установки.");
+        if common::installed_in(&self.dir) {
+            self.body_line(ui, "  Файл лаунчера уже находится в выбранной папке.");
+            self.body_line(ui, "  Проверь причину ошибки и повтори установку.");
+        } else {
+            self.body_line(ui, "  Можно скачать OmniSpec.exe вручную — он работает и без установки.");
+        }
         self.blank(ui, 14.0);
         self.rule(ui);
         self.blank(ui, 10.0);

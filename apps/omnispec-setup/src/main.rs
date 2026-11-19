@@ -30,6 +30,8 @@
 mod common;
 mod console;
 mod gui;
+#[cfg(windows)]
+mod windows_shortcuts;
 
 fn main() {
     let mut args = std::env::args().skip(1);

@@ -3886,7 +3886,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-app"
-version = "0.49.3"
+version = "0.49.4"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
@@ -3908,7 +3908,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-core"
-version = "0.49.3"
+version = "0.49.4"
 dependencies = [
  "dirs 5.0.1",
  "futures",
@@ -3929,13 +3929,14 @@ dependencies = [
 
 [[package]]
 name = "omnispec-setup"
-version = "0.49.3"
+version = "0.49.4"
 dependencies = [
  "eframe",
  "image",
  "libc",
  "omnispec-core",
  "tokio",
+ "windows",
  "winresource",
 ]
 
