@@ -79,6 +79,11 @@ class DiscordReleaseTests(unittest.TestCase):
         self.assertIn("ярлыков Windows", latest)
         self.assertIn("Enter в пустой области", latest)
         self.assertNotIn("SHA-512", latest)
+        catalog = build("v0.49.5")
+        self.assertIn("вкладка «скачать моды»", catalog.lower())
+        self.assertIn("CurseForge", catalog)
+        self.assertIn("без обязательного Enter", catalog)
+        self.assertNotIn("ярлыков Windows", catalog)
         with tempfile.TemporaryDirectory() as tmp:
             notes = Path(tmp) / "notes"
             notes.mkdir()

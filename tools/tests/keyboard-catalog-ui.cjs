@@ -67,12 +67,9 @@ async function noLaunch(page, label) {
 async function changeSelect(page, selector, key, resultRoot) {
   await page.locator(selector).focus();
   const before = await page.evaluate(() => window.__keyboardCalls.filter(x => x.command.startsWith('search_')).length);
-  if (selector === '#dl-source') await page.evaluate(() => { window.__sourceNode = document.querySelector('#dl-source'); });
   await page.keyboard.press(key);
-  // При возврате к источнику уже загруженный каталог берётся из памяти.
-  if (selector !== '#dl-source') await page.waitForFunction(n => window.__keyboardCalls.filter(x => x.command.startsWith('search_')).length > n, before);
+  await page.waitForFunction(n => window.__keyboardCalls.filter(x => x.command.startsWith('search_')).length > n, before);
   await page.waitForSelector(`${resultRoot} .card`);
-  if (selector === '#dl-source') assert(await page.evaluate(() => window.__sourceNode === document.querySelector('#dl-source')), 'select источника не должен пересоздаваться');
   await page.waitForTimeout(180); // ответ поиска тоже мог перерисовать фильтры
   assert.equal(await page.evaluate(() => document.activeElement.id), selector.slice(1), `${selector}: фокус потерялся`);
   await page.keyboard.press('Enter');
@@ -80,25 +77,36 @@ async function changeSelect(page, selector, key, resultRoot) {
   await page.keyboard.press('Escape'); // закрыть нативный список, если Enter его открыл
   assert.equal(await page.evaluate(() => document.activeElement.id), selector.slice(1), `${selector}: фокус потерялся после Enter`);
 }
+async function changeSource(page, scope, source, key = 'Enter') {
+  const selector = `[data-${scope}-source="${source}"]`;
+  const root = scope === 'dv' ? '#dv-results' : (source === 'curseforge' ? '#cf-results' : '#mr-results');
+  await page.locator(selector).focus();
+  await page.keyboard.press(key);
+  await page.waitForSelector(`${root} .card`);
+  assert.equal(await page.locator(selector).getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.evaluate(() => document.activeElement.id), `${scope}-source-${source}`, 'кнопка источника потеряла фокус');
+  await noLaunch(page, `${scope}: выбор источника клавишей ${key}`);
+}
 
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const browser = await chromium.launch({headless:true});
   try {
     const {page, errors} = await createPage(browser);
-    await changeSelect(page, '#dl-source', 'End', '#cf-results');
-    await changeSelect(page, '#dl-source', 'ArrowUp', '#mr-results');
-    await changeSelect(page, '#dl-source', 'ArrowDown', '#cf-results');
+    await changeSource(page, 'dl', 'curseforge', 'Space');
+    await changeSource(page, 'dl', 'modrinth', 'Enter');
+    await changeSource(page, 'dl', 'curseforge', 'Enter');
     await changeSelect(page, '#cf-type', 'End', '#cf-results');
     await changeSelect(page, '#cf-type', 'Home', '#cf-results');
     await changeSelect(page, '#cf-mc', 'End', '#cf-results');
     await changeSelect(page, '#cf-loader', 'End', '#cf-results');
     await changeSelect(page, '#cf-sort', 'End', '#cf-results');
-    await changeSelect(page, '#dl-source', 'Home', '#mr-results');
+    await changeSource(page, 'dl', 'modrinth', 'Space');
     await changeSelect(page, '#mr-type', 'End', '#mr-results');
     await changeSelect(page, '#mr-type', 'Home', '#mr-results');
-    await changeSelect(page, '#mr-mc', 'End', '#mr-results');
-    await changeSelect(page, '#mr-loader', 'End', '#mr-results');
+    // Версия и загрузчик пришли из CurseForge, поэтому здесь выбираем начало.
+    await changeSelect(page, '#mr-mc', 'Home', '#mr-results');
+    await changeSelect(page, '#mr-loader', 'Home', '#mr-results');
 
     // Если пользователь сам перевёл фокус, запоздавший ответ не должен его красть.
     await page.evaluate(() => { window.__heldSearch = {command:'search_modrinth', resolve:null}; });
@@ -128,31 +136,27 @@ async function changeSelect(page, selector, key, resultRoot) {
     await noLaunch(page, 'поиск по Enter');
 
     // Запоздавший ответ предыдущего источника не подменяет текущий каталог.
-    for (const [oldSource, key, newRoot, oldRoot] of [
-      ['modrinth', 'End', '#cf-results', '#mr-results'],
-      ['curseforge', 'Home', '#mr-results', '#cf-results'],
+    for (const [oldSource, newSource, newRoot, oldRoot] of [
+      ['modrinth', 'curseforge', '#cf-results', '#mr-results'],
+      ['curseforge', 'modrinth', '#mr-results', '#cf-results'],
     ]) {
       await page.evaluate(command => { window.__heldSearch = {command, resolve:null}; }, `search_${oldSource}`);
       await page.locator('#dl-query').fill(`held ${oldSource}`);
       await page.keyboard.press('Enter');
       await page.waitForFunction(() => typeof window.__heldSearch.resolve === 'function');
-      await page.locator('#dl-source').focus();
-      await page.keyboard.press(key);
-      await page.waitForSelector(`${newRoot} .card`);
+      await changeSource(page, 'dl', newSource, 'Space');
       await page.evaluate(() => window.__heldSearch.resolve());
       await page.waitForTimeout(250);
       assert.equal(await page.locator(oldRoot).count(), 0, 'старый ответ не должен рисовать чужой источник');
       assert(await page.locator(`${newRoot} .card`).count(), 'текущий источник должен оставаться на экране');
-      assert.equal(await page.evaluate(() => document.activeElement.id), 'dl-source');
-      await page.keyboard.press('Enter');
+      assert.equal(await page.evaluate(() => document.activeElement.id), `dl-source-${newSource}`);
       await noLaunch(page, 'поздний ответ другого источника');
-      await page.keyboard.press('Escape');
       await page.evaluate(() => { window.__heldSearch = null; });
     }
 
     await page.locator('#btn-home').click();
-    await page.waitForSelector('#dv-source');
-    await changeSelect(page, '#dv-source', 'End', '#dv-results');
+    await page.waitForSelector('[data-dv-source="curseforge"]');
+    await changeSource(page, 'dv', 'curseforge', 'Enter');
     await page.locator('[data-dv-view="list"]').focus();
     await page.keyboard.press('Enter');
     assert(await page.locator('[data-dv-view="list"]').evaluate(el => el.classList.contains('is-active')));

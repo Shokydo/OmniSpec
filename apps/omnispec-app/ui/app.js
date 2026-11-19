@@ -144,6 +144,9 @@
       "--red": dark ? "#ff7b72" : "#b42318",
       "--yellow": dark ? "#e3b341" : "#a2680e",
       "--blue": dark ? "#79c0ff" : "#0a58ca",
+      // Фирменные цвета источников остаются различимыми и на светлой теме.
+      "--catalog-modrinth": dark ? "#1bd96a" : "#087b42",
+      "--catalog-curseforge": dark ? "#ff805a" : "#bf3f19",
       "--console-bg": mix(theme.bg, dark ? "#000000" : step, dark ? 0.45 : 0.02)
     };
     // старые имена — просто перекрываем теми же значениями
@@ -2589,21 +2592,21 @@
     contentUpdates: {},
     contentQuery: {},
     mcver: null,
-    modsView: "list",
     external: { list: null, loading: false, error: null },
     iconCache: {},
     modsSource: "modrinth",
-    modsView: null,
+    modsView: "list",
+    modsQuery: "",
     dlRoot: null,
     modrinth: {
       query: "", type: "mod", mc: "", loader: "",
       results: [], total: 0, loading: false, loadingMore: false,
-      error: null, tried: false, view: "list"
+      error: null, tried: false
     },
     curseforge: {
       query: "", type: "mod", mc: "", loader: "", sort: "downloads",
       results: [], total: 0, loading: false, loadingMore: false,
-      error: null, tried: false, view: "grid"
+      error: null, tried: false
     },
     discover: {
       query: "", results: [], total: 0,
@@ -3830,7 +3833,10 @@
   function installedMessage(text) {
     installedProjectsMessage = text;
     const label = $("#dl-installed-check");
-    if (label) label.textContent = text;
+    if (label) {
+      label.textContent = text;
+      label.hidden = !text;
+    }
   }
 
   function projectKey(source, projectId) {
@@ -3904,14 +3910,14 @@
     // Старые результаты нельзя выдавать за актуальные после удаления или изменения файла.
     state.installedProjects = new Set();
     updateCatalogProjectStates();
-    if (!instanceId || state.tab !== "download") { installedMessage(""); return; }
-    installedMessage("Проверяем установленные версии модов…");
+    installedMessage("");
+    if (!instanceId || state.tab !== "download") return;
     try {
       const ids = await api.catalogCurrentMods(instanceId, source);
       if (generation !== installedProjectsGeneration || state.selectedId !== instanceId
           || installedProjectsSource !== source || state.modsSource !== source) return;
       state.installedProjects = new Set((ids || []).filter(Boolean).map((id) => projectKey(source, id)));
-      installedMessage("Обводка: в сборке установлена последняя версия под её Minecraft и загрузчик.");
+      installedMessage("");
       updateCatalogProjectStates();
     } catch (_) {
       if (generation !== installedProjectsGeneration || state.selectedId !== instanceId
@@ -5309,7 +5315,16 @@
         </div>
       </div>`;
 
-    $("#content-add").addEventListener("click", () => { state.modrinth.type = kind; state.modsSource = "modrinth"; state.tab = "download"; refreshInstalledProjects(); renderTab(); });
+    $("#content-add").addEventListener("click", () => {
+      cancelDownloadSearchTimer();
+      invalidateDownloadSearch("modrinth");
+      setDownloadFilter("modrinth", "type", kind);
+      state.modrinth.query = state.modsQuery;
+      state.modsSource = "modrinth";
+      state.tab = "download";
+      refreshInstalledProjects();
+      renderTab();
+    });
     $("#content-open").addEventListener("click", () => api.openPath(`/instances/${meta.id}/minecraft/${cfg.folder}`).catch((err) => toast(String(err), "err")));
     const input = $("#content-query");
     input.addEventListener("input", () => {
@@ -5677,12 +5692,17 @@
 
   /* ---------- Modrinth ---------- */
   const MR_PAGE = 24;
+  const SEARCH_INPUT_DELAY_MS = 300;
   let mrObserver = null;
+  let mrSearchGeneration = 0;
+  let cfSearchGeneration = 0;
+  let downloadSearchTimer = null;
+  let downloadSearchInstance = null;
   /* лента готовых сборок в главном окне */
   const DV_PAGE = 24;
   let dvObserver = null;
 
-  /** Общий размер плитки на странице «Скачать моды»: 1 → 12, 2 → 9, 3 → 6 в ряд.
+  /** Общий размер плитки на странице «Загрузить»: 1 → 12, 2 → 9, 3 → 6 в ряд.
    *  Один на оба источника; старые ключи mr_grid/cf_grid — для миграции. */
   function modsGridLevel() {
     const s = state.settings || {};
@@ -5696,6 +5716,130 @@
 
   function mrGridLevel() { return modsGridLevel(); }
   function mrColumns(level = modsGridLevel()) { return modsColumns(level); }
+
+  /** Один и тот же понятный переключатель источника для модов и готовых сборок. */
+  function sourceButtonsHtml(scope, active) {
+    return `<div class="catalog-sources" role="group" aria-label="Источник поиска">
+      ${[["modrinth", "Modrinth"], ["curseforge", "CurseForge"]].map(([source, title]) => `
+        <button type="button" id="${scope}-source-${source}" class="catalog-source${active === source ? " is-active" : ""}"
+          data-${scope}-source="${source}" data-source="${source}" aria-label="Искать на ${title}"
+          aria-pressed="${active === source}" title="${title}"><svg class="ic" aria-hidden="true"><use href="#i-${source}"/></svg></button>`).join("")}
+    </div>`;
+  }
+
+  function updateSourceButtons(scope, active) {
+    $$(`[data-${scope}-source]`).forEach((button) => {
+      const selected = button.dataset.source === active;
+      button.classList.toggle("is-active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+  }
+
+  /** Не отправляем незавершённую IME-композицию даже в WebView без isComposing. */
+  function bindLiveSearch(input, schedule, run) {
+    let composing = false;
+    input.addEventListener("compositionstart", () => { composing = true; });
+    input.addEventListener("input", (event) => schedule(event.target.value, composing || event.isComposing));
+    input.addEventListener("compositionend", (event) => { composing = false; schedule(event.target.value); });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !composing && !event.isComposing) { event.preventDefault(); run(); }
+    });
+  }
+
+  function catalogVisible(source) {
+    return state.tab === "download" && state.modsSource === source && Boolean(state.dlRoot?.isConnected);
+  }
+
+  function cancelDownloadSearchTimer() {
+    if (downloadSearchTimer) clearTimeout(downloadSearchTimer);
+    downloadSearchTimer = null;
+  }
+
+  /** Отмена относится и к первой странице, и к параллельной догрузке. */
+  function invalidateDownloadSearch(source) {
+    if (source === "curseforge") cfSearchGeneration += 1;
+    else mrSearchGeneration += 1;
+    const cfg = source === "curseforge" ? state.curseforge : state.modrinth;
+    cfg.loading = false;
+    cfg.loadingMore = false;
+    cfg.tried = false;
+    cfg.error = null;
+    cfg.results = [];
+    cfg.total = 0;
+  }
+
+  function renderCatalogSource(source) {
+    if (!catalogVisible(source)) return;
+    if (source === "curseforge") renderCurseForge();
+    else renderModrinth();
+  }
+
+  function scheduleDownloadSearch(value, composing = false) {
+    const source = state.modsSource === "curseforge" ? "curseforge" : "modrinth";
+    const cfg = source === "curseforge" ? state.curseforge : state.modrinth;
+    state.modsQuery = value;
+    cfg.query = value;
+    cancelDownloadSearchTimer();
+    // Инвалидируем сразу, а не после debounce: старый ответ не мигнёт во время ввода.
+    invalidateDownloadSearch(source);
+    cfg.loading = true;
+    cfg.tried = true;
+    renderCatalogSource(source);
+    if (composing) return;
+    downloadSearchTimer = setTimeout(() => {
+      downloadSearchTimer = null;
+      if (catalogVisible(source)) dlRunSearch();
+      else { cfg.loading = false; cfg.tried = false; }
+    }, SEARCH_INPUT_DELAY_MS);
+  }
+
+  /** Общие фильтры синхронизированы, но модпаки и сортировка CurseForge остаются его собственными. */
+  function setDownloadFilter(source, field, value) {
+    const current = source === "curseforge" ? state.curseforge : state.modrinth;
+    const other = source === "curseforge" ? state.modrinth : state.curseforge;
+    current[field] = value;
+    // На странице Modrinth нет модпаков: не подменяем им последний общий тип.
+    if (field !== "type" || ["mod", "resourcepack", "shader"].includes(value)) other[field] = value;
+  }
+
+  function selectDownloadSource(source) {
+    if (source !== "modrinth" && source !== "curseforge") return;
+    if (source === state.modsSource) {
+      if (downloadSearchTimer) dlRunSearch();
+      return;
+    }
+    cancelDownloadSearchTimer();
+    invalidateDownloadSearch(state.modsSource);
+    state.modsSource = source;
+    const cfg = source === "curseforge" ? state.curseforge : state.modrinth;
+    invalidateDownloadSearch(source);
+    cfg.query = state.modsQuery;
+    updateSourceButtons("dl", source);
+    refreshInstalledProjects();
+    dlRunSearch();
+  }
+
+  function setDownloadView(view) {
+    if (view !== "list" && view !== "grid") return;
+    state.modsView = view;
+    $$("[data-dl-view]").forEach((button) => {
+      const selected = button.dataset.dlView === view;
+      button.classList.toggle("is-active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+    const results = $("#mr-results") || $("#cf-results");
+    if (results) {
+      results.classList.toggle("is-grid", view === "grid");
+      results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
+      if (view === "grid") results.classList.add(`feed-grid-${modsGridLevel()}`);
+      results.style.setProperty("--feed-cols", String(modsColumns()));
+      // После смены раскладки конец списка может оказаться прямо на экране.
+      if (state.modsSource === "curseforge") cfWatchMore();
+      else watchMore();
+    }
+    state.settings = { ...(state.settings || {}), mods_view: view };
+    api.saveSettings(state.settings).catch(() => {});
+  }
 
   // Перерисовка фильтров/переключателей не должна выбрасывать фокус на BODY.
   // Не переносим фокус, если до замены он был вне контейнера.
@@ -5714,28 +5858,34 @@
     }
   }
 
-  /** Страница «Скачать моды»: общий поиск и вид, источник — Modrinth/CurseForge. */
+  /** Страница «Загрузить»: одна строка поиска и один вид для обоих источников. */
   function renderDownload() {
+    // Поиск учитывает версию и загрузчик сборки: ответ от прошлой сборки не подходит новой.
+    if (downloadSearchInstance !== state.selectedId) {
+      cancelDownloadSearchTimer();
+      invalidateDownloadSearch("modrinth");
+      invalidateDownloadSearch("curseforge");
+      downloadSearchInstance = state.selectedId;
+    }
     const source = state.modsSource === "curseforge" ? "curseforge" : "modrinth";
     const cfg = source === "curseforge" ? state.curseforge : state.modrinth;
-    const view = state.modsView || cfg.view || "list";
+    if (cfg.query !== state.modsQuery) {
+      cancelDownloadSearchTimer();
+      invalidateDownloadSearch(source);
+      cfg.query = state.modsQuery;
+    }
+    const view = state.modsView;
     replaceCatalogHtml($("#tab-body"), `
       <div class="modrinth-wrap">
         <div class="modrinth-filters">
           <label class="search" style="flex:1;min-width:220px">
             <svg class="ic"><use href="#i-search"/></svg>
-            <input id="dl-query" type="text" placeholder="Найти мод…" spellcheck="false" value="${esc(cfg.query)}">
+            <input id="dl-query" type="text" aria-label="Поиск в каталоге" placeholder="Найти мод…" spellcheck="false" value="${esc(state.modsQuery)}">
           </label>
-          <label class="feed-source" title="Где искать">
-            <span class="feed-source-label">Искать в</span>
-            <select class="select" id="dl-source">
-              <option value="modrinth" ${source === "modrinth" ? "selected" : ""}>Modrinth</option>
-              <option value="curseforge" ${source === "curseforge" ? "selected" : ""}>CurseForge</option>
-            </select>
-          </label>
-          <div class="mr-view" style="align-self:flex-end" title="Вид списка">
-            <button class="${view === "list" ? "is-active" : ""}" data-dl-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
-            <button class="${view === "grid" ? "is-active" : ""}" data-dl-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
+          ${sourceButtonsHtml("dl", source)}
+          <div class="mr-view" style="align-self:flex-end" role="group" aria-label="Вид каталога">
+            <button type="button" class="${view === "list" ? "is-active" : ""}" data-dl-view="list" aria-pressed="${view === "list"}"><svg class="ic"><use href="#i-list"/></svg>Список</button>
+            <button type="button" class="${view === "grid" ? "is-active" : ""}" data-dl-view="grid" aria-pressed="${view === "grid"}"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
           </div>
           <label class="feed-size" style="align-self:flex-end" title="Размер плитки: 1 — 12 в ряд, 2 — 9 в ряд, 3 — 6 в ряд">
             <svg class="ic"><use href="#i-grid"/></svg>
@@ -5743,25 +5893,13 @@
             <span class="mono" id="dl-size-val">${modsGridLevel()}</span>
           </label>
         </div>
-        <div class="hint" id="dl-installed-check" role="status">${esc(installedProjectsMessage)}</div>
+        <div class="hint" id="dl-installed-check" role="status"${installedProjectsMessage ? "" : " hidden"}>${esc(installedProjectsMessage)}</div>
         <div id="dl-source-body"></div>
       </div>`);
 
-    $("#dl-query").addEventListener("keydown", (event) => { if (event.key === "Enter") dlRunSearch(); });
-    $("#dl-source").addEventListener("change", (event) => {
-      state.modsSource = event.target.value === "curseforge" ? "curseforge" : "modrinth";
-      refreshInstalledProjects();
-      // Сам select не пересоздаём: на Windows/WebKit change может прийти
-      // прямо посреди работы с раскрытым списком клавиатурой.
-      const cfg = state.modsSource === "curseforge" ? state.curseforge : state.modrinth;
-      $("#dl-query").value = cfg.query;
-      if (state.modsSource === "curseforge") renderCurseForge(state.dlRoot);
-      else renderModrinth(state.dlRoot);
-    });
-    $$("#tab-body [data-dl-view]").forEach((btn) => btn.addEventListener("click", () => {
-      state.modsView = btn.dataset.dlView;
-      renderDownload();
-    }));
+    bindLiveSearch($("#dl-query"), scheduleDownloadSearch, dlRunSearch);
+    $$("#tab-body [data-dl-source]").forEach((button) => button.addEventListener("click", () => selectDownloadSource(button.dataset.dlSource)));
+    $$("#tab-body [data-dl-view]").forEach((button) => button.addEventListener("click", () => setDownloadView(button.dataset.dlView)));
     const dlSize = $("#dl-size");
     if (dlSize) {
       dlSize.addEventListener("input", () => {
@@ -5771,8 +5909,10 @@
         const results = $("#mr-results") || $("#cf-results");
         if (results) {
           results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
-          results.classList.add(`feed-grid-${level}`);
+          if (state.modsView === "grid") results.classList.add(`feed-grid-${level}`);
           results.style.setProperty("--feed-cols", String(modsColumns(level)));
+          if (state.modsSource === "curseforge") cfWatchMore();
+          else watchMore();
         }
         state.settings = { ...(state.settings || {}), mods_grid: level };
         api.saveSettings(state.settings).catch(() => {});
@@ -5784,10 +5924,12 @@
     else renderModrinth(state.dlRoot);
   }
 
-  /** Поиск на странице «Скачать моды» — как на главной: ввод + Enter. */
+  /** Enter остаётся быстрым ручным запуском, но для поиска он не нужен. */
   function dlRunSearch() {
-    const query = $("#dl-query") ? $("#dl-query").value : "";
-    if ((state.modsSource || "modrinth") === "curseforge") {
+    cancelDownloadSearchTimer();
+    const query = $("#dl-query") ? $("#dl-query").value : state.modsQuery;
+    state.modsQuery = query;
+    if (state.modsSource === "curseforge") {
       state.curseforge.query = query;
       cfRunSearch();
     } else {
@@ -5800,7 +5942,7 @@
     const root = container || state.dlRoot || $("#tab-body");
     const meta = selected();
     const cfg = state.modrinth;
-    const view = state.modsView || cfg.view || "list";
+    const view = state.modsView;
     // Внутри сборки модпаки не нужны — они ставятся только при создании сборки.
     const types = [["mod", "Моды"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
     const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
@@ -5833,10 +5975,10 @@
         </div>
       </div>`);
 
-    $("#mr-type").addEventListener("change", (event) => { state.modrinth.type = event.target.value; runSearch(); });
-    $("#mr-mc").addEventListener("change", (event) => { state.modrinth.mc = event.target.value; runSearch(); });
+    $("#mr-type").addEventListener("change", (event) => { setDownloadFilter("modrinth", "type", event.target.value); runSearch(); });
+    $("#mr-mc").addEventListener("change", (event) => { setDownloadFilter("modrinth", "mc", event.target.value); runSearch(); });
     const loaderSelect = $("#mr-loader");
-    if (loaderSelect) loaderSelect.addEventListener("change", (event) => { state.modrinth.loader = event.target.value; runSearch(); });
+    if (loaderSelect) loaderSelect.addEventListener("change", (event) => { setDownloadFilter("modrinth", "loader", event.target.value); runSearch(); });
     bindResultEvents();
     const retry = $("#mr-retry");
     if (retry) retry.addEventListener("click", () => runSearch());
@@ -6083,19 +6225,13 @@
             <div class="home-title">Готовые сборки</div>
             <label class="search home-search">
               <svg class="ic"><use href="#i-search"/></svg>
-              <input id="dv-query" type="text" placeholder="Найти сборку" spellcheck="false" value="${esc(cfg.query)}">
+              <input id="dv-query" type="text" aria-label="Поиск готовых сборок" placeholder="Найти сборку" spellcheck="false" value="${esc(cfg.query)}">
             </label>
-            <label class="feed-source" title="Где искать сборки">
-              <span class="feed-source-label">Искать в</span>
-              <select class="select" id="dv-source">
-                <option value="modrinth" ${source === "modrinth" ? "selected" : ""}>Modrinth</option>
-                <option value="curseforge" ${source === "curseforge" ? "selected" : ""}>CurseForge</option>
-              </select>
-            </label>
+            ${sourceButtonsHtml("dv", source)}
             <div class="home-tools">
-              <div class="mr-view" title="Вид">
-                <button class="${view === "list" ? "is-active" : ""}" data-dv-view="list"><svg class="ic"><use href="#i-list"/></svg>Список</button>
-                <button class="${view === "grid" ? "is-active" : ""}" data-dv-view="grid"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
+              <div class="mr-view" role="group" aria-label="Вид готовых сборок">
+                <button type="button" class="${view === "list" ? "is-active" : ""}" data-dv-view="list" aria-pressed="${view === "list"}"><svg class="ic"><use href="#i-list"/></svg>Список</button>
+                <button type="button" class="${view === "grid" ? "is-active" : ""}" data-dv-view="grid" aria-pressed="${view === "grid"}"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
               </div>
               <label class="feed-size" title="Размер плиток: 1 — 12 в ряд, 2 — 9 в ряд, 3 — 6 в ряд">
                 <svg class="ic"><use href="#i-grid"/></svg>
@@ -6125,14 +6261,19 @@
       if (meta) openInstanceMenu(event.clientX, event.clientY, meta);
     }));
     syncRecentRow();
-    $("#dv-query").addEventListener("keydown", (event) => { if (event.key === "Enter") dvReset(); });
-    const sourceSelect = $("#dv-source");
-    if (sourceSelect) sourceSelect.addEventListener("change", () => {
-      state.discover.source = sourceSelect.value === "curseforge" ? "curseforge" : "modrinth";
-      state.settings = { ...(state.settings || {}), feed_source: state.discover.source };
+    bindLiveSearch($("#dv-query"), scheduleDiscoverSearch, dvReset);
+    $$("#tab-body [data-dv-source]").forEach((button) => button.addEventListener("click", () => {
+      const source = button.dataset.dvSource;
+      if (source === state.discover.source) {
+        if (discoverSearchTimer) dvReset();
+        return;
+      }
+      state.discover.source = source;
+      updateSourceButtons("dv", source);
+      state.settings = { ...(state.settings || {}), feed_source: source };
       api.saveSettings(state.settings).catch(() => {});
       dvReset();
-    });
+    }));
     $$("#tab-body [data-dv-view]").forEach((btn) => btn.addEventListener("click", () => {
       state.discover.view = btn.dataset.dvView;
       renderDiscover();
@@ -6404,9 +6545,38 @@
   let dvRetryTimer = null;
   let dvRetryCount = 0;
   let dvGeneration = 0;
+  let discoverSearchTimer = null;
 
   function dvVisible() {
     return state.tab === "discover" && Boolean($("#dv-results"));
+  }
+
+  function cancelDiscoverSearchTimer() {
+    if (discoverSearchTimer) clearTimeout(discoverSearchTimer);
+    discoverSearchTimer = null;
+  }
+
+  function scheduleDiscoverSearch(value, composing = false) {
+    const cfg = state.discover;
+    cfg.query = value;
+    cancelDiscoverSearchTimer();
+    dvCancelRetry(true);
+    // Ответ прежнего запроса или догрузки устаревает уже на первом символе.
+    dvGeneration += 1;
+    cfg.loading = true;
+    cfg.loadingMore = false;
+    cfg.tried = true;
+    cfg.error = null;
+    cfg.moreError = null;
+    cfg.results = [];
+    cfg.total = 0;
+    if (dvVisible()) dvRenderResults();
+    if (composing) return;
+    discoverSearchTimer = setTimeout(() => {
+      discoverSearchTimer = null;
+      if (dvVisible()) dvReset();
+      else { cfg.loading = false; cfg.tried = false; }
+    }, SEARCH_INPUT_DELAY_MS);
   }
 
   function dvRetryable(error) {
@@ -6560,6 +6730,7 @@
   async function dvReset({ automatic = false } = {}) {
     const input = $("#dv-query");
     const cfg = state.discover;
+    cancelDiscoverSearchTimer();
     dvCancelRetry(!automatic);
     if (!automatic && input) cfg.query = input.value;
     cfg.loading = true;
@@ -6611,7 +6782,7 @@
         <button class="btn" id="mr-retry">Повторить</button>
       </div>`;
     }
-    if (!cfg.results.length) return `<div class="empty-state">Введи запрос и нажми Enter</div>`;
+    if (!cfg.results.length) return `<div class="empty-state">Ничего не найдено — попробуй другой запрос или фильтры</div>`;
     return `${cfg.results.map(cardHtml).join("")}<div class="mr-sentinel" id="mr-sentinel">${sentinelText()}</div>`;
   }
 
@@ -6626,7 +6797,7 @@
   function watchMore() {
     if (mrObserver) { mrObserver.disconnect(); mrObserver = null; }
     const sentinel = $("#mr-sentinel");
-    if (!sentinel) return;
+    if (!sentinel || state.modrinth.results.length >= state.modrinth.total) return;
     mrObserver = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) loadMore();
     }, { rootMargin: "200px" });
@@ -6635,32 +6806,40 @@
 
   async function loadMore() {
     const cfg = state.modrinth;
-    if (cfg.loading || cfg.loadingMore || cfg.error) return;
+    if (!catalogVisible("modrinth") || cfg.loading || cfg.loadingMore || cfg.error) return;
     if (!cfg.results.length || cfg.results.length >= cfg.total) return;
     cfg.loadingMore = true;
+    const generation = mrSearchGeneration;
+    const params = searchQuery(cfg.results.length);
     updateSentinel();
     try {
-      const hits = await api.search(searchQuery(cfg.results.length));
+      const hits = await api.search(params);
+      if (generation !== mrSearchGeneration) return;
       const known = new Set(cfg.results.map((hit) => hit.project_id));
-      cfg.results = cfg.results.concat((hits.hits || []).filter((hit) => !known.has(hit.project_id)));
-      cfg.total = hits.total_hits || cfg.total;
-      // сервер может отдать пустую страницу в конце — считаем, что всё
-      if (!(hits.hits || []).length) cfg.results.length = cfg.results.length;
-      const container = $("#mr-results");
-      if (container) {
+      const fresh = (hits.hits || []).filter((hit) => !known.has(hit.project_id));
+      cfg.results = cfg.results.concat(fresh);
+      cfg.total = hits.total_hits ?? cfg.total;
+      if (!fresh.length) cfg.total = cfg.results.length;
+      const container = catalogVisible("modrinth") && $("#mr-results");
+      if (container && fresh.length) {
         const sentinel = $("#mr-sentinel");
-        const html = (hits.hits || []).filter((hit) => !known.has(hit.project_id)).map(cardHtml).join("");
+        const html = fresh.map(cardHtml).join("");
         if (sentinel) sentinel.insertAdjacentHTML("beforebegin", html);
         else container.insertAdjacentHTML("beforeend", html);
         bindResultEvents();
       }
     } catch (err) {
+      if (generation !== mrSearchGeneration) return;
       cfg.error = String(err);
-      renderModrinth();
+      cfg.loadingMore = false;
+      renderCatalogSource("modrinth");
       return;
     }
     cfg.loadingMore = false;
-    updateSentinel();
+    if (catalogVisible("modrinth")) {
+      updateSentinel();
+      watchMore(); // если конец всё ещё виден, загрузим следующую страницу
+    }
   }
 
   function updateSentinel() {
@@ -6932,30 +7111,34 @@
   }
 
   async function runSearch() {
-    if ($("#dl-query")) state.modrinth.query = $("#dl-query").value;
-    if ($("#mr-mc")) state.modrinth.mc = $("#mr-mc").value;
-    if ($("#mr-loader")) state.modrinth.loader = $("#mr-loader").value;
+    cancelDownloadSearchTimer();
     const cfg = state.modrinth;
+    if (catalogVisible("modrinth") && $("#dl-query")) state.modsQuery = cfg.query = $("#dl-query").value;
+    if ($("#mr-mc")) setDownloadFilter("modrinth", "mc", $("#mr-mc").value);
+    if ($("#mr-loader")) setDownloadFilter("modrinth", "loader", $("#mr-loader").value);
+    const generation = ++mrSearchGeneration;
+    const params = searchQuery(0);
     cfg.loading = true;
     cfg.loadingMore = false;
     cfg.tried = true;
     cfg.error = null;
     cfg.results = [];
     cfg.total = 0;
-    renderModrinth();
+    renderCatalogSource("modrinth");
     try {
-      const result = await api.search(searchQuery(0));
-      state.modrinth.results = result.hits || [];
-      state.modrinth.total = result.total_hits || state.modrinth.results.length;
-      state.modrinth.error = null;
+      const result = await api.search(params);
+      if (generation !== mrSearchGeneration) return;
+      cfg.results = result.hits || [];
+      cfg.total = result.total_hits ?? cfg.results.length;
+      cfg.error = null;
     } catch (err) {
-      state.modrinth.results = [];
-      state.modrinth.total = 0;
-      state.modrinth.error = String(err);
+      if (generation !== mrSearchGeneration) return;
+      cfg.results = [];
+      cfg.total = 0;
+      cfg.error = String(err);
     }
-    state.modrinth.loading = false;
-    // Ответ старого источника не должен перерисовать уже переключённый каталог.
-    if (state.tab === "download" && state.modsSource !== "curseforge" && state.dlRoot?.isConnected) renderModrinth();
+    cfg.loading = false;
+    renderCatalogSource("modrinth");
   }
 
   async function installFromModrinth(projectId, kind) {
@@ -7003,7 +7186,7 @@
     const root = container || state.dlRoot || $("#tab-body");
     const meta = selected();
     const cfg = state.curseforge;
-    const view = state.modsView || cfg.view || "grid";
+    const view = state.modsView;
     // модпаки ставим отдельной сборкой, моды/ресурспаки/шейдеры — в текущую
     const types = [["mod", "Моды"], ["modpack", "Модпаки"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
     const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
@@ -7042,11 +7225,11 @@
         </div>
       </div>`);
 
-    $("#cf-type").addEventListener("change", (event) => { state.curseforge.type = event.target.value; cfRunSearch(); });
-    $("#cf-mc").addEventListener("change", (event) => { state.curseforge.mc = event.target.value; cfRunSearch(); });
+    $("#cf-type").addEventListener("change", (event) => { setDownloadFilter("curseforge", "type", event.target.value); cfRunSearch(); });
+    $("#cf-mc").addEventListener("change", (event) => { setDownloadFilter("curseforge", "mc", event.target.value); cfRunSearch(); });
     $("#cf-sort").addEventListener("change", (event) => { state.curseforge.sort = event.target.value; cfRunSearch(); });
     const loaderSelect = $("#cf-loader");
-    if (loaderSelect) loaderSelect.addEventListener("change", (event) => { state.curseforge.loader = event.target.value; cfRunSearch(); });
+    if (loaderSelect) loaderSelect.addEventListener("change", (event) => { setDownloadFilter("curseforge", "loader", event.target.value); cfRunSearch(); });
     bindCfEvents();
     const retry = $("#cf-retry");
     if (retry) retry.addEventListener("click", () => cfRunSearch());
@@ -7063,7 +7246,7 @@
         <button class="btn" id="cf-retry">Повторить</button>
       </div>`;
     }
-    if (!cfg.results.length) return `<div class="empty-state">Введи запрос и нажми Enter</div>`;
+    if (!cfg.results.length) return `<div class="empty-state">Ничего не найдено — попробуй другой запрос или фильтры</div>`;
     return `${cfg.results.map(cfCardHtml).join("")}<div class="mr-sentinel" id="cf-sentinel">${cfSentinelText()}</div>`;
   }
 
@@ -7077,7 +7260,7 @@
   function cfWatchMore() {
     if (cfObserver) { cfObserver.disconnect(); cfObserver = null; }
     const sentinel = $("#cf-sentinel");
-    if (!sentinel) return;
+    if (!sentinel || state.curseforge.results.length >= state.curseforge.total) return;
     cfObserver = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) cfLoadMore();
     }, { rootMargin: "200px" });
@@ -7095,17 +7278,20 @@
 
   async function cfLoadMore() {
     const cfg = state.curseforge;
-    if (cfg.loading || cfg.loadingMore || cfg.error) return;
+    if (!catalogVisible("curseforge") || cfg.loading || cfg.loadingMore || cfg.error) return;
     if (!cfg.results.length || cfg.results.length >= cfg.total) return;
     cfg.loadingMore = true;
+    const generation = cfSearchGeneration;
+    const params = cfSearchQuery(cfg.results.length);
     cfUpdateSentinel();
     try {
-      const page = await api.searchCurseforge(cfSearchQuery(cfg.results.length));
+      const page = await api.searchCurseforge(params);
+      if (generation !== cfSearchGeneration) return;
       const known = new Set(cfg.results.map((hit) => hit.project_id));
       const fresh = (page.hits || []).filter((hit) => !known.has(hit.project_id));
       cfg.results = cfg.results.concat(fresh);
-      cfg.total = page.total_hits || cfg.total;
-      const container = $("#cf-results");
+      cfg.total = page.total_hits ?? cfg.total;
+      const container = catalogVisible("curseforge") && $("#cf-results");
       if (container && fresh.length) {
         const sentinel = $("#cf-sentinel");
         const html = fresh.map(cfCardHtml).join("");
@@ -7115,13 +7301,17 @@
       }
       if (!fresh.length) cfg.total = cfg.results.length;
     } catch (err) {
+      if (generation !== cfSearchGeneration) return;
       cfg.error = String(err);
       cfg.loadingMore = false;
-      renderCurseForge();
+      renderCatalogSource("curseforge");
       return;
     }
     cfg.loadingMore = false;
-    cfUpdateSentinel();
+    if (catalogVisible("curseforge")) {
+      cfUpdateSentinel();
+      cfWatchMore();
+    }
   }
 
   function cfSearchQuery(offset) {
@@ -7276,29 +7466,34 @@
   }
 
   async function cfRunSearch() {
-    if ($("#dl-query")) state.curseforge.query = $("#dl-query").value;
-    if ($("#cf-mc")) state.curseforge.mc = $("#cf-mc").value;
-    if ($("#cf-loader")) state.curseforge.loader = $("#cf-loader").value;
+    cancelDownloadSearchTimer();
     const cfg = state.curseforge;
+    if (catalogVisible("curseforge") && $("#dl-query")) state.modsQuery = cfg.query = $("#dl-query").value;
+    if ($("#cf-mc")) setDownloadFilter("curseforge", "mc", $("#cf-mc").value);
+    if ($("#cf-loader")) setDownloadFilter("curseforge", "loader", $("#cf-loader").value);
+    const generation = ++cfSearchGeneration;
+    const params = cfSearchQuery(0);
     cfg.loading = true;
     cfg.loadingMore = false;
     cfg.tried = true;
     cfg.error = null;
     cfg.results = [];
     cfg.total = 0;
-    renderCurseForge();
+    renderCatalogSource("curseforge");
     try {
-      const page = await api.searchCurseforge(cfSearchQuery(0));
-      state.curseforge.results = page.hits || [];
-      state.curseforge.total = page.total_hits || state.curseforge.results.length;
-      state.curseforge.error = null;
+      const page = await api.searchCurseforge(params);
+      if (generation !== cfSearchGeneration) return;
+      cfg.results = page.hits || [];
+      cfg.total = page.total_hits ?? cfg.results.length;
+      cfg.error = null;
     } catch (err) {
-      state.curseforge.results = [];
-      state.curseforge.total = 0;
-      state.curseforge.error = String(err);
+      if (generation !== cfSearchGeneration) return;
+      cfg.results = [];
+      cfg.total = 0;
+      cfg.error = String(err);
     }
-    state.curseforge.loading = false;
-    if (state.tab === "download" && state.modsSource === "curseforge" && state.dlRoot?.isConnected) renderCurseForge();
+    cfg.loading = false;
+    renderCatalogSource("curseforge");
   }
 
   async function installFromCurseForge(projectId, btn) {
@@ -11180,6 +11375,8 @@
     try {
       state.settings = await api.settings();
     } catch { state.settings = { ...DEMO.settings }; }
+    // Вид каталога один для Modrinth и CurseForge и не теряется при перезапуске.
+    state.modsView = state.settings?.mods_view === "grid" ? "grid" : "list";
     // Оформление из settings.json (как prefs в OmniPanel): тема и эффект клика.
     state.customTheme = {
       bg: (state.settings && state.settings.theme_bg) || CUSTOM_THEME_DEFAULT.bg,

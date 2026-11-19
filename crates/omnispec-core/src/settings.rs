@@ -240,9 +240,14 @@ pub struct Settings {
     /// Размер плиток в «Готовых сборках»: 1 — 12 в ряд, 2 — 9, 3 — 6.
     #[serde(default = "default_feed_grid")]
     pub feed_grid: u8,
-    /// Размер плитки во вкладке Modrinth внутри сборки: 1 — 12 в ряд, 2 — 9, 3 — 6.
+    /// Старый размер плитки Modrinth; используется как запасной для прежних настроек.
     #[serde(default = "default_feed_grid")]
     pub mr_grid: u8,
+    /// Общие вид и размер плитки обоих каталогов; None сохраняет старые настройки.
+    #[serde(default)]
+    pub mods_view: Option<String>,
+    #[serde(default)]
+    pub mods_grid: Option<u8>,
     /// Базовый цвет фона поверх обоев (#rrggbb). Пусто — цвет текущей темы.
     #[serde(default)]
     pub theme_tint: Option<String>,
@@ -358,6 +363,8 @@ impl Default for Settings {
             sound_style: default_sound_style(),
             feed_grid: default_feed_grid(),
             mr_grid: default_feed_grid(),
+            mods_view: None,
+            mods_grid: None,
             theme_tint: None,
             loose_collapsed: false,
             onboarded: false,
@@ -450,9 +457,29 @@ mod discord_tests {
 
     #[test]
     fn local_icon_upload_requires_explicit_consent_for_old_and_new_settings() {
-        for settings in [Settings::default(), serde_json::from_str::<Settings>("{}").unwrap()] {
+        for settings in [
+            Settings::default(),
+            serde_json::from_str::<Settings>("{}").unwrap(),
+        ] {
             assert!(settings.discord_instance_icon);
             assert!(!settings.discord_upload_local_icon);
         }
+    }
+
+    #[test]
+    fn catalog_view_and_size_survive_settings_roundtrip_without_breaking_old_files() {
+        let old: Settings = serde_json::from_str(r#"{"mr_grid":3}"#).unwrap();
+        assert_eq!(old.mr_grid, 3);
+        assert_eq!(old.mods_view, None);
+        assert_eq!(old.mods_grid, None);
+
+        let mut changed = old;
+        changed.mods_view = Some("grid".into());
+        changed.mods_grid = Some(1);
+        let restored: Settings =
+            serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
+        assert_eq!(restored.mods_view.as_deref(), Some("grid"));
+        assert_eq!(restored.mods_grid, Some(1));
+        assert_eq!(restored.mr_grid, 3);
     }
 }

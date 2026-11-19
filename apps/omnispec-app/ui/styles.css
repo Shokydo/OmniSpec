@@ -36,6 +36,8 @@
   --red: #ff7b72;
   --yellow: #e3b341;
   --blue: #79c0ff;
+  --catalog-modrinth: #1bd96a;
+  --catalog-curseforge: #ff805a;
 
   /* консоль */
   --console-bg: #050506;
@@ -854,9 +856,9 @@ input, select, textarea { font: inherit; color: inherit; }
 /* только в строке фильтров Modrinth поля прижаты к низу и подписи капсом */
 .modrinth-filters .field { align-self: flex-end; }
 .modrinth-filters .field > label { text-transform: uppercase; letter-spacing: .5px; font-size: 10px; }
-/* страница «Скачать моды»: общий поиск стоит вровень с фильтрами */
+/* Страница «Загрузить»: общий поиск стоит вровень с фильтрами. */
 .modrinth-filters > .search { margin-bottom: 0; align-self: flex-end; }
-/* тело источника внутри страницы «Скачать моды»: flex, чтобы список скроллился */
+/* Тело источника внутри страницы «Загрузить»: flex, чтобы список скроллился. */
 #dl-source-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
 .input, .select {
@@ -2913,22 +2915,24 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 .home-search input { font-size: 12px; }
 .home-tools { justify-self: end; }
 
-/* «Искать в»: выпадающий список источника сборок — Modrinth или CurseForge */
-.feed-source {
-  display: inline-flex; align-items: center; gap: 8px;
-  height: var(--h-sm); padding: 0 4px 0 10px;
+/* Кнопки источников: фирменные знаки видны и без сетевых ресурсов. */
+.catalog-sources { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.catalog-source {
+  display: inline-grid; place-items: center;
+  width: var(--h); height: var(--h); padding: 0;
   border: 1px solid var(--line); border-radius: var(--r-sm);
   background: var(--bg-3); color: var(--dim-2);
-  white-space: nowrap;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
 }
-.feed-source-label { font-size: 11px; letter-spacing: .04em; }
-.feed-source .select {
-  height: calc(var(--h-sm) - 6px); min-width: 122px;
-  padding-left: 8px; font-size: 12px;
-  border-radius: var(--r-sm); background-color: var(--bg-2);
+.catalog-source .ic { width: 17px; height: 17px; }
+.catalog-source:hover { background: var(--bg-4); border-color: var(--line-3); color: var(--text); }
+.catalog-source.is-active[data-source="modrinth"] {
+  background: rgba(27, 217, 106, .13); border-color: var(--catalog-modrinth); color: var(--catalog-modrinth);
 }
-.feed-source:hover { border-color: var(--line-3); color: var(--text); }
-.feed-source:focus-within { border-color: var(--line-3); }
+.catalog-source.is-active[data-source="curseforge"] {
+  background: rgba(241, 100, 54, .13); border-color: var(--catalog-curseforge); color: var(--catalog-curseforge);
+}
+.catalog-source:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 
 /* ползунок размера плиток: 1 — 12 в ряд, 2 — 6, 3 — 4 */
 .feed-size {
@@ -2976,7 +2980,6 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 }
 @media (max-width: 1180px) {
   .home-feed-head { grid-template-columns: auto minmax(140px, 1fr) auto auto; }
-  .feed-source-label { display: none; }
 }
 @media (max-width: 980px) {
   /* на узком окне заголовок уходит на свою строку, инструменты остаются в ряд */

@@ -97,15 +97,14 @@ async function newPage(browser, scenario, rpc = false) {
       await page.waitForFunction(() => document.querySelector('#dv-results')?.textContent.includes('Modrinth OK'), null, {timeout:7000});
       assert.equal(await page.locator('#dv-query').inputValue(),'текст, который ещё печатаю');
       const calls = await page.evaluate(() => window.__mockDiscover.calls);
-      assert.deepEqual(calls.map(c=>c.query),['','','']);
+      assert.deepEqual(calls.map(c=>c.query),['','текст, который ещё печатаю','текст, который ещё печатаю']);
       assert.deepEqual(errors,[]);
-      console.log('AUTO_RETRY', JSON.stringify({calls, inputPreserved:true, fullWidth:true}));
+      console.log('AUTO_RETRY', JSON.stringify({calls, liveQueryPreserved:true, fullWidth:true}));
       await page.close();
     }
     {
       const {page,errors} = await newPage(browser,'race');
-      await page.locator('#dv-query').fill('new');
-      await page.locator('#dv-query').press('Enter');
+      await page.locator('#dv-query').fill('new'); // обновляется без Enter
       await page.waitForFunction(() => document.querySelector('#dv-results')?.textContent.includes('НОВЫЙ ОТВЕТ'));
       await page.waitForTimeout(1500);
       const text = await page.locator('#dv-results').innerText();
@@ -115,7 +114,7 @@ async function newPage(browser, scenario, rpc = false) {
     {
       const {page,errors} = await newPage(browser,'switch');
       await page.waitForSelector('#dv-retry');
-      await page.selectOption('#dv-source','curseforge');
+      await page.locator('[data-dv-source="curseforge"]').click();
       await page.waitForFunction(() => document.querySelector('#dv-results')?.textContent.includes('CurseForge OK'));
       await page.waitForTimeout(1500);
       const calls = await page.evaluate(() => window.__mockDiscover.calls);

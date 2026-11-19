@@ -133,11 +133,17 @@ async function ensureCard(page, rootSelector, cardSelector) {
   assert(await page.locator(cardSelector).count(),`не найдена карточка ${cardSelector}`);
 }
 async function preparePosition(page, rootSelector, cardSelector, query) {
+  // Поиск живой: сначала дожидаемся выдачи, затем прокручиваем и устанавливаем.
+  await page.locator('#dl-query').fill(query);
+  await page.waitForFunction(({rootSelector,query}) => {
+    const state = window.omnispecDebug.state;
+    const cfg = rootSelector === '#mr-results' ? state.modrinth : state.curseforge;
+    return cfg.query === query && cfg.tried && !cfg.loading && !cfg.error;
+  }, {rootSelector,query});
   await ensureCard(page,rootSelector,cardSelector);
   const card = page.locator(cardSelector);
   await card.scrollIntoViewIfNeeded();
   await card.locator('.card-actions button').first().scrollIntoViewIfNeeded();
-  await page.locator('#dl-query').fill(query); // without Enter; it must not be lost on install
   return await page.evaluate(({rootSelector,cardSelector}) => {
     const root = document.querySelector(rootSelector);
     window.__savedResultRoot = root;
@@ -155,7 +161,7 @@ async function assertPosition(page, rootSelector, cardSelector, before, query) {
   assert(before.top > 100 && before.height > before.client, `тест должен быть прокручен: ${JSON.stringify(before)}`);
   assert(after.sameRoot && after.sameCard, `список нельзя пересоздавать: ${JSON.stringify(after)}`);
   assert(Math.abs(after.top - before.top) <= 2, `позиция прокрутки изменилась: ${JSON.stringify({before,after})}`);
-  assert.equal(after.query,query,'незавершённый поисковый запрос должен сохраниться');
+  assert.equal(after.query,query,'поисковый запрос должен сохраниться');
 }
 async function pendingCount(page,count) {
   await page.waitForFunction(n => window.__catalogTest.pending.length === n,count);
@@ -167,7 +173,8 @@ async function clickInstall(page, selector) {
   return index;
 }
 async function selectCatalog(page, source, view, gridSize = 3) {
-  if (await page.locator('#dl-source').inputValue() !== source) await page.selectOption('#dl-source',source);
+  const button = page.locator(`[data-dl-source="${source}"]`);
+  if (await button.getAttribute('aria-pressed') !== 'true') await button.click();
   const root = source === 'modrinth' ? '#mr-results' : '#cf-results';
   await page.waitForSelector(`${root} .card`);
   if (!(await page.locator(`[data-dl-view="${view}"]`).evaluate(el => el.classList.contains('is-active')))) {
@@ -224,26 +231,27 @@ async function verifyInstallation(page, source, view, mode, number) {
     assert(await page.locator('[data-project="m-6"]').evaluate(el => el.classList.contains('is-installed')));
     assert(await page.locator('[data-project="m-8"]').evaluate(el => el.classList.contains('is-installed')));
     assert(!(await page.locator('[data-project="m-7"]').evaluate(el => el.classList.contains('is-installed'))));
-    assert((await page.locator('#dl-installed-check').innerText()).includes('последняя версия'));
+    assert(await page.locator('#dl-installed-check').isHidden(), 'поясняющая надпись не должна занимать место');
     assert((await page.locator('[data-project="m-8"]').getAttribute('aria-label')).includes('актуальная версия'));
     // A delayed answer from the other source must not overwrite the current one.
     await page.evaluate(() => { window.__catalogTest.holdNext['pack-a'] = 1; });
-    await page.selectOption('#dl-source','curseforge');
+    await page.locator('[data-dl-source="curseforge"]').click();
     await page.waitForFunction(() => window.__catalogTest.held.some(x => x.source === 'curseforge'));
-    await page.selectOption('#dl-source','modrinth');
+    await page.locator('[data-dl-source="modrinth"]').click();
     await page.waitForFunction(() => document.querySelector('[data-project="m-5"]')?.classList.contains('is-installed'));
     await page.evaluate(() => window.__catalogTest.releaseHeld('pack-a'));
     await page.waitForTimeout(150);
     assert(await page.locator('[data-project="m-5"]').evaluate(el => el.classList.contains('is-installed')));
     // An unavailable service must clear old marks and say the check failed; online retries.
     await page.evaluate(() => { window.__catalogTest.failCatalog = true; });
-    await page.selectOption('#dl-source','curseforge');
+    await page.locator('[data-dl-source="curseforge"]').click();
     await page.waitForFunction(() => document.querySelector('#dl-installed-check')?.textContent.includes('Не удалось'));
     await page.waitForSelector('[data-cf-project="c-5"]');
     assert(!(await page.locator('[data-cf-project="c-5"]').evaluate(el => el.classList.contains('is-installed'))));
     await page.evaluate(() => { window.__catalogTest.failCatalog = false; window.dispatchEvent(new Event('online')); });
     await page.waitForFunction(() => document.querySelector('[data-cf-project="c-5"]')?.classList.contains('is-installed'));
-    await page.selectOption('#dl-source','modrinth');
+    assert(await page.locator('#dl-installed-check').isHidden());
+    await page.locator('[data-dl-source="modrinth"]').click();
     await page.waitForFunction(() => document.querySelector('[data-project="m-5"]')?.classList.contains('is-installed'));
     console.log('CATALOG_CURRENT: imported/disabled/old, source races, offline retry — OK');
     await ensureCard(page,'#mr-results','[data-project="11111111"]');
@@ -326,6 +334,7 @@ async function verifyInstallation(page, source, view, mode, number) {
     // Parallel tracked installations: older events cannot hide or replace a newer
     // active operation, and after the newer one finishes we return to the older one.
     await selectCatalog(page,'modrinth','grid',1);
+    await ensureCard(page,'#mr-results','[data-project="m-93"]');
     let older = await clickInstall(page,'[data-project="m-90"] [data-install]');
     let newer = await clickInstall(page,'[data-project="m-91"] [data-install]');
     let newerOp = await page.evaluate(i => window.__catalogTest.pending[i].args.opId,newer);
@@ -358,16 +367,19 @@ async function verifyInstallation(page, source, view, mode, number) {
     await page.evaluate(() => {window.__catalogTest.holdNext['pack-b']=1;});
     await page.locator('.instance[data-id="pack-b"]').last().click();
     await page.waitForFunction(() => window.__catalogTest.held.some(x => x.id === 'pack-b'));
+    await ensureCard(page,'#mr-results','[data-project="m-82"]');
     await page.evaluate(i => window.__catalogTest.complete(i),previousPack);
     await page.waitForFunction(i => window.omnispecDebug.state.downloads.op === window.__catalogTest.pending[i].args.opId
       && window.omnispecDebug.state.downloads.state === 'done',previousPack);
     assert(!(await page.locator('[data-project="m-82"]').evaluate(el => el.classList.contains('is-installed'))),'фоновая установка не отмечается в чужой сборке');
     await page.locator('.instance[data-id="pack-a"]').last().click();
     await page.evaluate(() => window.__catalogTest.releaseHeld('pack-b'));
+    await ensureCard(page,'#mr-results','[data-project="m-82"]');
     await page.waitForFunction(() => document.querySelector('[data-project="m-82"]')?.classList.contains('is-installed'));
     assert(!(await page.locator('[data-project="m-9"]').evaluate(el => el.classList.contains('is-installed'))),'опоздавший ответ другой сборки проигнорирован');
     await page.locator('.instance[data-id="pack-b"]').last().click();
     await page.waitForFunction(() => document.querySelector('[data-project="m-9"]')?.classList.contains('is-installed'));
+    await ensureCard(page,'#mr-results','[data-project="m-82"]');
     assert(!(await page.locator('[data-project="m-82"]').evaluate(el => el.classList.contains('is-installed'))));
     console.log('INSTANCE_RACES: background install and stale responses stay isolated — OK');
 
@@ -384,7 +396,7 @@ async function verifyInstallation(page, source, view, mode, number) {
     await page.waitForFunction(() => window.omnispecDebug.state.downloads.state === 'done');
     await page.waitForFunction(() => window.omnispecDebug.state.selectedId === 'pack-a');
     await page.locator('#btn-home').click();
-    await page.selectOption('#dv-source','curseforge');
+    await page.locator('[data-dv-source="curseforge"]').click();
     await page.waitForSelector('#dv-results [data-cf-project="pack-c"] [data-cf-pack-install]');
     pack = await clickInstall(page,'#dv-results [data-cf-project="pack-c"] [data-cf-pack-install]');
     await page.evaluate(i => window.__catalogTest.progress(i,{done:4,total:4,detail:'файлов 4/4'}),pack);
