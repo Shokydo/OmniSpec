@@ -13,6 +13,60 @@ $Launcher = [IO.Path]::GetFullPath($Launcher)
 if (-not (Test-Path -LiteralPath $Setup -PathType Leaf)) { throw "Missing installer: $Setup" }
 if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) { throw "Missing payload: $Launcher" }
 
+# WScript.Shell читает TargetPath через ANSI и может заменить Unicode на `?`.
+# Поэтому проверяем фактический .lnk через тот же Unicode-интерфейс Shell,
+# которым Windows пользуется для запуска ярлыка.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+using System.Text;
+
+[ComImport, Guid("00021401-0000-0000-C000-000000000046")]
+public class OmniSpecShellLink {}
+
+[ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IOmniSpecShellLinkW {
+    [PreserveSig] int GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int size, IntPtr data, uint flags);
+    [PreserveSig] int GetIDList(out IntPtr pidl);
+    [PreserveSig] int SetIDList(IntPtr pidl);
+    [PreserveSig] int GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int size);
+    [PreserveSig] int SetDescription([MarshalAs(UnmanagedType.LPWStr)] string text);
+    [PreserveSig] int GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int size);
+    [PreserveSig] int SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string path);
+    [PreserveSig] int GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int size);
+    [PreserveSig] int SetArguments([MarshalAs(UnmanagedType.LPWStr)] string text);
+    [PreserveSig] int GetHotkey(out ushort hotkey);
+    [PreserveSig] int SetHotkey(ushort hotkey);
+    [PreserveSig] int GetShowCmd(out int show);
+    [PreserveSig] int SetShowCmd(int show);
+    [PreserveSig] int GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int size, out int index);
+}
+
+public static class OmniSpecShortcutReader {
+    public static string[] Read(string path) {
+        var link = (IOmniSpecShellLinkW)new OmniSpecShellLink();
+        try {
+            ((IPersistFile)link).Load(path, 0);
+            var target = new StringBuilder(32768);
+            var work = new StringBuilder(32768);
+            var icon = new StringBuilder(32768);
+            var desc = new StringBuilder(1024);
+            var args = new StringBuilder(1024);
+            int index;
+            Marshal.ThrowExceptionForHR(link.GetPath(target, target.Capacity, IntPtr.Zero, 4));
+            Marshal.ThrowExceptionForHR(link.GetWorkingDirectory(work, work.Capacity));
+            Marshal.ThrowExceptionForHR(link.GetIconLocation(icon, icon.Capacity, out index));
+            Marshal.ThrowExceptionForHR(link.GetDescription(desc, desc.Capacity));
+            Marshal.ThrowExceptionForHR(link.GetArguments(args, args.Capacity));
+            return new[] { target.ToString(), work.ToString(), icon.ToString(), index.ToString(), desc.ToString(), args.ToString() };
+        } finally {
+            Marshal.FinalReleaseComObject(link);
+        }
+    }
+}
+'@
+
 $temp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
 $root = Join-Path $temp ('omnispec-setup-smoke-' + [Guid]::NewGuid().ToString('N'))
 $desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory, [Environment+SpecialFolderOption]::DoNotVerify)
@@ -64,14 +118,13 @@ function Assert-PathEqual([string]$Actual, [string]$Expected, [string]$Label) {
 }
 function Assert-Pair([string]$Destination) {
     $exe = Join-Path $Destination 'OmniSpec.exe'
-    $shell = New-Object -ComObject WScript.Shell
     foreach ($file in @($desktopLink, $startLink)) {
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing shortcut: $file" }
-        $link = $shell.CreateShortcut($file)
-        Assert-PathEqual $link.TargetPath $exe 'TargetPath'
-        Assert-PathEqual $link.WorkingDirectory $Destination 'WorkingDirectory'
-        Assert-PathEqual $link.IconLocation "$exe,0" 'IconLocation'
-        if ($link.Description -ne 'OmniSpec' -or $link.Arguments -ne '') { throw "Unexpected shortcut properties: $file" }
+        $link = [OmniSpecShortcutReader]::Read($file)
+        Assert-PathEqual $link[0] $exe 'TargetPath'
+        Assert-PathEqual $link[1] $Destination 'WorkingDirectory'
+        Assert-PathEqual $link[2] $exe 'IconLocation'
+        if ($link[3] -ne '0' -or $link[4] -ne 'OmniSpec' -or $link[5] -ne '') { throw "Unexpected shortcut properties: $file" }
     }
 }
 function Assert-ShortcutLaunch([string]$Destination) {
@@ -132,7 +185,7 @@ try {
 
     # Quotes, $, &, %, comma, spaces and non-ASCII characters must remain data,
     # not become PowerShell/cmd expressions or disappear in an ANSI conversion.
-    $special = Join-Path $root 'Сборка ''quote'' $(name) & 100%PATH% (папка), test 🛠'
+    $special = Join-Path $root 'Сборка ''quote'' $(name) & 100%PATH% !name! (папка), test 🛠'
     $result = Invoke-Setup $Setup @('--yes', '--portable', '--dir', $special)
     Assert-Success $result 'Special-path install'
     Assert-Installation $special $true
@@ -163,6 +216,26 @@ try {
     }
     Remove-Item -LiteralPath $startLink -Force
     Write-Host 'WINDOWS_SHORTCUT_FAILURES_OK: both errors return nonzero and name the shortcut'
+
+    # Удаление себя — отдельный отложенный процесс. Проверяем и путь с %PATH%,
+    # иначе cmd может развернуть часть имени папки и оставить uninstall.exe.
+    $result = Invoke-Setup $Setup @('--yes', '--portable', '--dir', $special)
+    Assert-Success $result 'Restore special-path shortcuts'
+    $specialData = Join-Path $special 'OmniSpecData'
+    New-Item -ItemType Directory -Force -Path $specialData | Out-Null
+    [IO.File]::WriteAllText((Join-Path $specialData 'keep.txt'), 'keep')
+    $specialUninstall = Join-Path $special 'uninstall.exe'
+    $result = Invoke-Setup $specialUninstall @('--uninstall', '--yes', '--dir', $special)
+    Assert-Success $result 'Special-path uninstall'
+    if ((Test-Path -LiteralPath $desktopLink) -or (Test-Path -LiteralPath $startLink)) { throw 'Special-path uninstall left shortcuts behind' }
+    if (Test-Path -LiteralPath (Join-Path $special 'OmniSpec.exe')) { throw 'Special-path uninstall left launcher behind' }
+    if (-not (Test-Path -LiteralPath (Join-Path $specialData 'keep.txt') -PathType Leaf)) { throw 'Special-path uninstall deleted user data' }
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    while ((Test-Path -LiteralPath $specialUninstall) -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 100
+    }
+    if (Test-Path -LiteralPath $specialUninstall) { throw 'Special-path uninstaller did not delete itself' }
+    Write-Host 'WINDOWS_SPECIAL_UNINSTALL_OK: self-delete and shortcuts removed, user data preserved'
 
     # Проверяем удаление на обычном пути; пользовательские файлы в меню и данные
     # сборок должны остаться. Удаление себя — отдельный отложенный процесс.

@@ -468,23 +468,24 @@ pub fn uninstall(dir: &Path, remove_data: bool, report: &mut dyn FnMut(Progress)
 fn schedule_self_delete(path: &Path) {
     #[cfg(windows)]
     {
-        // Ждём, пока процесс выйдет: удаляем exe и, если папка опустела, её саму.
-        let folder = path
-            .parent()
-            .map(|dir| dir.display().to_string())
-            .unwrap_or_default();
-        let command = if folder.is_empty() {
-            format!("ping -n 3 127.0.0.1 >nul & del /f /q \"{}\"", path.display())
+        // Не встраиваем путь в текст cmd: буквальные %PATH%, & и Unicode в
+        // имени папки должны оставаться данными. Значения переменных cmd
+        // разворачивает однократно, а не исполняет их как новую команду.
+        let folder = path.parent().filter(|dir| !dir.as_os_str().is_empty());
+        let command = if folder.is_some() {
+            "ping -n 3 127.0.0.1 >nul & del /f /q \"%OMNISPEC_DELETE_SELF%\" & rmdir /q \"%OMNISPEC_DELETE_DIR%\""
         } else {
-            format!(
-                "ping -n 3 127.0.0.1 >nul & del /f /q \"{}\" & rmdir /q \"{folder}\"",
-                path.display()
-            )
+            "ping -n 3 127.0.0.1 >nul & del /f /q \"%OMNISPEC_DELETE_SELF%\""
         };
-        let _ = std::process::Command::new("cmd")
-            .args(["/C", &command])
-            .creation_flags(0x0800_0000)
-            .spawn();
+        let mut child = std::process::Command::new("cmd");
+        child
+            .args(["/D", "/V:OFF", "/C", command])
+            .env("OMNISPEC_DELETE_SELF", path)
+            .creation_flags(0x0800_0000);
+        if let Some(folder) = folder {
+            child.env("OMNISPEC_DELETE_DIR", folder);
+        }
+        let _ = child.spawn();
     }
     #[cfg(not(windows))]
     {
