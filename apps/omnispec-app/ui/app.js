@@ -2052,6 +2052,7 @@
     search: (q) => invoke("search_modrinth", q),
     modrinthVersions: (projectId, mc, loader) => invoke("modrinth_versions", { projectId, mcVersion: mc, loader }),
     installMod: (instanceId, projectId) => invoke("install_mod", { instanceId, projectId }),
+    installDiagnosticMod: (instanceId, attemptId, request) => invoke("install_diagnostic_mod", { instanceId, attemptId, request }),
     installModVersion: (instanceId, versionId) => invoke("install_mod_version", { instanceId, versionId }),
     installModpack: (versionId) => invoke("install_modpack", { versionId }),
     cancelDownload: () => invoke("cancel_download"),
@@ -2361,6 +2362,7 @@
       { id: "v4", name: "Sodium 0.4.10", version_number: "0.4.10", game_versions: ["1.20.1"], loaders: ["fabric"], date_published: "2023-08-19T10:00:00Z", files: [], dependencies: [] }
     ]),
     installMod: async (_i, projectId) => ({ installed: [`${projectId}-1.0.0.jar`], skipped: [] }),
+    installDiagnosticMod: async () => { throw new Error("в демо-режиме файлы модов не скачиваются"); },
     installModVersion: async () => ({ installed: ["mod.jar"], skipped: [] }),
     installModpack: async () => {
       await demoProgress("modpack", "читаем манифест модпака");
@@ -2570,6 +2572,7 @@
     runningRevision: 0,
     sessions: new Map(),
     preparing: new Map(),
+    diagnosticInstalls: new Map(),
     liveLogAvailable: !IS_APP,
     compact: false,
     logs: {},
@@ -2640,6 +2643,7 @@
     if (count > 0) state.preparing.set(instanceId, count);
     else state.preparing.delete(instanceId);
     updateStatus();
+    diagnosticsChanged(instanceId);
   }
   function finishDemoStops(instanceId, marked) {
     if (IS_APP) return;
@@ -3944,7 +3948,7 @@
             <div class="errors-head-copy">
               <div class="errors-eyebrow"><svg class="ic"><use href="#i-alert"/></svg>Помощь при запуске</div>
               <h1>Ошибки сборки</h1>
-              <p>Разбираем известные проблемы и подсказываем, с чего начать. Проверка локальная: файлы и настройки автоматически не меняются.</p>
+              <p>Разбираем известные проблемы локально. Файлы не меняются без твоего действия; для установки подходящей версии используется каталог Modrinth.</p>
             </div>
             <div class="errors-head-actions"><button class="btn" data-errors-action="console"><svg class="ic"><use href="#i-terminal"/></svg>Открыть консоль</button></div>
           </header>
@@ -3957,9 +3961,15 @@
     renderErrorsContent();
   }
 
-  /** Конкретная инструкция относится к настройкам той попытки, а не любой сборке. */
+  function fabricDependency(item) {
+    if (item && item.fabricApi) return { id: "fabric-api", name: "Fabric API", ...item.fabricApi };
+    return item && item.fabricDependency || null;
+  }
+
+  /** Конкретная инструкция относится к настройкам именно последней попытки. */
   function contextualErrorFinding(item, meta, run) {
-    if (!item.fabricApi) return item;
+    const dependency = fabricDependency(item);
+    if (!dependency) return item;
     const current = diagnosticLaunchContext(meta);
     const original = run && run.context;
     const changed = original && (original.mcVersion !== current.mcVersion
@@ -3969,20 +3979,108 @@
       steps: [`Настройки изменились после этого запуска: тогда ${formatContext(original)}, сейчас ${formatContext(current)}.`,
         "Запусти сборку снова и проверь новую диагностику: старое требование может больше не относиться к ней.",
         "Не заменяй и не удаляй файлы по старой ошибке; при необходимости проверь полный лог."] };
-    if (current.loader !== "fabric" || !current.mcVersion) return { ...item, fabricActions: false,
+    if (!original || diagnostics.latest(meta.id) !== run) return { ...item, fabricActions: false,
+      steps: ["Это не последняя попытка или её настройки неизвестны. Запусти сборку снова и проверь новую диагностику."] };
+    if (run.installApplied) return { ...item, fabricActions: false,
+      steps: ["Состав модов уже изменён. Запусти сборку снова и проверь актуальные сообщения перед следующей установкой."] };
+    if (current.loader !== "fabric" || !current.mcVersion || !current.loaderVersion) return { ...item, fabricActions: false,
       steps: [`Сейчас выбрано ${formatContext(current)}. Сообщение относится к зависимости Fabric; не устанавливай её вслепую.`,
         "Проверь, что выбрана нужная сборка и загрузчик, затем снова запусти игру и изучи полный лог."] };
-    const minimum = item.fabricApi.minimum;
-    const currentLabel = formatContext(current);
-    const contextNote = original ? ` Настройки этой попытки: ${currentLabel}.`
-      : ` Сейчас выбрано ${currentLabel}. Если настройки менялись после ошибки, сначала повтори запуск.`;
-    return { ...item, description: item.description + contextNote, fabricActions: true,
+    if (dependency.uncertain) return { ...item, fabricActions: false,
+      steps: ["В логе встретились несколько требований к версии, которые нельзя надёжно сравнить автоматически.",
+        "Проверь полный лог и подбери версию во встроенном разделе «Моды», не заменяя файлы вслепую."] };
+    const minimum = dependency.minimum;
+    return { ...item, description: item.description + ` Настройки этой попытки: ${formatContext(current)}.`, fabricActions: true,
       steps: ["Останови все окна этой сборки и сохрани резервную копию важных миров и модов.",
-        "Открой папку mods и проверь, нет ли там Fabric API, в том числе выключенного файла с окончанием .disabled. Не добавляй вторую копию.",
-        `В официальном списке версий выбери Minecraft ${current.mcVersion} и Fabric${minimum ? `; версия Fabric API должна быть ${minimum} или новее` : ""}. Проверь и остальные требования лога.`,
-        `Проверь требования файла к версии Fabric Loader${current.loaderVersion ? ` (у сборки ${current.loaderVersion})` : " в настройках сборки"} и Java: они могут быть указаны на странице версии или в fabric.mod.json внутри .jar.`,
-        "Скачай совместимый .jar и положи в mods этой сборки, не распаковывая. Если API уже есть, проверь его версию и включение; вручную замени только подтверждённо неподходящий файл после создания копии.",
-        "Запусти сборку снова. Если ошибка останется, проверь полный лог: могут быть и другие недостающие зависимости."] };
+        "Нажми кнопку установки: лаунчер сначала проверит существующие .jar и выключенные файлы .disabled. Не добавляй вторую копию.",
+        `Лаунчер подберёт файл для Minecraft ${current.mcVersion} и Fabric${minimum ? `, версия не ниже ${minimum}` : ""}; проверит требования fabric.mod.json к Fabric Loader и Java последнего запуска, а также SHA-512.`,
+        "Если найденный файл нужно заменить, сначала появится подтверждение; старая версия сохранится в резервной копии.",
+        "Запусти сборку снова. Могут потребоваться и другие зависимости: их нужно проверить по новому логу."] };
+  }
+
+  function diagnosticInstallKey(instanceId, attemptId, findingId) {
+    return JSON.stringify([instanceId, attemptId, findingId]);
+  }
+
+  function refreshDiagnosticInstall(instanceId, attemptId) {
+    if (state.tab === "errors" && state.selectedId === instanceId
+      && diagnostics.selected(instanceId)?.id === attemptId && $("#errors-dynamic")) renderErrorsContent();
+  }
+
+  async function installDiagnosticDependency(meta, run, item) {
+    const dependency = fabricDependency(item);
+    const key = diagnosticInstallKey(meta.id, run.id, item.id);
+    if (!dependency || state.diagnosticInstalls.get(key)?.busy || state.diagnosticInstalls.get(key)?.done) return;
+    const stillCurrent = () => {
+      const currentMeta = selected(), currentItem = run.findings.get(item.id);
+      const currentDep = fabricDependency(currentItem);
+      return currentMeta?.id === meta.id && diagnostics.selected(meta.id) === run && diagnostics.latest(meta.id) === run
+        && currentDep && currentDep.id === dependency.id && currentDep.minimum === dependency.minimum && !currentDep.uncertain
+        && contextualErrorFinding(currentItem, currentMeta, run).fabricActions
+        && !state.running.has(meta.id) && !state.preparing.has(meta.id) && !["preparing", "running"].includes(run.status);
+    };
+    if (!stillCurrent()) { toast("Останови игру и проверь актуальную попытку запуска", "err"); return; }
+    const operation = { busy: true, done: false, kind: "info", message: "Проверяем файлы и подбираем совместимую версию…" };
+    state.diagnosticInstalls.set(key, operation);
+    const update = () => refreshDiagnosticInstall(meta.id, run.id);
+    update();
+    const request = {
+      mod_id: dependency.id, minimum: dependency.minimum || null,
+      mc_version: run.context.mcVersion, loader_version: run.context.loaderVersion,
+      java_major: null, replace_file: null, enable_file: null, expected_sha256: null
+    };
+    try {
+      let result = await api.installDiagnosticMod(meta.id, run.id, request);
+      if (result && result.status === "existing") {
+        const found = Array.isArray(result.existing) ? result.existing : [];
+        if (found.length !== 1 || found[0].nested) {
+          const names = found.slice(0, 8).map((entry) => `${entry.name}${entry.disabled ? " (выключен)" : ""}${entry.nested ? " (встроен в другой мод)" : ""}`).join(", ");
+          operation.kind = "warning";
+          operation.message = `Найдены существующие файлы: ${names || "не удалось определить"}. Вторую копию не добавляли; проверь их во вкладке «Моды».`;
+          return;
+        }
+        const existing = found[0];
+        if (!existing.disabled && existing.compatible) {
+          operation.kind = "warning";
+          operation.message = `Уже установлен и включён ${existing.name} (${existing.version}). Вторую копию не добавляли; проверь новый лог и остальные зависимости.`;
+          return;
+        }
+        if (!stillCurrent()) throw new Error("настройки или выбранная попытка изменились; повтори запуск");
+        const enable = existing.disabled && existing.compatible;
+        const question = enable
+          ? `Найден выключенный совместимый файл «${existing.name}» (версия ${existing.version}). Включить его вместо скачивания второй копии?`
+          : `Найден ${existing.disabled ? "выключенный" : "установленный"} файл «${existing.name}» (версия ${existing.version}). ${existing.compatibility_reason || "Его совместимость не подтверждена."}\n\nПодобрать другую версию? Перед заменой будет сохранена резервная копия.`;
+        operation.message = "Ожидаем подтверждение изменения найденного файла.";
+        update();
+        const confirmed = await askConfirm({ title: enable ? "Включить найденный мод?" : "Заменить найденный мод?", text: question,
+          ok: enable ? "Включить" : "Сохранить копию и заменить", danger: false });
+        if (!confirmed) { operation.kind = "warning"; operation.message = "Изменения отменены, существующий файл сохранён."; return; }
+        if (!stillCurrent()) throw new Error("настройки или выбранная попытка изменились; повтори запуск");
+        if (enable) request.enable_file = existing.name;
+        else request.replace_file = existing.name;
+        request.expected_sha256 = existing.sha256;
+        operation.message = enable ? "Включаем проверенный файл…" : "Подбираем версию и сохраняем резервную копию…";
+        update();
+        result = await api.installDiagnosticMod(meta.id, run.id, request);
+      }
+      if (!result || !["installed", "enabled"].includes(result.status)) throw new Error("лаунчер не подтвердил результат установки");
+      operation.done = true;
+      run.installApplied = true; // прежний лог больше не описывает текущий состав mods
+      operation.kind = "ok";
+      operation.message = `${result.status === "enabled" ? "Включён" : "Установлен"} ${result.filename || dependency.name}${result.version ? ` · ${result.version}` : ""}.`
+        + (result.backup ? ` Прежний файл сохранён: ${result.backup}.` : "")
+        + (result.has_other_dependencies ? " У мода могут быть дополнительные зависимости." : "")
+        + (result.status === "installed" && !result.record_saved ? " Файл установлен, но запись для проверки обновлений не сохранена." : "")
+        + " Запусти сборку снова и проверь результат.";
+      toast(`${dependency.name}: ${result.status === "enabled" ? "включён" : "установлен"}`, "ok");
+    } catch (error) {
+      operation.kind = "error";
+      operation.message = `Не удалось установить ${dependency.name}: ${String(error && error.message || error)}. Файлы, не относящиеся к подтверждённой замене, не изменялись.`;
+      toast(`Установка ${dependency.name}: ${String(error && error.message || error)}`, "err");
+    } finally {
+      operation.busy = false;
+      update();
+    }
   }
 
   // Делегирование на контейнере вкладки: при обновлении карточек слушатели не размножаются.
@@ -4003,23 +4101,20 @@
       return;
     }
     if (action === "java") { openPrefs("game"); return; }
-    if (action === "fabric-api-versions" || action === "fabric-api-folder") {
+    if (action === "install-dependency" || action === "dependency-folder") {
       const meta = selected();
       const run = meta && diagnostics.selected(meta.id);
-      const item = run && run.findings.get("mod-dependencies");
-      // Проверяем повторно при клике: выбранная сборка или её настройки могли измениться.
-      if (!item || !item.fabricApi || !contextualErrorFinding(item, meta, run).fabricActions) {
+      const findingId = button.closest("[data-diagnostic]")?.dataset.diagnostic;
+      const item = run && run.findings.get(findingId);
+      // Проверяем повторно при клике: сборка и настройки могли измениться.
+      if (!item || !fabricDependency(item) || !contextualErrorFinding(item, meta, run).fabricActions) {
         toast("Настройки сборки изменились: запусти её снова и проверь новую ошибку", "err");
         renderErrorsContent();
         return;
       }
-      if (action === "fabric-api-versions") {
-        api.openUrl("https://modrinth.com/mod/fabric-api/versions")
-          .catch((error) => toast(`Не удалось открыть страницу: ${error}`, "err"));
-      } else {
-        api.openPath(`/instances/${meta.id}/minecraft/mods`)
-          .catch((error) => toast(`Не удалось открыть папку mods: ${error}`, "err"));
-      }
+      if (action === "install-dependency") installDiagnosticDependency(meta, run, item);
+      else api.openPath(`/instances/${meta.id}/minecraft/mods`)
+        .catch((error) => toast(`Не удалось открыть папку mods: ${error}`, "err"));
       return;
     }
     if (action === "copy") copyErrorsAdvice();
@@ -4045,9 +4140,16 @@
       </div>` : "";
     const list = run ? Array.from(run.findings.values()).sort((a, b) => b.priority - a.priority)
       .map((item) => contextualErrorFinding(item, meta, run)) : [];
-    const showMods = list.some((item) => ["java-modules", "duplicate-mods", "mod-dependencies", "mixin"].includes(item.id));
+    const showMods = list.some((item) => fabricDependency(item) || ["java-modules", "duplicate-mods", "mod-dependencies", "mixin"].includes(item.id));
     const showJava = list.some((item) => ["java-version", "java-missing", "memory-heap", "memory-reserve", "jvm"].includes(item.id));
-    const cards = list.map((item) => `
+    const cards = list.map((item) => {
+      const dependency = fabricDependency(item);
+      const operation = run && state.diagnosticInstalls.get(diagnosticInstallKey(meta.id, run.id, item.id));
+      const busy = operation?.busy || operation?.done || state.running.has(meta.id) || state.preparing.has(meta.id)
+        || run && ["preparing", "running"].includes(run.status);
+      const label = operation?.busy ? "Проверяем…" : operation?.done ? "Готово"
+        : dependency?.source === "replace" ? "Подобрать и установить версию" : `Установить ${dependency?.name || "мод"}`;
+      return `
       <article class="errors-card" data-diagnostic="${esc(item.id)}">
         <div class="errors-card-head">
           <span class="errors-card-mark"><svg class="ic"><use href="#i-alert"/></svg></span>
@@ -4055,13 +4157,15 @@
         </div>
         <ol class="errors-steps">${item.steps.map((step) => `<li>${esc(step)}</li>`).join("")}</ol>
         ${item.fabricActions ? `<div class="errors-card-actions">
-          <button class="btn btn-small" data-errors-action="fabric-api-versions"><svg class="ic"><use href="#i-download"/></svg>Версии Fabric API</button>
-          <button class="btn btn-small" data-errors-action="fabric-api-folder"><svg class="ic"><use href="#i-folder"/></svg>Открыть mods</button>
+          <button class="btn btn-small btn-primary" data-errors-action="install-dependency" ${busy ? "disabled" : ""}><svg class="ic"><use href="#i-download"/></svg>${esc(label)}</button>
+          <button class="btn btn-small" data-errors-action="dependency-folder"><svg class="ic"><use href="#i-folder"/></svg>Открыть mods</button>
         </div>` : ""}
+        ${operation?.message ? `<div class="errors-install-note is-${esc(operation.kind)}" role="status" aria-live="polite">${esc(operation.message)}</div>` : ""}
         <details class="errors-evidence" data-evidence="${esc(item.id)}" ${openDetails.has(item.id) ? "open" : ""}>
           <summary>Показать строку из лога</summary><pre>${esc(item.evidence)}</pre>
         </details>
-      </article>`).join("");
+      </article>`;
+    }).join("");
     const raw = run && run.error ? `<details class="errors-evidence" data-evidence="preparation" ${openDetails.has("preparation") ? "open" : ""}>
       <summary>Показать сообщение запуска</summary><pre>${esc(run.error)}</pre></details>` : "";
     const unknown = run && !list.length && (run.status === "failed" || (run.status === "exited" && run.code !== 0));

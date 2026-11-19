@@ -56,6 +56,27 @@ assert.match(fabric.steps.join(' '), /mods/);
 assert.equal(analyzeLine(' - Install fabric-api-base, version 0.145.1 or later.')?.fabricApi, undefined);
 assert.equal(analyzeLine("Mod 'Test' (test) 1.0 requires version 0.145.1 or later of fabric-api, which is present!")?.fabricApi, undefined);
 assert.equal(analyzeLine('Java finished with exit code 1'), null);
+const missingOther = analyzeLine(' - Install fabric-language-kotlin, version 1.13.1+kotlin.2.1.10 or later.');
+assert.equal(missingOther.fabricDependency.id, 'fabric-language-kotlin');
+assert.equal(missingOther.fabricDependency.minimum, '1.13.1+kotlin.2.1.10');
+const replacement = analyzeLine(" - Replace mod 'Fabric Language Kotlin' (fabric-language-kotlin) 1.13.0+kotlin.2.0.0 with version 1.13.1 or later.");
+assert.equal(replacement.fabricDependency.source, 'replace');
+assert.equal(replacement.fabricDependency.minimum, '1.13.1');
+assert.equal(analyzeLine(" - Replace mod 'Fabric API' (fabric-api) 0.130.0 with version 0.145.1 or later.").fabricApi.source, 'replace');
+for (const line of [
+  ' - Install java, version 25 or later.',
+  " - Replace mod 'Fabric Loader' (fabricloader) 0.18.4 with version 0.19.3 or later.",
+  ' - Install helper, version 1.2.3 or later that is compatible with:',
+  " - Replace mod 'Example' (example) 1.0.0 with any version between 1.1.0 and 2.0.0.",
+]) {
+  const item = analyzeLine(line);
+  assert(!item?.fabricApi && !item?.fabricDependency, `сложное ограничение/системный компонент не устанавливается как мод: ${line}`);
+}
+const conflictingMinima = new DiagnosticsStore();
+conflictingMinima.begin('p','r',{mcVersion:'26.3',loader:'fabric',loaderVersion:'0.19.3'});
+conflictingMinima.log({instance:'p',attempt_id:'r',line:' - Install fabric-api, version 0.145.1-beta.1 or later.'});
+conflictingMinima.log({instance:'p',attempt_id:'r',line:' - Install fabric-api, version 0.145.1 or later.'});
+assert.equal(conflictingMinima.selected('p').findings.get('mod-dependencies').fabricApi.uncertain,true,'неоднозначные минимумы не теряются');
 
 let fabricChanges = 0;
 const fabricStore = new DiagnosticsStore({onChange: () => fabricChanges++});

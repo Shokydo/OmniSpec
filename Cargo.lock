@@ -3886,7 +3886,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-app"
-version = "0.49.1"
+version = "0.49.2"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
@@ -3908,7 +3908,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-core"
-version = "0.49.1"
+version = "0.49.2"
 dependencies = [
  "dirs 5.0.1",
  "futures",
@@ -3917,9 +3917,11 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "thiserror 2.0.21",
  "tokio",
  "zip",
@@ -3927,7 +3929,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-setup"
-version = "0.49.1"
+version = "0.49.2"
 dependencies = [
  "eframe",
  "image",

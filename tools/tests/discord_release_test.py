@@ -70,10 +70,16 @@ class DiscordReleaseTests(unittest.TestCase):
         self.assertIn("## What's Changed", body)
         self.assertIn("Fabric API", body)
         self.assertIn("OmniSpec-Setup.exe", body)
-        self.assertNotIn("Fabric API", build("v0.49.2"))
+        self.assertNotIn("SHA-512", body)
+        self.assertIn("SHA-512", build("v0.49.2"))
         with tempfile.TemporaryDirectory() as tmp:
             notes = Path(tmp) / "notes"
             notes.mkdir()
+            (notes / "v1.2.3.md").write_text("notes for first version", encoding="utf-8")
+            (notes / "v1.2.4.md").write_text("notes for next version", encoding="utf-8")
+            self.assertIn("notes for first version", build("v1.2.3", notes))
+            self.assertNotIn("notes for first version", build("v1.2.4", notes))
+            self.assertNotIn("notes for next version", build("v1.2.5", notes))
             (Path(tmp) / "secret.md").write_text("must not be read", encoding="utf-8")
             self.assertNotIn("must not be read", build("../secret", notes))
             result = subprocess.run(

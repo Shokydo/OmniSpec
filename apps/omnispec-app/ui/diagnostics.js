@@ -37,26 +37,48 @@
   // Ищем именно fabric-api, а не fabric-loader или отдельный модуль API.
   const FABRIC_VERSION = "[0-9][A-Za-z0-9._+~-]{0,79}";
   const FABRIC_SOLUTION = new RegExp(
-    `\\bInstall\\s+fabric-api,\\s*(?:version\\s+(${FABRIC_VERSION})\\s+or\\s+later|any\\s+version)(?=[.!\\s]|$)`, "i"
+    `\\bInstall\\s+fabric-api,\\s*(?:version\\s+(${FABRIC_VERSION})\\s+or\\s+later|any\\s+version)[.!]?\\s*$`, "i"
   );
+  // Только простые, полностью сформулированные решения Fabric Loader. Сложные
+  // интервалы и «that is compatible with …» не сводим к одному минимуму.
+  const FABRIC_OTHER_INSTALL = new RegExp(
+    `\\bInstall\\s+([A-Za-z][A-Za-z0-9_-]{0,79}),\\s*(?:version\\s+(${FABRIC_VERSION})\\s+or\\s+later|any\\s+version)[.!]?\\s*$`, "i"
+  );
+  const FABRIC_REPLACE = new RegExp(
+    `\\bReplace\\s+mod\\s+'([^'\\r\\n]{1,100})'\\s+\\(([A-Za-z][A-Za-z0-9_-]{0,79})\\)\\s+${FABRIC_VERSION}\\s+with\\s+version\\s+(${FABRIC_VERSION})\\s+or\\s+later[.!]?\\s*$`, "i"
+  );
+  const FABRIC_BUILTINS = new Set(["minecraft", "java", "fabricloader", "quilt_loader"]);
   const FABRIC_DETAIL = new RegExp(
     `\\bMod\\s+'([^\\r\\n]{1,100}?)'\\s+\\(([A-Za-z0-9_.-]{1,120})\\)\\s+([A-Za-z0-9._+~-]{1,80})\\s+requires\\s+(?:version\\s+(${FABRIC_VERSION})\\s+or\\s+later|any\\s+version)\\s+of\\s+fabric-api,\\s+which\\s+is\\s+missing\\b`, "i"
   );
   const MAX_FABRIC_DEPENDENTS = 8;
 
-  function fabricFinding(line, minimum, dependents = [], quality = 2, source = "detail") {
+  function fabricFinding(line, minimum, dependents = [], quality = 2, source = "detail", uncertain = false) {
     const requirement = minimum ? ` Требуется версия ${minimum} или новее.` : " Версия в этой строке не уточняется.";
     const names = dependents.length ? ` В логе её требуют: ${dependents.map((item) => `${item.name} ${item.version}`).join(", ")}.` : "";
-    const item = finding("mod-dependencies", "Не найден Fabric API",
-      "Fabric сообщает, что необходимая зависимость fabric-api не найдена." + requirement + names
-        + " Файл может отсутствовать, быть выключенным или не подходить этой сборке.",
+    const replacement = source === "replace";
+    const item = finding("mod-dependencies", replacement ? "Нужна другая версия Fabric API" : "Не найден Fabric API",
+      (replacement ? "Fabric предлагает заменить установленную версию fabric-api." : "Fabric сообщает, что необходимая зависимость fabric-api не найдена.")
+        + requirement + names + " Файл может отсутствовать, быть выключенным или не подходить этой сборке.",
       ["Останови все окна этой сборки и сохрани резервную копию важных миров и модов.",
         "Проверь папку mods: Fabric API может уже находиться там или быть выключен с окончанием .disabled. Не добавляй вторую копию.",
-        `В официальном списке выбери Fabric API для точной версии Minecraft и загрузчика Fabric${minimum ? `, версия не ниже ${minimum}` : ""}; проверь и остальные требования лога.`,
-        "Скачай совместимый .jar и положи его в mods этой сборки, не распаковывая. Если API уже есть, проверь его версию и включение; замени только подтверждённо неподходящий файл вручную после создания копии.",
+        "Подбери совместимую версию в лаунчере и проверь остальные требования лога.",
         "Запусти сборку снова. Если ошибка останется, проверь полный лог: могут быть и другие недостающие зависимости."],
       line, 92, quality);
-    item.fabricApi = { minimum, dependents, source };
+    item.fabricApi = { minimum, dependents, source, uncertain };
+    return item;
+  }
+
+  function otherFabricFinding(line, id, minimum, source, name = id, uncertain = false) {
+    const replacement = source === "replace";
+    const requirement = minimum ? ` Требуется версия ${minimum} или новее.` : " Версия в этой строке не уточняется.";
+    const item = finding(`fabric-mod:${id}`, replacement ? `Нужна другая версия ${name}` : `Не найден мод ${name}`,
+      (replacement ? `Fabric предлагает заменить мод ${id}.` : `Fabric предлагает установить отсутствующую зависимость ${id}.`) + requirement,
+      ["Останови все окна этой сборки и сохрани резервную копию важных миров и модов.",
+        "Лаунчер проверит существующие и выключенные файлы перед изменением.",
+        "Подбери совместимую версию в лаунчере и проверь остальные требования лога.",
+        "Запусти сборку снова: у мода могут быть дополнительные зависимости."], line, 91, minimum ? 4 : 2);
+    item.fabricDependency = { id, name, minimum, source, uncertain };
     return item;
   }
 
@@ -81,9 +103,11 @@
   function mergeFabricFindings(previous, candidate) {
     const old = previous.fabricApi, next = candidate.fabricApi;
     let useCandidate = false;
+    let uncertain = old.uncertain || next.uncertain;
     if (next.minimum && !old.minimum) useCandidate = true;
     else if (next.minimum && old.minimum) {
       const comparison = compareFabricMinimum(next.minimum, old.minimum);
+      if (comparison === null && next.minimum !== old.minimum) uncertain = true;
       useCandidate = comparison === 1 || ((comparison === 0 || comparison === null) && candidate.quality > previous.quality);
     } else if (!next.minimum && !old.minimum && candidate.quality > previous.quality) useCandidate = true;
     const dependents = old.dependents.slice();
@@ -91,10 +115,20 @@
       if (dependents.length >= MAX_FABRIC_DEPENDENTS) break;
       if (!dependents.some((item) => item.id.toLowerCase() === dep.id.toLowerCase())) dependents.push(dep);
     }
-    if (!useCandidate && dependents.length === old.dependents.length) return null;
+    if (!useCandidate && dependents.length === old.dependents.length && uncertain === old.uncertain) return null;
     const chosen = useCandidate ? candidate : previous;
     return fabricFinding(chosen.evidence, chosen.fabricApi.minimum, dependents,
-      Math.max(previous.quality, candidate.quality), chosen.fabricApi.source);
+      Math.max(previous.quality, candidate.quality), chosen.fabricApi.source, uncertain);
+  }
+
+  function mergeOtherFabric(previous, candidate) {
+    const old = previous.fabricDependency, next = candidate.fabricDependency;
+    const comparison = old.minimum && next.minimum ? compareFabricMinimum(next.minimum, old.minimum) : null;
+    const uncertain = old.uncertain || next.uncertain || Boolean(old.minimum && next.minimum && old.minimum !== next.minimum && comparison === null);
+    const chosen = (!old.minimum && next.minimum) || comparison === 1 ? candidate : previous;
+    if (chosen === previous && uncertain === old.uncertain) return null;
+    const data = chosen.fabricDependency;
+    return otherFabricFinding(chosen.evidence, data.id, data.minimum, data.source, data.name, uncertain);
   }
 
   /** Вернуть подтверждённый сигнатурой признак, но не делать вывод по самому коду выхода. */
@@ -175,6 +209,19 @@
     if (detail) {
       const dependent = { name: detail[1], id: detail[2], version: detail[3] };
       return fabricFinding(line, detail[4] || null, [dependent], detail[4] ? 3 : 2, "detail");
+    }
+    const replacement = line.match(FABRIC_REPLACE);
+    if (replacement) {
+      const id = replacement[2].toLowerCase();
+      if (!FABRIC_BUILTINS.has(id)) {
+        if (id === "fabric-api") return fabricFinding(line, replacement[3], [], 4, "replace");
+        return otherFabricFinding(line, id, replacement[3], "replace", replacement[1]);
+      }
+    }
+    const otherInstall = line.match(FABRIC_OTHER_INSTALL);
+    if (otherInstall) {
+      const id = otherInstall[1].toLowerCase();
+      if (!FABRIC_BUILTINS.has(id) && id !== "fabric-api") return otherFabricFinding(line, id, otherInstall[2] || null, "install");
     }
     if (/incompatible mods found|some of your mods are incompatible|modresolutionexception|missing (?:or unsupported )?mandatory dependenc|mod\s+[^\n]{0,140}\s+requires\s+[^\n]{1,160}/i.test(line)) {
       return finding("mod-dependencies", "Несовместимые моды или зависимости",
@@ -350,6 +397,12 @@
       const previous = run.findings.get(candidate.id);
       if (previous && previous.fabricApi && candidate.fabricApi) {
         const merged = mergeFabricFindings(previous, candidate);
+        if (!merged) return false;
+        run.findings.set(candidate.id, merged);
+        return true;
+      }
+      if (previous && previous.fabricDependency && candidate.fabricDependency) {
+        const merged = mergeOtherFabric(previous, candidate);
         if (!merged) return false;
         run.findings.set(candidate.id, merged);
         return true;

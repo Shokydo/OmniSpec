@@ -30,6 +30,7 @@ async function createPage(browser, options = {}) {
     const callbacks = {};
     const mock = window.__testTauri = {
       launches: [], opened: [], openedUrls: [], calls: [], active: new Map(), callbacks,
+      installResults: [],
       emit(name, payload) { if (!callbacks[name]) throw new Error(`No listener: ${name}`); callbacks[name]({payload}); },
       log(index, line) {
         const run = this.launches[index];
@@ -64,6 +65,12 @@ async function createPage(browser, options = {}) {
           case 'instance_path': return `/test/${args.instanceId}`;
           case 'open_path': this.opened.push(args.path); return null;
           case 'open_url': this.openedUrls.push(args.url); return null;
+          case 'install_diagnostic_mod': {
+            const result = this.installResults.shift() || {status:'installed',filename:'fabric-api-0.166.2+26.3.jar',version:'0.166.2+26.3',record_saved:true,has_other_dependencies:false};
+            if (result.error) throw result.error;
+            if (result.delay) await new Promise(resolve => setTimeout(resolve,result.delay));
+            return result;
+          }
           case 'launch_instance': {
             const run = {args,runId:`${args.instanceId}#${this.launches.length+1}`};
             this.launches.push(run);
@@ -215,8 +222,7 @@ async function bodyContains(page, text) {
       await page.close();
     }
 
-    // Пользовательская рекомендация Fabric: точный минимум, настройки запуска,
-    // ручные действия вместо молчаливой установки или создания дубликатов.
+    // Точный минимум и установка в лаунчере; диагностика сама ничего не меняет.
     {
       const {page,errors} = await createPage(browser);
       await choosePack(page,'pack-b'); await page.click('#btn-play'); await attemptCount(page,1);
@@ -235,37 +241,163 @@ async function bodyContains(page, text) {
       await page.waitForFunction(() => !window.omnispecDebug.state.preparing.has('pack-b'));
       const text = await page.locator('#errors-dynamic').innerText();
       assert(text.includes('0.145.1') && text.includes('Minecraft 26.3') && text.includes('Fabric 0.19.3'));
-      assert(text.includes('требования файла к версии Fabric Loader') && text.includes('fabric.mod.json'));
+      assert(text.includes('Fabric Loader') && text.includes('fabric.mod.json') && text.includes('SHA-512'));
       assert(text.includes('EntityCulling 1.12.1') && text.includes('TRansition 1.0.28') && text.includes('TRender 1.0.17'));
       assert(text.includes('Не добавляй вторую копию') && text.includes('.disabled'));
       assert.equal(await page.locator('#errors-dynamic img').count(),0,'имена модов из лога экранируются');
       assert.equal(await page.locator('[data-diagnostic="mod-dependencies"]').count(),1);
-      assert.deepEqual(await page.evaluate(() => window.__testTauri.openedUrls),[], 'страница не открывается без нажатия');
-      assert.equal(await page.evaluate(() => window.__testTauri.calls.some(x => /^install_mod/.test(x.command))),false,'диагностика не устанавливает файлы');
-      await page.locator('[data-errors-action="fabric-api-versions"]').click();
-      await page.locator('[data-errors-action="fabric-api-folder"]').click();
-      assert.deepEqual(await page.evaluate(() => window.__testTauri.openedUrls), ['https://modrinth.com/mod/fabric-api/versions']);
+      assert.equal(await page.evaluate(() => window.__testTauri.calls.some(x => x.command === 'install_diagnostic_mod')),false,'диагностика сама не устанавливает файлы');
+      await page.locator('[data-errors-action="dependency-folder"]').click();
       assert.deepEqual(await page.evaluate(() => window.__testTauri.opened), ['/instances/pack-b/minecraft/mods']);
-      await page.locator('[data-errors-action="copy"]').click();
-      const copied = await page.evaluate(() => window.__testTauri.copied);
-      assert(copied.includes('Minecraft 26.3') && copied.includes('0.145.1'));
-      assert(!copied.includes('Install fabric-api'), 'в буфер не попадает сырой лог');
       // Проверка ещё и в обработчике: настройки могли измениться после отрисовки.
       await page.evaluate(() => { window.omnispecDebug.state.instances.find(x => x.id === 'pack-b').mc_version='26.1'; });
-      await page.locator('[data-errors-action="fabric-api-versions"]').click();
-      assert.equal((await page.evaluate(() => window.__testTauri.openedUrls)).length,1,'старая кнопка не открывает страницу после смены версии');
+      await page.locator('[data-errors-action="dependency-folder"]').click();
+      assert.equal((await page.evaluate(() => window.__testTauri.opened)).length,1,'старая кнопка не действует после смены версии');
       await bodyContains(page,'Настройки изменились после этого запуска');
-      assert.equal(await page.locator('[data-errors-action="fabric-api-versions"]').count(),0);
+      assert.equal(await page.locator('[data-errors-action="install-dependency"]').count(),0);
       assert((await page.locator('#errors-dynamic').innerText()).includes('Minecraft 26.3 / Fabric'));
       assert((await page.locator('#errors-dynamic').innerText()).includes('Minecraft 26.1 / Fabric'));
-      await page.evaluate(() => { const meta=window.omnispecDebug.state.instances.find(x => x.id === 'pack-b'); meta.mc_version='26.3'; meta.loader.version='0.20.0'; });
+      await page.evaluate(() => { window.omnispecDebug.state.instances.find(x => x.id === 'pack-b').mc_version='26.3'; });
+      await page.locator('[data-tab="console"]').click(); await page.locator('[data-tab="errors"]').click();
+      await page.locator('[data-errors-action="install-dependency"]').click();
+      await bodyContains(page,'Установлен fabric-api-0.166.2+26.3.jar');
+      const install = await page.evaluate(() => window.__testTauri.calls.find(x => x.command === 'install_diagnostic_mod').args);
+      assert.equal(install.instanceId,'pack-b'); assert.equal(install.attemptId,(await page.evaluate(() => window.__testTauri.launches[0].args.attemptId)));
+      assert.equal(install.request.mod_id,'fabric-api'); assert.equal(install.request.minimum,'0.145.1');
+      assert.equal(install.request.mc_version,'26.3'); assert.equal(install.request.loader_version,'0.19.3');
+      assert.equal(install.request.replace_file,null); assert.equal(install.request.enable_file,null);
+      assert.deepEqual(await page.evaluate(() => window.__testTauri.openedUrls),[], 'установка не открывает сайт');
+      assert.equal(await page.locator('[data-errors-action="install-dependency"]').count(),0,'после изменения нужен новый запуск');
+      await page.locator('[data-errors-action="copy"]').click();
+      const copied = await page.evaluate(() => window.__testTauri.copied);
+      assert(copied.includes('MC 26.3') && copied.includes('0.145.1'));
+      assert(!copied.includes('Install fabric-api'), 'в буфер не попадает сырой лог');
+      await page.evaluate(() => { const meta=window.omnispecDebug.state.instances.find(x => x.id === 'pack-b'); meta.loader.version='0.20.0'; });
       await page.locator('[data-tab="console"]').click();
       await page.locator('[data-tab="errors"]').click();
       await bodyContains(page,'Настройки изменились после этого запуска');
       assert((await page.locator('#errors-dynamic').innerText()).includes('Fabric 0.19.3'));
       assert((await page.locator('#errors-dynamic').innerText()).includes('Fabric 0.20.0'));
-      assert.equal(await page.locator('[data-errors-action="fabric-api-versions"]').count(),0,'смена версии загрузчика тоже устаревает подсказку');
-      assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_FABRIC_API: exact minimum, safe manual actions, configuration change — OK');
+      assert.equal(await page.locator('[data-errors-action="install-dependency"]').count(),0);
+      assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_FABRIC_API: in-app installation, exact minimum, no browser, stale configuration — OK');
+      await page.close();
+    }
+
+    // Не устанавливаем при работающей игре; совместимый выключенный JAR включаем только после подтверждения.
+    {
+      const {page,errors} = await createPage(browser);
+      await choosePack(page,'pack-b'); await page.click('#btn-play'); await attemptCount(page,1);
+      await page.evaluate(() => { const m=window.__testTauri; m.log(0,' - Install fabric-api, version 0.145.1 or later.'); m.start(0); });
+      await bodyContains(page,'Не найден Fabric API');
+      assert.equal(await page.locator('[data-errors-action="install-dependency"]').isEnabled(),false,'пока игра работает кнопку нельзя нажать');
+      await page.evaluate(() => {
+        const m=window.__testTauri; m.exit(0,1);
+        m.installResults.push({status:'existing',existing:[{name:'fabric-api.jar.disabled',version:'0.166.2+26.3',disabled:true,nested:false,compatible:true,sha256:'verified-hash'}]});
+        m.installResults.push({status:'enabled',filename:'fabric-api.jar',version:'0.166.2+26.3',record_saved:true,has_other_dependencies:false});
+      });
+      await page.waitForFunction(() => !window.omnispecDebug.state.running.has('pack-b') && !window.omnispecDebug.state.preparing.has('pack-b'));
+      await page.locator('[data-errors-action="install-dependency"]').click();
+      await page.waitForSelector('#modal-confirm:not([hidden])');
+      assert((await page.locator('#confirm-text').innerText()).includes('выключенный совместимый файл'));
+      assert.equal(await page.evaluate(() => window.__testTauri.calls.filter(x => x.command === 'install_diagnostic_mod').length),1);
+      await page.locator('#confirm-ok').click();
+      await bodyContains(page,'Включён fabric-api.jar');
+      const calls = await page.evaluate(() => window.__testTauri.calls.filter(x => x.command === 'install_diagnostic_mod'));
+      assert.equal(calls.length,2); assert.equal(calls[1].args.request.enable_file,'fabric-api.jar.disabled');
+      assert.equal(calls[1].args.request.replace_file,null); assert.equal(calls[1].args.request.expected_sha256,'verified-hash');
+      assert.deepEqual(await page.evaluate(() => window.__testTauri.openedUrls),[]);
+      assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_DISABLED: game guard, explicit enable, no duplicate or website — OK');
+      await page.close();
+    }
+
+    // Несовместимая старая версия заменяется лишь с согласия и отчётом о резервной копии.
+    {
+      const {page,errors} = await createPage(browser);
+      await choosePack(page,'pack-b'); await page.click('#btn-play'); await attemptCount(page,1);
+      await page.evaluate(() => {
+        const m=window.__testTauri; m.log(0," - Replace mod 'Fabric API' (fabric-api) 0.140.0 with version 0.145.1 or later."); m.exit(0,1);
+        const r=m.launches[0]; r.resolve({run_id:r.runId,account:'Steve',java_major:25});
+        const existing={status:'existing',existing:[{name:'old.jar',version:'0.140.0',disabled:false,nested:false,compatible:false,compatibility_reason:'версия ниже требования',sha256:'old-hash'}]};
+        m.installResults.push(existing,existing,{status:'installed',filename:'new.jar',version:'0.166.2',backup:'C:\\OmniSpec\\backups\\old.jar.bak',record_saved:true,has_other_dependencies:true});
+      });
+      await bodyContains(page,'Нужна другая версия Fabric API');
+      await page.waitForFunction(() => !window.omnispecDebug.state.preparing.has('pack-b'));
+      await page.locator('[data-errors-action="install-dependency"]').click();
+      await page.waitForSelector('#modal-confirm:not([hidden])');
+      assert((await page.locator('#confirm-text').innerText()).includes('резервная копия'));
+      await page.locator('#confirm-cancel').click(); await bodyContains(page,'Изменения отменены');
+      assert.equal(await page.evaluate(() => window.__testTauri.calls.filter(x => x.command === 'install_diagnostic_mod').length),1);
+      await page.locator('[data-errors-action="install-dependency"]').click();
+      await page.waitForSelector('#modal-confirm:not([hidden])'); await page.locator('#confirm-ok').click();
+      await bodyContains(page,'Установлен new.jar');
+      const note = await page.locator('.errors-install-note').innerText();
+      assert(note.includes('old.jar.bak') && note.includes('дополнительные зависимости'));
+      const calls=await page.evaluate(() => window.__testTauri.calls.filter(x => x.command === 'install_diagnostic_mod'));
+      assert.equal(calls.length,3); assert.equal(calls[2].args.request.replace_file,'old.jar');
+      assert.equal(calls[2].args.request.expected_sha256,'old-hash'); assert.equal(calls[2].args.request.minimum,'0.145.1');
+      assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_REPLACE: confirmation, cancellation, backup, hash and result — OK');
+      await page.close();
+    }
+
+    // Несколько копий/вложенный мод и ошибки: никаких тихих замен, сообщения видны в карточке.
+    {
+      const {page,errors} = await createPage(browser);
+      await choosePack(page,'pack-b'); await page.click('#btn-play'); await attemptCount(page,1);
+      await page.evaluate(() => {
+        const m=window.__testTauri; m.log(0,' - Install fabric-api, version 0.145.1 or later.'); m.exit(0,1);
+        const r=m.launches[0]; r.resolve({run_id:r.runId,account:'Steve',java_major:25});
+        m.installResults.push({status:'existing',existing:[
+          {name:'one.jar',version:'0.145.1',disabled:false,nested:false,sha256:'a'},
+          {name:'<img src=x>.jar.disabled',version:'0.145.1',disabled:true,nested:true,sha256:'b'}
+        ]},{error:'нет связи с каталогом'});
+      });
+      await bodyContains(page,'Не найден Fabric API'); await page.waitForFunction(() => !window.omnispecDebug.state.preparing.has('pack-b'));
+      await page.locator('[data-errors-action="install-dependency"]').click(); await bodyContains(page,'Найдены существующие файлы');
+      assert((await page.locator('.errors-install-note').innerText()).includes('встроен в другой мод'));
+      assert.equal(await page.locator('#errors-dynamic img').count(),0); assert.equal(await page.locator('#modal-confirm:not([hidden])').count(),0);
+      await page.locator('[data-errors-action="install-dependency"]').click(); await bodyContains(page,'нет связи с каталогом');
+      assert.equal(await page.locator('[data-errors-action="install-dependency"]').isEnabled(),true,'ошибку можно повторить');
+      assert.deepEqual(await page.evaluate(() => window.__testTauri.openedUrls),[]);
+      assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_CONFLICTS: duplicates, nested JAR, escaped errors and retry — OK');
+      await page.close();
+    }
+
+    // После изменения настроек в открытом диалоге подтверждения файл не заменяем.
+    {
+      const {page,errors} = await createPage(browser);
+      await choosePack(page,'pack-b'); await page.click('#btn-play'); await attemptCount(page,1);
+      await page.evaluate(() => {
+        const m=window.__testTauri; m.log(0,' - Install fabric-api, version 0.145.1 or later.'); m.exit(0,1);
+        const r=m.launches[0]; r.resolve({run_id:r.runId,account:'Steve',java_major:25});
+        m.installResults.push({status:'existing',existing:[{name:'old.jar',version:'0.1.0',disabled:false,nested:false,compatible:false,sha256:'old-hash'}]});
+      });
+      await bodyContains(page,'Не найден Fabric API'); await page.waitForFunction(() => !window.omnispecDebug.state.preparing.has('pack-b'));
+      await page.locator('[data-errors-action="install-dependency"]').click(); await page.waitForSelector('#modal-confirm:not([hidden])');
+      await page.evaluate(() => { window.omnispecDebug.state.instances.find(x => x.id === 'pack-b').loader.version='0.20.0'; });
+      await page.locator('#confirm-ok').click(); await bodyContains(page,'настройки или выбранная попытка изменились');
+      assert.equal(await page.evaluate(() => window.__testTauri.calls.filter(x => x.command === 'install_diagnostic_mod').length),1);
+      assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_CONFIRM_RACE: stale profile cancels replacement — OK');
+      await page.close();
+    }
+
+    // Другой простой запрос Fabric тоже подбирается по id и минимуму внутри приложения.
+    {
+      const {page,errors} = await createPage(browser);
+      await choosePack(page,'pack-b'); await page.click('#btn-play'); await attemptCount(page,1);
+      await page.evaluate(() => {
+        const m=window.__testTauri;
+        m.log(0,' - Install fabric-api, version 0.145.1 or later.');
+        m.log(0," - Replace mod 'Fabric Language Kotlin' (fabric-language-kotlin) 1.13.0 with version 1.13.1 or later.");
+        m.exit(0,1); const r=m.launches[0]; r.resolve({run_id:r.runId,account:'Steve',java_major:25});
+      });
+      await bodyContains(page,'Нужна другая версия Fabric Language Kotlin'); await page.waitForFunction(() => !window.omnispecDebug.state.preparing.has('pack-b'));
+      await page.locator('[data-diagnostic="fabric-mod:fabric-language-kotlin"] [data-errors-action="install-dependency"]').click();
+      await bodyContains(page,'Установлен fabric-api-0.166.2+26.3.jar');
+      const args=await page.evaluate(() => window.__testTauri.calls.find(x => x.command === 'install_diagnostic_mod').args);
+      assert.equal(args.request.mod_id,'fabric-language-kotlin'); assert.equal(args.request.minimum,'1.13.1');
+      assert.equal(await page.locator('[data-errors-action="install-dependency"]').count(),0,'после изменения требуется свежий лог для других модов');
+      assert.deepEqual(await page.evaluate(() => window.__testTauri.openedUrls),[]);
+      assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_OTHER_MOD: scoped mod ID, minimum and stale second action — OK');
       await page.close();
     }
 
@@ -278,9 +410,9 @@ async function bodyContains(page, text) {
         const r=m.launches[0]; r.resolve({run_id:r.runId,account:'Steve'});
       });
       await bodyContains(page,'не устанавливай её вслепую');
-      assert.equal(await page.locator('[data-errors-action="fabric-api-versions"]').count(),0);
-      assert.equal(await page.locator('[data-errors-action="fabric-api-folder"]').count(),0);
-      assert.equal(await page.evaluate(() => window.__testTauri.calls.some(x => /^install_mod/.test(x.command))),false);
+      assert.equal(await page.locator('[data-errors-action="install-dependency"]').count(),0);
+      assert.equal(await page.locator('[data-errors-action="dependency-folder"]').count(),0);
+      assert.equal(await page.evaluate(() => window.__testTauri.calls.some(x => x.command === 'install_diagnostic_mod')),false);
       assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_FABRIC_WRONG_LOADER: no unsuitable actions — OK');
       await page.close();
     }

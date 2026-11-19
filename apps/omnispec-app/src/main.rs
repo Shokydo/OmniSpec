@@ -3,7 +3,7 @@
 
 //! Tauri-оболочка OmniSpec: тонкий слой команд поверх `omnispec-core`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -38,6 +38,8 @@ mod rpc_icons;
 
 struct RunningChild {
     child: Mutex<tokio::process::Child>,
+    /// Реальная папка этого процесса не зависит от последующих правок профиля.
+    game_dir: PathBuf,
     /// Отмечаем только успешно отправленный запрос на остановку.
     stop_requested: AtomicBool,
 }
@@ -83,6 +85,95 @@ fn reserve_launch(
     })
 }
 
+/// Ремонт из диагностики не должен пересекаться с запуском или изменением
+/// содержимого этой же сборки. Обычные операции между собой не блокируем.
+#[derive(Default)]
+struct ContentAccess {
+    repairing: HashSet<String>,
+    writers: HashMap<String, usize>,
+}
+
+struct ContentReservation {
+    instance_id: String,
+    access: Arc<StdMutex<ContentAccess>>,
+    repair: bool,
+}
+
+impl Drop for ContentReservation {
+    fn drop(&mut self) {
+        let mut access = self.access.lock().unwrap_or_else(|e| e.into_inner());
+        if self.repair {
+            access.repairing.remove(&self.instance_id);
+        } else if let Some(count) = access.writers.get_mut(&self.instance_id) {
+            *count -= 1;
+            if *count == 0 { access.writers.remove(&self.instance_id); }
+        }
+    }
+}
+
+fn reserve_content_write(id: &str, access: &Arc<StdMutex<ContentAccess>>) -> Result<ContentReservation, String> {
+    let mut guard = access.lock().unwrap_or_else(|e| e.into_inner());
+    if !guard.repairing.is_empty() { return Err("идёт установка из диагностики; дождись её завершения".into()); }
+    *guard.writers.entry(id.to_string()).or_insert(0) += 1;
+    Ok(ContentReservation { instance_id:id.to_string(), access:access.clone(), repair:false })
+}
+
+fn normalized_game_dir(paths: &Paths, meta: &InstanceMeta) -> PathBuf {
+    let dir = instances::game_dir_for(paths, meta);
+    dir.canonicalize().unwrap_or(dir)
+}
+
+fn reserve_diagnostic_repair(
+    id: &str,
+    has_running: bool,
+    launching: &Arc<StdMutex<HashMap<String, usize>>>,
+    access: &Arc<StdMutex<ContentAccess>>,
+) -> Result<ContentReservation, String> {
+    let mut guard = access.lock().unwrap_or_else(|e| e.into_inner());
+    let pending = launching.lock().unwrap_or_else(|e| e.into_inner());
+    // Пока профиль подготавливается, его папка могла измениться в настройках;
+    // ждём окончания подготовки, вместо того чтобы угадывать реальный путь.
+    if has_running || !pending.is_empty() {
+        return Err("сначала останови все окна, использующие эту папку игры, и дождись окончания подготовки сборок".into());
+    }
+    // В том числе чужая сборка может использовать ту же внешнюю папку mods.
+    // На время загрузки не допускаем новых изменений и других исправлений.
+    if !guard.repairing.is_empty() || !guard.writers.is_empty() {
+        return Err("сборка уже изменяется; дождись завершения операции".into());
+    }
+    guard.repairing.insert(id.to_string());
+    Ok(ContentReservation { instance_id:id.to_string(), access:access.clone(), repair:true })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DiagnosticConfig {
+    mc_version: String,
+    loader: instances::Loader,
+    game_dir: PathBuf,
+    version_id: String,
+    instance_java: Option<String>,
+    global_java: Option<String>,
+    legacy_java: Option<String>,
+    auto_java: bool,
+}
+
+impl DiagnosticConfig {
+    fn new(paths: &Paths, meta: &InstanceMeta, settings: &Settings, version_id: String) -> Self {
+        Self {
+            mc_version: meta.mc_version.clone(), loader: meta.loader.clone(),
+            game_dir: normalized_game_dir(paths, meta), version_id,
+            instance_java: meta.java_path.clone(), global_java: settings.java_path.clone(),
+            legacy_java: settings.java_path_legacy.clone(), auto_java: settings.auto_java,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DiagnosticLaunch {
+    attempt_id: String,
+    actual: Option<(DiagnosticConfig, u32, omnispec_core::diagnostic_install::ModDirSnapshot)>,
+}
+
 struct AppState {
     paths: Paths,
     /// Путь, с которым лаунчер запустили (`.mrpack` двойным щелчком или drag&drop в ярлык).
@@ -95,6 +186,9 @@ struct AppState {
     running: Arc<Mutex<HashMap<String, ChildHandle>>>,
     /// Попытки, которые ещё готовятся; дубликаты с аккаунтом разрешены.
     launching: Arc<StdMutex<HashMap<String, usize>>>,
+    content_access: Arc<StdMutex<ContentAccess>>,
+    /// Последняя попытка каждой сборки и реально выбранная в ней Java.
+    diagnostic_launches: StdMutex<HashMap<String, DiagnosticLaunch>>,
     /// Статус в Discord: фронт пишет через set_presence, воркер шлёт в IPC.
     presence: presence::Presence,
     /// Не загружаем одну и ту же иконку несколько раз параллельно.
@@ -172,6 +266,12 @@ async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result
         state.rpc_upload_allowed.send_replace(false);
     }
     if !current.discord_rpc { state.presence.configure(false); }
+    // Отзыв согласия выше действует немедленно даже при занятой установке.
+    // Блокируем только смену Java, от которой зависит совместимость JAR.
+    let _java_change = if current.java_path != settings.java_path
+        || current.java_path_legacy != settings.java_path_legacy || current.auto_java != settings.auto_java {
+        Some(reserve_content_write("__settings__", &state.content_access)?)
+    } else { None };
     settings.save(&state.paths).map_err(err)?;
     state.presence.configure(settings.discord_rpc);
     *current = settings;
@@ -261,6 +361,7 @@ async fn create_instance(
     state: State<'_, AppState>,
     req: CreateInstanceRequest,
 ) -> Result<InstanceMeta, String> {
+    let _write = reserve_content_write("__create__", &state.content_access)?;
     let meta = instances::create(&state.paths, req).map_err(err)?;
     let reporter = reporter_for(&app, &meta.id);
     reporter.emit("loader", 0, 1, "готовим профиль версии");
@@ -274,6 +375,7 @@ async fn create_instance(
 
 #[tauri::command]
 fn delete_instance(state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     instances::delete(&state.paths, &instance_id).map_err(err)
 }
 
@@ -283,11 +385,13 @@ fn duplicate_instance(
     state: State<'_, AppState>,
     instance_id: String,
 ) -> Result<InstanceMeta, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     instances::duplicate(&state.paths, &instance_id).map_err(err)
 }
 
 #[tauri::command]
 fn update_instance(state: State<'_, AppState>, meta: InstanceMeta) -> Result<(), String> {
+    let _write = reserve_content_write(&meta.id, &state.content_access)?;
     instances::save(&state.paths, &meta).map_err(err)
 }
 
@@ -323,6 +427,7 @@ async fn install_instance(
     state: State<'_, AppState>,
     instance_id: String,
 ) -> Result<Value, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let reporter = reporter_for(&app, &instance_id);
     // id возвращаемый ensure_profile — реальный: инсталлятор мог назвать
@@ -363,12 +468,24 @@ async fn launch_instance(
         let has_running = running
             .keys()
             .any(|key| key.split_once('#').map(|(id, _)| id) == Some(instance_id.as_str()));
-        reserve_launch(
+        // Порядок блокировок совпадает с установкой: running → content → launching.
+        let _content = state.content_access.lock().unwrap_or_else(|e| e.into_inner());
+        if !_content.repairing.is_empty() { return Err("дождись окончания установки из диагностики".into()); }
+        let reservation = reserve_launch(
             &instance_id,
             account_uuid.is_some(),
             has_running,
             &state.launching,
-        )?
+        )?;
+        // Даже неудачная новая попытка делает старый диагностический контекст
+        // неактуальным. Запись делается внутри общей секции резервирования.
+        let mut attempts = state.diagnostic_launches.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(id) = &attempt_id {
+            attempts.insert(instance_id.clone(), DiagnosticLaunch { attempt_id: id.clone(), actual: None });
+        } else {
+            attempts.remove(&instance_id);
+        }
+        reservation
     };
     // Глобальный счётчик, а не первый свободный номер: прежние события могли
     // ещё находиться в очереди UI при следующем запуске той же сборки.
@@ -398,12 +515,24 @@ async fn launch_instance(
     .map_err(err)?;
 
     let mut child = game::launch::spawn(&plan).map_err(err)?;
+    if let Some(id) = &attempt_id {
+        let mut attempts = state.diagnostic_launches.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = attempts.get_mut(&instance_id).filter(|entry| &entry.attempt_id == id) {
+            // Java из реального плана, а не догадка UI по настройкам. Если
+            // снимок mods недоступен, запуск продолжается без автоисправления.
+            let mods = instances::game_dir_for(&state.paths, &meta).join("mods");
+            entry.actual = omnispec_core::diagnostic_install::snapshot_mods(&mods).ok()
+                .map(|snapshot| (DiagnosticConfig::new(&state.paths, &meta, &settings, plan.version_id.clone()), plan.java_major, snapshot));
+        }
+    }
     instances::touch_play(&state.paths, &instance_id).ok();
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
+    let game_dir = PathBuf::from(&plan.game_dir);
     let child = Arc::new(RunningChild {
         child: Mutex::new(child),
+        game_dir: game_dir.canonicalize().unwrap_or(game_dir),
         stop_requested: AtomicBool::new(false),
     });
     state
@@ -795,6 +924,7 @@ async fn install_curseforge(
     project_id: String,
     file_id: Option<String>,
 ) -> Result<curseforge_install::InstallOutcome, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let reporter = reporter_for(&app, &instance_id);
     curseforge_install::install(
@@ -818,6 +948,7 @@ async fn install_curseforge_modpack(
     project_id: String,
     file_id: Option<String>,
 ) -> Result<InstanceMeta, String> {
+    let _write = reserve_content_write("__modpack__", &state.content_access)?;
     let reporter = reporter_for(&app, "modpack");
     curseforge_modpack::install(
         &state.curseforge,
@@ -837,11 +968,55 @@ async fn install_mod(
     instance_id: String,
     project_id: String,
 ) -> Result<modrinth_install::InstallOutcome, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let reporter = reporter_for(&app, &instance_id);
     modrinth_install::install_project(&state.modrinth, &state.paths, &meta, &project_id, &reporter)
         .await
         .map_err(err)
+}
+
+/// Скачивание найденной в логе зависимости с проверкой профиля и JAR.
+#[tauri::command]
+async fn install_diagnostic_mod(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    instance_id: String,
+    attempt_id: String,
+    mut request: omnispec_core::diagnostic_install::InstallRequest,
+) -> Result<omnispec_core::diagnostic_install::InstallResult, String> {
+    let before = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let target = normalized_game_dir(&state.paths, &before);
+    let _reservation = {
+        let running = state.running.lock().await;
+        let has_running = running.values().any(|child| child.game_dir == target);
+        reserve_diagnostic_repair(&instance_id, has_running, &state.launching, &state.content_access)?
+    };
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    if normalized_game_dir(&state.paths, &meta) != target { return Err("папка сборки изменилась; повтори запуск".into()); }
+    let settings = state.settings.lock().await.clone();
+    let attempt = state.diagnostic_launches.lock().unwrap_or_else(|e| e.into_inner())
+        .get(&instance_id).cloned().ok_or_else(|| "данные последнего запуска недоступны; запусти сборку снова".to_string())?;
+    if attempt.attempt_id != attempt_id { return Err("это не последняя попытка запуска; проверь новую диагностику".into()); }
+    let (used_config, used_java, used_mods) = attempt.actual.ok_or_else(|| "данные последнего запуска не определены; запусти сборку снова".to_string())?;
+    let now = DiagnosticConfig::new(&state.paths, &meta, &settings, meta.version_id());
+    if used_config != now { return Err("настройки игры, загрузчика или Java изменились после запуска; запусти сборку снова".into()); }
+    let current_mods = omnispec_core::diagnostic_install::snapshot_mods(&instances::game_dir_for(&state.paths, &meta).join("mods")).map_err(err)?;
+    if used_mods != current_mods { return Err("файлы mods изменились после запуска; запусти сборку снова для актуальной диагностики".into()); }
+    request.java_major = Some(used_java);
+    let reporter = reporter_for(&app, &instance_id);
+    let result = match omnispec_core::diagnostic_install::install_missing(&state.modrinth, &state.paths, &meta, &request, &reporter).await {
+        Ok(result) => result,
+        Err(error) => {
+            let status = if matches!(error, omnispec_core::error::Error::Cancelled) { "cancelled" } else { "error" };
+            reporter.emit_state("mods", status, error.to_string());
+            return Err(err(error));
+        }
+    };
+    if result.status != "existing" {
+        state.diagnostic_launches.lock().unwrap_or_else(|e| e.into_inner()).remove(&instance_id);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -851,6 +1026,7 @@ async fn install_mod_version(
     instance_id: String,
     version_id: String,
 ) -> Result<modrinth_install::InstallOutcome, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let reporter = reporter_for(&app, &instance_id);
     modrinth_install::install_version(&state.modrinth, &state.paths, &meta, &version_id, &reporter)
@@ -871,6 +1047,7 @@ async fn install_modpack(
     state: State<'_, AppState>,
     version_id: String,
 ) -> Result<InstanceMeta, String> {
+    let _write = reserve_content_write("__modpack__", &state.content_access)?;
     let reporter = reporter_for(&app, "modpack");
     let source = version_id.trim().to_string();
 
@@ -1035,6 +1212,7 @@ fn delete_file(
     instance_id: String,
     path: String,
 ) -> Result<(), String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let base = instances::game_dir(&state.paths, &instance_id);
     let target = safe_join(&base, &path)?;
     if target.is_dir() {
@@ -1212,6 +1390,7 @@ fn fm_create_dir(
     instance_id: String,
     path: String,
 ) -> Result<(), String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let base = instances::game_dir(&state.paths, &instance_id);
     let target = safe_join(&base, &path)?;
     std::fs::create_dir_all(&target).map_err(err)
@@ -1225,6 +1404,7 @@ fn fm_rename(
     path: String,
     name: String,
 ) -> Result<String, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let clean = name.trim();
     if clean.is_empty()
         || clean == "."
@@ -1261,6 +1441,7 @@ fn fm_move(
     paths: Vec<String>,
     dir: String,
 ) -> Result<usize, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let base = instances::game_dir(&state.paths, &instance_id);
     let target = safe_join(&base, &dir)?;
     std::fs::create_dir_all(&target).map_err(err)?;
@@ -1780,6 +1961,7 @@ async fn import_external(
     loader_version: Option<String>,
     icon: Option<String>,
 ) -> Result<InstanceMeta, String> {
+    let _write = reserve_content_write("__import__", &state.content_access)?;
     let paths = state.paths.clone();
     let kind = loader.unwrap_or_else(|| "vanilla".into());
     let version = loader_version.unwrap_or_default();
@@ -1836,6 +2018,7 @@ async fn import_zip(
     loader: Option<String>,
     loader_version: Option<String>,
 ) -> Result<omnispec_core::instances::InstanceMeta, String> {
+    let _write = reserve_content_write("__import__", &state.content_access)?;
     let paths = state.paths.clone();
     tauri::async_runtime::spawn_blocking(move || {
         omnispec_core::transfer::import_zip(
@@ -1906,6 +2089,7 @@ fn content_toggle(
     kind: String,
     name: String,
 ) -> Result<String, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     omnispec_core::content::toggle(&state.paths, &meta, &kind, &name).map_err(err)
 }
@@ -1918,6 +2102,7 @@ fn content_delete(
     kind: String,
     name: String,
 ) -> Result<(), String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     omnispec_core::content::remove(&state.paths, &meta, &kind, &name).map_err(err)
 }
@@ -1948,6 +2133,7 @@ async fn content_update(
     name: String,
     update: Option<Value>,
 ) -> Result<Value, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let reporter = reporter_for(&app, &meta.id);
     let update = match update {
@@ -1984,6 +2170,7 @@ async fn content_replace_version(
     name: String,
     version_id: String,
 ) -> Result<Value, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let reporter = reporter_for(&app, &meta.id);
     let outcome = omnispec_core::content::replace_version(
@@ -2010,6 +2197,7 @@ async fn mods_ensure_dependencies(
     state: State<'_, AppState>,
     instance_id: String,
 ) -> Result<Value, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let reporter = reporter_for(&app, &meta.id);
     let outcome =
@@ -2028,6 +2216,7 @@ fn toggle_mod(
     instance_id: String,
     name: String,
 ) -> Result<String, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     modrinth_install::toggle_mod(&state.paths, &meta, &name).map_err(err)
 }
@@ -2704,6 +2893,7 @@ fn set_instance_icon_file(
     instance_id: String,
     path: String,
 ) -> Result<InstanceMeta, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let source = PathBuf::from(&path);
     let extension = source
         .extension()
@@ -2768,6 +2958,7 @@ fn copy_instance_file(
     path: String,
     sub: String,
 ) -> Result<String, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let source = PathBuf::from(&path);
     let name = source
         .file_name()
@@ -3083,6 +3274,8 @@ fn main() {
         settings: Mutex::new(settings),
         running: Arc::new(Mutex::new(HashMap::new())),
         launching: Arc::new(StdMutex::new(HashMap::new())),
+        content_access: Arc::new(StdMutex::new(ContentAccess::default())),
+        diagnostic_launches: StdMutex::new(HashMap::new()),
         presence,
         rpc_icon_lock: Mutex::new(()),
         rpc_upload_allowed,
@@ -3136,6 +3329,7 @@ fn main() {
             image_data_url,
             import_skin,
             install_mod,
+            install_diagnostic_mod,
             install_mod_version,
             install_modpack,
             cancel_download,
@@ -3205,6 +3399,47 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     #[test]
+    fn diagnostic_reservation_excludes_running_preparing_and_concurrent_writes() {
+        use super::{reserve_content_write, reserve_diagnostic_repair, ContentAccess};
+        let access = Arc::new(Mutex::new(ContentAccess::default()));
+        let launching = Arc::new(Mutex::new(HashMap::new()));
+        assert!(reserve_diagnostic_repair("pack", true, &launching, &access).is_err());
+        launching.lock().unwrap().insert("different-pack".into(), 1);
+        assert!(reserve_diagnostic_repair("pack", false, &launching, &access).is_err());
+        launching.lock().unwrap().clear();
+        let writer = reserve_content_write("different-pack", &access).unwrap();
+        assert!(reserve_diagnostic_repair("pack", false, &launching, &access).is_err());
+        drop(writer);
+        let repair = reserve_diagnostic_repair("pack", false, &launching, &access).unwrap();
+        assert!(reserve_content_write("pack", &access).is_err());
+        assert!(reserve_content_write("different-pack", &access).is_err(), "shared game directories cannot bypass the guard");
+        assert!(reserve_diagnostic_repair("other", false, &launching, &access).is_err());
+        drop(repair);
+        assert!(reserve_content_write("pack", &access).is_ok());
+        assert!(reserve_diagnostic_repair("pack", false, &launching, &access).is_ok());
+    }
+
+    #[test]
+    fn diagnostic_config_tracks_game_directory_and_actual_java_settings() {
+        use super::{DiagnosticConfig, InstanceMeta, Paths, Settings};
+        let root = std::env::temp_dir().join(format!("omnispec-config-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::new(&root).unwrap();
+        let mut meta: InstanceMeta = serde_json::from_value(serde_json::json!({
+            "id":"test","name":"Test","mc_version":"26.3","loader":{"type":"fabric","version":"0.19.3"}
+        })).unwrap();
+        let mut settings = Settings::default();
+        let base = DiagnosticConfig::new(&paths, &meta, &settings, meta.version_id());
+        settings.java_path = Some("another-java".into());
+        assert_ne!(base, DiagnosticConfig::new(&paths, &meta, &settings, meta.version_id()));
+        settings.java_path = None; meta.mc_version = "26.2".into();
+        assert_ne!(base, DiagnosticConfig::new(&paths, &meta, &settings, meta.version_id()));
+        meta.mc_version = "26.3".into(); meta.game_dir = Some(root.join("external").display().to_string());
+        assert_ne!(base, DiagnosticConfig::new(&paths, &meta, &settings, meta.version_id()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn run_key_accepts_full_key_from_ui() {
         assert_eq!(run_key("atm10", Some("atm10#2".into())).as_deref(), Some("atm10#2"));
     }
@@ -3272,6 +3507,7 @@ mod tests {
         let process = tokio::process::Command::new("sleep").arg("30").spawn().unwrap();
         let handle = Arc::new(super::RunningChild {
             child: tokio::sync::Mutex::new(process),
+            game_dir: std::path::PathBuf::from("test"),
             stop_requested: AtomicBool::new(false),
         });
         assert!(!handle.stop_requested.load(Ordering::Relaxed));
