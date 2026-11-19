@@ -15,6 +15,7 @@
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 5h6l2 2h10v12H3V5Zm2 4v8h14V9H5Z"/></symbol>
   <symbol id="i-settings" viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.48-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58ZM12 15.6A3.6 3.6 0 1 1 15.6 12 3.6 3.6 0 0 1 12 15.6Z"/></symbol>
   <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M3 4h18v16H3V4Zm2 2v12h14V6H5Zm2 2 3 3-3 3 2 2 5-5-5-5-2 2Z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 2 1.6 20h20.8L12 2Zm0 4 6.9 12H5.1L12 6Zm-1 3v4.8h2V9h-2Zm0 6.2v2h2v-2h-2Z"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7L8 5Z"/></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></symbol>
   <symbol id="i-restart" viewBox="0 0 24 24"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7Z"/></symbol>
@@ -148,6 +149,7 @@
     <nav class="tabs" id="tabs">
       <button class="tab" data-tab="discover">Главная</button>
       <button class="tab is-active" data-tab="console">Консоль</button>
+      <button class="tab" data-tab="errors">Ошибки <span class="tab-badge errors-badge" id="badge-errors" hidden></span></button>
       <button class="tab" data-tab="files">Файлы</button>
       <button class="tab" data-tab="mods">Моды <span class="tab-badge" id="badge-mods" hidden>0</span></button>
       <button class="tab" data-tab="resourcepacks">Ресурспаки</button>
@@ -496,6 +498,7 @@
   </div>
 </div>
 
+<script src="diagnostics.js"></script>
 <script src="app.js"></script>
 
 </body>

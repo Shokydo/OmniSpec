@@ -5,14 +5,15 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use futures::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::sync::Mutex;
 
 use omnispec_core::accounts::AccountStore;
@@ -35,7 +36,52 @@ mod presence;
 /// Безопасное разрешение публичных иконок для Rich Presence.
 mod rpc_icons;
 
-type ChildHandle = Arc<Mutex<tokio::process::Child>>;
+struct RunningChild {
+    child: Mutex<tokio::process::Child>,
+    /// Отмечаем только успешно отправленный запрос на остановку.
+    stop_requested: AtomicBool,
+}
+type ChildHandle = Arc<RunningChild>;
+
+// Идентификатор не переиспользуется, пока работает лаунчер: поздний вывод от
+// первого окна нельзя принять за вывод нового запуска той же сборки.
+static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Резервируем попытку до асинхронной подготовки. Иначе два быстрых нажатия
+/// «Играть» могут одновременно увидеть пустой `running` и запустить два окна.
+struct LaunchReservation {
+    instance_id: String,
+    launching: Arc<StdMutex<HashMap<String, usize>>>,
+}
+
+impl Drop for LaunchReservation {
+    fn drop(&mut self) {
+        let mut launching = self.launching.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = launching.get_mut(&self.instance_id) {
+            *count -= 1;
+            if *count == 0 {
+                launching.remove(&self.instance_id);
+            }
+        }
+    }
+}
+
+fn reserve_launch(
+    instance_id: &str,
+    allow_duplicate: bool,
+    has_running: bool,
+    launching: &Arc<StdMutex<HashMap<String, usize>>>,
+) -> Result<LaunchReservation, String> {
+    let mut pending = launching.lock().unwrap_or_else(|e| e.into_inner());
+    if !allow_duplicate && (has_running || pending.contains_key(instance_id)) {
+        return Err("эта сборка уже запущена или подготавливается".into());
+    }
+    *pending.entry(instance_id.to_string()).or_insert(0) += 1;
+    Ok(LaunchReservation {
+        instance_id: instance_id.to_string(),
+        launching: launching.clone(),
+    })
+}
 
 struct AppState {
     paths: Paths,
@@ -47,6 +93,8 @@ struct AppState {
     curseforge: CurseForge,
     settings: Mutex<Settings>,
     running: Arc<Mutex<HashMap<String, ChildHandle>>>,
+    /// Попытки, которые ещё готовятся; дубликаты с аккаунтом разрешены.
+    launching: Arc<StdMutex<HashMap<String, usize>>>,
     /// Статус в Discord: фронт пишет через set_presence, воркер шлёт в IPC.
     presence: presence::Presence,
     /// Не загружаем одну и ту же иконку несколько раз параллельно.
@@ -299,34 +347,44 @@ async fn launch_instance(
     state: State<'_, AppState>,
     instance_id: String,
     account_uuid: Option<String>,
+    attempt_id: Option<String>,
 ) -> Result<Value, String> {
-    // Ключ запуска — «id#номер»: так одна сборка может работать сразу в нескольких окнах.
-    let run_id = {
+    // Фронт создаёт токен до подготовки и получает его обратно в событиях —
+    // они могут прийти даже раньше результата команды launch_instance.
+    let attempt_id = attempt_id.filter(|id| {
+        !id.is_empty()
+            && id.len() <= 100
+            && id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    });
+    let _reservation = {
         let running = state.running.lock().await;
-        let mut taken: Vec<u32> = running
+        let has_running = running
             .keys()
-            .filter_map(|key| match key.split_once('#') {
-                Some((id, num)) if id == instance_id => num.parse().ok(),
-                _ => None,
-            })
-            .collect();
-        if !taken.is_empty() && account_uuid.is_none() {
-            return Err("эта сборка уже запущена".into());
-        }
-        taken.sort_unstable();
-        let mut next = 1u32;
-        for num in taken {
-            if num == next {
-                next += 1;
-            }
-        }
-        format!("{instance_id}#{next}")
+            .any(|key| key.split_once('#').map(|(id, _)| id) == Some(instance_id.as_str()));
+        reserve_launch(
+            &instance_id,
+            account_uuid.is_some(),
+            has_running,
+            &state.launching,
+        )?
     };
+    // Глобальный счётчик, а не первый свободный номер: прежние события могли
+    // ещё находиться в очереди UI при следующем запуске той же сборки.
+    let run_id = format!(
+        "{instance_id}#{}",
+        NEXT_RUN_ID.fetch_add(1, Ordering::Relaxed)
+    );
 
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let settings = state.settings.lock().await.clone();
     let account = account_for(&state, &settings, account_uuid.as_deref()).await?;
-    let reporter = reporter_for(&app, &instance_id);
+    // Прогресс подготовки привязан к той же попытке, что и диагностика.
+    let reporter = reporter_for(&app, &instance_id).with_op(format!(
+        "launch:{}",
+        attempt_id.as_deref().unwrap_or(&run_id)
+    ));
 
     let plan = game::launch::prepare(
         &state.http,
@@ -344,7 +402,10 @@ async fn launch_instance(
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let child = Arc::new(Mutex::new(child));
+    let child = Arc::new(RunningChild {
+        child: Mutex::new(child),
+        stop_requested: AtomicBool::new(false),
+    });
     state
         .running
         .lock()
@@ -354,6 +415,8 @@ async fn launch_instance(
     emit_game_log(
         &app,
         &instance_id,
+        &run_id,
+        attempt_id.as_deref(),
         format!(
             "[omnispec] запуск: {} (аргументов {}, файлов в classpath {}, подготовка {} мс)",
             plan.java,
@@ -363,11 +426,24 @@ async fn launch_instance(
         ),
     );
 
+    let mut pumps = Vec::new();
     if let Some(stdout) = stdout {
-        spawn_pump(app.clone(), instance_id.clone(), stdout);
+        pumps.push(spawn_pump(
+            app.clone(),
+            instance_id.clone(),
+            run_id.clone(),
+            attempt_id.clone(),
+            stdout,
+        ));
     }
     if let Some(stderr) = stderr {
-        spawn_pump(app.clone(), instance_id.clone(), stderr);
+        pumps.push(spawn_pump(
+            app.clone(),
+            instance_id.clone(),
+            run_id.clone(),
+            attempt_id.clone(),
+            stderr,
+        ));
     }
 
     // Следим за завершением процесса.
@@ -375,6 +451,7 @@ async fn launch_instance(
         let app = app.clone();
         let id = instance_id.clone();
         let session = run_id.clone();
+        let attempt = attempt_id.clone();
         let child = child.clone();
         let running = state.running.clone();
         let paths = state.paths.clone();
@@ -391,18 +468,31 @@ async fn launch_instance(
                     instances::add_playtime(&paths, &id, elapsed - flushed);
                     flushed = elapsed;
                 }
-                let status = {
-                    let mut guard = child.lock().await;
-                    guard.try_wait().ok().flatten()
+                let (status, stopped) = {
+                    let mut guard = child.child.lock().await;
+                    let status = guard.try_wait().ok().flatten();
+                    (status, child.stop_requested.load(Ordering::Relaxed))
                 };
                 if let Some(status) = status {
                     let code = status.code().unwrap_or(-1);
                     // накопленное время игры в часах показываем в списке сборок
                     instances::add_playtime(&paths, &id, elapsed.saturating_sub(flushed));
                     running.lock().await.remove(&session);
+                    // stderr нередко содержит решающую ошибку в самом конце.
+                    // Даём обоим потокам закончить до события выхода; таймаут
+                    // защищает от дочернего процесса, унаследовавшего pipe.
+                    if !finish_pumps(pumps, Duration::from_secs(3)).await {
+                        emit_game_log(
+                            &app,
+                            &id,
+                            &session,
+                            attempt.as_deref(),
+                            "[omnispec] Не удалось полностью дочитать вывод игры после её завершения".into(),
+                        );
+                    }
                     let _ = app.emit(
                         "game-exit",
-                        json!({"instance": id, "code": code, "run_id": session}),
+                        json!({"instance": id, "code": code, "run_id": session, "attempt_id": attempt, "stopped": stopped}),
                     );
                     break;
                 }
@@ -432,20 +522,91 @@ fn launch_summary(plan: &LaunchPlan) -> Value {
     })
 }
 
-fn emit_game_log(app: &AppHandle, instance_id: &str, line: String) {
-    let _ = app.emit("game-log", json!({"instance": instance_id, "line": line}));
+fn emit_game_log(
+    app: &AppHandle,
+    instance_id: &str,
+    run_id: &str,
+    attempt_id: Option<&str>,
+    line: String,
+) {
+    let _ = app.emit(
+        "game-log",
+        json!({
+            "instance": instance_id, "run_id": run_id, "attempt_id": attempt_id, "line": line
+        }),
+    );
 }
 
-fn spawn_pump<R>(app: AppHandle, instance_id: String, reader: R)
+/// Разбиваем очень длинные строки на ограниченные части и не прерываем чтение
+/// при не-UTF-8 байтах (например, вывод системной программы на Windows).
+async fn pump_lines<R, F>(reader: R, mut emit: F)
+where
+    R: tokio::io::AsyncRead + Unpin,
+    F: FnMut(String),
+{
+    const MAX_LINE_BYTES: u64 = 64 * 1024;
+    let mut reader = BufReader::new(reader);
+    let mut bytes = Vec::new();
+    loop {
+        bytes.clear();
+        let result = (&mut reader)
+            .take(MAX_LINE_BYTES)
+            .read_until(b'\n', &mut bytes)
+            .await;
+        match result {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                if bytes.last() == Some(&b'\n') {
+                    bytes.pop();
+                }
+                if bytes.last() == Some(&b'\r') {
+                    bytes.pop();
+                }
+                emit(String::from_utf8_lossy(&bytes).into_owned());
+            }
+        }
+    }
+}
+
+fn spawn_pump<R>(
+    app: AppHandle,
+    instance_id: String,
+    run_id: String,
+    attempt_id: Option<String>,
+    reader: R,
+) -> tokio::task::JoinHandle<()>
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            emit_game_log(&app, &instance_id, line);
+        pump_lines(reader, |line| {
+            emit_game_log(&app, &instance_id, &run_id, attempt_id.as_deref(), line);
+        })
+        .await;
+    })
+}
+
+/// Ограниченное ожидание stdout и stderr. По таймауту отменяем и дожидаемся
+/// оставшихся задач, чтобы они не продолжали отправлять строки после game-exit.
+async fn finish_pumps(mut pumps: Vec<tokio::task::JoinHandle<()>>, limit: Duration) -> bool {
+    let mut completed = 0;
+    let finished = tokio::time::timeout(limit, async {
+        for pump in &mut pumps {
+            let _ = pump.await;
+            completed += 1;
         }
-    });
+    })
+    .await
+    .is_ok();
+    if !finished {
+        for pump in pumps.iter().skip(completed) {
+            pump.abort();
+        }
+        for pump in pumps.into_iter().skip(completed) {
+            let _ = pump.await;
+        }
+    }
+    finished
 }
 
 /// Ключ сессии в `state.running` — «id#2». Из интерфейса приходит уже полный
@@ -483,9 +644,16 @@ async fn stop_instance(
         return Err("сборка не запущена".into());
     }
     for child in handles {
-        let mut guard = child.lock().await;
-        guard.start_kill().map_err(err)?;
+        request_stop(&child).await?;
     }
+    Ok(())
+}
+
+async fn request_stop(child: &ChildHandle) -> Result<(), String> {
+    let mut guard = child.child.lock().await;
+    guard.start_kill().map_err(err)?;
+    // Пока замок занят, наблюдатель не успеет прочитать код завершения.
+    child.stop_requested.store(true, Ordering::Relaxed);
     Ok(())
 }
 
@@ -2914,6 +3082,7 @@ fn main() {
         http,
         settings: Mutex::new(settings),
         running: Arc::new(Mutex::new(HashMap::new())),
+        launching: Arc::new(StdMutex::new(HashMap::new())),
         presence,
         rpc_icon_lock: Mutex::new(()),
         rpc_upload_allowed,
@@ -3029,7 +3198,11 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::run_key;
+    use super::{finish_pumps, pump_lines, reserve_launch, run_key};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn run_key_accepts_full_key_from_ui() {
@@ -3044,5 +3217,116 @@ mod tests {
     #[test]
     fn run_key_without_run_id_stops_all_windows() {
         assert_eq!(run_key("atm10", None), None);
+    }
+
+    #[test]
+    fn reservation_blocks_accidental_double_launch_but_allows_duplicates() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let first = reserve_launch("one", false, false, &pending).unwrap();
+        assert!(reserve_launch("one", false, false, &pending).is_err());
+        let duplicate = reserve_launch("one", true, false, &pending).unwrap();
+        let other = reserve_launch("two", false, false, &pending).unwrap();
+        drop(first);
+        assert!(reserve_launch("one", false, false, &pending).is_err());
+        drop(duplicate);
+        assert!(reserve_launch("one", false, false, &pending).is_ok());
+        assert!(reserve_launch("one", false, true, &pending).is_err());
+        drop(other);
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn concurrent_regular_launches_get_only_one_reservation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Barrier;
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let barrier = Arc::new(Barrier::new(9));
+        let successes = Arc::new(AtomicUsize::new(0));
+        let mut threads = Vec::new();
+        for _ in 0..8 {
+            let pending = pending.clone();
+            let barrier = barrier.clone();
+            let successes = successes.clone();
+            threads.push(std::thread::spawn(move || {
+                let reservation = reserve_launch("one", false, false, &pending);
+                if reservation.is_ok() {
+                    successes.fetch_add(1, Ordering::Relaxed);
+                }
+                // Победитель держит бронь, пока все потоки не закончат проверку.
+                barrier.wait();
+                drop(reservation);
+            }));
+        }
+        barrier.wait();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(successes.load(Ordering::Relaxed), 1);
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn successful_stop_is_recorded_for_the_exact_child() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let process = tokio::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let handle = Arc::new(super::RunningChild {
+            child: tokio::sync::Mutex::new(process),
+            stop_requested: AtomicBool::new(false),
+        });
+        assert!(!handle.stop_requested.load(Ordering::Relaxed));
+        super::request_stop(&handle).await.unwrap();
+        assert!(handle.stop_requested.load(Ordering::Relaxed));
+        let status = handle.child.lock().await.wait().await.unwrap();
+        assert!(!status.success());
+    }
+
+    #[tokio::test]
+    async fn pumps_drain_both_streams_before_exit_and_handle_invalid_utf8() {
+        let output = Arc::new(Mutex::new(Vec::<String>::new()));
+        let (mut stdout, stdout_reader) = tokio::io::duplex(1024);
+        let (mut stderr, stderr_reader) = tokio::io::duplex(1024);
+        let out_lines = output.clone();
+        let err_lines = output.clone();
+        let first = tokio::spawn(async move {
+            pump_lines(stdout_reader, |line| out_lines.lock().unwrap().push(line)).await;
+        });
+        let second = tokio::spawn(async move {
+            pump_lines(stderr_reader, |line| err_lines.lock().unwrap().push(line)).await;
+        });
+        stdout.write_all(b"ordinary output\n").await.unwrap();
+        stdout.shutdown().await.unwrap();
+        let writer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(35)).await;
+            stderr.write_all(b"last error \xff\n").await.unwrap();
+            stderr.shutdown().await.unwrap();
+        });
+        assert!(finish_pumps(vec![first, second], Duration::from_secs(1)).await);
+        writer.await.unwrap();
+        output.lock().unwrap().push("EXIT".into());
+        let lines = output.lock().unwrap();
+        assert!(lines.iter().any(|line| line == "ordinary output"));
+        assert!(lines.iter().any(|line| line == "last error \u{fffd}"));
+        assert_eq!(lines.last().map(String::as_str), Some("EXIT"));
+    }
+
+    #[tokio::test]
+    async fn stuck_stream_is_cancelled_and_long_lines_are_bounded() {
+        let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+        let captured = lines.clone();
+        let (mut writer, reader) = tokio::io::duplex(128 * 1024);
+        let pump = tokio::spawn(async move {
+            pump_lines(reader, |line| captured.lock().unwrap().push(line)).await;
+        });
+        writer.write_all(&vec![b'a'; 70_000]).await.unwrap();
+        writer.write_all(b"\n").await.unwrap();
+        // Держим writer открытым, как у процесса, унаследовавшего дескриптор.
+        assert!(!finish_pumps(vec![pump], Duration::from_millis(100)).await);
+        let got = lines.lock().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].len(), 65_536);
+        assert_eq!(got[1].len(), 70_000 - 65_536);
+        drop(got);
+        assert!(writer.write_all(b"too late\n").await.is_err());
     }
 }

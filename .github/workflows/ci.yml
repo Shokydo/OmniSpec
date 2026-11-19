@@ -38,7 +38,7 @@ jobs:
         run: cargo check --workspace
 
   ui-test:
-    name: Проверка интерфейса и сетевых сбоев
+    name: Интерфейс, диагностика и сетевые сбои
     runs-on: ubuntu-latest
     defaults:
       run:

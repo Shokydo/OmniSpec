@@ -1435,6 +1435,7 @@
       if (!okDelete) return;
       try {
         await api.deleteInstance(fresh.id);
+        diagnostics.forget(fresh.id);
         if (state.selectedId === fresh.id) state.selectedId = null;
         await refreshInstances();
         renderTab();
@@ -1473,19 +1474,35 @@
   }
 
   async function launchDuplicate(meta, accountUuid) {
+    const attemptId = nextAttemptId();
+    diagnostics.begin(meta.id, attemptId);
+    changePreparing(meta.id, 1);
     syncPresence("launching");
+    pushLog(meta.id, "[omnispec] Подготовка дубликата сборки", "dim");
     try {
-      const plan = await api.launch(meta.id, accountUuid);
-      addSession(meta.id, plan && plan.run_id, plan && plan.account);
+      const plan = await api.launch(meta.id, accountUuid, attemptId);
+      finishLaunchProgress(attemptId, "done");
+      const run = diagnostics.started(meta.id, attemptId, plan && plan.run_id, plan && plan.account);
+      // game-exit может прийти раньше ответа команды: не возвращаем мёртвое окно в список.
+      if (run && run.status === "running") {
+        addSession(meta.id, plan && plan.run_id, plan && plan.account);
+        const who = (plan && plan.account) ? ` · ${plan.account}` : "";
+        toast(`Дубликат запущен${who}`, "ok");
+        pushLog(meta.id, `[omnispec] дубликат запущен${who}`, "dim");
+      }
       renderSidebar();
       updateStatus();
       syncPresence();
-      const who = (plan && plan.account) ? ` · ${plan.account}` : "";
-      toast(`Дубликат запущен${who}`, "ok");
-      pushLog(meta.id, `[omnispec] дубликат запущен${who}`, "dim");
     } catch (err) {
-      toast(`Не удалось запустить дубликат: ${err}`, "err");
+      const failed = diagnostics.fail(meta.id, attemptId, err);
+      const cancelled = failed && failed.status === "cancelled";
+      finishLaunchProgress(attemptId, cancelled ? "cancelled" : "error");
+      pushLog(meta.id, `[omnispec] ${cancelled ? "Подготовка дубликата отменена" : "Ошибка запуска дубликата"}: ${err}`, cancelled ? "dim" : "err");
+      if (cancelled) toast("Подготовка дубликата отменена", "info");
+      else toast(`Не удалось запустить дубликат. Подробности — во вкладке «Ошибки»: ${err}`, "err");
       syncPresence();
+    } finally {
+      changePreparing(meta.id, -1);
     }
   }
 
@@ -2029,7 +2046,7 @@
     versions: (snapshots) => invoke("minecraft_versions", { snapshots }),
     loaderVersions: (kind, mc) => invoke("loader_versions", { kind, mcVersion: mc }),
     installInstance: (id) => invoke("install_instance", { instanceId: id }),
-    launch: (id, accountUuid = null) => invoke("launch_instance", { instanceId: id, accountUuid }),
+    launch: (id, accountUuid = null, attemptId = null) => invoke("launch_instance", { instanceId: id, accountUuid, attemptId }),
     stop: (id, runId) => invoke("stop_instance", { instanceId: id, runId: runId || null }),
     running: () => invoke("running_instances"),
     search: (q) => invoke("search_modrinth", q),
@@ -2550,7 +2567,10 @@
     accounts: { accounts: [], active: null },
     tab: "console",
     running: new Set(),
+    runningRevision: 0,
     sessions: new Map(),
+    preparing: new Map(),
+    liveLogAvailable: !IS_APP,
     compact: false,
     logs: {},
     files: { path: "", entries: [], selected: null },
@@ -2581,7 +2601,7 @@
       retrySeconds: 0, tried: false, view: "grid", source: "modrinth"
     },
     wall: { wallpaper: null, fit: "cover", blur: 0, dim: 40 },
-    downloads: { active: false, title: "", done: 0, total: 0, files: new Map(), state: "active", collapsed: false, timer: null },
+    downloads: { active: false, title: "", done: 0, total: 0, files: new Map(), state: "active", op: "", collapsed: false, timer: null },
     installedProjects: new Set(),
     downloadingProjects: new Set(),
     update: { info: null, version: "0.1.0", repo: null, enabled: true, checking: false, installing: false },
@@ -2602,6 +2622,27 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // Анализирует только новые строки. Храним результаты отдельных попыток в
+  // памяти текущего сеанса; сеть и файлы сборки диагностика не трогает.
+  const diagnostics = new window.OmniDiagnostics.DiagnosticsStore({ onChange: diagnosticsChanged });
+  let diagnosticsRenderTimer = 0;
+  let attemptSerial = 0;
+  function nextAttemptId() {
+    return `${Date.now().toString(36)}-${(++attemptSerial).toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+  function changePreparing(instanceId, delta) {
+    const count = (state.preparing.get(instanceId) || 0) + delta;
+    if (count > 0) state.preparing.set(instanceId, count);
+    else state.preparing.delete(instanceId);
+    updateStatus();
+  }
+  function finishDemoStops(instanceId, marked) {
+    if (IS_APP) return;
+    for (const run of diagnostics.list(instanceId)) {
+      if (marked.includes(run.id)) diagnostics.exit({ instance: instanceId, attempt_id: run.id, run_id: run.runId, code: 0 });
+    }
+  }
 
   const LOADER_NAMES = { vanilla: "Vanilla", fabric: "Fabric", quilt: "Quilt", forge: "Forge", neoforge: "NeoForge" };
 
@@ -2819,6 +2860,7 @@
     const key = runId || `local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     state.sessions.get(instanceId).set(key, { account: account || "", runId: key });
     state.running.add(instanceId);
+    state.runningRevision += 1;
   }
 
   /** Сессии сборки: первая — обычный запуск, остальные — дубликаты. */
@@ -2836,6 +2878,7 @@
       if (!map.size) state.sessions.delete(instanceId);
     }
     if (!state.sessions.has(instanceId)) state.running.delete(instanceId);
+    state.runningRevision += 1;
   }
 
   /** Категории сборок: из настроек + динамическая «Запущенные». */
@@ -3230,14 +3273,17 @@
       <button class="ctx-item danger" data-act="stop-dup"><svg class="ic"><use href="#i-close"/></svg>Выключить дубликат</button>`, async (act) => {
       if (act === "focus" && meta) { selectInstance(meta.id); return; }
       if (act !== "stop-dup") return;
+      const marked = diagnostics.requestStop(instanceId, runId);
       try {
         await api.stop(instanceId, runId);
+        finishDemoStops(instanceId, marked);
         dropSession(instanceId, runId);
         renderSidebar();
         renderTab();
         updateStatus();
         toast("Дубликат выключен", "ok");
       } catch (error) {
+        diagnostics.undoStop(instanceId, marked);
         const text = String(error);
         // окно могло закрыться само — тогда просто убираем ноду из списка
         if (text.includes("не запущена")) {
@@ -3438,10 +3484,14 @@
     const toolbar = document.querySelector(".toolbar");
     if (toolbar) toolbar.classList.toggle("is-idle", !meta);
     const running = meta && state.running.has(meta.id);
+    const preparing = meta && state.preparing.has(meta.id);
+    const status = running ? "запущена" : preparing ? "подготавливается" : "остановлена";
     $("#tb-dot").className = `dot ${running ? "on" : ""}`;
-    $("#tb-status").textContent = !meta ? "сборка не выбрана" : running ? "запущена" : "остановлена";
-    $("#tb-center").textContent = meta ? `${meta.name} — ${running ? "запущена" : "остановлена"}` : "OmniSpec — лаунчер Minecraft";
-    $("#btn-play").querySelector("span").textContent = running ? "Играть снова" : "Играть";
+    $("#tb-status").textContent = meta ? status : "сборка не выбрана";
+    $("#tb-center").textContent = meta ? `${meta.name} — ${status}` : "OmniSpec — лаунчер Minecraft";
+    const playButton = $("#btn-play");
+    playButton.querySelector("span").textContent = running ? "Играть снова" : "Играть";
+    playButton.disabled = Boolean(preparing);
   }
 
   /* ==================== ПРОГРЕСС ==================== */
@@ -3509,7 +3559,11 @@
     if (text) text.textContent = info.text;
   }
 
+  // Запоздавший прогресс уже завершённой подготовки не должен снова
+  // показывать панель «Ресурсы игры» как активную.
+  const finishedLaunchProgress = new Set();
   function setProgress(payload) {
+    if (payload && payload.op && finishedLaunchProgress.has(payload.op)) return;
     state.progress = payload || null;
     renderImpProgress();
     const box = $("#progress");
@@ -3533,7 +3587,9 @@
         $("#upd-progress-text").textContent = payload.detail || "";
       }
     }
-    if (payload.stage === "launch" && payload.done >= payload.total) setTimeout(() => setProgress(null), 2500);
+    if (payload.stage === "launch" && payload.done >= payload.total) {
+      setTimeout(() => { if (state.progress === payload) setProgress(null); }, 2500);
+    }
     updateDownloads(payload);
   }
 
@@ -3561,9 +3617,12 @@
     const stage = String(payload.stage || "");
     const isDownloadStage = ["modpack", "mods", "update", "libraries", "assets", "version", "java", "loader", "import"].includes(stage);
     if (!isDownloadStage) return;
+    // Глобальная панель показывает последний пришедший этап; op позволяет не
+    // завершить чужую загрузку ответом параллельной попытки запуска.
+    const op = String(payload.op || "");
 
-    // Новая операция (этап сменился или панель была завершена) — сброс.
-    if (!dl.active || dl.stage !== stage) {
+    // Не смешиваем файлы двух операций, даже если их этапы совпадают.
+    if (!dl.active || dl.stage !== stage || dl.op !== op) {
       dl.active = true;
       dl.stage = stage;
       dl.title = DL_STAGE_TITLES[stage] || "Загрузка";
@@ -3573,6 +3632,7 @@
       dl.collapsed = false;
       if (dl.timer) { clearTimeout(dl.timer); dl.timer = null; }
     }
+    dl.op = op;
 
     // Общий прогресс по файлам.
     const total = Number(payload.total || 0);
@@ -3594,15 +3654,12 @@
     }
 
     // Финальные состояния: явное событие done или счётчик дошёл до конца.
-    if (payload.state === "done" || (total > 0 && done >= total)) {
+    if (payload.state === "cancelled" || payload.state === "error") {
+      dl.state = payload.state;
+      scheduleDlHide();
+    } else if (payload.state === "done" || (total > 0 && done >= total)) {
       dl.state = "done";
       dl.files.forEach((entry) => { entry.complete = true; entry.done = entry.total; });
-      scheduleDlHide();
-    } else if (payload.state === "cancelled") {
-      dl.state = "cancelled";
-      scheduleDlHide();
-    } else if (payload.state === "error") {
-      dl.state = "error";
       scheduleDlHide();
     } else {
       // идёт активная загрузка — отложенное скрытие отменяется
@@ -3620,6 +3677,24 @@
       dl.active = false;
       renderDownloads();
     }, 10000);
+  }
+
+  /** Завершаем только прогресс этой попытки; параллельную операцию не скрываем. */
+  function finishLaunchProgress(attemptId, outcome) {
+    const op = `launch:${attemptId}`;
+    finishedLaunchProgress.add(op);
+    while (finishedLaunchProgress.size > 100) finishedLaunchProgress.delete(finishedLaunchProgress.values().next().value);
+    const dl = state.downloads;
+    if (dl.active && dl.op === op && dl.state === "active") {
+      dl.state = outcome;
+      if (outcome === "done") {
+        if (dl.total > 0) dl.done = dl.total;
+        dl.files.forEach((entry) => { entry.complete = true; entry.done = entry.total; });
+      }
+      scheduleDlHide();
+      renderDownloads();
+    }
+    if (state.progress && state.progress.op === op) setProgress(null);
   }
 
   function renderDownloads() {
@@ -3737,6 +3812,7 @@
     const body = $("#tab-body");
     const meta = selected();
     applyTabs(meta);
+    updateErrorsBadge();
     // без сборки показываем ленту готовых сборок, со сборкой — её вкладки
     if (!meta) state.tab = "discover";
     else if (state.tab === "discover") state.tab = "console";
@@ -3753,6 +3829,7 @@
     switch (state.tab) {
       case "discover": return renderDiscover();
       case "console": return renderConsole();
+      case "errors": return renderErrors();
       case "files": return renderFiles();
       case "mods": return renderContent("mod");
       case "resourcepacks": return renderContent("resourcepack");
@@ -3762,6 +3839,212 @@
       case "download": return renderDownload();
       case "settings": return renderSettings();
     }
+  }
+
+  /* ---------- локальная помощь с ошибками ---------- */
+  function updateErrorsBadge() {
+    const badge = $("#badge-errors");
+    if (!badge) return;
+    const run = state.selectedId && diagnostics.latest(state.selectedId);
+    const count = run ? run.findings.size : 0;
+    const failed = run && (run.status === "failed" || (run.status === "exited" && run.code !== 0));
+    badge.hidden = !count && !failed;
+    badge.textContent = count ? (count > 9 ? "9+" : String(count)) : "!";
+    badge.title = count ? `В последнем запуске найдено признаков: ${count}` : "Последний запуск завершился с ошибкой";
+  }
+
+  /** Вызывается только при смене состояния или новой сигнатуре, не на каждую строку. */
+  function diagnosticsChanged(instanceId) {
+    if (instanceId !== state.selectedId) return;
+    updateErrorsBadge();
+    if (state.tab !== "errors" || diagnosticsRenderTimer) return;
+    diagnosticsRenderTimer = setTimeout(() => {
+      diagnosticsRenderTimer = 0;
+      if (state.tab === "errors" && $("#errors-dynamic")) renderErrorsContent();
+    }, 120);
+  }
+
+  function errorsRunLabel(run) {
+    const time = new Date(run.startedAt).toLocaleString("ru-RU", {
+      day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit"
+    });
+    const kind = run.status === "preparing" ? "подготовка" : run.status === "running" ? "работает"
+      : run.status === "stopped" ? "остановлен" : run.status === "cancelled" ? "отменён"
+      : run.status === "failed" ? "ошибка подготовки" : run.code == null ? "код неизвестен" : `код ${run.code}`;
+    const number = run.runId && run.runId.includes("#") ? ` #${run.runId.slice(run.runId.lastIndexOf("#") + 1)}` : "";
+    return `${time}${number}${run.account ? ` · ${run.account}` : ""} · ${kind}`;
+  }
+
+  function errorsStatus(run) {
+    if (!run && !state.liveLogAvailable) return {
+      style: "warning", icon: "i-alert", title: "Живой лог недоступен",
+      text: "Не удалось подписаться на сообщения игры. Автоматическая проверка лога работать не будет; проверь лог в папке сборки."
+    };
+    if (!run) return {
+      style: "neutral", icon: "i-terminal", title: "Пока нет данных",
+      text: "Запусти эту сборку: здесь появятся подсказки, если в выводе найдутся известные признаки проблем."
+    };
+    const found = run.findings.size > 0;
+    if (run.status === "preparing") return {
+      style: "neutral", icon: "i-terminal", title: "Подготавливаем запуск",
+      text: "Проверяем ошибки подготовки и будем разбирать новые строки лога по мере их появления."
+    };
+    if (run.status === "running" && !state.liveLogAvailable) return {
+      style: "warning", icon: "i-alert", title: "Живой лог недоступен",
+      text: "Не удалось подписаться на сообщения игры. Автоматическая проверка и состояние завершения могут быть неполными; проверь лог в папке сборки."
+    };
+    if (run.status === "running") return found ? {
+      style: "warning", icon: "i-alert", title: "Есть сигналы в логе",
+      text: "Игра ещё работает. Эти сообщения не обязательно означают, что запуск завершится с ошибкой."
+    } : {
+      style: "neutral", icon: "i-terminal", title: "Пока ничего подозрительного",
+      text: "Процесс запущен. Продолжаем проверять новые строки; не все проблемы можно определить автоматически."
+    };
+    if (run.status === "cancelled") return {
+      style: "neutral", icon: "i-stop", title: "Подготовка отменена",
+      text: "Загрузка была отменена пользователем. Можно запустить сборку снова."
+    };
+    if (run.status === "stopped") return {
+      style: "neutral", icon: "i-stop", title: "Игра остановлена пользователем",
+      text: found ? "До остановки в логе встретились сообщения ниже; они не обязательно означают сбой." : "Ручная остановка не считается ошибкой запуска."
+    };
+    if (run.status === "failed") return {
+      style: "error", icon: "i-alert", title: "Не удалось подготовить запуск",
+      text: found ? "Ниже — подсказки по распознанным сообщениям. Проверь полную ошибку, если они не помогут." : "Известную причину определить не удалось. Посмотри сообщение запуска и приложи его к обращению."
+    };
+    if (run.code === 0) return found ? {
+      style: "warning", icon: "i-alert", title: "Игра завершилась с кодом 0",
+      text: "В логе были сообщения ниже. Они могут быть предупреждениями и не обязательно указывают на сбой."
+    } : {
+      style: "ok", icon: "i-check", title: "Известные ошибки не найдены",
+      text: "Игра завершилась с кодом 0. Это не гарантирует, что другие проблемы отсутствуют."
+    };
+    const code = run.code == null ? "Код завершения недоступен." : `Код завершения: ${run.code}.`;
+    return found ? {
+      style: "error", icon: "i-alert", title: "Игра завершилась с ошибкой",
+      text: `${code} Сам по себе код не объясняет причину; ниже — признаки, найденные в логе.`
+    } : {
+      style: "error", icon: "i-alert", title: "Причину определить не удалось",
+      text: `${code} Сам по себе код не объясняет причину. Понадобится полный лог или краш-отчёт.`
+    };
+  }
+
+  function renderErrors() {
+    const meta = selected();
+    if (!meta) return;
+    const body = $("#tab-body");
+    body.innerHTML = `
+      <div class="errors-view">
+        <div class="errors-shell">
+          <header class="errors-head">
+            <div class="errors-head-copy">
+              <div class="errors-eyebrow"><svg class="ic"><use href="#i-alert"/></svg>Помощь при запуске</div>
+              <h1>Ошибки сборки</h1>
+              <p>Разбираем известные проблемы и подсказываем, с чего начать. Проверка локальная: файлы и настройки автоматически не меняются.</p>
+            </div>
+            <div class="errors-head-actions"><button class="btn" data-errors-action="console"><svg class="ic"><use href="#i-terminal"/></svg>Открыть консоль</button></div>
+          </header>
+          <div id="errors-dynamic"></div>
+        </div>
+      </div>`;
+    const view = $(".errors-view", body);
+    view.addEventListener("click", handleErrorsClick);
+    view.addEventListener("change", handleErrorsChange);
+    renderErrorsContent();
+  }
+
+  // Делегирование на контейнере вкладки: при обновлении карточек слушатели не размножаются.
+  function handleErrorsClick(event) {
+    const body = $("#tab-body");
+    if (state.tab !== "errors" || !$("#errors-dynamic")) return;
+    const button = event.target.closest("[data-errors-action]");
+    if (!button || !body.contains(button)) return;
+    const action = button.dataset.errorsAction;
+    if (action === "console" || action === "settings" || action === "mods") {
+      state.tab = action;
+      renderTab();
+      return;
+    }
+    if (action === "folder") {
+      const meta = selected();
+      if (meta) api.openPath(`/instances/${meta.id}/minecraft`).catch((error) => toast(`Не удалось открыть папку: ${error}`, "err"));
+      return;
+    }
+    if (action === "java") { openPrefs("game"); return; }
+    if (action === "copy") copyErrorsAdvice();
+  }
+
+  function handleErrorsChange(event) {
+    if (state.tab !== "errors" || !$("#errors-dynamic")) return;
+    if (event.target.id === "errors-run") diagnostics.select(state.selectedId, event.target.value);
+  }
+
+  function renderErrorsContent() {
+    const box = $("#errors-dynamic");
+    const meta = selected();
+    if (!box || !meta) return;
+    const run = diagnostics.selected(meta.id);
+    const status = errorsStatus(run);
+    const sameRun = box.dataset.run === (run && run.id);
+    const openDetails = sameRun ? new Set($$("details[open][data-evidence]", box).map((el) => el.dataset.evidence)) : new Set();
+    const runs = diagnostics.list(meta.id);
+    const choices = runs.length > 1 ? `
+      <div class="errors-run-row"><label for="errors-run">Попытка запуска</label>
+        <select class="select" id="errors-run">${runs.map((item) => `<option value="${esc(item.id)}" ${item.id === run.id ? "selected" : ""}>${esc(errorsRunLabel(item))}</option>`).join("")}</select>
+      </div>` : "";
+    const list = run ? Array.from(run.findings.values()).sort((a, b) => b.priority - a.priority) : [];
+    const showMods = list.some((item) => ["java-modules", "duplicate-mods", "mod-dependencies", "mixin"].includes(item.id));
+    const showJava = list.some((item) => ["java-version", "java-missing", "memory-heap", "memory-reserve", "jvm"].includes(item.id));
+    const cards = list.map((item) => `
+      <article class="errors-card" data-diagnostic="${esc(item.id)}">
+        <div class="errors-card-head">
+          <span class="errors-card-mark"><svg class="ic"><use href="#i-alert"/></svg></span>
+          <div><h3>${esc(item.title)}</h3><p>${esc(item.description)}</p></div>
+        </div>
+        <ol class="errors-steps">${item.steps.map((step) => `<li>${esc(step)}</li>`).join("")}</ol>
+        <details class="errors-evidence" data-evidence="${esc(item.id)}" ${openDetails.has(item.id) ? "open" : ""}>
+          <summary>Показать строку из лога</summary><pre>${esc(item.evidence)}</pre>
+        </details>
+      </article>`).join("");
+    const raw = run && run.error ? `<details class="errors-evidence" data-evidence="preparation" ${openDetails.has("preparation") ? "open" : ""}>
+      <summary>Показать сообщение запуска</summary><pre>${esc(run.error)}</pre></details>` : "";
+    const unknown = run && !list.length && (run.status === "failed" || (run.status === "exited" && run.code !== 0));
+    box.dataset.run = run ? run.id : "";
+    box.innerHTML = `${choices}
+      <section class="errors-status is-${esc(status.style)}" role="status" aria-live="polite">
+        <span class="errors-status-icon"><svg class="ic"><use href="#${esc(status.icon)}"/></svg></span>
+        <div class="errors-status-copy"><div class="errors-status-title">${esc(status.title)}</div><div class="errors-status-text">${esc(status.text)}</div>${raw}</div>
+      </section>
+      ${list.length ? `<div class="errors-section-title">На что обратить внимание</div><div class="errors-list">${cards}</div>` : ""}
+      ${run && run.findingsLimited ? `<p class="errors-privacy">Показаны не все сигналы. Остальные сообщения можно посмотреть в консоли.</p>` : ""}
+      ${unknown ? `<div class="errors-section-title">Что можно сделать</div>
+        <article class="errors-card"><div class="errors-card-head"><span class="errors-card-mark"><svg class="ic"><use href="#i-file"/></svg></span><div><h3>Нужны подробности</h3><p>Без текста ошибки нельзя надёжно выбрать исправление.</p></div></div>
+          <ol class="errors-steps"><li>Открой консоль и посмотри строки перед завершением.</li><li>В папке сборки найди <code>logs/latest.log</code> и, если есть, файл в <code>crash-reports</code>.</li><li>Передай полный лог или краш-отчёт автору сборки либо в поддержку.</li></ol>
+        </article>` : ""}
+      <aside class="errors-support">
+        <div class="errors-support-copy"><strong>${run ? "Нужна дополнительная помощь?" : "Где искать полный лог"}</strong>
+          <p>Открой папку сборки: обычно лог находится в <code>logs/latest.log</code>, а отчёты — в <code>crash-reports</code>. Файлов может не быть, а latest.log может перезаписаться другим запуском.</p>
+        </div>
+        <div class="errors-support-actions">
+          <button class="btn btn-small" data-errors-action="folder"><svg class="ic"><use href="#i-folder"/></svg>Папка сборки</button>
+          <button class="btn btn-small" data-errors-action="settings">Настройки сборки</button>
+          ${showMods ? `<button class="btn btn-small" data-errors-action="mods">Моды</button>` : ""}
+          ${showJava ? `<button class="btn btn-small" data-errors-action="java">Общие настройки Java</button>` : ""}
+          ${list.length ? `<button class="btn btn-small" data-errors-action="copy"><svg class="ic"><use href="#i-copy"/></svg>Скопировать подсказки</button>` : ""}
+        </div>
+      </aside>
+      <p class="errors-privacy">Результаты хранятся в памяти только во время текущего сеанса OmniSpec. Перед отправкой логов проверь, нет ли в них личных путей, ников и токенов; автоматически они никуда не отправляются.</p>`;
+  }
+
+  async function copyErrorsAdvice() {
+    const meta = selected();
+    const run = meta && diagnostics.selected(meta.id);
+    if (!run) return;
+    const list = Array.from(run.findings.values()).sort((a, b) => b.priority - a.priority);
+    const text = [`OmniSpec · ${meta.name} · MC ${meta.mc_version} · ${loaderLabel(meta.loader)}`,
+      errorsStatus(run).title, ...list.map((item) => `\n${item.title}\n${item.description}\n${item.steps.map((step, i) => `${i + 1}. ${step}`).join("\n")}`)].join("\n");
+    try { await navigator.clipboard.writeText(text); toast("Подсказки скопированы (без лога)", "ok"); }
+    catch { toast("Не удалось скопировать подсказки", "err"); }
   }
 
   /* ---------- консоль ---------- */
@@ -4643,7 +4926,10 @@
   async function renderContent(kind) {
     const cfg = CONTENT_KINDS[kind] || CONTENT_KINDS.mod;
     const meta = selected();
+    if (!meta) return;
     const entries = await api.contentList(meta.id, kind).catch(() => []);
+    const tabForKind = kind === "mod" ? "mods" : kind === "resourcepack" ? "resourcepacks" : "shaders";
+    if (state.tab !== tabForKind || state.selectedId !== meta.id) return;
     if (kind === "mod") {
       state.mods = entries;
       $("#badge-mods").hidden = !entries.length;
@@ -9286,6 +9572,7 @@
       return;
     }
     const javas = await api.javas().catch(() => []);
+    if (state.tab !== "settings" || state.selectedId !== meta.id) return;
     $("#tab-body").innerHTML = `
       <div class="settings-wrap">
         <div class="settings-grid">
@@ -9434,6 +9721,7 @@
       if (!okDelete2) return;
       try {
         await api.deleteInstance(meta.id);
+        diagnostics.forget(meta.id);
         state.selectedId = null;
         await refreshInstances();
         renderTab();
@@ -9598,9 +9886,16 @@
 
   /* ==================== ДЕЙСТВИЯ ==================== */
   async function refreshInstances() {
+    const runningRevision = state.runningRevision;
     try {
-      state.instances = await api.instances();
-      state.running = new Set(await api.running());
+      const instances = await api.instances();
+      const running = await api.running();
+      state.instances = instances;
+      // Ответ может запоздать за game-exit или запуском другого окна.
+      if (state.runningRevision === runningRevision) {
+        state.running = new Set([...(running || []), ...state.sessions.keys()]);
+        state.runningRevision += 1;
+      }
     } catch (err) {
       toast(String(err), "err");
     }
@@ -9614,8 +9909,8 @@
   async function launchFromList(id) {
     const meta = state.instances.find((item) => item.id === id);
     if (!meta) return;
-    if (state.running.has(id)) {
-      toast(`«${meta.name}» уже запущена`, "");
+    if (state.running.has(id) || state.preparing.has(id)) {
+      toast(`«${meta.name}» уже запущена или подготавливается`, "");
       selectInstance(id);
       return;
     }
@@ -9631,45 +9926,57 @@
   async function play() {
     const meta = selected();
     if (!meta) return toast("Выбери сборку", "err");
-    if (state.running.has(meta.id)) return toast("Сборка уже запущена", "err");
-    $("#btn-play").disabled = true;
+    if (state.running.has(meta.id) || state.preparing.has(meta.id)) return toast("Сборка уже запущена или подготавливается", "err");
+    const attemptId = nextAttemptId();
+    diagnostics.begin(meta.id, attemptId);
+    changePreparing(meta.id, 1);
     syncPresence("launching");
     pushLog(meta.id, `[omnispec] Подготовка «${meta.name}» (MC ${meta.mc_version}, ${loaderLabel(meta.loader)})`, "dim");
-    if (state.tab === "console") renderLogs(meta.id);
+    if (state.tab === "console" && state.selectedId === meta.id) renderLogs(meta.id);
     try {
-      const plan = await api.launch(meta.id);
-      setProgress(null);
-      addSession(meta.id, plan && plan.run_id, plan && plan.account);
-      pushLog(meta.id, `[omnispec] Java ${plan.java_major || plan.major || "—"}: ${plan.java || "java"}`, "dim");
-      pushLog(meta.id, `[omnispec] Память ${plan.memory_mb} МБ, артефактов в classpath: ${plan.classpath_entries}`, "dim");
-      state.running.add(meta.id);
+      const plan = await api.launch(meta.id, null, attemptId);
+      finishLaunchProgress(attemptId, "done");
+      const run = diagnostics.started(meta.id, attemptId, plan && plan.run_id, plan && plan.account);
+      // Завершение и последние строки могут прийти раньше ответа launch_instance.
+      if (run && run.status === "running") {
+        addSession(meta.id, plan && plan.run_id, plan && plan.account);
+        pushLog(meta.id, `[omnispec] Java ${(plan && (plan.java_major || plan.major)) || "—"}: ${(plan && plan.java) || "java"}`, "dim");
+        pushLog(meta.id, `[omnispec] Память ${(plan && plan.memory_mb) || "—"} МБ, артефактов в classpath: ${(plan && plan.classpath_entries) ?? "—"}`, "dim");
+      }
       renderSidebar();
       updateStatus();
       syncPresence();
     } catch (err) {
-      setProgress(null);
-      pushLog(meta.id, `[omnispec] Ошибка запуска: ${err}`, "err");
-      toast(`Не удалось запустить: ${err}`, "err");
-      if (state.tab === "console") renderLogs(meta.id);
+      const failed = diagnostics.fail(meta.id, attemptId, err);
+      const cancelled = failed && failed.status === "cancelled";
+      finishLaunchProgress(attemptId, cancelled ? "cancelled" : "error");
+      pushLog(meta.id, `[omnispec] ${cancelled ? "Подготовка отменена" : "Ошибка запуска"}: ${err}`, cancelled ? "dim" : "err");
+      if (cancelled) toast("Подготовка запуска отменена", "info");
+      else toast(`Не удалось запустить. Подробности — во вкладке «Ошибки»: ${err}`, "err");
+      if (state.tab === "console" && state.selectedId === meta.id) renderLogs(meta.id);
       syncPresence();
     } finally {
-      $("#btn-play").disabled = false;
+      changePreparing(meta.id, -1);
     }
   }
 
   async function stopGame() {
     const meta = selected();
     if (!meta) return;
+    const marked = diagnostics.requestStop(meta.id);
+    const targetedRuns = sessionsOf(meta.id).map((session) => session.runId);
     try {
       await api.stop(meta.id);
-      if (state.sessions) state.sessions.delete(meta.id);
-      state.running.delete(meta.id);
+      finishDemoStops(meta.id, marked);
+      // Новое окно могло открыться, пока команда остановки ожидала ответа.
+      for (const runId of targetedRuns) dropSession(meta.id, runId);
+      if (!state.sessions.has(meta.id)) { state.running.delete(meta.id); state.runningRevision += 1; }
       renderSidebar();
       updateStatus();
       syncPresence();
       toast("Игра остановлена");
     }
-    catch (err) { toast(String(err), "err"); }
+    catch (err) { diagnostics.undoStop(meta.id, marked); toast(String(err), "err"); }
   }
 
   async function installInstance() {
@@ -10237,7 +10544,8 @@
         api.window("fullscreen").catch(() => {});
         return;
       }
-      if (event.key === "Enter" && !event.target.matches("input, select, textarea") && $("#modal-create").hidden) play();
+      // Enter на интерактивных элементах не должен вдобавок запускать игру.
+      if (event.key === "Enter" && !event.target.closest("input, select, textarea, button, a, summary, [contenteditable], [role='button'], [role='link']") && $("#modal-create").hidden) play();
     });
   }
 
@@ -10258,18 +10566,24 @@
 
     await api.onProgress((payload) => setProgress(payload));
     await api.onLog((payload) => {
-      pushLog(payload.instance, payload.line, classify(payload.line));
+      if (!payload || !payload.instance) return;
+      diagnostics.log(payload);
+      const line = String(payload.line ?? "");
+      pushLog(payload.instance, line, classify(line));
     });
     await api.onExit(async (payload) => {
+      if (!payload || !payload.instance) return;
+      const run = diagnostics.exit(payload);
+      const stopped = typeof payload.stopped === "boolean" ? payload.stopped : Boolean(run && run.status === "stopped");
       dropSession(payload.instance, payload.run_id);
-      pushLog(payload.instance, `[omnispec] Игра завершилась с кодом ${payload.code}`, payload.code === 0 ? "ok" : "err");
+      pushLog(payload.instance, stopped ? `[omnispec] Игра остановлена пользователем (код ${payload.code})` : `[omnispec] Игра завершилась с кодом ${payload.code}`, stopped || payload.code === 0 ? "ok" : "err");
       // время игры пишется в мету сборки на стороне ядра — подтягиваем его
       await refreshInstances();
       if (state.tab === "discover") renderDiscover();
       renderSidebar();
       updateStatus();
       syncPresence();
-      if (payload.code !== 0) toast(`Игра закрылась с ошибкой (код ${payload.code})`, "err");
+      if (payload.code !== 0 && !stopped) toast(`Игра закрылась с ошибкой (код ${payload.code}). Открой вкладку «Ошибки».`, "err");
     });
     await api.onToast((payload) => toast(payload.message, payload.kind || ""));
   }
@@ -10475,6 +10789,10 @@
     bindEvents();
     initClickFx();
     initDownloadsPanel();
+    // Подписываемся до появления списка сборок и сетевой проверки обновлений,
+    // иначе быстрый запуск может завершиться до регистрации game-log/game-exit.
+    try { await attachBackendEvents(); state.liveLogAvailable = true; }
+    catch (error) { state.liveLogAvailable = false; toast(`Живой лог недоступен: ${error && error.message ? error.message : error}`, "err"); }
     try {
       state.settings = await api.settings();
     } catch { state.settings = { ...DEMO.settings }; }
@@ -10546,14 +10864,8 @@
     updateStatus();
     renderTab();
     syncPresence();
-    try {
-      await initUpdates();
-      await attachBackendEvents();
-    } catch (error) {
-      // Без разрешений Tauri события недоступны — лаунчер продолжит работать,
-      // просто без живого лога (см. capabilities/default.json).
-      toast(`Живой лог недоступен: ${error && error.message ? error.message : error}`, "err");
-    }
+    try { await initUpdates(); }
+    catch (error) { toast(`Не удалось проверить обновления: ${error && error.message ? error.message : error}`, "err"); }
     // .mrpack, с которым запустили лаунчер (двойной щелчок в проводнике)
     if (IS_APP) {
       try {
