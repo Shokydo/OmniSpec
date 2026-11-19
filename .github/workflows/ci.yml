@@ -28,5 +28,25 @@ jobs:
       - name: Тесты ядра
         run: cargo test -p omnispec-core
 
+      - name: Тесты Discord RPC
+        run: cargo test -p omnispec-app
+
       - name: Проверка всего workspace
         run: cargo check --workspace
+
+  ui-test:
+    name: Проверка интерфейса и сетевых сбоев
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tools/tests/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm test

@@ -158,6 +158,13 @@ pub struct Settings {
     /// Client ID приложения зашит в код (presence.rs), в настройках его нет.
     #[serde(default = "default_true")]
     pub discord_rpc: bool,
+    /// Маленькая картинка в статусе Discord — иконка выбранной сборки.
+    #[serde(default = "default_true")]
+    pub discord_instance_icon: bool,
+    /// Разрешение публиковать локальную иконку на временном хостинге.
+    /// По умолчанию выключено: локальные изображения не покидают компьютер.
+    #[serde(default)]
+    pub discord_upload_local_icon: bool,
 
     /* ---------- оформление ---------- */
     /// Обои: имя встроенных (`grid`, `aurora`, …) или путь к своему файлу.
@@ -323,6 +330,8 @@ impl Default for Settings {
             proxy: None,
             ms_client_id: None,
             discord_rpc: true,
+            discord_instance_icon: true,
+            discord_upload_local_icon: false,
             wallpaper: None,
             wallpaper_fit: default_wallpaper_fit(),
             wallpaper_blur: 0,
@@ -433,4 +442,17 @@ impl Settings {
 
 fn serenity_parse(text: &str) -> Result<Settings> {
     serde_json::from_str::<Settings>(text).map_err(Error::from)
+}
+
+#[cfg(test)]
+mod discord_tests {
+    use super::*;
+
+    #[test]
+    fn local_icon_upload_requires_explicit_consent_for_old_and_new_settings() {
+        for settings in [Settings::default(), serde_json::from_str::<Settings>("{}").unwrap()] {
+            assert!(settings.discord_instance_icon);
+            assert!(!settings.discord_upload_local_icon);
+        }
+    }
 }

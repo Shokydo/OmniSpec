@@ -89,6 +89,8 @@ impl CurseForge {
             .header("x-api-key", self.key.trim())
             .header("Accept", "application/json")
             .query(params)
+            // Каталог не должен висеть несколько минут до автоповтора.
+            .timeout(std::time::Duration::from_secs(25))
             .send()
             .await
             .map_err(|error| crate::error::Error::http(url, error))?;

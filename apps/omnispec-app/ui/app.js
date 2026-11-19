@@ -1395,12 +1395,13 @@
       return;
     }
     if (action === "icon-reset") {
+      invalidatePresenceIcon();
       try {
         await api.updateInstance({ ...fresh, icon: null });
         delete state.iconCache[fresh.id];
         await refreshInstances();
         toast("Иконка сброшена", "ok");
-      } catch (err) { toast(String(err), "err"); }
+      } catch (err) { syncPresence(); toast(String(err), "err"); }
       return;
     }
     if (action === "rename") {
@@ -1490,6 +1491,7 @@
 
   /** Своя иконка сборки из файла-картинки. */
   async function setIconFromFile(meta, path) {
+    invalidatePresenceIcon();
     try {
       await api.setInstanceIconFile(meta.id, path);
       const data = await api.instanceIcon(meta.id).catch(() => null);
@@ -1497,7 +1499,7 @@
       await refreshInstances();
       toast("Иконка обновлена", "ok");
       if (state.tab === "settings") renderSettings();
-    } catch (err) { toast(String(err), "err"); }
+    } catch (err) { syncPresence(); toast(String(err), "err"); }
   }
 
   /* ==================== ОКНО «ВСЕ СБОРКИ» (сетка иконок по категориям) ==================== */
@@ -2007,10 +2009,19 @@
   };
 
   /* ==================== API ==================== */
+  // Все изменения настроек отправляем по порядку: быстрая смена галочек,
+  // особенно разрешения на публикацию, не должна откатываться старой записью.
+  let settingsSaveQueue = Promise.resolve();
+  function saveSettingsInOrder(settings) {
+    const snapshot = JSON.parse(JSON.stringify(settings));
+    const next = settingsSaveQueue.catch(() => {}).then(() => invoke("save_settings", { settings: snapshot }));
+    settingsSaveQueue = next;
+    return next;
+  }
   const realApi = {
     appInfo: () => invoke("app_info"),
     settings: () => invoke("get_settings"),
-    saveSettings: (settings) => invoke("save_settings", { settings }),
+    saveSettings: saveSettingsInOrder,
     instances: () => invoke("list_instances"),
     createInstance: (req) => invoke("create_instance", { req }),
     deleteInstance: (id) => invoke("delete_instance", { instanceId: id }),
@@ -2053,7 +2064,8 @@
     scanExternal: () => invoke("scan_external_launchers"),
     importExternal: (payload) => invoke("import_external", payload),
     exportInstance: (instanceId, path, format, include) => invoke("export_instance", { instanceId, path, format, include }),
-    setPresence: (mode, details, stateText, startedAt) => invoke("set_presence", { mode, details, stateText, startedAt }),
+    setPresence: (mode, details, stateText, startedAt, smallImage) => invoke("set_presence", { mode, details, stateText, startedAt, smallImage: smallImage || null }),
+    resolvePresenceIcon: (instanceId) => invoke("resolve_presence_icon", { instanceId }),
     sendFeedback: (name, email, kind, message) => invoke("send_feedback", { name, email, kind, message }),
     duplicateInstance: (instanceId) => invoke("duplicate_instance", { instanceId }),
     installZip: (payload) => invoke("import_zip", payload),
@@ -2463,6 +2475,7 @@
     },
     exportInstance: async (_id, path) => path,
     setPresence: async () => null,
+    resolvePresenceIcon: async () => null,
     sendFeedback: async () => null,
     duplicateInstance: async (instanceId) => {
       const meta = DEMO.instances.find((item) => item.id === instanceId);
@@ -2566,8 +2579,8 @@
     },
     discover: {
       query: "", results: [], total: 0,
-      loading: false, loadingMore: false, error: null, tried: false, view: "grid",
-      source: "modrinth"
+      loading: false, loadingMore: false, error: null, moreError: null,
+      retrySeconds: 0, tried: false, view: "grid", source: "modrinth"
     },
     wall: { wallpaper: null, fit: "cover", blur: 0, dim: 40 },
     downloads: { active: false, title: "", done: 0, total: 0, files: new Map(), state: "active", collapsed: false, timer: null },
@@ -3312,11 +3325,34 @@
 
   /* ==================== DISCORD RICH PRESENCE ==================== */
   const APP_STARTED_AT = Math.floor(Date.now() / 1000);
+  const RPC_ASSET_ROOT = "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/rpc";
+  const RPC_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ?";
   let presenceStartedAt = null;
+  let presenceSequence = 0;
+  let presenceSendQueue = Promise.resolve();
+  let presenceIconEpoch = 0;
+  const presenceIconCache = new Map();
+  const presenceIconPending = new Map();
 
-  /** Статус в Discord: «В ожидании» / «Запускает» / «Играет» + сборка и таймер. */
+  function invalidatePresenceIcon() {
+    presenceIconEpoch += 1;
+    presenceSequence += 1; // незавершённые ответы относятся к прежней иконке
+    presenceIconCache.clear();
+  }
+
+  /** Встроенные иконки и буквы уже опубликованы вместе с лаунчером. */
+  function presenceFallbackIcon(meta) {
+    if (meta.icon && INSTANCE_ICONS.includes(meta.icon)) return `${RPC_ASSET_ROOT}/${meta.icon}.png`;
+    let first = Array.from(String(meta.name || "").trim())[0] || "?";
+    first = Array.from(first.toUpperCase())[0] || "?";
+    if (!RPC_LETTERS.includes(first)) first = "?";
+    return `${RPC_ASSET_ROOT}/letter-${first.codePointAt(0).toString(16).padStart(4, "0")}.png`;
+  }
+
+  /** Статус Discord: большой логотип и, по настройке, иконка сборки. */
   function syncPresence(forceMode) {
     if (!IS_APP) return;
+    const sequence = ++presenceSequence;
     const meta = selected();
     const running = !!(meta && state.running.has(meta.id));
     const mode = forceMode || (running ? "playing" : "idle");
@@ -3326,8 +3362,46 @@
     const variant = meta ? `MC ${meta.mc_version} · ${loaderLabel(meta.loader)}` : "";
     const stateText = mode === "playing" ? variant : mode === "launching" ? "Запускает" : "В ожидании";
     const startedAt = mode === "idle" ? APP_STARTED_AT : presenceStartedAt;
-    api.setPresence(mode, details, stateText, startedAt).catch(() => {});
+    const settings = state.settings || {};
+    const showIcon = settings.discord_rpc !== false && settings.discord_instance_icon !== false && Boolean(meta);
+    const fallback = showIcon ? presenceFallbackIcon(meta) : null;
+    const send = (image) => {
+      // Вызовы Tauri могут завершаться не по порядку. Сериализуем запись,
+      // а ещё не начавшиеся устаревшие вызовы пропускаем.
+      if (sequence !== presenceSequence) return;
+      presenceSendQueue = presenceSendQueue.catch(() => {}).then(() => {
+        if (sequence !== presenceSequence) return;
+        return api.setPresence(mode, details, stateText, startedAt, image);
+      }).catch(() => {});
+    };
+    if (!showIcon || !isImageIcon(meta.icon)) { send(fallback); return; }
+
+    const key = JSON.stringify([presenceIconEpoch, meta.id, meta.icon, meta.source_url || "", settings.discord_upload_local_icon === true]);
+    let cached = presenceIconCache.get(key);
+    if (cached && cached.expiresAt <= Date.now()) { presenceIconCache.delete(key); cached = null; }
+    if (cached) { send(cached.url || fallback); return; }
+    send(fallback); // статус не ждёт сетевого запроса и остаётся работоспособным
+    let pending = presenceIconPending.get(key);
+    if (!pending) {
+      pending = api.resolvePresenceIcon(meta.id).then((url) => {
+        const lifetime = url ? 6 * 24 * 60 * 60 * 1000 : 5 * 60 * 1000;
+        presenceIconCache.set(key, { url: url || null, expiresAt: Date.now() + lifetime });
+        return url;
+      }).catch((error) => {
+        // Временный сбой не закрепляем надолго; показ статуса не прерываем.
+        presenceIconCache.set(key, { url: null, expiresAt: Date.now() + 60 * 1000 });
+        if (sequence === presenceSequence && settings.discord_upload_local_icon === true) {
+          toast(`Не удалось подготовить иконку для Discord: ${error}`, "err");
+        }
+        return null;
+      }).finally(() => presenceIconPending.delete(key));
+      presenceIconPending.set(key, pending);
+    }
+    pending.then((url) => send(url || fallback));
   }
+
+  // Временные публичные ссылки нужно обновлять и при очень долгой работе окна.
+  setInterval(() => { if (IS_APP && selected()) syncPresence(); }, 60 * 60 * 1000);
 
   function selectInstance(id) {
     closeAccountPopover();
@@ -5462,8 +5536,17 @@
     if (retry) retry.addEventListener("click", () => dvReset());
     bindResultEvents();
     bindCfEvents();
+    // После перерисовки ленты снова привязываем кнопку повтора догрузки.
+    dvUpdateSentinel();
     dvWatch();
     if (!cfg.tried && !cfg.loading && !cfg.error) dvReset();
+    else if (cfg.error && !cfg.loading && !dvRetryTimer) {
+      dvScheduleRetry("first");
+      dvRenderResults();
+    } else if (cfg.moreError && !cfg.loadingMore && !dvRetryTimer) {
+      dvScheduleRetry("more");
+      dvUpdateSentinel();
+    }
   }
 
   /* ---------- импорт на главной ---------- */
@@ -5693,13 +5776,61 @@
     if (state.tab === "discover") renderDiscover();
   }
 
+  // Автоповтор только пока открыта главная; ручной поиск отменяет старый таймер.
+  const DV_RETRY_MS = [5000, 10000, 20000, 40000, 60000, 120000];
+  let dvRetryTimer = null;
+  let dvRetryCount = 0;
+  let dvGeneration = 0;
+
+  function dvVisible() {
+    return state.tab === "discover" && Boolean($("#dv-results"));
+  }
+
+  function dvRetryable(error) {
+    const text = String(error || "");
+    const status = /\bHTTP(?:\/[\d.]+)?\s*(\d{3})\b/i.exec(text);
+    if (status) {
+      const code = Number(status[1]);
+      return code === 408 || code === 425 || code === 429 || code >= 500;
+    }
+    return !/не задан API.ключ|ключ.*не принят|unauthorized|forbidden/i.test(text);
+  }
+
+  function dvCancelRetry(resetCount = false) {
+    if (dvRetryTimer) clearTimeout(dvRetryTimer);
+    dvRetryTimer = null;
+    state.discover.retrySeconds = 0;
+    if (resetCount) dvRetryCount = 0;
+  }
+
+  function dvScheduleRetry(kind) {
+    const cfg = state.discover;
+    const error = kind === "more" ? cfg.moreError : cfg.error;
+    if (!dvVisible() || dvRetryTimer || !error || !dvRetryable(error)) return;
+    const delay = DV_RETRY_MS[Math.min(dvRetryCount, DV_RETRY_MS.length - 1)];
+    dvRetryCount += 1;
+    cfg.retrySeconds = Math.round(delay / 1000);
+    dvRetryTimer = setTimeout(() => {
+      dvRetryTimer = null;
+      cfg.retrySeconds = 0;
+      if (!dvVisible()) return; // при возврате на главную таймер включится снова
+      if (kind === "more") dvLoadMore(true);
+      else dvReset({ automatic: true });
+    }, delay);
+  }
+
   function dvResultsHtml() {
     const cfg = state.discover;
     if (cfg.loading && !cfg.results.length) return `<div class="empty-state">Загружаем готовые сборки…</div>`;
     if (cfg.error) {
-      return `<div class="empty-state" style="display:flex;flex-direction:column;align-items:center;gap:10px">
-        <div style="max-width:640px;text-align:left;white-space:pre-wrap;font-size:12px;color:var(--red)">${esc(cfg.error)}</div>
-        <button class="btn" id="dv-retry">Повторить</button>
+      const retryHint = cfg.retrySeconds
+        ? `Повторим автоматически через ${cfg.retrySeconds} сек.`
+        : "Проверь подключение, источник и настройки прокси.";
+      return `<div class="empty-state dv-error" role="status">
+        <strong>Не удалось загрузить готовые сборки</strong>
+        <span>${retryHint}</span>
+        <button class="btn" id="dv-retry">Повторить сейчас</button>
+        <details><summary>Подробнее об ошибке</summary><pre>${esc(cfg.error)}</pre></details>
       </div>`;
     }
     if (!cfg.results.length) return `<div class="empty-state">Ничего не нашлось — попробуй другой запрос</div>`;
@@ -5709,15 +5840,22 @@
   function dvSentinelText() {
     const cfg = state.discover;
     if (cfg.loadingMore) return `<span class="mr-more-spinner"></span>Загружаем ещё…`;
+    if (cfg.moreError) {
+      const hint = cfg.retrySeconds ? `Повторим через ${cfg.retrySeconds} сек.` : "Проверь подключение.";
+      return `<span>Не удалось загрузить остальные сборки. ${hint}</span> <button class="btn" id="dv-more-retry">Повторить сейчас</button>`;
+    }
     if (cfg.results.length >= cfg.total) return `Показано всё: ${cfg.results.length}`;
     return `Прокрути вниз — ещё ${Math.max(0, cfg.total - cfg.results.length)}`;
   }
 
   function dvUpdateSentinel() {
     const sentinel = $("#dv-sentinel");
-    if (sentinel) sentinel.innerHTML = dvSentinelText();
+    if (!sentinel) return;
+    sentinel.innerHTML = dvSentinelText();
+    const retry = $("#dv-more-retry", sentinel);
+    if (retry) retry.addEventListener("click", () => { dvCancelRetry(true); dvLoadMore(true); });
     const cfg = state.discover;
-    if (sentinel && !cfg.loadingMore && cfg.results.length >= cfg.total) {
+    if (cfg.moreError || (!cfg.loadingMore && cfg.results.length >= cfg.total)) {
       if (dvObserver) { dvObserver.disconnect(); dvObserver = null; }
     }
   }
@@ -5725,11 +5863,25 @@
   function dvWatch() {
     if (dvObserver) { dvObserver.disconnect(); dvObserver = null; }
     const sentinel = $("#dv-sentinel");
-    if (!sentinel) return;
+    const cfg = state.discover;
+    if (!sentinel || cfg.moreError || cfg.results.length >= cfg.total) return;
     dvObserver = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) dvLoadMore();
     }, { rootMargin: "240px" });
     dvObserver.observe(sentinel);
+  }
+
+  // Перерисовываем только результаты, не стирая набираемый поиск или форму импорта.
+  function dvRenderResults() {
+    const results = $("#dv-results");
+    if (!results) return;
+    results.innerHTML = dvResultsHtml();
+    const retry = $("#dv-retry", results);
+    if (retry) retry.addEventListener("click", () => dvReset());
+    bindResultEvents();
+    bindCfEvents();
+    dvUpdateSentinel();
+    dvWatch();
   }
 
   /** Карточка ленты: у Modrinth и CurseForge свои обработчики кнопок. */
@@ -5738,80 +5890,93 @@
     return cardHtml(hit, "pack");
   }
 
-  /** Запрос ленты: источник выбирается списком «Искать в». */
-  async function dvFetch(offset) {
-    const cfg = state.discover;
-    if ((cfg.source || "modrinth") === "curseforge") {
-      return api.searchCurseforge({
-        query: cfg.query,
-        projectType: "modpack",
-        mcVersion: null,
-        loader: null,
-        offset,
-        limit: DV_PAGE,
-        sort: "downloads"
-      });
-    }
-    return api.search({
-      query: cfg.query,
-      projectType: "modpack",
-      mcVersion: null,
-      loader: null,
-      offset,
-      limit: DV_PAGE,
-      sort: "downloads"
-    });
+  /** Снимок параметров не меняется, пока запрос находится в полёте. */
+  async function dvFetch(offset, query, source) {
+    const params = {
+      query, projectType: "modpack", mcVersion: null, loader: null,
+      offset, limit: DV_PAGE, sort: "downloads"
+    };
+    return source === "curseforge" ? api.searchCurseforge(params) : api.search(params);
   }
 
-  async function dvLoadMore() {
+  async function dvLoadMore(force = false) {
     const cfg = state.discover;
-    if (cfg.loading || cfg.loadingMore || cfg.error) return;
+    if (cfg.loading || cfg.loadingMore || cfg.error || (cfg.moreError && !force)) return;
     if (!cfg.results.length || cfg.results.length >= cfg.total) return;
+    dvCancelRetry(false);
+    cfg.moreError = null;
     cfg.loadingMore = true;
+    const generation = dvGeneration;
+    const offset = cfg.results.length;
+    const query = cfg.query;
+    const source = cfg.source || "modrinth";
     dvUpdateSentinel();
     try {
-      const page = await dvFetch(cfg.results.length);
+      const page = await dvFetch(offset, query, source);
+      if (generation !== dvGeneration) return;
       const known = new Set(cfg.results.map((hit) => hit.project_id));
       const fresh = (page.hits || []).filter((hit) => !known.has(hit.project_id));
       cfg.results = cfg.results.concat(fresh);
-      cfg.total = page.total_hits || cfg.total;
+      cfg.total = page.total_hits ?? cfg.total;
+      if (!fresh.length) cfg.total = cfg.results.length;
       const sentinel = $("#dv-sentinel");
       if (sentinel && fresh.length) sentinel.insertAdjacentHTML("beforebegin", fresh.map((hit) => discCardHtml(hit)).join(""));
       bindResultEvents();
       bindCfEvents();
-      if (!fresh.length) cfg.total = cfg.results.length;
+      dvRetryCount = 0;
     } catch (err) {
-      cfg.error = String(err);
+      if (generation !== dvGeneration) return;
+      cfg.moreError = String(err);
     }
     cfg.loadingMore = false;
-    if (cfg.error) { renderDiscover(); return; }
+    if (cfg.moreError) dvScheduleRetry("more");
     dvUpdateSentinel();
+    if (!cfg.moreError) dvWatch();
   }
 
-  async function dvReset() {
+  async function dvReset({ automatic = false } = {}) {
     const input = $("#dv-query");
     const cfg = state.discover;
-    cfg.query = input ? input.value : cfg.query;
+    dvCancelRetry(!automatic);
+    if (!automatic && input) cfg.query = input.value;
     cfg.loading = true;
     cfg.loadingMore = false;
     cfg.tried = true;
     cfg.error = null;
+    cfg.moreError = null;
     cfg.results = [];
     cfg.total = 0;
-    renderDiscover();
+    const generation = ++dvGeneration;
+    const query = cfg.query;
+    const source = cfg.source || "modrinth";
+    dvRenderResults();
     try {
-      const page = await dvFetch(0);
+      const page = await dvFetch(0, query, source);
+      if (generation !== dvGeneration) return;
       cfg.results = page.hits || [];
-      cfg.total = page.total_hits || cfg.results.length;
-      cfg.error = null;
+      cfg.total = page.total_hits ?? cfg.results.length;
+      dvRetryCount = 0;
     } catch (err) {
-      cfg.results = [];
-      cfg.total = 0;
+      if (generation !== dvGeneration) return;
       cfg.error = String(err);
     }
     cfg.loading = false;
-    if (state.tab === "discover" || !selected()) renderDiscover();
+    if (cfg.error) dvScheduleRetry("first");
+    if (dvVisible()) dvRenderResults();
   }
+
+  // Когда сеть вернулась, не ждём оставшуюся паузу backoff.
+  window.addEventListener("online", () => {
+    const cfg = state.discover;
+    if (!dvVisible() || cfg.loading || cfg.loadingMore) return;
+    if (cfg.error && dvRetryable(cfg.error)) {
+      dvCancelRetry(false);
+      dvReset({ automatic: true });
+    } else if (cfg.moreError && dvRetryable(cfg.moreError)) {
+      dvCancelRetry(false);
+      dvLoadMore(true);
+    }
+  });
 
   function resultsHtml() {
     const cfg = state.modrinth;
@@ -7656,8 +7821,22 @@
             <div><div class="switch-row"><button class="switch ${settings.discord_rpc !== false ? "on" : ""}" id="set-discord-rpc"></button><span class="muted">«В ожидании / Запускает / Играет» + сборка</span></div></div>
           </div>
           <div class="settings-row">
-            <div class="label">Как включить</div>
-            <div class="muted" style="line-height:1.55">Статус работает сразу — Client ID приложения зашит в лаунчер. Логотип: Rich Presence → Art Assets → Add Image, имя <span class="kbd">logo</span>.</div>
+            <div class="label">Изображения</div>
+            <div class="muted" style="line-height:1.55">Большая картинка — логотип OmniSpec. Маленькая — значок выбранной сборки.</div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Иконка сборки</div>
+            <div>
+              <label class="rpc-check"><input type="checkbox" id="set-discord-icon" ${settings.discord_instance_icon !== false ? "checked" : ""}><span>Показывать маленькую иконку сборки</span></label>
+              <div class="hint">Для Modrinth и CurseForge используется публичная иконка проекта, если она совпадает с иконкой сборки. Встроенные значки и буквы работают без загрузки файлов.</div>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="label">Свои картинки</div>
+            <div>
+              <label class="rpc-check"><input type="checkbox" id="set-discord-upload" ${settings.discord_upload_local_icon === true ? "checked" : ""}><span>Разрешить публикацию локальных иконок для Discord</span></label>
+              <div class="hint rpc-privacy">По умолчанию выключено. При включении выбранная иконка уменьшится и отправится на публичный сторонний сервис tmpfile.link: её сможет открыть любой, у кого есть ссылка. Сервис заявляет удаление через 7 дней; досрочно удалить файл нельзя, а Discord может кэшировать его дольше. Отключение галочки не удаляет уже отправленные файлы. Без разрешения вместо своей картинки показывается буква сборки.</div>
+            </div>
           </div>
         </div>
       </div>`;
@@ -8097,7 +8276,7 @@
     // точечное сохранение: правки в полях не теряются при переключении вкладок
     const commit = (patch) => {
       state.settings = { ...(state.settings || {}), ...patch };
-      api.saveSettings(state.settings).catch(() => {});
+      return api.saveSettings(state.settings).catch(() => {});
     };
     const bindField = (selector, key, { number = false, trim = false } = {}) => {
       const el = $(selector);
@@ -8115,7 +8294,42 @@
       el.addEventListener("blur", apply);
     };
     const discordToggle = $("#set-discord-rpc");
-    if (discordToggle) discordToggle.addEventListener("click", () => commit({ discord_rpc: discordToggle.classList.contains("on") }));
+    const discordIcon = $("#set-discord-icon");
+    const discordUpload = $("#set-discord-upload");
+    const discordControls = [discordToggle, discordIcon, discordUpload].filter(Boolean);
+    const commitDiscord = async (key, enabled, control) => {
+      const previous = key === "discord_upload_local_icon"
+        ? state.settings?.[key] === true : state.settings?.[key] !== false;
+      discordControls.forEach((el) => { el.disabled = true; });
+      state.settings = { ...(state.settings || {}), [key]: enabled };
+      const saving = api.saveSettings(state.settings);
+      // Скрываем старую картинку сразу, не ожидая медленную запись на диск.
+      invalidatePresenceIcon();
+      syncPresence();
+      try {
+        await saving;
+      } catch (error) {
+        // Не оставляем отмеченным разрешение, которое не удалось сохранить.
+        if (enabled && state.settings?.[key] === enabled) {
+          state.settings = { ...(state.settings || {}), [key]: previous };
+          if (control.type === "checkbox") control.checked = previous;
+          else control.classList.toggle("on", previous);
+          // Перезаписываем возможные изменения других настроек, уже стоящие в очереди.
+          try { await api.saveSettings(state.settings); } catch (_) { /* покажем ошибку ниже */ }
+        }
+        toast(`Не удалось сохранить настройки Discord: ${error}. Проверь файл настроек; после перезапуска значение может вернуться.`, "err");
+      } finally {
+        discordControls.forEach((el) => { el.disabled = false; });
+        invalidatePresenceIcon();
+        syncPresence();
+      }
+    };
+    if (discordToggle) discordToggle.addEventListener("click", () =>
+      commitDiscord("discord_rpc", discordToggle.classList.contains("on"), discordToggle));
+    if (discordIcon) discordIcon.addEventListener("change", () =>
+      commitDiscord("discord_instance_icon", discordIcon.checked, discordIcon));
+    if (discordUpload) discordUpload.addEventListener("change", () =>
+      commitDiscord("discord_upload_local_icon", discordUpload.checked, discordUpload));
     bindField("#set-memory", "memory_mb", { number: true });
     bindField("#set-jvm", "jvm_args");
     bindField("#set-java", "java_path", { trim: true });
@@ -8172,6 +8386,8 @@
       proxy: value("#set-proxy") !== undefined ? (value("#set-proxy").trim() || null) : settings.proxy,
       ms_client_id: value("#set-ms-client") !== undefined ? (value("#set-ms-client").trim() || null) : settings.ms_client_id,
       discord_rpc: flag("#set-discord-rpc", settings.discord_rpc),
+      discord_instance_icon: $("#set-discord-icon") ? $("#set-discord-icon").checked : settings.discord_instance_icon,
+      discord_upload_local_icon: $("#set-discord-upload") ? $("#set-discord-upload").checked : settings.discord_upload_local_icon,
       update_enabled: flag("#set-upd-enabled", settings.update_enabled),
       update_auto: flag("#set-upd-auto", settings.update_auto),
       update_prerelease: flag("#set-upd-pre", settings.update_prerelease),
@@ -9181,12 +9397,13 @@
     });
     const iconReset = $("#inst-icon-reset");
     if (iconReset) iconReset.addEventListener("click", async () => {
+      invalidatePresenceIcon();
       try {
         await api.updateInstance({ ...meta, icon: null });
         delete state.iconCache[meta.id];
         await refreshInstances();
         renderSettings();
-      } catch (err) { toast(String(err), "err"); }
+      } catch (err) { syncPresence(); toast(String(err), "err"); }
     });
     $("#inst-save").addEventListener("click", async () => {
       const chip = $("#inst-icons .icon-chip.is-active");
@@ -9199,11 +9416,12 @@
         jvm_args: $("#inst-jvm").value.trim() || null,
         notes: $("#inst-notes").value.trim()
       };
+      if (next.icon !== meta.icon || next.name !== meta.name) invalidatePresenceIcon();
       try {
         await api.updateInstance(next);
         await refreshInstances();
         toast("Сборка сохранена", "ok");
-      } catch (err) { toast(String(err), "err"); }
+      } catch (err) { syncPresence(); toast(String(err), "err"); }
     });
     $("#inst-change-version").addEventListener("click", () => openVersionChange());
     $("#inst-export-mrpack").addEventListener("click", () => openExportModal(meta, "mrpack"));
@@ -9391,6 +9609,7 @@
     await loadInstanceIcons();
     renderSidebar();
     renderBuildIcon(selected());
+    syncPresence();
   }
 
   /** Двойной клик по сборке в списке или на главной: выбрать её и запустить игру. */

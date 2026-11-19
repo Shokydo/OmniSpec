@@ -14,6 +14,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
+# Согласованная пользователем публикация локальной иконки для Discord RPC.
+reqwest = { workspace = true, features = ["multipart"] }
+sha2 = "0.10"
+hex = { workspace = true }
 omnispec-core = { path = "../../crates/omnispec-core" }
 # системные диалоги «проводника»: выбор файла/папки
 rfd = "0.15"

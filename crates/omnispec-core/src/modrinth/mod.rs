@@ -73,14 +73,7 @@ impl Modrinth {
         ];
 
         let url = format!("{BASE_URL}/search");
-        let response = self
-            .http
-            .inner()
-            .get(&url)
-            .query(&params)
-            .send()
-            .await
-            .map_err(|error| crate::error::Error::http(&url, error))?;
+        let response = self.http.get_query(&url, &params).await?;
         let status = response.status();
         if !status.is_success() {
             return Err(Error::Other(format!("Modrinth /search → HTTP {status}")));

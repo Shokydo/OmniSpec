@@ -22,6 +22,8 @@ pub struct PresenceInfo {
     pub state: String,
     /// Unix-время начала (таймер в Discord); None — без таймера.
     pub started_at: Option<u64>,
+    /// Публичный HTTPS-адрес иконки выбранной сборки, если она доступна.
+    pub small_image: Option<String>,
 }
 
 /// Client ID приложения OmniSpec в Discord Developer Portal.
@@ -155,7 +157,17 @@ impl Presence {
         let mut last_sent: Option<serde_json::Value> = None;
         let mut last_send_at = std::time::Instant::now() - Duration::from_secs(60);
         loop {
-            let (_, info) = self.snapshot();
+            let (enabled, info) = self.snapshot();
+            if !enabled {
+                // Выключение RPC должно убрать уже показанный статус.
+                let clear = serde_json::json!({
+                    "cmd": "SET_ACTIVITY",
+                    "args": {"pid": std::process::id(), "activity": null},
+                    "nonce": next_nonce(),
+                }).to_string();
+                let _ = write_frame(&mut stream, 1, &clear);
+                return Ok(());
+            }
             let activity = activity_value(&info);
             let changed = last_sent.as_ref() != Some(&activity);
             let heartbeat = last_send_at.elapsed() >= Duration::from_secs(15);
@@ -193,20 +205,74 @@ fn activity_value(info: &PresenceInfo) -> serde_json::Value {
     } else {
         info.state.trim()
     };
-    // Минимальная активность: только текст и таймер. Ссылки на картинки
-    // (assets) и кнопки убраны — если ассет «logo» ещё не загружен в портале,
-    // Discord может не показывать активность целиком. Картинку вернём,
-    // когда ассет будет на месте.
+    // Discord принимает публичные URL в assets; заранее загружать логотип
+    // в Developer Portal не нужно. Локальные пути и data: недопустимы.
+    let mut assets = serde_json::json!({
+        "large_image": "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/icons/icon-512.png",
+        "large_text": "OmniSpec",
+    });
+    if let Some(url) = info.small_image.as_deref().filter(|url| valid_image_url(url)) {
+        assets["small_image"] = serde_json::json!(url);
+        assets["small_text"] = serde_json::json!(details.chars().take(128).collect::<String>());
+    }
     let mut activity = serde_json::json!({
         "type": 0,
         "details": details,
         "state": state,
         "instance": false,
+        "assets": assets,
     });
     if let Some(start) = info.started_at {
         activity["timestamps"] = serde_json::json!({"start": start});
     }
     activity
+}
+
+/// Допускаем только HTTPS-картинки известных источников, без локальных путей.
+pub(crate) fn valid_image_url(value: &str) -> bool {
+    if value.len() > 256 || value.chars().any(char::is_control) {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(value) else { return false; };
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some()
+        || url.port().is_some_and(|port| port != 443)
+    {
+        return false;
+    }
+    match url.host_str().unwrap_or("") {
+        "raw.githubusercontent.com" | "cdn.modrinth.com" | "d.tmpfile.link" => true,
+        host if host == "forgecdn.net" || host.ends_with(".forgecdn.net") => true,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activity_contains_launcher_and_instance_images() {
+        let info = PresenceInfo {
+            mode: "playing".into(), details: "Моя сборка".into(),
+            state: "MC 1.21.1".into(), started_at: Some(123),
+            small_image: Some("https://cdn.modrinth.com/data/test/icon.png".into()),
+        };
+        let value = activity_value(&info);
+        assert!(value["assets"]["large_image"].as_str().unwrap().ends_with("/icons/icon-512.png"));
+        assert_eq!(value["assets"]["small_image"], "https://cdn.modrinth.com/data/test/icon.png");
+        assert_eq!(value["assets"]["small_text"], "Моя сборка");
+        assert_eq!(value["timestamps"]["start"], 123);
+    }
+
+    #[test]
+    fn activity_omits_untrusted_or_local_image() {
+        for url in ["file:///secret.png", "data:image/png;base64,AAAA", "http://localhost/a.png",
+                    "https://cdn.modrinth.com.evil.example/x", "https://user@cdn.modrinth.com/x"] {
+            assert!(!valid_image_url(url));
+            let info = PresenceInfo { small_image: Some(url.into()), ..PresenceInfo::default() };
+            assert!(activity_value(&info)["assets"].get("small_image").is_none());
+        }
+    }
 }
 
 static NONCE: AtomicU64 = AtomicU64::new(1);

@@ -1,0 +1,10 @@
+{
+  "name": "omnispec-ui-tests",
+  "private": true,
+  "scripts": {
+    "test": "node feed-rpc-regression.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.49.1"
+  }
+}

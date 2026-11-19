@@ -241,6 +241,28 @@ impl Http {
         }
     }
 
+    /// GET с query-параметрами для каталога: при сетевом обрыве повторяем
+    /// через отдельный HTTP/1.1-клиент, не меняя сам поисковый запрос.
+    pub async fn get_query(&self, url: &str, params: &[(&str, &str)]) -> Result<reqwest::Response> {
+        let mut last = None;
+        for attempt in 0..3u64 {
+            let client = if attempt == 0 { &self.client } else { &self.fallback };
+            match client.get(url).query(params).timeout(Duration::from_secs(15)).send().await {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    let retry = error.is_timeout() || error.is_connect() || error.is_request();
+                    last = Some(error);
+                    if !retry || attempt == 2 { break; }
+                    tokio::time::sleep(Duration::from_millis(300 * (attempt + 1))).await;
+                }
+            }
+        }
+        match last {
+            Some(error) => Err(Error::http(url, error)),
+            None => Err(Error::Other(format!("не удалось выполнить запрос к {url}"))),
+        }
+    }
+
     /// Проверка связи: возвращает HTTP-код или понятную ошибку.
     pub async fn probe(&self, url: &str) -> Result<u16> {
         let response = self.send_get(url).await?;
@@ -610,6 +632,37 @@ pub struct DownloadItem {
     pub dest: PathBuf,
     pub size: Option<u64>,
     pub sha1: Option<String>,
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::Http;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn interrupted_search_is_retried_with_the_same_query() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            // Первый запрос обрывается, второй возвращает ответ.
+            for attempt in 0..2 {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = [0u8; 4096];
+                let read = socket.read(&mut request).unwrap();
+                assert!(String::from_utf8_lossy(&request[..read]).contains("query=test"));
+                if attempt == 1 {
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK").unwrap();
+                }
+            }
+        });
+        let url = format!("http://{address}/search");
+        let response = Http::new().get_query(&url, &[("query", "test")]).await.unwrap();
+        assert_eq!(response.text().await.unwrap(), "OK");
+        server.join().unwrap();
+    }
 }
 
 impl DownloadItem {

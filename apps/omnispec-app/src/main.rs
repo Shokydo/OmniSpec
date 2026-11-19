@@ -32,6 +32,8 @@ use omnispec_core::update::{self, UpdateInfo};
 
 /// Discord Rich Presence (локальный IPC Discord).
 mod presence;
+/// Безопасное разрешение публичных иконок для Rich Presence.
+mod rpc_icons;
 
 type ChildHandle = Arc<Mutex<tokio::process::Child>>;
 
@@ -47,6 +49,10 @@ struct AppState {
     running: Arc<Mutex<HashMap<String, ChildHandle>>>,
     /// Статус в Discord: фронт пишет через set_presence, воркер шлёт в IPC.
     presence: presence::Presence,
+    /// Не загружаем одну и ту же иконку несколько раз параллельно.
+    rpc_icon_lock: Mutex<()>,
+    /// Отмена ещё не завершённой загрузки при отзыве согласия.
+    rpc_upload_allowed: tokio::sync::watch::Sender<bool>,
 }
 
 fn err<E: std::fmt::Display>(error: E) -> String {
@@ -107,11 +113,23 @@ async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
 
 #[tauri::command]
 async fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
-    state
-        .presence
-        .configure(settings.discord_rpc);
+    // Записи settings.json не должны обгонять друг друга или видеть частичный файл.
+    let mut current = state.settings.lock().await;
+    // Запрет действует сразу, даже если сохранить файл не удалось: до перезапуска
+    // не начнём новых отправок и попытаемся отменить уже начатую.
+    if !settings.discord_rpc { current.discord_rpc = false; }
+    if !settings.discord_instance_icon { current.discord_instance_icon = false; }
+    if !settings.discord_upload_local_icon { current.discord_upload_local_icon = false; }
+    if !current.discord_rpc || !current.discord_instance_icon || !current.discord_upload_local_icon {
+        state.rpc_upload_allowed.send_replace(false);
+    }
+    if !current.discord_rpc { state.presence.configure(false); }
     settings.save(&state.paths).map_err(err)?;
-    *state.settings.lock().await = settings;
+    state.presence.configure(settings.discord_rpc);
+    *current = settings;
+    state.rpc_upload_allowed.send_replace(
+        current.discord_rpc && current.discord_instance_icon && current.discord_upload_local_icon
+    );
     Ok(())
 }
 
@@ -176,19 +194,69 @@ async fn send_feedback(
 
 /// Статус в Discord: фронт сообщает режим, сборку и время начала.
 #[tauri::command]
-fn set_presence(
+async fn set_presence(
     state: State<'_, AppState>,
     mode: String,
     details: String,
     state_text: String,
     started_at: Option<u64>,
-) {
+    small_image: Option<String>,
+) -> Result<(), String> {
+    let settings = state.settings.lock().await;
+    let small_image = if settings.discord_rpc && settings.discord_instance_icon {
+        small_image.filter(|url| {
+            let temporary = reqwest::Url::parse(url).ok()
+                .is_some_and(|parsed| parsed.host_str() == Some("d.tmpfile.link"));
+            presence::valid_image_url(url) && (settings.discord_upload_local_icon || !temporary)
+        })
+    } else {
+        None
+    };
     state.presence.set(presence::PresenceInfo {
         mode,
         details,
         state: state_text,
         started_at,
+        small_image,
     });
+    Ok(())
+}
+
+/// Найти публичную иконку сборки. Пересылка локальных изображений возможна
+/// исключительно по отдельному сохранённому согласию в настройках Discord.
+#[tauri::command]
+async fn resolve_presence_icon(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<Option<String>, String> {
+    let _guard = state.rpc_icon_lock.lock().await;
+    let settings = state.settings.lock().await.clone();
+    if !settings.discord_rpc || !settings.discord_instance_icon { return Ok(None); }
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let Some(image) = rpc_icons::read_local(&state.paths, &meta)? else { return Ok(None); };
+    if let Some(url) = rpc_icons::cached(&state.paths, &image, settings.discord_upload_local_icon) {
+        return Ok(Some(url));
+    }
+    if let Some(url) = rpc_icons::find_public(&state.http, &state.modrinth, &state.curseforge, &meta, &image).await {
+        rpc_icons::remember(&state.paths, &image, &url, false);
+        let current = state.settings.lock().await;
+        return Ok((current.discord_rpc && current.discord_instance_icon).then_some(url));
+    }
+    // Согласие могло измениться, пока искали картинку проекта.
+    let permission = {
+        let current = state.settings.lock().await;
+        if !current.discord_rpc || !current.discord_instance_icon || !current.discord_upload_local_icon {
+            return Ok(None);
+        }
+        state.rpc_upload_allowed.subscribe()
+    };
+    let Some(result) = rpc_icons::until_revoked(
+        permission, rpc_icons::upload_temporary(&state.http, &image)
+    ).await else { return Ok(None); };
+    let url = result?;
+    rpc_icons::remember(&state.paths, &image, &url, true);
+    let current = state.settings.lock().await;
+    Ok((current.discord_rpc && current.discord_instance_icon && current.discord_upload_local_icon).then_some(url))
 }
 
 /* ==================== СБОРКИ ==================== */
@@ -2892,6 +2960,9 @@ fn main() {
     presence.configure(settings.discord_rpc);
     let presence_worker = presence.clone();
     std::thread::spawn(move || presence_worker.run());
+    let (rpc_upload_allowed, _) = tokio::sync::watch::channel(
+        settings.discord_rpc && settings.discord_instance_icon && settings.discord_upload_local_icon
+    );
 
     let state = AppState {
         modrinth: Modrinth::new(http.clone()),
@@ -2903,6 +2974,8 @@ fn main() {
         settings: Mutex::new(settings),
         running: Arc::new(Mutex::new(HashMap::new())),
         presence,
+        rpc_icon_lock: Mutex::new(()),
+        rpc_upload_allowed,
     };
 
     tauri::Builder::default()
@@ -2924,6 +2997,7 @@ fn main() {
             get_settings,
             save_settings,
             set_presence,
+            resolve_presence_icon,
             send_feedback,
             list_instances,
             create_instance,
