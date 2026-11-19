@@ -161,6 +161,7 @@ async fn install_recursive(
             crate::content::ContentRecord {
                 filename: file.filename.clone(),
                 project_id: Some(version.project_id.clone()),
+                source: Some("modrinth".into()),
                 version_id: Some(version.id.clone()),
                 version_number: version.version_number.clone(),
                 title: if project.title.is_empty() {

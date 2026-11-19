@@ -987,6 +987,7 @@ pub async fn install_missing(
                     ContentRecord {
                         filename: file.filename.clone(),
                         project_id: Some(project.id.clone()),
+                        source: Some("modrinth".into()),
                         version_id: Some(version.id.clone()),
                         version_number: version.version_number.clone(),
                         title: project.title.clone(),

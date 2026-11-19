@@ -52,9 +52,11 @@ pub struct ContentEntry {
     pub filename: String,
     pub enabled: bool,
     pub size: u64,
-    /// Проект и версия из картотеки — если файл ставили через лаунчер.
+    /// Проект, источник и версия из картотеки — если файл ставили через лаунчер.
     #[serde(default)]
     pub project_id: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
     #[serde(default)]
     pub version_id: Option<String>,
     #[serde(default)]
@@ -69,6 +71,9 @@ pub struct ContentRecord {
     pub filename: String,
     #[serde(default)]
     pub project_id: Option<String>,
+    /// Источник нужен, чтобы одинаковые id двух каталогов не совпадали.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     #[serde(default)]
     pub version_id: Option<String>,
     #[serde(default)]
@@ -80,6 +85,41 @@ pub struct ContentRecord {
     pub kind: String,
     #[serde(default)]
     pub sha1: String,
+}
+
+impl ContentRecord {
+    /// Старые записи не содержат источника. У Modrinth id проекта и версии —
+    /// 8 символов base62, у CurseForge — десятичные числа. Используем старую
+    /// запись только тогда, когда по этим признакам нет неоднозначности.
+    fn known_source(&self) -> Option<&str> {
+        match self.source.as_deref() {
+            Some("modrinth") => return Some("modrinth"),
+            Some("curseforge") => return Some("curseforge"),
+            Some(_) => return None,
+            None => {}
+        }
+        let project = self.project_id.as_deref().filter(|id| !id.is_empty())?;
+        if !project.bytes().all(|c| c.is_ascii_alphanumeric()) {
+            return None;
+        }
+        let project_is_number = project.bytes().all(|c| c.is_ascii_digit());
+        if !project_is_number {
+            return (project.len() == 8).then_some("modrinth");
+        }
+        if project.len() != 8 {
+            return Some("curseforge");
+        }
+        let version = self.version_id.as_deref().filter(|id| !id.is_empty())?;
+        if !version.bytes().all(|c| c.is_ascii_alphanumeric()) {
+            return None;
+        }
+        let version_is_number = version.bytes().all(|c| c.is_ascii_digit());
+        match (version.len() == 8, version_is_number) {
+            (true, false) => Some("modrinth"),
+            (false, true) => Some("curseforge"),
+            _ => None,
+        }
+    }
 }
 
 /// Картотека сборки: `<сборка>/content.json`.
@@ -150,6 +190,7 @@ pub fn list(paths: &Paths, instance: &InstanceMeta, kind: &str) -> Vec<ContentEn
             enabled,
             size: item.metadata().map(|m| m.len()).unwrap_or(0),
             project_id: record.and_then(|r| r.project_id.clone()),
+            source: record.and_then(|r| r.known_source().map(str::to_owned)),
             version_id: record.and_then(|r| r.version_id.clone()),
             version_number: record
                 .map(|r| r.version_number.clone())
@@ -275,6 +316,7 @@ async fn resolve_record(
     let record = ContentRecord {
         filename: entry.filename.clone(),
         project_id: Some(version.project_id.clone()),
+        source: Some("modrinth".into()),
         version_id: Some(version.id.clone()),
         version_number: version.version_number.clone(),
         title: version.name.clone(),
@@ -433,6 +475,7 @@ pub async fn apply_update_with(
         ContentRecord {
             filename: update.new_filename.clone(),
             project_id: Some(update.project_id.clone()),
+            source: Some("modrinth".into()),
             version_id: Some(update.version_id.clone()),
             version_number: update.latest.clone(),
             title: update.title.clone(),
@@ -510,6 +553,7 @@ pub async fn replace_version(
         ContentRecord {
             filename: file.filename.clone(),
             project_id: Some(version.project_id.clone()),
+            source: Some("modrinth".into()),
             version_id: Some(version.id.clone()),
             version_number: version.version_number.clone(),
             title: if project.title.is_empty() {
@@ -559,6 +603,247 @@ mod tests {
         assert!(matches_kind("sodium.jar.disabled", "mod"));
         assert!(!matches_kind("sodium.zip", "mod"));
         assert!(matches_kind("BSL_v8.zip", "shader"));
+    }
+
+    #[test]
+    fn source_of_old_records_is_only_inferred_when_unambiguous() {
+        fn record(project: &str, version: Option<&str>, source: Option<&str>) -> ContentRecord {
+            ContentRecord {
+                project_id: Some(project.into()),
+                version_id: version.map(str::to_owned),
+                source: source.map(str::to_owned),
+                ..Default::default()
+            }
+        }
+        assert_eq!(
+            record("AANobbMI", Some("R1b2C3d4"), None).known_source(),
+            Some("modrinth")
+        );
+        assert_eq!(
+            record("123456", Some("1234567"), None).known_source(),
+            Some("curseforge")
+        );
+        assert_eq!(
+            record("12345678", Some("R1b2C3d4"), None).known_source(),
+            Some("modrinth")
+        );
+        assert_eq!(
+            record("12345678", Some("1234567"), None).known_source(),
+            Some("curseforge")
+        );
+        assert_eq!(
+            record("12345678", Some("12345678"), None).known_source(),
+            None
+        );
+        assert_eq!(record("12345678", None, None).known_source(), None);
+        assert_eq!(
+            record("12345678", None, Some("modrinth")).known_source(),
+            Some("modrinth")
+        );
+        assert_eq!(
+            record("12345678", None, Some("curseforge")).known_source(),
+            Some("curseforge")
+        );
+        assert_eq!(record("12345678", None, Some("other")).known_source(), None);
+        let old: ContentRecord = serde_json::from_str(
+            r#"{"filename":"old.jar","project_id":"AANobbMI","version_id":"R1b2C3d4"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.source, None);
+        assert_eq!(old.known_source(), Some("modrinth"));
+    }
+
+    #[test]
+    fn listed_projects_come_from_existing_enabled_or_disabled_files() {
+        let root =
+            std::env::temp_dir().join(format!("omnispec-content-source-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::new(&root).unwrap();
+        let instance: InstanceMeta = serde_json::from_value(serde_json::json!({
+            "id": "pack", "name": "Pack", "mc_version": "1.21.1"
+        }))
+        .unwrap();
+        let mods = paths.instance_game_dir("pack").join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        std::fs::write(mods.join("first.jar"), b"first").unwrap();
+        std::fs::write(mods.join("second.jar.disabled"), b"second").unwrap();
+        let mut store = ContentStore::default();
+        for (name, source) in [
+            ("first.jar", "modrinth"),
+            ("second.jar", "curseforge"),
+            ("absent.jar", "modrinth"),
+        ] {
+            store.files.insert(
+                name.into(),
+                ContentRecord {
+                    filename: name.into(),
+                    project_id: Some("12345678".into()),
+                    source: Some(source.into()),
+                    ..Default::default()
+                },
+            );
+        }
+        save_store(&paths, &instance, &store).unwrap();
+        let entries = list(&paths, &instance, "mod");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].source.as_deref(), Some("modrinth"));
+        assert!(entries[0].enabled);
+        assert_eq!(entries[1].source.as_deref(), Some("curseforge"));
+        assert!(!entries[1].enabled);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    struct LiveRoot(PathBuf);
+    impl Drop for LiveRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn live_fixture(source: &str) -> (LiveRoot, Paths, InstanceMeta) {
+        let root =
+            std::env::temp_dir().join(format!("omnispec-catalog-{source}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::new(&root).unwrap();
+        let meta: InstanceMeta = serde_json::from_value(serde_json::json!({
+            "id": "pack", "name": "Test pack", "mc_version": "1.21.1",
+            "loader": {"type":"fabric", "version":"0.16.10"}
+        }))
+        .unwrap();
+        crate::instances::save(&paths, &meta).unwrap();
+        (LiveRoot(root), paths, meta)
+    }
+
+    fn progress_recorder() -> (
+        Reporter,
+        std::sync::Arc<std::sync::Mutex<Vec<crate::net::ProgressEvent>>>,
+    ) {
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let copy = events.clone();
+        let reporter =
+            Reporter::new(move |event| copy.lock().unwrap().push(event)).with_op("install:smoke");
+        (reporter, events)
+    }
+
+    #[tokio::test]
+    #[ignore = "real Modrinth/CDN smoke test; run manually with network access"]
+    async fn live_modrinth_project_and_version_record_the_right_source() {
+        crate::net::reset_cancel();
+        let (_tmp, paths, meta) = live_fixture("modrinth");
+        let client = Modrinth::new(crate::net::Http::new());
+        let (reporter, events) = progress_recorder();
+        let project = "AANobbMI"; // Sodium
+        let version = client
+            .project_versions(project, Some("1.21.1"), Some("fabric"))
+            .await
+            .unwrap()
+            .remove(0);
+        let installed = crate::modrinth::install::install_version(
+            &client,
+            &paths,
+            &meta,
+            &version.id,
+            &reporter,
+        )
+        .await
+        .unwrap();
+        assert!(!installed.installed.is_empty());
+        let entries = list(&paths, &meta, "mod");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.project_id.as_deref() == Some(project))
+            .unwrap();
+        assert_eq!(entry.source.as_deref(), Some("modrinth"));
+        assert_eq!(entry.version_id.as_deref(), Some(version.id.as_str()));
+        assert!(paths
+            .instance_game_dir("pack")
+            .join("mods")
+            .join(&entry.name)
+            .exists());
+        let direct = InstanceMeta {
+            id: "direct".into(),
+            ..meta.clone()
+        };
+        crate::instances::save(&paths, &direct).unwrap();
+        let direct_result =
+            crate::modrinth::install::install_project(&client, &paths, &direct, project, &reporter)
+                .await
+                .unwrap();
+        assert!(!direct_result.installed.is_empty());
+        assert!(list(&paths, &direct, "mod")
+            .iter()
+            .any(|entry| entry.project_id.as_deref() == Some(project)
+                && entry.source.as_deref() == Some("modrinth")));
+        let skipped =
+            crate::modrinth::install::install_project(&client, &paths, &direct, project, &reporter)
+                .await
+                .unwrap();
+        assert!(!skipped.skipped.is_empty());
+        let events = events.lock().unwrap();
+        assert!(!events.is_empty() && events.iter().all(|event| event.op == "install:smoke"));
+        assert_eq!(events.last().unwrap().state, "done");
+        println!("real Modrinth: {} / {}", entry.name, version.id);
+    }
+
+    #[tokio::test]
+    #[ignore = "real CurseForge/CDN smoke test; run manually with network access"]
+    async fn live_curseforge_project_and_version_record_the_right_source() {
+        crate::net::reset_cancel();
+        let (_tmp, paths, meta) = live_fixture("curseforge");
+        let client = crate::curseforge::CurseForge::new(crate::net::Http::new());
+        let (reporter, events) = progress_recorder();
+        let project = "394468"; // Sodium
+        let version = client
+            .files(project, Some("1.21.1"), Some("fabric"))
+            .await
+            .unwrap()
+            .remove(0);
+        let installed = crate::curseforge::install::install(
+            &client,
+            &paths,
+            &meta,
+            project,
+            Some(&version.id),
+            &reporter,
+        )
+        .await
+        .unwrap();
+        assert!(!installed.installed.is_empty());
+        let entries = list(&paths, &meta, "mod");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.project_id.as_deref() == Some(project))
+            .unwrap();
+        assert_eq!(entry.source.as_deref(), Some("curseforge"));
+        assert_eq!(entry.version_id.as_deref(), Some(version.id.as_str()));
+        assert!(paths
+            .instance_game_dir("pack")
+            .join("mods")
+            .join(&entry.name)
+            .exists());
+        let direct = InstanceMeta {
+            id: "direct".into(),
+            ..meta.clone()
+        };
+        crate::instances::save(&paths, &direct).unwrap();
+        let direct_result =
+            crate::curseforge::install::install(&client, &paths, &direct, project, None, &reporter)
+                .await
+                .unwrap();
+        assert!(!direct_result.installed.is_empty());
+        assert!(list(&paths, &direct, "mod")
+            .iter()
+            .any(|entry| entry.project_id.as_deref() == Some(project)
+                && entry.source.as_deref() == Some("curseforge")));
+        let skipped =
+            crate::curseforge::install::install(&client, &paths, &direct, project, None, &reporter)
+                .await
+                .unwrap();
+        assert!(!skipped.skipped.is_empty());
+        let events = events.lock().unwrap();
+        assert!(!events.is_empty() && events.iter().all(|event| event.op == "install:smoke"));
+        assert_eq!(events.last().unwrap().state, "done");
+        println!("real CurseForge: {} / {}", entry.name, version.id);
     }
 
     #[test]

@@ -226,6 +226,21 @@ fn reporter_for(app: &AppHandle, instance_id: &str) -> Reporter {
     })
 }
 
+/// Панель не должна завершить одну установку ответом другой параллельной операции.
+fn reporter_for_content(app: &AppHandle, instance_id: &str, op_id: Option<String>) -> Reporter {
+    let reporter = reporter_for(app, instance_id);
+    match op_id.filter(|id| {
+        id.starts_with("install:")
+            && id.len() <= 100
+            && id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b':' | b'-' | b'_'))
+    }) {
+        Some(id) => reporter.with_op(id),
+        None => reporter,
+    }
+}
+
 /* ==================== ИНФОРМАЦИЯ ==================== */
 
 #[derive(Serialize)]
@@ -923,10 +938,11 @@ async fn install_curseforge(
     instance_id: String,
     project_id: String,
     file_id: Option<String>,
+    op_id: Option<String>,
 ) -> Result<curseforge_install::InstallOutcome, String> {
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    let reporter = reporter_for(&app, &instance_id);
+    let reporter = reporter_for_content(&app, &instance_id, op_id);
     curseforge_install::install(
         &state.curseforge,
         &state.paths,
@@ -947,9 +963,10 @@ async fn install_curseforge_modpack(
     state: State<'_, AppState>,
     project_id: String,
     file_id: Option<String>,
+    op_id: Option<String>,
 ) -> Result<InstanceMeta, String> {
     let _write = reserve_content_write("__modpack__", &state.content_access)?;
-    let reporter = reporter_for(&app, "modpack");
+    let reporter = reporter_for_content(&app, "modpack", op_id);
     curseforge_modpack::install(
         &state.curseforge,
         &state.paths,
@@ -967,10 +984,11 @@ async fn install_mod(
     state: State<'_, AppState>,
     instance_id: String,
     project_id: String,
+    op_id: Option<String>,
 ) -> Result<modrinth_install::InstallOutcome, String> {
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    let reporter = reporter_for(&app, &instance_id);
+    let reporter = reporter_for_content(&app, &instance_id, op_id);
     modrinth_install::install_project(&state.modrinth, &state.paths, &meta, &project_id, &reporter)
         .await
         .map_err(err)
@@ -1025,10 +1043,11 @@ async fn install_mod_version(
     state: State<'_, AppState>,
     instance_id: String,
     version_id: String,
+    op_id: Option<String>,
 ) -> Result<modrinth_install::InstallOutcome, String> {
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    let reporter = reporter_for(&app, &instance_id);
+    let reporter = reporter_for_content(&app, &instance_id, op_id);
     modrinth_install::install_version(&state.modrinth, &state.paths, &meta, &version_id, &reporter)
         .await
         .map_err(err)
@@ -1046,9 +1065,10 @@ async fn install_modpack(
     app: AppHandle,
     state: State<'_, AppState>,
     version_id: String,
+    op_id: Option<String>,
 ) -> Result<InstanceMeta, String> {
     let _write = reserve_content_write("__modpack__", &state.content_access)?;
-    let reporter = reporter_for(&app, "modpack");
+    let reporter = reporter_for_content(&app, "modpack", op_id);
     let source = version_id.trim().to_string();
 
     // 1) локальный файл .mrpack
@@ -2169,10 +2189,11 @@ async fn content_replace_version(
     kind: String,
     name: String,
     version_id: String,
+    op_id: Option<String>,
 ) -> Result<Value, String> {
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    let reporter = reporter_for(&app, &meta.id);
+    let reporter = reporter_for_content(&app, &meta.id, op_id);
     let outcome = omnispec_core::content::replace_version(
         &state.modrinth,
         &state.paths,
@@ -2196,10 +2217,11 @@ async fn mods_ensure_dependencies(
     app: AppHandle,
     state: State<'_, AppState>,
     instance_id: String,
+    op_id: Option<String>,
 ) -> Result<Value, String> {
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    let reporter = reporter_for(&app, &meta.id);
+    let reporter = reporter_for_content(&app, &meta.id, op_id);
     let outcome =
         modrinth_install::ensure_dependencies(&state.modrinth, &state.paths, &meta, &reporter)
             .await

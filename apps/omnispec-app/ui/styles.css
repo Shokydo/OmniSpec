@@ -899,6 +899,13 @@ input, select, textarea { font: inherit; color: inherit; }
   transition: border-color var(--t-fast), background var(--t-fast);
 }
 .card:hover { background: var(--bg-3); border-color: var(--line-2); }
+/* Установленные моды заметны даже в мелкой плитке.
+   Внутренняя линия не меняет размеры карточки и не сдвигает список. */
+.modrinth-results .card.is-installed,
+.modrinth-results .card.is-installed:hover {
+  border-color: var(--green);
+  box-shadow: inset 0 0 0 1px var(--green);
+}
 .card-icon {
   width: 44px; height: 44px; flex: none;
   display: grid; place-items: center;
@@ -2951,6 +2958,24 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 .modrinth-results.is-grid.feed-grid-2 .card-title { font-size: 11px; }
 .modrinth-results.is-grid.feed-grid-1 .card-desc,
 .modrinth-results.is-grid.feed-grid-1 .card-meta { display: none; }
+/* В самой мелкой плитке оставляем статус поверх иконки, не меняя высоту ряда. */
+.modrinth-results.is-grid.feed-grid-1 .card.is-installed,
+.modrinth-results.is-grid.feed-grid-1 .card.is-downloading { position: relative; }
+.modrinth-results.is-grid.feed-grid-1 .card.is-installed .card-meta,
+.modrinth-results.is-grid.feed-grid-1 .card.is-downloading .card-meta {
+  display: flex; position: absolute; z-index: 1;
+  top: 8px; left: 8px; right: 8px; margin: 0;
+  min-width: 0; flex-wrap: nowrap; pointer-events: none;
+}
+.modrinth-results.is-grid.feed-grid-1 .card-meta > :not([data-project-status]) { display: none; }
+.modrinth-results.is-grid.feed-grid-1 .card-meta [data-project-status] {
+  display: block; max-width: 100%; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; padding: 0 2px;
+  font-size: 8px; line-height: 14px; background: var(--bg-2);
+}
+.modrinth-results.is-grid.feed-grid-1 .card-meta [data-project-status="installed"] {
+  color: var(--green); border-color: var(--green);
+}
 @media (max-width: 1180px) {
   .home-feed-head { grid-template-columns: auto minmax(140px, 1fr) auto auto; }
   .feed-source-label { display: none; }

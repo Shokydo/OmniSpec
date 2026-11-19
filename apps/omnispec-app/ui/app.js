@@ -1678,7 +1678,7 @@
       state.home.status = `копируем «${file}» в лаунчер…`;
       if (state.tab === "discover") renderDiscover();
       toast(`Импортируем «${file}»…`);
-      const meta = await api.installModpack(path);
+      const meta = await withInstallProgress("modpack", "modpack", (op) => api.installModpack(path, op));
       if (categoryId) await moveInstanceToCategory(meta.id, categoryId);
       await refreshInstances();
       selectInstance(meta.id);
@@ -1848,12 +1848,13 @@
 
   /** Демо-прогресс: событие за событием, чтобы полоса процессов была видна. */
   let demoProgressCb = null;
-  async function demoProgress(stage, detail) {
+  async function demoProgress(stage, detail, op = "") {
     const total = 4;
     for (let done = 0; done <= total; done += 1) {
-      if (demoProgressCb) demoProgressCb({ stage, done, total, detail });
+      if (demoProgressCb) demoProgressCb({ stage, done, total, detail, op });
       await new Promise((resolve) => setTimeout(resolve, 90));
     }
+    if (demoProgressCb) demoProgressCb({ stage, done: total, total, detail, state: "done", op });
   }
 
   /** Демо-содержимое: ресурспаки и шейдеры «как будто лежат в сборке». */
@@ -2051,10 +2052,10 @@
     running: () => invoke("running_instances"),
     search: (q) => invoke("search_modrinth", q),
     modrinthVersions: (projectId, mc, loader) => invoke("modrinth_versions", { projectId, mcVersion: mc, loader }),
-    installMod: (instanceId, projectId) => invoke("install_mod", { instanceId, projectId }),
+    installMod: (instanceId, projectId, opId = null) => invoke("install_mod", { instanceId, projectId, opId }),
     installDiagnosticMod: (instanceId, attemptId, request) => invoke("install_diagnostic_mod", { instanceId, attemptId, request }),
-    installModVersion: (instanceId, versionId) => invoke("install_mod_version", { instanceId, versionId }),
-    installModpack: (versionId) => invoke("install_modpack", { versionId }),
+    installModVersion: (instanceId, versionId, opId = null) => invoke("install_mod_version", { instanceId, versionId, opId }),
+    installModpack: (versionId, opId = null) => invoke("install_modpack", { versionId, opId }),
     cancelDownload: () => invoke("cancel_download"),
     listDir: (instanceId, sub) => invoke("list_dir", { instanceId, sub }),
     readFile: (instanceId, path) => invoke("read_text_file", { instanceId, path }),
@@ -2077,8 +2078,8 @@
     contentDelete: (instanceId, kind, name) => invoke("content_delete", { instanceId, kind, name }),
     contentUpdates: (instanceId, kind) => invoke("content_updates", { instanceId, kind }),
     contentUpdate: (instanceId, kind, name, update) => invoke("content_update", { instanceId, kind, name, update: update || null }),
-    replaceModVersion: (instanceId, kind, name, versionId) => invoke("content_replace_version", { instanceId, kind, name, versionId }),
-    ensureDependencies: (instanceId) => invoke("mods_ensure_dependencies", { instanceId }),
+    replaceModVersion: (instanceId, kind, name, versionId, opId = null) => invoke("content_replace_version", { instanceId, kind, name, versionId, opId }),
+    ensureDependencies: (instanceId, opId = null) => invoke("mods_ensure_dependencies", { instanceId, opId }),
     scanExternal: () => invoke("scan_external_launchers"),
     importExternal: (payload) => invoke("import_external", payload),
     exportInstance: (instanceId, path, format, include) => invoke("export_instance", { instanceId, path, format, include }),
@@ -2116,11 +2117,11 @@
     customWallpaper: () => invoke("custom_wallpaper"),
     modrinthProject: (projectId) => invoke("modrinth_project", { projectId }),
     searchCurseforge: (q) => invoke("search_curseforge", q),
-    installCurseforgeModpack: (projectId, fileId) => invoke("install_curseforge_modpack", { projectId, fileId: fileId || null }),
+    installCurseforgeModpack: (projectId, fileId, opId = null) => invoke("install_curseforge_modpack", { projectId, fileId: fileId || null, opId }),
     curseforgeVersions: (projectId, mc, loader) => invoke("curseforge_versions", { projectId, mcVersion: mc, loader }),
     curseforgeProject: (projectId) => invoke("curseforge_project", { projectId }),
     curseforgeReady: () => invoke("curseforge_ready"),
-    installCurseforge: (instanceId, projectId, fileId) => invoke("install_curseforge", { instanceId, projectId, fileId: fileId || null }),
+    installCurseforge: (instanceId, projectId, fileId, opId = null) => invoke("install_curseforge", { instanceId, projectId, fileId: fileId || null, opId }),
     accountSkin: () => invoke("account_skin"),
     accountCapes: () => invoke("account_capes"),
     setCape: (capeId) => invoke("set_cape", { capeId }),
@@ -2364,9 +2365,9 @@
     installMod: async (_i, projectId) => ({ installed: [`${projectId}-1.0.0.jar`], skipped: [] }),
     installDiagnosticMod: async () => { throw new Error("в демо-режиме файлы модов не скачиваются"); },
     installModVersion: async () => ({ installed: ["mod.jar"], skipped: [] }),
-    installModpack: async () => {
-      await demoProgress("modpack", "читаем манифест модпака");
-      await demoProgress("mods", "скачиваем моды");
+    installModpack: async (_versionId, op) => {
+      await demoProgress("modpack", "читаем манифест модпака", op);
+      await demoProgress("mods", "скачиваем моды", op);
       return DEMO.instances[0];
     },
     listDir: async (_id, sub) => {
@@ -2410,6 +2411,7 @@
           enabled: mod.enabled,
           size: mod.size,
           project_id: mod.project_id || null,
+          source: mod.project_id ? "modrinth" : null,
           version_id: mod.version_id || null,
           version_number: version ? version[1] : null,
           title: pretty ? pretty.charAt(0).toUpperCase() + pretty.slice(1) : null
@@ -2606,7 +2608,8 @@
     wall: { wallpaper: null, fit: "cover", blur: 0, dim: 40 },
     downloads: { active: false, title: "", done: 0, total: 0, files: new Map(), state: "active", op: "", collapsed: false, timer: null },
     installedProjects: new Set(),
-    downloadingProjects: new Set(),
+    // Счётчики позволяют одной из параллельных установок завершиться раньше другой.
+    downloadingProjects: new Map(),
     update: { info: null, version: "0.1.0", repo: null, enabled: true, checking: false, installing: false },
     theme: "dark",
     customTheme: { ...CUSTOM_THEME_DEFAULT },
@@ -3570,8 +3573,24 @@
   // Запоздавший прогресс уже завершённой подготовки не должен снова
   // показывать панель «Ресурсы игры» как активную.
   const finishedLaunchProgress = new Set();
+  const finishedContentProgress = new Set();
+  // Самая поздняя незавершённая установка отображается первой. Поздние события
+  // более старой операции не должны скрыть панель новой.
+  const activeContentProgress = new Map();
+  function latestContentProgress() {
+    let latest = null;
+    for (const entry of activeContentProgress.values()) latest = entry;
+    return latest;
+  }
   function setProgress(payload) {
-    if (payload && payload.op && finishedLaunchProgress.has(payload.op)) return;
+    if (payload && payload.op && (finishedLaunchProgress.has(payload.op) || finishedContentProgress.has(payload.op))) return;
+    if (payload && activeContentProgress.has(payload.op)) {
+      // Даже явное «done» от ядра может прийти до ответа команды. Закрываем
+      // панель только после окончательного результата установки с зависимостями.
+      payload = { ...payload, state: "active" };
+      activeContentProgress.set(payload.op, payload);
+      if (latestContentProgress().op !== payload.op) return;
+    }
     state.progress = payload || null;
     renderImpProgress();
     const box = $("#progress");
@@ -3661,11 +3680,13 @@
       if (entry) entry.complete = true;
     }
 
-    // Финальные состояния: явное событие done или счётчик дошёл до конца.
+    // 100% отдельного файла ещё не означает завершение установки: после него
+    // могут скачиваться зависимости или распаковываться архив. Для отслеживаемых
+    // операций ждём ответа команды; остальные этапы используют свои события.
     if (payload.state === "cancelled" || payload.state === "error") {
       dl.state = payload.state;
       scheduleDlHide();
-    } else if (payload.state === "done" || (total > 0 && done >= total)) {
+    } else if (payload.state === "done" || (!activeContentProgress.has(op) && stage !== "mods" && !payload.file && total > 0 && done >= total)) {
       dl.state = "done";
       dl.files.forEach((entry) => { entry.complete = true; entry.done = entry.total; });
       scheduleDlHide();
@@ -3682,9 +3703,34 @@
     const dl = state.downloads;
     if (dl.timer) clearTimeout(dl.timer);
     dl.timer = setTimeout(() => {
+      dl.timer = null;
       dl.active = false;
       renderDownloads();
-    }, 10000);
+    }, 3000);
+  }
+
+  /** Ответ команды завершает только собственную установку, даже при ошибке. */
+  function finishContentProgress(op, outcome) {
+    if (!op) return;
+    activeContentProgress.delete(op);
+    finishedContentProgress.add(op);
+    while (finishedContentProgress.size > 100) finishedContentProgress.delete(finishedContentProgress.values().next().value);
+    const dl = state.downloads;
+    if (dl.active && dl.op === op) {
+      const other = latestContentProgress();
+      if (other) {
+        setProgress(other); // ещё одна установка продолжается
+      } else {
+        dl.state = outcome;
+        if (outcome === "done") {
+          if (dl.total > 0) dl.done = dl.total;
+          dl.files.forEach((entry) => { entry.complete = true; entry.done = entry.total; });
+        }
+        scheduleDlHide();
+        renderDownloads();
+      }
+    }
+    if (state.progress && state.progress.op === op) setProgress(null);
   }
 
   /** Завершаем только прогресс этой попытки; параллельную операцию не скрываем. */
@@ -3769,41 +3815,130 @@
     });
   }
 
-  /* ==================== БЕЙДЖИ УСТАНОВЛЕННЫХ МОДОВ ==================== */
-  /** Подтянуть id проектов, уже стоящих в текущей сборке (для бейджей). */
-  async function refreshInstalledProjects() {
-    const meta = selected();
-    if (!meta) { state.installedProjects = new Set(); return; }
-    try {
-      const entries = await api.contentList(meta.id, "mod");
-      const ids = new Set();
-      for (const entry of entries || []) {
-        if (entry.project_id) ids.add(entry.project_id);
-      }
-      state.installedProjects = ids;
-    } catch (_) { /* без бейджей */ }
+  /* ==================== ПРИЗНАКИ УСТАНОВЛЕННЫХ МОДОВ ==================== */
+  let installedProjectsInstance = null;
+  let installedProjectsGeneration = 0;
+  let contentOperationSerial = 0;
+
+  function projectKey(source, projectId) {
+    return JSON.stringify([source, String(projectId)]);
   }
 
-  /** Бейдж для карточки проекта: «скачивается» важнее, чем «установлен». */
-  function projectBadge(projectId) {
-    if (!projectId) return "";
-    if (state.downloadingProjects.has(projectId)) {
-      return `<span class="tag tag-downloading">скачивается…</span>`;
-    }
-    if (state.installedProjects.has(projectId)) {
-      return `<span class="tag tag-installed">установлен</span>`;
-    }
+  function downloadingProjectKey(instanceId, source, projectId) {
+    return JSON.stringify([instanceId, source, String(projectId)]);
+  }
+
+  function projectInstalled(projectId, source, type) {
+    return Boolean(projectId && type === "mod" && state.selectedId
+      && installedProjectsInstance === state.selectedId && state.installedProjects.has(projectKey(source, projectId)));
+  }
+
+  function projectStatus(projectId, source, type) {
+    if (!projectId || !state.selectedId || type === "modpack") return "";
+    if (state.downloadingProjects.has(downloadingProjectKey(state.selectedId, source, projectId))) return "downloading";
+    return projectInstalled(projectId, source, type) ? "installed" : "";
+  }
+
+  function projectLabel(title, projectId, source, type) {
+    const parts = [title || "Проект"];
+    if (projectInstalled(projectId, source, type)) parts.push("установлен в этой сборке");
+    if (projectStatus(projectId, source, type) === "downloading") parts.push("скачивается");
+    return parts.join(" — ");
+  }
+
+  /** Бейдж и дополнительная обводка используют один и тот же проверенный id. */
+  function projectBadge(projectId, source, type) {
+    const status = projectStatus(projectId, source, type);
+    if (status === "downloading") return `<span class="tag tag-downloading" data-project-status="downloading">скачивается…</span>`;
+    if (status === "installed") return `<span class="tag tag-installed" data-project-status="installed">установлен</span>`;
     return "";
   }
 
-  /** Пометить проект как скачиваемый на время установки. */
-  async function withDownloading(projectId, fn) {
-    if (projectId) state.downloadingProjects.add(projectId);
+  /** Обновляем только статусы существующих карточек, не пересоздавая список. */
+  function updateCatalogProjectStates() {
+    $$("#mr-results, #cf-results").forEach((results) => {
+      const top = results.scrollTop;
+      const left = results.scrollLeft;
+      $$(".card[data-project], .card[data-cf-project]", results).forEach((card) => {
+        const source = card.dataset.cfProject ? "curseforge" : "modrinth";
+        const projectId = card.dataset.cfProject || card.dataset.project;
+        const title = card.dataset.cfTitle || card.dataset.title || "Проект";
+        const type = card.dataset.projectType || "mod";
+        const status = projectStatus(projectId, source, type);
+        card.classList.toggle("is-installed", projectInstalled(projectId, source, type));
+        card.classList.toggle("is-downloading", status === "downloading");
+        card.setAttribute("aria-label", projectLabel(title, projectId, source, type));
+        const meta = $(".card-meta", card);
+        const old = meta && $("[data-project-status]", meta);
+        if (meta && (old?.dataset.projectStatus || "") !== status) {
+          if (old) old.remove();
+          if (status) meta.insertAdjacentHTML("afterbegin", projectBadge(projectId, source, type));
+        }
+      });
+      // Не позволяем обновлению статусов сдвинуть пользователя при переносе меток.
+      results.scrollTop = top;
+      results.scrollLeft = left;
+    });
+  }
+
+  /** Запрос относится к конкретной сборке; запоздавший ответ нельзя применить к другой. */
+  async function refreshInstalledProjects() {
+    const generation = ++installedProjectsGeneration;
+    const instanceId = selected()?.id || null;
+    if (installedProjectsInstance !== instanceId) {
+      installedProjectsInstance = instanceId;
+      state.installedProjects = new Set();
+      updateCatalogProjectStates();
+    }
+    if (!instanceId) return;
     try {
-      return await fn();
+      const entries = await api.contentList(instanceId, "mod");
+      if (generation !== installedProjectsGeneration || state.selectedId !== instanceId) return;
+      state.installedProjects = new Set((entries || [])
+        .filter((entry) => entry.project_id && ["modrinth", "curseforge"].includes(entry.source))
+        .map((entry) => projectKey(entry.source, entry.project_id)));
+      updateCatalogProjectStates();
+    } catch (_) { /* прежнее состояние той же сборки остаётся на экране */ }
+  }
+
+  /** Показываем операцию от её начала до ответа команды, включая зависимости. */
+  async function withInstallProgress(instanceId, stage, fn) {
+    const op = `install:${Date.now().toString(36)}-${(++contentOperationSerial).toString(36)}`;
+    // Запрос метаданных тоже часть установки: старый таймер не должен закрыть
+    // панель, пока первый сетевой ответ ещё не получен.
+    const start = { instance: instanceId, stage, done: 0, total: 0, detail: "подготавливаем установку", state: "active", op };
+    activeContentProgress.set(op, start);
+    setProgress(start);
+    let outcome = "error";
+    try {
+      const result = await fn(op);
+      outcome = "done";
+      return result;
+    } catch (error) {
+      if (/отмен|cancel/i.test(String(error?.message || error))) outcome = "cancelled";
+      throw error;
     } finally {
-      if (projectId) state.downloadingProjects.delete(projectId);
-      await refreshInstalledProjects();
+      finishContentProgress(op, outcome);
+    }
+  }
+
+  /** Пометить проект на время установки, не меняя текущую позицию пользователя. */
+  async function withDownloading(projectId, fn, options = {}) {
+    const instanceId = options.instanceId || state.selectedId;
+    const source = options.source || (state.modsSource === "curseforge" ? "curseforge" : "modrinth");
+    const key = projectId && instanceId ? downloadingProjectKey(instanceId, source, projectId) : null;
+    if (key) state.downloadingProjects.set(key, (state.downloadingProjects.get(key) || 0) + 1);
+    updateCatalogProjectStates();
+    try {
+      return await withInstallProgress(instanceId, "mods", fn);
+    } finally {
+      if (key) {
+        const remaining = (state.downloadingProjects.get(key) || 1) - 1;
+        if (remaining > 0) state.downloadingProjects.set(key, remaining);
+        else state.downloadingProjects.delete(key);
+      }
+      updateCatalogProjectStates();
+      if (state.selectedId === instanceId) await refreshInstalledProjects();
     }
   }
 
@@ -5329,7 +5464,7 @@
     const meta = selected();
     toast("Проверяем зависимости модов…");
     try {
-      const result = await api.ensureDependencies(meta.id);
+      const result = await withDownloading(null, (op) => api.ensureDependencies(meta.id, op), { instanceId: meta.id, source: "modrinth" });
       const added = (result && result.installed) || [];
       renderContent("mod");
       toast(added.length ? `Докачано: ${added.join(", ")}` : "Все зависимости на месте", "ok");
@@ -6071,7 +6206,7 @@
       cfg.status = "качаем модпак…";
       renderDiscover();
       try {
-        const meta = await api.installModpack(url);
+        const meta = await withInstallProgress("modpack", "modpack", (op) => api.installModpack(url, op));
         cfg.url = "";
         cfg.status = "";
         await refreshInstances();
@@ -6139,7 +6274,7 @@
             loader: cfg.zipLoader === "vanilla" ? null : cfg.zipLoader,
             loaderVersion: cfg.zipLoaderVersion || null
           })
-        : await api.installModpack(path);
+        : await withInstallProgress("modpack", "modpack", (op) => api.installModpack(path, op));
       cfg.zipPath = "";
       cfg.status = "";
       await refreshInstances();
@@ -6563,13 +6698,13 @@
   function cardHtml(hit, kind) {
     const isPack = kind === "pack" || (!kind && state.modrinth.type === "modpack");
     const openType = isPack ? "modpack" : (state.modrinth.type || "mod");
-    return `<div class="card" data-project="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}" data-slug="${esc(hit.slug || hit.project_id)}" data-title="${esc(hit.title)}">
+    return `<div class="card${projectInstalled(hit.project_id, "modrinth", openType) ? " is-installed" : ""}${projectStatus(hit.project_id, "modrinth", openType) === "downloading" ? " is-downloading" : ""}" role="group" aria-label="${esc(projectLabel(hit.title, hit.project_id, "modrinth", openType))}" data-project="${esc(hit.project_id)}" data-project-type="${esc(openType)}" data-kind="${isPack ? "pack" : "mod"}" data-slug="${esc(hit.slug || hit.project_id)}" data-title="${esc(hit.title)}">
       <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
       <div class="card-body">
         <div class="card-title">${esc(hit.title)}</div>
         <div class="card-desc">${esc(hit.description)}</div>
         <div class="card-meta">
-          ${projectBadge(hit.project_id)}
+          ${projectBadge(hit.project_id, "modrinth", openType)}
           ${(hit.categories || []).slice(0, 3).map((cat) => `<span class="tag">${esc(cat)}</span>`).join("")}
           <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
         </div>
@@ -6708,7 +6843,7 @@
       </div>`;
     $$("[data-install-version]").forEach((btn) => btn.addEventListener("click", () => {
       if (btn.dataset.replace) replaceModVersion(btn.dataset.replace, btn.dataset.installVersion, btn.dataset.kind, btn);
-      else installVersion(btn.dataset.installVersion, btn.dataset.kind, btn);
+      else installVersion(btn.dataset.installVersion, btn.dataset.kind, btn, projectId);
     }));
   }
 
@@ -6718,7 +6853,7 @@
     if (!meta) return toast("Сначала выбери сборку", "err");
     if (btn) { btn.disabled = true; btn.textContent = "Меняем…"; }
     try {
-      await withDownloading(null, () => api.replaceModVersion(meta.id, kind, filename, versionId));
+      await withDownloading(null, (op) => api.replaceModVersion(meta.id, kind, filename, versionId, op), { instanceId: meta.id, source: "modrinth" });
       state.contentUpdates[kind] = (state.contentUpdates[kind] || []).filter((item) => item.filename !== filename);
       const modal = $("#modal-versions");
       if (modal) modal.hidden = true;
@@ -6730,21 +6865,20 @@
     }
   }
 
-  async function installVersion(versionId, kind, btn) {
+  async function installVersion(versionId, kind, btn, projectId) {
     const modal = $("#modal-versions");
     if (btn) { btn.disabled = true; btn.textContent = "Ставим…"; }
     try {
       if (kind === "pack") {
-        const meta = await api.installModpack(versionId);
+        const meta = await withInstallProgress("modpack", "modpack", (op) => api.installModpack(versionId, op));
         await refreshInstances();
         selectInstance(meta.id);
         toast(`Ваша сборка «${meta.name}» установлена`, "ok");
       } else {
         const meta = selected();
         if (!meta) { toast("Сначала выбери сборку", "err"); return; }
-        const outcome = await api.installModVersion(meta.id, versionId);
+        const outcome = await withDownloading(projectId, (op) => api.installModVersion(meta.id, versionId, op), { instanceId: meta.id, source: "modrinth" });
         toast(outcome.installed.length ? `Ваш мод установлен: ${outcome.installed.join(", ")}` : "Ваш мод уже установлен", "ok");
-        if (state.tab === "download") renderDownload();
       }
       if (modal) modal.hidden = true;
     } catch (err) {
@@ -6782,10 +6916,12 @@
   async function installFromModrinth(projectId, kind) {
     if (kind === "pack") {
       try {
-        const versions = await api.modrinthVersions(projectId, null, null);
-        if (!versions.length) return toast("У модпака нет версий", "err");
-        toast("Скачиваем модпак…");
-        const meta = await api.installModpack(versions[0].id);
+        const meta = await withInstallProgress("modpack", "modpack", async (op) => {
+          const versions = await api.modrinthVersions(projectId, null, null);
+          if (!versions.length) throw new Error("У модпака нет версий");
+          toast("Скачиваем модпак…");
+          return api.installModpack(versions[0].id, op);
+        });
         await refreshInstances();
         selectInstance(meta.id);
         toast(`Ваша сборка «${meta.name}» установлена`, "ok");
@@ -6795,9 +6931,8 @@
     const meta = selected();
     if (!meta) return toast("Сначала выбери сборку", "err");
     try {
-      const outcome = await withDownloading(projectId, () => api.installMod(meta.id, projectId));
+      const outcome = await withDownloading(projectId, (op) => api.installMod(meta.id, projectId, op), { instanceId: meta.id, source: "modrinth" });
       toast(outcome.installed.length ? `Ваш мод установлен: ${outcome.installed.join(", ")}` : "Ваш мод уже установлен", "ok");
-      if (state.tab === "download") renderTab();
     } catch (err) { toast(String(err), "err"); }
   }
 
@@ -6960,13 +7095,13 @@
 
   function cfCardHtml(hit) {
     const openType = state.curseforge.type || "mod";
-    return `<div class="card" data-cf-project="${esc(hit.project_id)}" data-cf-slug="${esc(hit.slug || hit.project_id)}" data-cf-title="${esc(hit.title)}">
+    return `<div class="card${projectInstalled(hit.project_id, "curseforge", openType) ? " is-installed" : ""}${projectStatus(hit.project_id, "curseforge", openType) === "downloading" ? " is-downloading" : ""}" role="group" aria-label="${esc(projectLabel(hit.title, hit.project_id, "curseforge", openType))}" data-cf-project="${esc(hit.project_id)}" data-project-type="${esc(openType)}" data-cf-slug="${esc(hit.slug || hit.project_id)}" data-cf-title="${esc(hit.title)}">
       <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
       <div class="card-body">
         <div class="card-title">${esc(hit.title)}</div>
         <div class="card-desc">${esc(hit.description)}</div>
         <div class="card-meta">
-          ${projectBadge(hit.project_id)}
+          ${projectBadge(hit.project_id, "curseforge", openType)}
           <span class="tag">curseforge</span>
           ${(hit.categories || []).slice(0, 2).map((cat) => `<span class="tag">${esc(cat)}</span>`).join("")}
           <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
@@ -6994,7 +7129,7 @@
         <div class="card-title">${esc(hit.title)}</div>
         <div class="card-desc">${esc(hit.description)}</div>
         <div class="card-meta">
-          ${projectBadge(hit.project_id)}
+          ${projectBadge(hit.project_id, "curseforge", "modpack")}
           <span class="tag">curseforge</span>
           ${(hit.categories || []).slice(0, 2).map((cat) => `<span class="tag">${esc(cat)}</span>`).join("")}
           <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
@@ -7019,7 +7154,7 @@
     if (btn) { btn.disabled = true; }
     toast(`Ставим сборку${title ? ` «${title}»` : ""} — это может занять пару минут`, "info");
     try {
-      const meta = await api.installCurseforgeModpack(projectId, fileId || null);
+      const meta = await withInstallProgress("modpack", "modpack", (op) => api.installCurseforgeModpack(projectId, fileId || null, op));
       toast(`Сборка «${meta && meta.name ? meta.name : "модпак"}» готова`, "ok");
       try {
         const list = await api.instances();
@@ -7126,14 +7261,13 @@
     if (!meta) return toast("Сначала выбери сборку", "err");
     if (btn) { btn.disabled = true; }
     try {
-      const outcome = await withDownloading(projectId, () => api.installCurseforge(meta.id, projectId, null));
+      const outcome = await withDownloading(projectId, (op) => api.installCurseforge(meta.id, projectId, null, op), { instanceId: meta.id, source: "curseforge" });
       toast(
         outcome.installed.length
           ? `Ваш мод установлен: ${outcome.installed.join(", ")}`
           : `Ваш мод уже установлен${outcome.skipped.length ? `: ${outcome.skipped.join(", ")}` : ""}`,
         "ok"
       );
-      if (state.tab === "download") renderDownload();
     } catch (err) {
       toast(String(err), "err");
     } finally {
@@ -7246,10 +7380,9 @@
     if (btn) { btn.disabled = true; btn.textContent = "Ставим…"; }
     const modal = $("#modal-versions");
     try {
-      const outcome = await api.installCurseforge(meta.id, projectId, fileId);
+      const outcome = await withDownloading(projectId, (op) => api.installCurseforge(meta.id, projectId, fileId, op), { instanceId: meta.id, source: "curseforge" });
       toast(outcome.installed.length ? `Ваш мод установлен: ${outcome.installed.join(", ")}` : "Ваш мод уже установлен", "ok");
       if (modal) modal.hidden = true;
-      if (state.tab === "download") renderDownload();
     } catch (err) {
       toast(String(err), "err");
       if (btn) { btn.disabled = false; btn.textContent = "Установить"; }
