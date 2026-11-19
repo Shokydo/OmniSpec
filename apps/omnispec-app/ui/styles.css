@@ -996,6 +996,7 @@ body.has-wall .discover-head { background: transparent; }
 .settings-note.warn { color: var(--yellow); }
 
 .range { display: flex; align-items: center; gap: 10px; }
+.memory-hint { margin-top: 6px; color: var(--dim-2); font-size: 10.5px; line-height: 1.5; }
 input[type="range"] {
   flex: 1; height: 3px; border-radius: var(--r-pill);
   accent-color: var(--accent); background: var(--bg-4);
@@ -1634,6 +1635,9 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
   position: fixed;
   z-index: 60;
   min-width: 214px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   padding: 5px;
   background: var(--bg-2);
   border: 1px solid var(--line-2);
@@ -1653,6 +1657,9 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
   color: var(--dim);
   font-size: 12px;
   text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 .ctx-item:hover { background: var(--bg-4); color: var(--text); }
@@ -3208,3 +3215,43 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 @media (max-width: 720px) {
   .create-grid { grid-template-columns: 1fr; }
 }
+
+/* У body задан zoom: vh/vw сами его не компенсируют. Окно настроек и его
+   вложенный диалог должны оставаться целиком внутри физического окна. */
+.prefs-box {
+  width: min(1280px, calc(98vw / var(--ui-zoom, 1)));
+  height: min(820px, calc(93vh / var(--ui-zoom, 1)));
+  max-width: calc(98vw / var(--ui-zoom, 1));
+  max-height: calc(93vh / var(--ui-zoom, 1));
+}
+#modal-create > .modal {
+  width: min(720px, calc(92vw / var(--ui-zoom, 1)));
+  max-width: calc(92vw / var(--ui-zoom, 1));
+  max-height: calc(86vh / var(--ui-zoom, 1));
+}
+
+/* Выбор начальной вкладки: свой диалог в палитре текущей темы. */
+.initial-tab-trigger { min-width: 174px; justify-content: flex-start; }
+.initial-tab-trigger span { flex: 1; text-align: left; }
+.initial-tab-chevron { color: var(--dim-2); }
+.initial-tab-backdrop { z-index: 55; }
+.initial-tab-box {
+  width: min(500px, calc(90vw / var(--ui-zoom, 1)));
+  max-width: calc(90vw / var(--ui-zoom, 1));
+  max-height: calc(90vh / var(--ui-zoom, 1));
+}
+.initial-tab-body { min-height: 0; }
+.initial-tab-note { margin: 0 0 14px; color: var(--dim); font-size: 11.5px; line-height: 1.5; }
+.initial-tab-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.initial-tab-option {
+  display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 42px;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--bg-3); color: var(--dim); text-align: left; font-size: 12px;
+}
+.initial-tab-option span { flex: 1; min-width: 0; }
+.initial-tab-option .ic { width: 15px; height: 15px; flex: none; }
+.initial-tab-option:hover { background: var(--bg-4); color: var(--text); border-color: var(--line-2); }
+.initial-tab-option.is-active { background: var(--bg-4); color: var(--text); border-color: var(--accent); }
+.initial-tab-option .initial-tab-check { visibility: hidden; color: var(--accent); }
+.initial-tab-option.is-active .initial-tab-check { visibility: visible; }
+@media (max-width: 420px) { .initial-tab-options { grid-template-columns: 1fr; } }

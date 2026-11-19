@@ -67,7 +67,7 @@ async function openPage(browser) {
           case 'accounts_info': return {accounts:[{uuid:'u',username:'Steve',kind:'offline'}],active:'u'};
           case 'list_instances': return instances.map(x => ({...x}));
           case 'running_instances': return [];
-          case 'catalog_current_mods': case 'content_list': case 'list_java': return [];
+          case 'catalog_installed_mods': case 'content_list': case 'list_java': return [];
           case 'version_info': return {version:'test',enabled:false};
           case 'search_modrinth': return this.search('modrinth',args);
           case 'search_curseforge': return this.search('curseforge',args);
@@ -222,6 +222,7 @@ async function switchSource(page, scope, source) {
       await page.locator('#dl-query').fill(query);
       await page.waitForFunction(({source,query}) => window.__liveCatalog.held.some(x => x.source === source && x.query === query),{source,query});
       await page.locator('.instance[data-id="beta"]').last().click();
+      await page.locator('[data-tab="download"]').click();
       await page.waitForFunction(({results}) => document.querySelector(results)?.textContent.includes('1.20.1 forge'),{results});
       await page.evaluate(({source,query}) => window.__liveCatalog.release(source,query),{source,query});
       await page.waitForTimeout(100);
@@ -229,6 +230,7 @@ async function switchSource(page, scope, source) {
       assert(!(await page.locator(results).innerText()).includes('1.21.1 fabric'),'ответ прежней сборки должен игнорироваться');
       assert.equal(await page.locator('#dl-query').inputValue(),query);
       await page.locator('.instance[data-id="alpha"]').last().click();
+      await page.locator('[data-tab="download"]').click();
       await page.waitForFunction(({results}) => document.querySelector(results)?.textContent.includes('1.21.1 fabric'),{results});
     }
     await switchSource(page,'dl','modrinth');

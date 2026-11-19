@@ -35,6 +35,8 @@ use omnispec_core::update::{self, UpdateInfo};
 mod presence;
 /// Безопасное разрешение публичных иконок для Rich Presence.
 mod rpc_icons;
+/// Объём физической памяти, доступной операционной системе.
+mod system_memory;
 
 struct RunningChild {
     child: Mutex<tokio::process::Child>,
@@ -259,6 +261,11 @@ fn app_info(state: State<'_, AppState>) -> AppInfo {
         platform: format!("{} / {}", std::env::consts::OS, std::env::consts::ARCH),
         demo: false,
     }
+}
+
+#[tauri::command]
+fn system_memory() -> Option<system_memory::SystemMemory> {
+    system_memory::read()
 }
 
 /* ==================== НАСТРОЙКИ ==================== */
@@ -2145,13 +2152,13 @@ async fn pick_save_path(
 
 /* ==================== СОДЕРЖИМОЕ СБОРКИ ==================== */
 
-/// Подтвердить актуальные моды по содержимому реальных файлов и каталогу.
+/// Подтвердить наличие модов любой версии по содержимому реальных файлов.
 #[tauri::command]
-async fn catalog_current_mods(
+async fn catalog_installed_mods(
     state: State<'_, AppState>, instance_id: String, source: String,
 ) -> Result<Vec<String>, String> {
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    omnispec_core::catalog_installed::current_projects(
+    omnispec_core::catalog_installed::installed_projects(
         &state.paths, &meta, &source, &state.modrinth, &state.curseforge,
     ).await.map_err(err)
 }
@@ -3414,6 +3421,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            system_memory,
             get_settings,
             save_settings,
             set_presence,
@@ -3481,7 +3489,7 @@ fn main() {
             version_info,
             check_update,
             net_check,
-            catalog_current_mods,
+            catalog_installed_mods,
             content_list,
             content_toggle,
             content_delete,

@@ -1,9 +1,9 @@
-//! Актуальные установленные моды для карточек каталога.
+//! Установленные моды для карточек каталога, независимо от версии.
 //!
 //! Доверяем содержимому реальных файлов в mods, а не имени файла или старой
 //! картотеке. Это работает и для импортированных/переименованных JAR, включая
-//! выключенные. Для каждой площадки проверяем последнюю версию, совместимую
-//! с Minecraft и загрузчиком выбранной сборки.
+//! выключенные. Отметка означает только наличие файла, а не его актуальность
+//! или совместимость с Minecraft и загрузчиком выбранной сборки.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -136,24 +136,11 @@ fn scan_mods(dir: &Path, curseforge: bool) -> Result<Vec<LocalMod>> {
     Ok(result)
 }
 
-fn compatible(version: &Version, game_version: &str, loader: &str) -> bool {
-    if !version.game_versions.iter().any(|item| item == game_version) { return false; }
-    version.loaders.iter().any(|item| match loader {
-        "fabric" => item == "fabric",
-        "quilt" => item == "quilt",
-        "forge" => item == "forge",
-        "neoforge" => item == "neoforge",
-        _ => false,
-    })
-}
-
-fn current_modrinth(
-    files: &[LocalMod], latest: &HashMap<String, Version>, game_version: &str, loader: &str,
-) -> HashSet<String> {
+fn installed_modrinth(files: &[LocalMod], versions: &HashMap<String, Version>) -> HashSet<String> {
     let mut result = HashSet::new();
     for file in files {
-        let Some(version) = latest.get(&file.sha1) else { continue; };
-        if version.project_id.is_empty() || !compatible(version, game_version, loader) { continue; }
+        let Some(version) = versions.get(&file.sha1) else { continue; };
+        if version.project_id.is_empty() { continue; }
         if version.files.iter().any(|item| item.hashes.get("sha1")
             .is_some_and(|hash| hash.eq_ignore_ascii_case(&file.sha1))) && file.still_matches() {
             result.insert(version.project_id.clone());
@@ -162,9 +149,23 @@ fn current_modrinth(
     result
 }
 
-/// Вернуть только подтверждённые актуальные id. Если сервис недоступен,
-/// возвращаем ошибку вместо догадки по content.json или имени файла.
-pub async fn current_projects(
+fn installed_curseforge(files: &[LocalMod], matches: &[crate::curseforge::FingerprintMatch]) -> HashSet<String> {
+    let mut result = HashSet::new();
+    for item in matches {
+        let Ok(project) = item.version.project_id.parse::<u32>() else { continue; };
+        if project == 0 { continue; }
+        let Some(remote) = item.version.primary_file() else { continue; };
+        if files.iter().any(|local| local.fingerprint == Some(item.fingerprint)
+            && local.matches_hashes(&remote.hashes) && local.still_matches()) {
+            result.insert(project.to_string());
+        }
+    }
+    result
+}
+
+/// Вернуть только подтверждённые id установленных проектов. Если сервис
+/// недоступен, не угадываем проект по одному имени или старому content.json.
+pub async fn installed_projects(
     paths: &Paths, instance: &InstanceMeta, source: &str,
     modrinth: &Modrinth, curseforge: &CurseForge,
 ) -> Result<Vec<String>> {
@@ -176,41 +177,19 @@ pub async fn current_projects(
     let files = tokio::task::spawn_blocking(move || scan_mods(&folder, cf)).await
         .map_err(|error| Error::other(format!("не удалось проверить моды: {error}")))??;
     if files.is_empty() { return Ok(Vec::new()); }
-    let loader = instance.loader.kind();
-    let mut current = if !cf {
+    let mut installed = if !cf {
         let mut hashes: Vec<_> = files.iter().map(|file| file.sha1.clone()).collect();
         hashes.sort(); hashes.dedup();
-        let latest = modrinth.latest_versions_for_hashes(&hashes, &instance.mc_version, loader).await?;
-        current_modrinth(&files, &latest, &instance.mc_version, loader)
+        let versions = modrinth.versions_for_hashes(&hashes).await?;
+        installed_modrinth(&files, &versions)
     } else {
         let mut fingerprints: Vec<_> = files.iter().filter_map(|file| file.fingerprint).collect();
         fingerprints.sort_unstable(); fingerprints.dedup();
         let matches = curseforge.fingerprint_matches(&fingerprints).await?;
-        let mut verified: HashMap<u32, Vec<(&LocalMod, String)>> = HashMap::new();
-        for item in matches {
-            let Ok(project) = item.version.project_id.parse::<u32>() else { continue; };
-            let Some(remote) = item.version.primary_file() else { continue; };
-            for local in files.iter().filter(|file| file.fingerprint == Some(item.fingerprint)) {
-                if local.matches_hashes(&remote.hashes) {
-                    verified.entry(project).or_default().push((local, item.version.id.clone()));
-                }
-            }
-        }
-        let mut projects: Vec<_> = verified.keys().copied().collect();
-        projects.sort_unstable();
-        let latest = curseforge.latest_compatible_files(&projects, &instance.mc_version, loader).await?;
-        let mut result = HashSet::new();
-        for (project, entries) in verified {
-            let id = project.to_string();
-            if latest.get(&id).is_some_and(|latest_id| entries.iter().any(|(file, version_id)|
-                version_id == latest_id && file.still_matches())) {
-                result.insert(id);
-            }
-        }
-        result
+        installed_curseforge(&files, &matches)
     }.into_iter().collect::<Vec<_>>();
-    current.sort();
-    Ok(current)
+    installed.sort();
+    Ok(installed)
 }
 
 #[cfg(test)]
@@ -248,23 +227,17 @@ mod tests {
             "id":"new","project_id":"project","game_versions":["1.21.1"],"loaders":["fabric"],
             "files":[{"url":"","filename":"not-local-name.jar","hashes":{"sha1":current.sha1}}]
         })).unwrap();
-        let latest = HashMap::from([(current.sha1.clone(), version.clone()), (old.sha1.clone(), version)]);
-        assert_eq!(current_modrinth(&files, &latest, "1.21.1", "fabric"), HashSet::from(["project".into()]));
-        assert!(current_modrinth(&files, &latest, "1.20.1", "fabric").is_empty());
-        assert!(current_modrinth(&files, &latest, "1.21.1", "forge").is_empty());
-        assert!(current_modrinth(&files, &latest, "1.21.1", "quilt").is_empty(), "Fabric не гарантирует Quilt");
-        let mut forge_version = latest.get(&current.sha1).unwrap().clone();
-        forge_version.loaders = vec!["forge".into()];
-        let forge = HashMap::from([(current.sha1.clone(), forge_version)]);
-        assert!(current_modrinth(&files, &forge, "1.21.1", "neoforge").is_empty(), "Forge не гарантирует NeoForge");
+        // Сервер не должен подтверждать старый файл чужой версией с другим хешем.
+        let versions = HashMap::from([(current.sha1.clone(), version.clone()), (old.sha1.clone(), version)]);
+        assert_eq!(installed_modrinth(&files, &versions), HashSet::from(["project".into()]));
         std::fs::remove_file(&current.path).unwrap();
-        assert!(current_modrinth(&files, &latest, "1.21.1", "fabric").is_empty(), "удалённый актуальный файл больше не подтверждает проект");
+        assert!(installed_modrinth(&files, &versions).is_empty(), "удалённый файл и несовпадающий хеш не подтверждают проект");
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
     #[ignore = "requires real Modrinth, CurseForge and CDN"]
-    async fn live_imported_files_match_both_catalogs_and_only_the_latest() {
+    async fn live_imported_files_match_both_catalogs_at_any_version() {
         let root = std::env::temp_dir().join(format!("omnispec-live-current-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::new(&root).unwrap();
@@ -289,20 +262,22 @@ mod tests {
         assert!(!paths.instance_dir(&meta.id).join("content.json").exists());
         std::fs::write(dir.join("renamed-old.jar"), &old_bytes).unwrap();
         for (source, id) in [("modrinth", "AANobbMI"), ("curseforge", "394468")] {
-            let ids = current_projects(&paths, &meta, source, &mr, &cf).await.unwrap();
-            assert!(!ids.iter().any(|item| item == id), "устаревшая версия не выделяется: {source} {ids:?}");
+            let ids = installed_projects(&paths, &meta, source, &mr, &cf).await.unwrap();
+            assert!(ids.iter().any(|item| item == id), "старая импортированная версия отмечается: {source} {ids:?}");
         }
+        std::fs::remove_file(dir.join("renamed-old.jar")).unwrap();
         std::fs::write(dir.join("imported-latest.jar.disabled"), &current_bytes).unwrap();
         for (source, id) in [("modrinth", "AANobbMI"), ("curseforge", "394468")] {
-            let ids = current_projects(&paths, &meta, source, &mr, &cf).await.unwrap();
-            assert!(ids.iter().any(|item| item == id), "импортированная актуальная версия: {source} {ids:?}");
+            let ids = installed_projects(&paths, &meta, source, &mr, &cf).await.unwrap();
+            assert!(ids.iter().any(|item| item == id), "выключенная версия тоже отмечается: {source} {ids:?}");
         }
         for loader in [crate::instances::Loader::NeoForge { version: "1".into() }, crate::instances::Loader::Quilt { version: "1".into() }] {
             let mut other = meta.clone();
             other.loader = loader;
+            other.mc_version = "1.19.4".into();
             for (source, id) in [("modrinth", "AANobbMI"), ("curseforge", "394468")] {
-                let ids = current_projects(&paths, &other, source, &mr, &cf).await.unwrap();
-                assert!(!ids.iter().any(|item| item == id), "Fabric JAR не подтверждает другой загрузчик: {source} {:?} {ids:?}", other.loader);
+                let ids = installed_projects(&paths, &other, source, &mr, &cf).await.unwrap();
+                assert!(ids.iter().any(|item| item == id), "наличие JAR отмечается даже при несовпадении загрузчика: {source} {:?} {ids:?}", other.loader);
             }
         }
         std::fs::remove_file(dir.join("imported-latest.jar.disabled")).unwrap();
@@ -310,7 +285,7 @@ mod tests {
         altered.push(b' '); // тот же CurseForge fingerprint, но уже другие байты и SHA-1
         std::fs::write(dir.join("altered.jar"), &altered).unwrap();
         for (source, id) in [("modrinth", "AANobbMI"), ("curseforge", "394468")] {
-            let ids = current_projects(&paths, &meta, source, &mr, &cf).await.unwrap();
+            let ids = installed_projects(&paths, &meta, source, &mr, &cf).await.unwrap();
             assert!(!ids.iter().any(|item| item == id), "изменённый файл не подтверждается: {source} {ids:?}");
         }
         assert!(!paths.instance_dir(&meta.id).join("content.json").exists());
@@ -333,6 +308,14 @@ mod tests {
         assert!(one.matches_hashes(&hashes));
         assert!(!two.matches_hashes(&hashes));
         assert!(!one.matches_hashes(&HashMap::new()));
+        let version: Version = serde_json::from_value(serde_json::json!({
+            "id":"old-file", "project_id":"394468", "game_versions":["1.16.5"], "loaders":["forge"],
+            "files":[{"url":"", "filename":"other-name.jar", "hashes":hashes}]
+        })).unwrap();
+        let matches = vec![crate::curseforge::FingerprintMatch { fingerprint: one.fingerprint.unwrap(), version }];
+        assert_eq!(installed_curseforge(&[one.clone(), two.clone()], &matches), HashSet::from(["394468".into()]));
+        std::fs::remove_file(&one.path).unwrap();
+        assert!(installed_curseforge(&[one, two], &matches).is_empty(), "коллизия или удалённый файл не подтверждают проект");
         let _ = std::fs::remove_dir_all(root);
     }
 }

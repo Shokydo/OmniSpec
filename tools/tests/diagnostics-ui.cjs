@@ -162,6 +162,7 @@ async function bodyContains(page, text) {
       const {page,errors} = await createPage(browser);
       await choosePack(page); await page.click('#btn-play'); await attemptCount(page,1);
       await page.locator('.instance[data-id="pack-b"]').last().click();
+      await page.locator('[data-tab="errors"]').click();
       assert.equal(await page.locator('#btn-play').isEnabled(),true,'подготовка другой сборки не блокирует кнопку');
       await page.click('#btn-play'); await attemptCount(page,2);
       await page.evaluate(() => {
@@ -454,8 +455,10 @@ async function bodyContains(page, text) {
       await page.selectOption('#errors-run',ids[0]); await bodyContains(page,'Игра завершилась с ошибкой');
       assert((await page.locator('#errors-dynamic').innerText()).includes('Конфликт модулей Java'));
       await page.locator('.instance[data-id="pack-b"]').last().click();
+      await page.locator('[data-tab="errors"]').click();
       await bodyContains(page,'Пока нет данных');
       await page.locator('.instance[data-id="pack-a"]').last().click();
+      await page.locator('[data-tab="errors"]').click();
       await bodyContains(page,'Конфликт модулей Java');
       assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_SESSIONS: isolated duplicates, targeted stop, profile isolation — OK');
       await page.close();

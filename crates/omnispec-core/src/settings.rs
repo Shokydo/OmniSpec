@@ -43,6 +43,10 @@ fn default_ui_scale() -> u32 {
     100
 }
 
+fn default_initial_tab() -> String {
+    "console".to_string()
+}
+
 fn default_feed_grid() -> u8 {
     2
 }
@@ -231,6 +235,9 @@ pub struct Settings {
     /// Масштаб интерфейса в процентах: 80, 90, 100, 110, 125, 150.
     #[serde(default = "default_ui_scale")]
     pub ui_scale: u32,
+    /// Вкладка при открытии сборки; старые настройки начинают с консоли.
+    #[serde(default = "default_initial_tab")]
+    pub initial_tab: String,
     /// Фоновая анимация: stars | dust | sticks | snow | off.
     #[serde(default = "default_ambient")]
     pub ambient: String,
@@ -359,6 +366,7 @@ impl Default for Settings {
             theme_text: None,
             click_fx: default_click_fx(),
             ui_scale: default_ui_scale(),
+            initial_tab: default_initial_tab(),
             ambient: default_ambient(),
             sound_style: default_sound_style(),
             feed_grid: default_feed_grid(),
@@ -463,6 +471,19 @@ mod discord_tests {
         ] {
             assert!(settings.discord_instance_icon);
             assert!(!settings.discord_upload_local_icon);
+        }
+    }
+
+    #[test]
+    fn initial_tab_defaults_to_console_and_survives_roundtrip() {
+        let old: Settings = serde_json::from_str(r#"{"ui_scale":125}"#).unwrap();
+        assert_eq!(old.initial_tab, "console");
+        for tab in ["console", "errors", "files", "mods", "resourcepacks", "shaders", "worlds", "screenshots", "download", "settings"] {
+            let mut changed = old.clone();
+            changed.initial_tab = tab.into();
+            let restored: Settings = serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
+            assert_eq!(restored.initial_tab, tab);
+            assert_eq!(restored.ui_scale, 125);
         }
     }
 

@@ -84,6 +84,11 @@ class DiscordReleaseTests(unittest.TestCase):
         self.assertIn("CurseForge", catalog)
         self.assertIn("без обязательного Enter", catalog)
         self.assertNotIn("ярлыков Windows", catalog)
+        preferences = build("v0.49.6")
+        self.assertIn("начальную вкладку", preferences)
+        self.assertIn("CurseForge", preferences)
+        self.assertIn("физическую ОЗУ", preferences)
+        self.assertNotIn("без обязательного Enter", preferences)
         with tempfile.TemporaryDirectory() as tmp:
             notes = Path(tmp) / "notes"
             notes.mkdir()

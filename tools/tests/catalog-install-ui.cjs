@@ -75,10 +75,10 @@ async function createPage(browser) {
           case 'list_java': return [];
           case 'instance_path': return `/test/${args.instanceId}`;
           case 'content_list': return (this.entries[args.instanceId] || []).map(x => ({...x}));
-          case 'catalog_current_mods': {
+          case 'catalog_installed_mods': {
             if (this.failCatalog) throw 'сеть недоступна';
             const snapshot = (this.entries[args.instanceId] || [])
-              .filter(x => x.source === args.source && x.latest !== false).map(x => x.project_id);
+              .filter(x => x.source === args.source).map(x => x.project_id);
             if (this.holdNext[args.instanceId] > 0) {
               this.holdNext[args.instanceId]--;
               return new Promise(resolve => this.held.push({id:args.instanceId,source:args.source,snapshot,resolve}));
@@ -226,13 +226,13 @@ async function verifyInstallation(page, source, view, mode, number) {
   const browser = await chromium.launch({headless:true});
   try {
     const {page,errors} = await createPage(browser);
-    // Current enabled/disabled and imported files are outlined; outdated versions are not.
+    // Enabled, disabled, imported and old versions all mark the installed project.
     await page.waitForFunction(() => document.querySelector('[data-project="m-5"]')?.classList.contains('is-installed'));
     assert(await page.locator('[data-project="m-6"]').evaluate(el => el.classList.contains('is-installed')));
     assert(await page.locator('[data-project="m-8"]').evaluate(el => el.classList.contains('is-installed')));
-    assert(!(await page.locator('[data-project="m-7"]').evaluate(el => el.classList.contains('is-installed'))));
+    assert(await page.locator('[data-project="m-7"]').evaluate(el => el.classList.contains('is-installed')),'старая версия тоже отмечается');
     assert(await page.locator('#dl-installed-check').isHidden(), 'поясняющая надпись не должна занимать место');
-    assert((await page.locator('[data-project="m-8"]').getAttribute('aria-label')).includes('актуальная версия'));
+    assert(!(await page.locator('[data-project="m-8"]').getAttribute('aria-label')).includes('актуальная версия'),'наличие не означает актуальность');
     // A delayed answer from the other source must not overwrite the current one.
     await page.evaluate(() => { window.__catalogTest.holdNext['pack-a'] = 1; });
     await page.locator('[data-dl-source="curseforge"]').click();
@@ -260,7 +260,7 @@ async function verifyInstallation(page, source, view, mode, number) {
     assert(!(await page.locator('[data-project="11111111"]').evaluate(el => el.classList.contains('is-installed'))),'неизвестный источник не отмечается');
     const colors = await page.evaluate(() => {
       const installed = document.querySelector('[data-project="m-5"]');
-      const other = document.querySelector('[data-project="m-7"]');
+      const other = document.querySelector('[data-project="m-10"]');
       return {border:getComputedStyle(installed).borderColor,other:getComputedStyle(other).borderColor,shadow:getComputedStyle(installed).boxShadow};
     });
     assert.notEqual(colors.border,colors.other,'установленный мод должен иметь видимую рамку');
@@ -366,6 +366,7 @@ async function verifyInstallation(page, source, view, mode, number) {
     const previousPack = await clickInstall(page,'[data-project="m-82"] [data-install]');
     await page.evaluate(() => {window.__catalogTest.holdNext['pack-b']=1;});
     await page.locator('.instance[data-id="pack-b"]').last().click();
+    await page.locator('[data-tab="download"]').click();
     await page.waitForFunction(() => window.__catalogTest.held.some(x => x.id === 'pack-b'));
     await ensureCard(page,'#mr-results','[data-project="m-82"]');
     await page.evaluate(i => window.__catalogTest.complete(i),previousPack);
@@ -373,11 +374,13 @@ async function verifyInstallation(page, source, view, mode, number) {
       && window.omnispecDebug.state.downloads.state === 'done',previousPack);
     assert(!(await page.locator('[data-project="m-82"]').evaluate(el => el.classList.contains('is-installed'))),'фоновая установка не отмечается в чужой сборке');
     await page.locator('.instance[data-id="pack-a"]').last().click();
+    await page.locator('[data-tab="download"]').click();
     await page.evaluate(() => window.__catalogTest.releaseHeld('pack-b'));
     await ensureCard(page,'#mr-results','[data-project="m-82"]');
     await page.waitForFunction(() => document.querySelector('[data-project="m-82"]')?.classList.contains('is-installed'));
     assert(!(await page.locator('[data-project="m-9"]').evaluate(el => el.classList.contains('is-installed'))),'опоздавший ответ другой сборки проигнорирован');
     await page.locator('.instance[data-id="pack-b"]').last().click();
+    await page.locator('[data-tab="download"]').click();
     await page.waitForFunction(() => document.querySelector('[data-project="m-9"]')?.classList.contains('is-installed'));
     await ensureCard(page,'#mr-results','[data-project="m-82"]');
     assert(!(await page.locator('[data-project="m-82"]').evaluate(el => el.classList.contains('is-installed'))));

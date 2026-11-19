@@ -51,7 +51,7 @@ const server = http.createServer((req, res) => {
             case 'instance_path': return `/data/instances/${args.instanceId}`;
             case 'custom_wallpaper': case 'startup_file': case 'set_presence': case 'resolve_presence_icon': case 'instance_icon': return null;
             case 'version_info': return {version:'test',enabled:false};
-            case 'list_java': case 'catalog_current_mods': case 'content_list': return [];
+            case 'list_java': case 'catalog_installed_mods': case 'content_list': return [];
             case 'search_modrinth': case 'search_curseforge': return {hits:[],total_hits:0};
             case 'launch_instance': {
               this.running = [args.instanceId];

@@ -203,6 +203,14 @@
 
   const UI_SCALES = [80, 90, 100, 110, 125, 150];
 
+  const INITIAL_TABS = [
+    ["console", "Консоль", "i-terminal"], ["errors", "Ошибки", "i-alert"],
+    ["files", "Файлы", "i-folder"], ["mods", "Моды", "i-mod"],
+    ["resourcepacks", "Ресурспаки", "i-cube"], ["shaders", "Шейдеры", "i-star"],
+    ["worlds", "Миры", "i-globe"], ["screenshots", "Скриншоты", "i-image"],
+    ["download", "Загрузить", "i-download"], ["settings", "Сборка", "i-sliders"]
+  ];
+
   /** Трейс при первом запуске: искры, тонкие, короткий хвост, почти прозрачные. */
   const TRAIL_DEFAULTS = { style: "sparks", size: 50, length: 20, opacity: 15 };
 
@@ -223,6 +231,9 @@
       body.style.height = `calc(100vh / ${factor})`;
     }
     document.documentElement.dataset.uiScale = String(scale);
+    document.documentElement.style.setProperty("--ui-zoom", String(scale / 100));
+    // Canvas и ограниченные экраном меню/окна должны узнать о новом масштабе.
+    window.dispatchEvent(new Event("resize"));
     return scale;
   }
 
@@ -437,6 +448,15 @@
       particles = Array.from({ length: count() }, () => spawn(true));
     }
 
+    /** При изменении окна сохраняем координаты и скорости видимых частиц.
+     * Полная пересборка на каждом событии resize выглядела как бешеное движение. */
+    function fitParticles() {
+      particles = particles.filter((p) => p.x >= -60 && p.x <= width + 60 && p.y >= -40 && p.y <= height + 40);
+      const target = count();
+      if (particles.length > target) particles.length = target;
+      while (particles.length < target) particles.push(spawn(true));
+    }
+
     function drawStar(p, time) {
       const twinkle = 0.6 + 0.4 * Math.sin(time * 1.7 + p.phase);
       ctx.globalAlpha = p.alpha * twinkle;
@@ -631,7 +651,7 @@
     window.addEventListener("resize", () => {
       if (style === "off" || !raf) return;
       resize();
-      build();
+      fitParticles();
     });
 
     ambientInkRefresh = () => {
@@ -676,7 +696,9 @@
         else start();
         return style;
       },
-      current: () => style
+      current: () => style,
+      // Снимок для автоматической проверки плавности resize; исходные объекты не отдаём.
+      snapshot: () => ({ width, height, particles: particles.map((p) => ({ ...p })) })
     };
   })();
 
@@ -831,10 +853,11 @@
 
     function start() {
       const el = canvas();
-      if (!el) return;
+      if (!el || raf) return;
       el.hidden = false;
       resize();
-      if (!raf) { last = 0; raf = requestAnimationFrame(step); }
+      last = 0;
+      raf = requestAnimationFrame(step);
     }
 
     function stop() {
@@ -1311,15 +1334,33 @@
     }
   }
 
+  /** Координаты события и getBoundingClientRect — в пикселях окна, а меню
+   * живёт внутри body с zoom. Длинное меню ограничиваем высотой и прокручиваем. */
+  function positionCtxMenu(el, x, y) {
+    const zoom = uiZoom();
+    const width = window.innerWidth / zoom;
+    const height = window.innerHeight / zoom;
+    const margin = Math.min(8, width / 4, height / 4);
+    const maxWidth = Math.max(1, width - margin * 2);
+    const maxHeight = Math.max(1, height - margin * 2);
+    el.style.minWidth = `${Math.min(214, maxWidth)}px`;
+    el.style.maxWidth = `${maxWidth}px`;
+    el.style.maxHeight = `${maxHeight}px`;
+    el.style.left = "0px";
+    el.style.top = "0px";
+    el.scrollTop = 0;
+    const rect = el.getBoundingClientRect();
+    el.style.left = `${Math.max(margin, Math.min(x / zoom, width - rect.width / zoom - margin))}px`;
+    el.style.top = `${Math.max(margin, Math.min(y / zoom, height - rect.height / zoom - margin))}px`;
+  }
+
   /** Общее контекстное меню: html + обработчик по data-act. */
   function fillCtxMenu(x, y, html, handler) {
     const el = $("#ctx-menu");
     if (!el) return;
     el.innerHTML = html;
     el.hidden = false;
-    const rect = el.getBoundingClientRect();
-    el.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
-    el.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+    positionCtxMenu(el, x, y);
     $$(".ctx-item", el).forEach((btn) => btn.addEventListener("click", () => {
       closeCtxMenu();
       handler(btn.dataset.act);
@@ -1351,9 +1392,7 @@
       <div class="ctx-sep"></div>
       <button class="ctx-item danger" data-act="delete"><svg class="ic"><use href="#i-trash"/></svg>Удалить сборку</button>`;
     el.hidden = false;
-    const rect = el.getBoundingClientRect();
-    el.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
-    el.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+    positionCtxMenu(el, x, y);
     $$(".ctx-item", el).forEach((btn) => btn.addEventListener("click", () => {
       closeCtxMenu();
       runInstanceAction(btn.dataset.act, meta);
@@ -1368,8 +1407,9 @@
       return;
     }
     if (action === "play") {
-      state.selectedId = fresh.id;
-      renderSidebar();
+      // ПКМ может быть открыт по другой сборке: переключаем не только id,
+      // но и заголовок/вкладку, чтобы не показывать содержимое старой сборки.
+      if (state.selectedId !== fresh.id) openInstance(fresh.id);
       if (state.running.has(fresh.id)) await stopGame();
       else play();
       return;
@@ -1599,7 +1639,7 @@
       const tile = event.target.closest("[data-build-tile]");
       if (!tile) return;
       close();
-      selectInstance(tile.dataset.buildTile);
+      openInstance(tile.dataset.buildTile);
     });
     $("#builds-body").addEventListener("contextmenu", (event) => {
       const tile = event.target.closest("[data-build-tile]");
@@ -1608,7 +1648,7 @@
       const meta = state.instances.find((item) => item.id === tile.dataset.buildTile);
       if (!meta) return;
       close();
-      selectInstance(meta.id);
+      openInstance(meta.id);
       openInstanceMenu(event.clientX, event.clientY, meta);
     });
   }
@@ -1684,7 +1724,7 @@
       const meta = await withInstallProgress("modpack", "modpack", (op) => api.installModpack(path, op));
       if (categoryId) await moveInstanceToCategory(meta.id, categoryId);
       await refreshInstances();
-      selectInstance(meta.id);
+      openInstance(meta.id);
       toast(`Ваша сборка «${meta.name}» установлена`, "ok");
     } catch (err) {
       toast(String(err), "err");
@@ -2041,6 +2081,7 @@
   }
   const realApi = {
     appInfo: () => invoke("app_info"),
+    systemMemory: () => invoke("system_memory"),
     settings: () => invoke("get_settings"),
     saveSettings: saveSettingsInOrder,
     instances: () => invoke("list_instances"),
@@ -2077,7 +2118,7 @@
     screenshotThumb: (instanceId, name) => invoke("screenshot_thumb", { instanceId, name }),
     screenshotFull: (instanceId, name) => invoke("screenshot_full", { instanceId, name }),
     // содержимое сборки: моды, ресурспаки, шейдеры
-    catalogCurrentMods: (instanceId, source) => invoke("catalog_current_mods", { instanceId, source }),
+    catalogInstalledMods: (instanceId, source) => invoke("catalog_installed_mods", { instanceId, source }),
     contentList: (instanceId, kind) => invoke("content_list", { instanceId, kind }),
     contentToggle: (instanceId, kind, name) => invoke("content_toggle", { instanceId, kind, name }),
     contentDelete: (instanceId, kind, name) => invoke("content_delete", { instanceId, kind, name }),
@@ -2180,6 +2221,7 @@
 
   const demoApi = {
     appInfo: async () => ({ home: "C:\\Users\\Player\\AppData\\Roaming\\OmniSpec", version: "0.1.0 (демо-режим)", demo: true }),
+    systemMemory: async () => null, // браузер не раскрывает точный объём ОЗУ
     settings: async () => ({ ...DEMO.settings }),
     saveSettings: async (s) => { DEMO.settings = s; return null; },
     instances: async () => DEMO.instances.map((i) => ({ ...i })),
@@ -2407,7 +2449,7 @@
     },
     mods: async () => demoMods.map((m) => ({ ...m })),
     // В демо-режиме пример статусов, без обращения к сети и локальным файлам.
-    catalogCurrentMods: async (_id, source) => source === "modrinth" ? demoMods.map((mod) => mod.project_id).filter(Boolean) : [],
+    catalogInstalledMods: async (_id, source) => source === "modrinth" ? demoMods.map((mod) => mod.project_id).filter(Boolean) : [],
     // содержимое сборки в демо-режиме
     contentList: async (_id, kind) => (kind === "mod"
       ? demoMods.map((mod) => {
@@ -2576,6 +2618,7 @@
     instances: [],
     selectedId: null,
     settings: null,
+    systemMemory: null,
     accounts: { accounts: [], active: null },
     tab: "console",
     running: new Set(),
@@ -2636,6 +2679,66 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // Все ползунки памяти учитывают одну и ту же физическую ОЗУ и ограничение
+  // ядра. При сбое определения честно показываем, что максимум приблизительный.
+  const MEMORY_MIN = 512;
+  const MEMORY_STEP = 256;
+  const MEMORY_ENGINE_MAX = 65536;
+  const MEMORY_UNKNOWN_MAX = 32768;
+  function memoryLimits() {
+    const detected = Number(state.systemMemory?.total_mb);
+    const total = Number.isFinite(detected) && detected > 0 ? Math.floor(detected) : null;
+    const max = total === null ? MEMORY_UNKNOWN_MAX
+      : Math.max(MEMORY_MIN, Math.min(MEMORY_ENGINE_MAX, Math.floor(total / MEMORY_STEP) * MEMORY_STEP));
+    return { total, max };
+  }
+  function memoryValue(value) {
+    const n = Number(value);
+    // Даже значение вне диапазона показываем как сохранённое, не переписывая его.
+    return value != null && Number.isFinite(n) && n >= 0 ? Math.round(n) : 4096;
+  }
+  function memoryHint(value) {
+    const { total, max } = memoryLimits();
+    let system;
+    if (total === null) {
+      system = "Не удалось определить ОЗУ компьютера; проверь объём вручную и оставь запас системе.";
+    } else if (total < MEMORY_MIN) {
+      system = `ОЗУ, доступная системе: ${total} МБ. Лаунчеру нужно не менее ${MEMORY_MIN} МБ для игры; ползунок недоступен.`;
+    } else {
+      const reserve = total >= 32768 ? 4096 : total >= 8192 ? 2048 : 1024;
+      const recommended = Math.min(max, Math.floor((total - reserve) / MEMORY_STEP) * MEMORY_STEP);
+      const limit = total > MEMORY_ENGINE_MAX ? ` Предел лаунчера: ${MEMORY_ENGINE_MAX} МБ.` : "";
+      const guidance = recommended >= MEMORY_MIN
+        ? ` Ориентир для игры — не более ${recommended} МБ: оставь хотя бы ${reserve} МБ системе и другим программам.`
+          + (Number(value) > recommended ? " Сейчас запас меньше рекомендуемого." : "")
+        : ` Даже минимальные ${MEMORY_MIN} МБ могут не оставить достаточно памяти системе.`;
+      system = `ОЗУ, доступная системе: ${total} МБ.${limit}${guidance}`;
+    }
+    const saved = Number(value) > max
+      ? ` Сохранено ${value} МБ — выше предела ползунка. Значение не изменится, пока ты сам не передвинешь ползунок.`
+      : Number(value) < MEMORY_MIN
+        ? ` Сохранено ${value} МБ — ниже минимума; при запуске применяется ${MEMORY_MIN} МБ. Значение останется прежним, пока ты не передвинешь ползунок.`
+        : "";
+    return system + saved;
+  }
+  function memoryRangeHtml(id, value, label) {
+    const saved = memoryValue(value);
+    const { total, max } = memoryLimits();
+    const disabled = total !== null && total < MEMORY_MIN;
+    return `<div class="range">
+      <input type="range" id="${id}" min="${MEMORY_MIN}" max="${max}" step="${MEMORY_STEP}" value="${Math.min(saved, max)}" data-memory-dirty="false" aria-label="${esc(label)}"${disabled ? " disabled" : ""}>
+      <span class="tag" id="${id}-value">${saved} МБ</span>
+    </div><div class="hint memory-hint" id="${id}-hint">${esc(memoryHint(saved))}</div>`;
+  }
+  function updateMemoryRange(input) {
+    input.dataset.memoryDirty = "true";
+    const value = Number(input.value);
+    const label = $(`#${input.id}-value`);
+    const hint = $(`#${input.id}-hint`);
+    if (label) label.textContent = `${value} МБ`;
+    if (hint) hint.textContent = memoryHint(value);
+  }
 
   // Анализирует только новые строки. Храним результаты отдельных попыток в
   // памяти текущего сеанса; сеть и файлы сборки диагностика не трогает.
@@ -3024,7 +3127,7 @@
     $$(".instance", list).forEach((el) => {
       el.addEventListener("click", () => {
         if (consumeDragClick()) return;
-        selectInstance(el.dataset.id);
+        openInstance(el.dataset.id);
       });
       // двойной клик по сборке — сразу запускаем игру
       el.addEventListener("dblclick", (event) => {
@@ -3052,7 +3155,7 @@
 
     $$(".instance-dup", list).forEach((el) => {
       el.addEventListener("click", () => {
-        if (el.dataset.dupOf) selectInstance(el.dataset.dupOf);
+        if (el.dataset.dupOf) openInstance(el.dataset.dupOf);
       });
       // ПКМ по самому дубликату — выключить именно это окно игры
       el.addEventListener("contextmenu", (event) => {
@@ -3290,7 +3393,7 @@
       <button class="ctx-item" data-act="focus"><svg class="ic"><use href="#i-house"/></svg>Открыть сборку</button>
       <div class="ctx-sep"></div>
       <button class="ctx-item danger" data-act="stop-dup"><svg class="ic"><use href="#i-close"/></svg>Выключить дубликат</button>`, async (act) => {
-      if (act === "focus" && meta) { selectInstance(meta.id); return; }
+      if (act === "focus" && meta) { openInstance(meta.id); return; }
       if (act !== "stop-dup") return;
       const marked = diagnostics.requestStop(instanceId, runId);
       try {
@@ -3465,6 +3568,17 @@
 
   // Временные публичные ссылки нужно обновлять и при очень долгой работе окна.
   setInterval(() => { if (IS_APP && selected()) syncPresence(); }, 60 * 60 * 1000);
+
+  /** Настройка относится к явному открытию сборки, не к обновлению метаданных. */
+  function initialTab() {
+    const id = state.settings?.initial_tab;
+    return INITIAL_TABS.some(([tab]) => tab === id) ? id : "console";
+  }
+
+  function openInstance(id) {
+    if (id && state.instances.some((meta) => meta.id === id)) state.tab = initialTab();
+    selectInstance(id);
+  }
 
   function selectInstance(id) {
     closeAccountPopover();
@@ -3860,7 +3974,7 @@
 
   function projectLabel(title, projectId, source, type) {
     const parts = [title || "Проект"];
-    if (projectInstalled(projectId, source, type)) parts.push("установлен в этой сборке, актуальная версия");
+    if (projectInstalled(projectId, source, type)) parts.push("установлен в этой сборке");
     if (projectStatus(projectId, source, type) === "downloading") parts.push("скачивается");
     return parts.join(" — ");
   }
@@ -3913,7 +4027,7 @@
     installedMessage("");
     if (!instanceId || state.tab !== "download") return;
     try {
-      const ids = await api.catalogCurrentMods(instanceId, source);
+      const ids = await api.catalogInstalledMods(instanceId, source);
       if (generation !== installedProjectsGeneration || state.selectedId !== instanceId
           || installedProjectsSource !== source || state.modsSource !== source) return;
       state.installedProjects = new Set((ids || []).filter(Boolean).map((id) => projectKey(source, id)));
@@ -3976,7 +4090,9 @@
     });
   }
 
+  let tabRenderGeneration = 0;
   function renderTab() {
+    tabRenderGeneration += 1;
     const body = $("#tab-body");
     const meta = selected();
     applyTabs(meta);
@@ -4423,6 +4539,7 @@
   const FM_IMAGES = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"];
 
   const fm = {
+    revision: 0,
     path: "",
     entries: [],
     cache: new Map(),      // путь -> список того, что внутри
@@ -4474,9 +4591,12 @@
   /** Содержимое папки с кэшем: дерево не дёргает диск на каждую перерисовку. */
   async function fmList(path) {
     const key = path || "";
+    const instanceId = state.selectedId;
+    const revision = fm.revision;
     if (fm.cache.has(key)) return fm.cache.get(key);
-    const entries = await api.listDir(state.selectedId, key)
-      .catch((error) => { toast(String(error), "err"); return []; });
+    const entries = await api.listDir(instanceId, key)
+      .catch((error) => { if (state.tab === "files" && state.selectedId === instanceId && fm.revision === revision) toast(String(error), "err"); return []; });
+    if (state.tab !== "files" || state.selectedId !== instanceId || fm.revision !== revision) return [];
     const sorted = entries.slice().sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name, "ru"));
     fm.cache.set(key, sorted);
     return sorted;
@@ -4517,7 +4637,10 @@
   async function fmRenderTree() {
     const box = $("#fm-tree");
     if (!box) return;
+    const instanceId = state.selectedId;
+    const revision = fm.revision;
     const html = await fmTreeHtml("", 0);
+    if (!box.isConnected || state.tab !== "files" || state.selectedId !== instanceId || fm.revision !== revision) return;
     box.innerHTML = html || `<div class="fm-empty">${fm.query ? "Ничего не найдено" : "Папка пуста"}</div>`;
     $$(".fm-row", box).forEach((row) => {
       const path = row.dataset.dir;
@@ -4779,9 +4902,15 @@
 
   async function fmRefresh() {
     if (!$("#fm-tree")) return;
-    const entries = await fmList(fm.path);
+    const instanceId = state.selectedId;
+    const revision = fm.revision;
+    const path = fm.path;
+    const valid = () => state.tab === "files" && state.selectedId === instanceId && fm.revision === revision && fm.path === path;
+    const entries = await fmList(path);
+    if (!valid()) return;
     fm.entries = entries;
     await fmRenderTree();
+    if (!valid()) return;
     fmRenderList();
     fmRenderCrumb();
     fmRenderStatus();
@@ -5098,6 +5227,7 @@
   }
 
   async function renderFiles() {
+    fm.revision += 1;
     fm.path = "";
     fm.entries = [];
     fm.cache.clear();
@@ -5244,13 +5374,24 @@
     return contentUpdates(kind).find((item) => item.filename === entry.filename);
   }
 
+  let contentViewInstance = null;
+  let contentRenderSerial = 0;
   async function renderContent(kind) {
     const cfg = CONTENT_KINDS[kind] || CONTENT_KINDS.mod;
     const meta = selected();
-    if (!meta) return;
-    const entries = await api.contentList(meta.id, kind).catch(() => []);
     const tabForKind = kind === "mod" ? "mods" : kind === "resourcepack" ? "resourcepacks" : "shaders";
-    if (state.tab !== tabForKind || state.selectedId !== meta.id) return;
+    if (!meta || state.tab !== tabForKind) return;
+    if (contentViewInstance !== meta.id) {
+      // Иконки и найденные обновления относятся к конкретной сборке.
+      contentViewInstance = meta.id;
+      state.modIcons = {};
+      state.contentUpdates = {};
+    }
+    const generation = tabRenderGeneration;
+    const serial = ++contentRenderSerial;
+    const entries = await api.contentList(meta.id, kind).catch(() => []);
+    if (serial !== contentRenderSerial || generation !== tabRenderGeneration
+        || state.tab !== tabForKind || state.selectedId !== meta.id) return;
     if (kind === "mod") {
       state.mods = entries;
       $("#badge-mods").hidden = !entries.length;
@@ -5259,10 +5400,11 @@
     // иконки подгружаются для модов, ресурспаков и шейдеров
     if (!Object.keys(state.modIcons).length) {
       api.modIcons(meta.id).then((map) => {
-        if (!map || !Object.keys(map).length) return;
+        if (!map || !Object.keys(map).length || generation !== tabRenderGeneration
+            || state.selectedId !== meta.id || contentViewInstance !== meta.id) return;
         state.modIcons = map;
         if (state.tab === "mods" || state.tab === "resourcepacks" || state.tab === "shaders") {
-          if (state.selectedId === meta.id) renderContent(state.tab === "mods" ? "mod" : state.tab === "resourcepacks" ? "resourcepack" : "shader");
+          renderContent(state.tab === "mods" ? "mod" : state.tab === "resourcepacks" ? "resourcepack" : "shader");
         }
       }).catch(() => {});
     }
@@ -5406,10 +5548,14 @@
   /** Проверка обновлений: одного файла или всех сразу. */
   async function checkContentUpdates(kind, filename = null) {
     const meta = selected();
+    if (!meta) return;
+    const generation = tabRenderGeneration;
+    const stillCurrent = () => generation === tabRenderGeneration && state.selectedId === meta.id;
     const body = kind === "mod" ? "моды сборки" : kind === "shader" ? "шейдеры сборки" : "ресурспаки сборки";
     toast(filename ? `Проверяем обновления «${filename}»…` : `Проверяем обновления (${body})…`);
     try {
       const updates = await api.contentUpdates(meta.id, kind);
+      if (!stillCurrent()) return;
       state.contentUpdates[kind] = updates;
       if (filename) {
         const found = updates.find((item) => item.filename === filename);
@@ -5420,6 +5566,7 @@
           ok: "Обновить",
           danger: false
         });
+        if (!stillCurrent()) return;
         if (ok) await updateContentFile(kind, filename);
         else renderContent(kind);
         return;
@@ -5508,8 +5655,11 @@
   /* ---------- миры ---------- */
   async function renderWorlds() {
     const meta = selected();
+    if (!meta) return;
+    const generation = tabRenderGeneration;
     const entries = await api.listDir(meta.id, "saves").catch(() => []);
     const icons = await api.worldIcons(meta.id).catch(() => ({}));
+    if (generation !== tabRenderGeneration || state.tab !== "worlds" || state.selectedId !== meta.id) return;
     $("#tab-body").innerHTML = `
       <div class="list-wrap">
         <div class="panel">
@@ -5542,8 +5692,11 @@
 
   async function renderScreenshots() {
     const meta = selected();
-    shotInstanceId = meta.id;
+    if (!meta) return;
+    const generation = tabRenderGeneration;
     const entries = await api.listScreenshots(meta.id).catch(() => []);
+    if (generation !== tabRenderGeneration || state.tab !== "screenshots" || state.selectedId !== meta.id) return;
+    shotInstanceId = meta.id;
     state.shots = { entries, shown: 0 };
     $("#tab-body").innerHTML = `
       <div class="list-wrap">
@@ -6245,9 +6398,7 @@
       </div>`);
 
     $$("#tab-body [data-home-id]").forEach((card) => card.addEventListener("click", () => {
-      selectInstance(card.dataset.homeId);
-      state.tab = "console";
-      renderTab();
+      openInstance(card.dataset.homeId);
     }));
     // двойной клик по недавней сборке — сразу запускаем игру
     $$("#tab-body [data-home-id]").forEach((card) => card.addEventListener("dblclick", (event) => {
@@ -6394,9 +6545,7 @@
         cfg.url = "";
         cfg.status = "";
         await refreshInstances();
-        selectInstance(meta.id);
-        state.tab = "console";
-        renderTab();
+        openInstance(meta.id);
         toast(`Сборка «${meta.name}» добавлена`, "ok");
       } catch (err) {
         toast(`Не удалось добавить: ${err}`, "err");
@@ -6462,9 +6611,7 @@
       cfg.zipPath = "";
       cfg.status = "";
       await refreshInstances();
-      selectInstance(meta.id);
-      state.tab = "console";
-      renderTab();
+      openInstance(meta.id);
       toast(`Сборка «${meta.name}» добавлена`, "ok");
     } catch (err) {
       toast(`Не удалось импортировать: ${err}`, "err");
@@ -6532,9 +6679,7 @@
     if (failed.length) toast(`Импортировано ${done} из ${list.length}. Не удалось: ${failed.join("; ")}`, "err");
     else toast(`Импортировано сборок: ${done}`, "ok");
     if (done === 1 && last) {
-      selectInstance(last.id);
-      state.tab = "console";
-      renderTab();
+      openInstance(last.id);
       return;
     }
     if (state.tab === "discover") renderDiscover();
@@ -7095,7 +7240,7 @@
       if (kind === "pack") {
         const meta = await withInstallProgress("modpack", "modpack", (op) => api.installModpack(versionId, op));
         await refreshInstances();
-        selectInstance(meta.id);
+        openInstance(meta.id);
         toast(`Ваша сборка «${meta.name}» установлена`, "ok");
       } else {
         const meta = selected();
@@ -7151,7 +7296,7 @@
           return api.installModpack(versions[0].id, op);
         });
         await refreshInstances();
-        selectInstance(meta.id);
+        openInstance(meta.id);
         toast(`Ваша сборка «${meta.name}» установлена`, "ok");
       } catch (err) { toast(String(err), "err"); }
       return;
@@ -8261,7 +8406,21 @@
   function prefsLook(settings) {
     const own = state.customTheme;
     const custom = state.theme === "custom";
+    const selectedTab = INITIAL_TABS.find(([id]) => id === initialTab()) || INITIAL_TABS[0];
     return `
+      <div class="prefs-section">
+        <div class="prefs-label">Начальная вкладка</div>
+        <div class="settings-row">
+          <div class="label">При открытии сборки</div>
+          <div>
+            <button type="button" class="btn initial-tab-trigger" id="prefs-initial-tab" aria-haspopup="dialog">
+              <svg class="ic"><use href="#${selectedTab[2]}"/></svg><span>${esc(selectedTab[1])}</span>
+              <svg class="ic initial-tab-chevron"><use href="#i-chev"/></svg>
+            </button>
+            <div class="hint">Выбери, что показывать первым при нажатии на сборку.</div>
+          </div>
+        </div>
+      </div>
       <div class="prefs-section">
         <div class="prefs-label">Тема оформления</div>
         <div class="theme-grid" id="theme-grid">
@@ -8594,10 +8753,7 @@
         <div class="prefs-rows">
           <div class="settings-row">
             <div class="label">Память по умолчанию, МБ</div>
-            <div class="range">
-              <input type="range" id="set-memory" min="1024" max="16384" step="512" value="${settings.memory_mb || 4096}">
-              <span class="tag" id="set-memory-value">${settings.memory_mb || 4096} МБ</span>
-            </div>
+            <div>${memoryRangeHtml("set-memory", settings.memory_mb, "Память по умолчанию")}</div>
           </div>
           <div class="settings-row">
             <div class="label">Java (новая)</div>
@@ -8701,10 +8857,58 @@
       </div>`;
   }
 
+  // Последний подтверждённый выбор нужен для отката при ошибке записи;
+  // номер защищает более поздний выбор от запоздавшего ответа предыдущего.
+  let initialTabSaveGeneration = 0;
+  let confirmedInitialTab = null;
+
+  function closeInitialTabDialog() {
+    const modal = $("#modal-initial-tab");
+    if (modal) modal.hidden = true;
+    $("#prefs-initial-tab")?.focus();
+  }
+
+  function openInitialTabDialog() {
+    const modal = $("#modal-initial-tab");
+    const list = $("#initial-tab-options");
+    if (!modal || !list) return;
+    const current = initialTab();
+    list.innerHTML = INITIAL_TABS.map(([id, label, icon]) => `
+      <button type="button" class="initial-tab-option ${id === current ? "is-active" : ""}" data-initial-tab="${id}" aria-pressed="${id === current}">
+        <svg class="ic"><use href="#${icon}"/></svg><span>${esc(label)}</span>
+        <svg class="ic initial-tab-check" aria-hidden="true"><use href="#i-check"/></svg>
+      </button>`).join("");
+    $$("[data-initial-tab]", list).forEach((button) => button.addEventListener("click", async () => {
+      const chosen = button.dataset.initialTab;
+      if (!INITIAL_TABS.some(([id]) => id === chosen)) return;
+      if (confirmedInitialTab === null) confirmedInitialTab = initialTab();
+      const generation = ++initialTabSaveGeneration;
+      state.settings = { ...(state.settings || {}), initial_tab: chosen };
+      modal.hidden = true;
+      if (!$("#modal-prefs").hidden) renderPrefs();
+      $("#prefs-initial-tab")?.focus();
+      try {
+        await api.saveSettings(state.settings);
+        confirmedInitialTab = chosen;
+      } catch (error) {
+        if (generation === initialTabSaveGeneration && state.settings?.initial_tab === chosen) {
+          state.settings = { ...state.settings, initial_tab: confirmedInitialTab };
+          if (!$("#modal-prefs").hidden) renderPrefs();
+          // Другая правка настроек могла уже поставить в очередь старый снимок.
+          try { await api.saveSettings(state.settings); } catch (_) { /* покажем ошибку ниже */ }
+        }
+        toast(`Не удалось сохранить начальную вкладку: ${error}`, "err");
+      }
+    }));
+    modal.hidden = false;
+    $("[aria-pressed='true']", list)?.focus();
+  }
+
   /* обработчики для всех категорий сразу — их немного */
   function bindPrefs() {
     const settings = state.settings || {};
 
+    $("#prefs-initial-tab")?.addEventListener("click", openInitialTabDialog);
     $$("#theme-grid .theme-chip").forEach((chip) => chip.addEventListener("click", () => {
       state.theme = applyTheme(chip.dataset.themeId);
       // тема запоминается сразу: иначе после перезапуска возвращалось «тёмная»
@@ -9020,7 +9224,7 @@
     });
 
     const memory = $("#set-memory");
-    if (memory) memory.addEventListener("input", (event) => { $("#set-memory-value").textContent = `${event.target.value} МБ`; });
+    if (memory) memory.addEventListener("input", () => updateMemoryRange(memory));
     const autoJava = $("#set-auto-java");
     if (autoJava) autoJava.addEventListener("click", () => autoJava.classList.toggle("on"));
     [$("#set-discord-rpc"), $("#set-discord-icon"), $("#set-discord-upload")].forEach((control) => {
@@ -9156,7 +9360,15 @@
       commitDiscord("discord_instance_icon", discordIcon.classList.contains("on"), discordIcon));
     if (discordUpload) discordUpload.addEventListener("click", () =>
       commitDiscord("discord_upload_local_icon", discordUpload.classList.contains("on"), discordUpload));
-    bindField("#set-memory", "memory_mb", { number: true });
+    if (memory) {
+      const commitMemory = () => {
+        if (memory.dataset.memoryDirty !== "true") return;
+        memory.dataset.memoryDirty = "false";
+        commit({ memory_mb: Number(memory.value) });
+      };
+      memory.addEventListener("change", commitMemory);
+      memory.addEventListener("blur", commitMemory);
+    }
     bindField("#set-jvm", "jvm_args");
     bindField("#set-java", "java_path", { trim: true });
     bindField("#set-java-legacy", "java_path_legacy", { trim: true });
@@ -9204,7 +9416,7 @@
     const flag = (selector, fallback) => { const el = $(selector); return el ? el.classList.contains("on") : fallback; };
     const next = {
       ...settings,
-      memory_mb: value("#set-memory") !== undefined ? Number(value("#set-memory")) : settings.memory_mb,
+      memory_mb: $("#set-memory")?.dataset.memoryDirty === "true" ? Number(value("#set-memory")) : settings.memory_mb,
       java_path: value("#set-java") !== undefined ? (value("#set-java").trim() || null) : settings.java_path,
       java_path_legacy: value("#set-java-legacy") !== undefined ? (value("#set-java-legacy").trim() || null) : settings.java_path_legacy,
       jvm_args: value("#set-jvm") !== undefined ? value("#set-jvm") : settings.jvm_args,
@@ -10107,14 +10319,18 @@
   }
 
   /* ==================== НАСТРОЙКИ СБОРКИ (свои у каждой) ==================== */
+  let settingsRenderSerial = 0;
   async function renderSettings() {
     const meta = selected();
     if (!meta) {
       $("#tab-body").innerHTML = `<div class="empty-state">Выбери сборку слева</div>`;
       return;
     }
+    const generation = tabRenderGeneration;
+    const serial = ++settingsRenderSerial;
     const javas = await api.javas().catch(() => []);
-    if (state.tab !== "settings" || state.selectedId !== meta.id) return;
+    if (serial !== settingsRenderSerial || generation !== tabRenderGeneration
+        || state.tab !== "settings" || state.selectedId !== meta.id) return;
     $("#tab-body").innerHTML = `
       <div class="settings-wrap">
         <div class="settings-grid">
@@ -10146,10 +10362,7 @@
               </div>
               <div class="settings-row">
                 <div class="label">Память, МБ</div>
-                <div class="range">
-                  <input type="range" id="inst-memory" min="512" max="32768" step="256" value="${meta.memory_mb ?? ((state.settings && state.settings.memory_mb) || 4096)}">
-                  <span class="tag" id="inst-memory-value">${meta.memory_mb ?? ((state.settings && state.settings.memory_mb) || 4096)} МБ</span>
-                </div>
+                <div>${memoryRangeHtml("inst-memory", meta.memory_mb ?? state.settings?.memory_mb, "Память этой сборки")}</div>
               </div>
               <div class="settings-row">
                 <div class="label">Java для этой сборки</div>
@@ -10203,9 +10416,7 @@
       $$("#inst-icons .icon-chip").forEach((el) => el.classList.toggle("is-active", el === chip));
     }));
     const memorySlider = $("#inst-memory");
-    if (memorySlider) memorySlider.addEventListener("input", (event) => {
-      $("#inst-memory-value").textContent = `${event.target.value} МБ`;
-    });
+    if (memorySlider) memorySlider.addEventListener("input", () => updateMemoryRange(memorySlider));
     const javaPick = $("#inst-java-pick");
     if (javaPick) javaPick.addEventListener("click", async () => {
       const picked = await api.pickFile("Java для сборки", ["exe", ""]).catch(() => null);
@@ -10238,7 +10449,7 @@
         ...meta,
         name: $("#inst-name").value.trim() || meta.name,
         icon: chip && chip.dataset.icon ? chip.dataset.icon : null,
-        memory_mb: $("#inst-memory").value ? Number($("#inst-memory").value) : null,
+        memory_mb: memorySlider?.dataset.memoryDirty === "true" ? Number(memorySlider.value) : (meta.memory_mb ?? null),
         java_path: $("#inst-java").value.trim() || null,
         jvm_args: $("#inst-jvm").value.trim() || null,
         notes: $("#inst-notes").value.trim()
@@ -10489,15 +10700,10 @@
     if (!meta) return;
     if (state.running.has(id) || state.preparing.has(id)) {
       toast(`«${meta.name}» уже запущена или подготавливается`, "");
-      selectInstance(id);
+      openInstance(id);
       return;
     }
-    if (state.selectedId !== id) {
-      state.selectedId = id;
-      state.tab = "console";
-      renderSidebar();
-      renderTab();
-    }
+    if (state.selectedId !== id) openInstance(id);
     play();
   }
 
@@ -10735,7 +10941,7 @@
       icon: "",
       iconFile: "",
       iconPreview: "",
-      memory: Math.max(512, Math.round(((settings.memory_mb || 4096)) / 512) * 512),
+      memory: Math.min(memoryLimits().max, Math.max(MEMORY_MIN, Math.round(memoryValue(settings.memory_mb) / MEMORY_STEP) * MEMORY_STEP)),
       installMode: "default",
       customDir: "",
       javaPath: "",
@@ -10829,10 +11035,7 @@
 
         <div class="field is-wide">
           <label>Выделение ОЗУ</label>
-          <div class="range">
-            <input type="range" id="c-memory" min="512" max="32768" step="512" value="${cfg.memory}">
-            <span class="tag" id="c-memory-value">${cfg.memory} МБ</span>
-          </div>
+          ${memoryRangeHtml("c-memory", cfg.memory, "Выделение ОЗУ для новой сборки")}
         </div>
 
         <div class="field is-wide">
@@ -10890,7 +11093,8 @@
     const memory = $("#c-memory");
     memory.addEventListener("input", () => {
       cfg.memory = Number(memory.value);
-      $("#c-memory-value").textContent = `${cfg.memory} МБ`;
+      updateMemoryRange(memory);
+      updateCreateHint();
     });
     $$("#c-install-mode .chip").forEach((chip) => chip.addEventListener("click", () => {
       cfg.installMode = chip.dataset.installMode === "custom" ? "custom" : "default";
@@ -10958,7 +11162,7 @@
       if (cfg.iconFile) await api.setInstanceIconFile(meta.id, cfg.iconFile).catch(() => {});
       if (cfg.category) await moveInstanceToCategory(meta.id, cfg.category);
       await refreshInstances();
-      selectInstance(meta.id);
+      openInstance(meta.id);
       toast(`Сборка «${meta.name}» создана`, "ok");
     } catch (err) {
       toast(String(err), "err");
@@ -11056,6 +11260,18 @@
     if (verModal) verModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-versions") verModal.hidden = true; });
     const prefsModal = $("#modal-prefs");
     if (prefsModal) prefsModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-prefs") prefsModal.hidden = true; });
+    const initialTabModal = $("#modal-initial-tab");
+    if (initialTabModal) {
+      $("[data-close-initial-tab]", initialTabModal)?.addEventListener("click", closeInitialTabDialog);
+      initialTabModal.addEventListener("mousedown", (event) => { if (event.target === initialTabModal) closeInitialTabDialog(); });
+      initialTabModal.addEventListener("keydown", (event) => {
+        if (event.key !== "Tab") return;
+        const controls = $$("button:not([disabled])", initialTabModal);
+        if (!controls.length) return;
+        if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls[controls.length - 1].focus(); }
+        else if (!event.shiftKey && document.activeElement === controls[controls.length - 1]) { event.preventDefault(); controls[0].focus(); }
+      });
+    }
     const accModal = $("#modal-account");
     if (accModal) accModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-account") accModal.hidden = true; });
 
@@ -11101,11 +11317,18 @@
       if (menu && !menu.hidden && !menu.contains(event.target)) closeCtxMenu();
     });
     window.addEventListener("blur", closeCtxMenu);
+    window.addEventListener("resize", closeCtxMenu);
 
     document.addEventListener("keydown", (event) => {
       if (event.ctrlKey && event.key.toLowerCase() === "r") { event.preventDefault(); refreshInstances(); }
       if (event.ctrlKey && event.key.toLowerCase() === "l") { event.preventDefault(); state.logs[state.selectedId] = []; renderLogs(state.selectedId); }
       if (event.key === "Escape") {
+        const initialTabModal = $("#modal-initial-tab");
+        if (initialTabModal && !initialTabModal.hidden) {
+          event.preventDefault();
+          closeInitialTabDialog();
+          return;
+        }
         $("#modal-create").hidden = true;
         const prefs = $("#modal-prefs");
         if (prefs) prefs.hidden = true;
@@ -11375,6 +11598,8 @@
     try {
       state.settings = await api.settings();
     } catch { state.settings = { ...DEMO.settings }; }
+    // Значение физической ОЗУ нужно до открытия настроек или создания сборки.
+    state.systemMemory = await api.systemMemory().catch(() => null);
     // Вид каталога один для Modrinth и CurseForge и не теряется при перезапуске.
     state.modsView = state.settings?.mods_view === "grid" ? "grid" : "list";
     // Оформление из settings.json (как prefs в OmniPanel): тема и эффект клика.
@@ -11570,7 +11795,7 @@
   })();
 
   // отладочный мостик для автотестов интерфейса (Playwright): не влияет на работу лаунчера
-  window.omnispecDebug = { state, paletteFromImage, wallpaperPalette, feedGridLevel };
+  window.omnispecDebug = { state, paletteFromImage, wallpaperPalette, feedGridLevel, ambientSnapshot: ambient.snapshot };
 
   init();
 })();

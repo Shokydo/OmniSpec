@@ -306,6 +306,20 @@
   </div>
 </div>
 
+<!-- Выбор начальной вкладки: собственное окно, как остальные диалоги лаунчера. -->
+<div class="modal-backdrop initial-tab-backdrop" id="modal-initial-tab" hidden>
+  <div class="modal initial-tab-box" role="dialog" aria-modal="true" aria-labelledby="initial-tab-title">
+    <header class="modal-head">
+      <h2 id="initial-tab-title">Начальная вкладка</h2>
+      <button type="button" class="icon-btn" data-close-initial-tab title="Закрыть" aria-label="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="modal-body initial-tab-body">
+      <p class="initial-tab-note">Открывается при выборе сборки. Другую вкладку всегда можно выбрать вручную.</p>
+      <div class="initial-tab-options" id="initial-tab-options" role="group" aria-label="Начальная вкладка сборки"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ============ ПЕРВЫЙ ЗАПУСК: быстрая настройка ============ -->
 <div class="modal-backdrop" id="modal-shot" hidden>
   <div class="modal shot-box">
