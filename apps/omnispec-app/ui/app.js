@@ -1475,7 +1475,7 @@
 
   async function launchDuplicate(meta, accountUuid) {
     const attemptId = nextAttemptId();
-    diagnostics.begin(meta.id, attemptId);
+    diagnostics.begin(meta.id, attemptId, diagnosticLaunchContext(meta));
     changePreparing(meta.id, 1);
     syncPresence("launching");
     pushLog(meta.id, "[omnispec] Подготовка дубликата сборки", "dim");
@@ -2630,6 +2630,9 @@
   let attemptSerial = 0;
   function nextAttemptId() {
     return `${Date.now().toString(36)}-${(++attemptSerial).toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+  function diagnosticLaunchContext(meta) {
+    return { mcVersion: meta.mc_version || "", loader: (meta.loader && meta.loader.type) || "vanilla" };
   }
   function changePreparing(instanceId, delta) {
     const count = (state.preparing.get(instanceId) || 0) + delta;
@@ -3953,6 +3956,32 @@
     renderErrorsContent();
   }
 
+  /** Конкретная инструкция относится к настройкам той попытки, а не любой сборке. */
+  function contextualErrorFinding(item, meta, run) {
+    if (!item.fabricApi) return item;
+    const current = diagnosticLaunchContext(meta);
+    const original = run && run.context;
+    const changed = original && ((original.mcVersion && original.mcVersion !== current.mcVersion)
+      || (original.loader && original.loader !== current.loader));
+    const formatContext = (context) => `Minecraft ${context.mcVersion || "?"} / ${LOADER_NAMES[context.loader] || context.loader || "?"}`;
+    if (changed) return { ...item, fabricActions: false,
+      steps: [`Настройки изменились после этого запуска: тогда ${formatContext(original)}, сейчас ${formatContext(current)}.`,
+        "Запусти сборку снова и проверь новую диагностику: старое требование может больше не относиться к ней.",
+        "Не заменяй и не удаляй файлы по старой ошибке; при необходимости проверь полный лог."] };
+    if (current.loader !== "fabric" || !current.mcVersion) return { ...item, fabricActions: false,
+      steps: [`Сейчас выбрано ${formatContext(current)}. Сообщение относится к зависимости Fabric; не устанавливай её вслепую.`,
+        "Проверь, что выбрана нужная сборка и загрузчик, затем снова запусти игру и изучи полный лог."] };
+    const minimum = item.fabricApi.minimum;
+    const contextNote = original ? ` Для этой попытки выбраны Minecraft ${current.mcVersion} и Fabric.`
+      : ` Сейчас выбраны Minecraft ${current.mcVersion} и Fabric. Если настройки менялись после ошибки, сначала повтори запуск.`;
+    return { ...item, description: item.description + contextNote, fabricActions: true,
+      steps: ["Останови все окна этой сборки и сохрани резервную копию важных миров и модов.",
+        "Открой папку mods и проверь, нет ли там Fabric API, в том числе выключенного файла с окончанием .disabled. Не добавляй вторую копию.",
+        `В официальном списке версий выбери Minecraft ${current.mcVersion} и Fabric${minimum ? `; версия Fabric API должна быть ${minimum} или новее` : ""}. Проверь и остальные требования лога.`,
+        "Скачай совместимый .jar и положи в mods этой сборки, не распаковывая. Если API уже есть, проверь его версию и включение; вручную замени только подтверждённо неподходящий файл после создания копии.",
+        "Запусти сборку снова. Если ошибка останется, проверь полный лог: могут быть и другие недостающие зависимости."] };
+  }
+
   // Делегирование на контейнере вкладки: при обновлении карточек слушатели не размножаются.
   function handleErrorsClick(event) {
     const body = $("#tab-body");
@@ -3971,6 +4000,25 @@
       return;
     }
     if (action === "java") { openPrefs("game"); return; }
+    if (action === "fabric-api-versions" || action === "fabric-api-folder") {
+      const meta = selected();
+      const run = meta && diagnostics.selected(meta.id);
+      const item = run && run.findings.get("mod-dependencies");
+      // Проверяем повторно при клике: выбранная сборка или её настройки могли измениться.
+      if (!item || !item.fabricApi || !contextualErrorFinding(item, meta, run).fabricActions) {
+        toast("Настройки сборки изменились: запусти её снова и проверь новую ошибку", "err");
+        renderErrorsContent();
+        return;
+      }
+      if (action === "fabric-api-versions") {
+        api.openUrl("https://modrinth.com/mod/fabric-api/versions")
+          .catch((error) => toast(`Не удалось открыть страницу: ${error}`, "err"));
+      } else {
+        api.openPath(`/instances/${meta.id}/minecraft/mods`)
+          .catch((error) => toast(`Не удалось открыть папку mods: ${error}`, "err"));
+      }
+      return;
+    }
     if (action === "copy") copyErrorsAdvice();
   }
 
@@ -3992,7 +4040,8 @@
       <div class="errors-run-row"><label for="errors-run">Попытка запуска</label>
         <select class="select" id="errors-run">${runs.map((item) => `<option value="${esc(item.id)}" ${item.id === run.id ? "selected" : ""}>${esc(errorsRunLabel(item))}</option>`).join("")}</select>
       </div>` : "";
-    const list = run ? Array.from(run.findings.values()).sort((a, b) => b.priority - a.priority) : [];
+    const list = run ? Array.from(run.findings.values()).sort((a, b) => b.priority - a.priority)
+      .map((item) => contextualErrorFinding(item, meta, run)) : [];
     const showMods = list.some((item) => ["java-modules", "duplicate-mods", "mod-dependencies", "mixin"].includes(item.id));
     const showJava = list.some((item) => ["java-version", "java-missing", "memory-heap", "memory-reserve", "jvm"].includes(item.id));
     const cards = list.map((item) => `
@@ -4002,6 +4051,10 @@
           <div><h3>${esc(item.title)}</h3><p>${esc(item.description)}</p></div>
         </div>
         <ol class="errors-steps">${item.steps.map((step) => `<li>${esc(step)}</li>`).join("")}</ol>
+        ${item.fabricActions ? `<div class="errors-card-actions">
+          <button class="btn btn-small" data-errors-action="fabric-api-versions"><svg class="ic"><use href="#i-download"/></svg>Версии Fabric API</button>
+          <button class="btn btn-small" data-errors-action="fabric-api-folder"><svg class="ic"><use href="#i-folder"/></svg>Открыть mods</button>
+        </div>` : ""}
         <details class="errors-evidence" data-evidence="${esc(item.id)}" ${openDetails.has(item.id) ? "open" : ""}>
           <summary>Показать строку из лога</summary><pre>${esc(item.evidence)}</pre>
         </details>
@@ -4040,7 +4093,8 @@
     const meta = selected();
     const run = meta && diagnostics.selected(meta.id);
     if (!run) return;
-    const list = Array.from(run.findings.values()).sort((a, b) => b.priority - a.priority);
+    const list = Array.from(run.findings.values()).sort((a, b) => b.priority - a.priority)
+      .map((item) => contextualErrorFinding(item, meta, run));
     const text = [`OmniSpec · ${meta.name} · MC ${meta.mc_version} · ${loaderLabel(meta.loader)}`,
       errorsStatus(run).title, ...list.map((item) => `\n${item.title}\n${item.description}\n${item.steps.map((step, i) => `${i + 1}. ${step}`).join("\n")}`)].join("\n");
     try { await navigator.clipboard.writeText(text); toast("Подсказки скопированы (без лога)", "ok"); }
@@ -9928,7 +9982,7 @@
     if (!meta) return toast("Выбери сборку", "err");
     if (state.running.has(meta.id) || state.preparing.has(meta.id)) return toast("Сборка уже запущена или подготавливается", "err");
     const attemptId = nextAttemptId();
-    diagnostics.begin(meta.id, attemptId);
+    diagnostics.begin(meta.id, attemptId, diagnosticLaunchContext(meta));
     changePreparing(meta.id, 1);
     syncPresence("launching");
     pushLog(meta.id, `[omnispec] Подготовка «${meta.name}» (MC ${meta.mc_version}, ${loaderLabel(meta.loader)})`, "dim");

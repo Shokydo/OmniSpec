@@ -33,6 +33,70 @@
     return { id, title, description, steps, evidence: evidence(line), priority, quality };
   }
 
+  // Fabric Loader печатает отдельно общее решение и затем требования модов.
+  // Ищем именно fabric-api, а не fabric-loader или отдельный модуль API.
+  const FABRIC_VERSION = "[0-9][A-Za-z0-9._+~-]{0,79}";
+  const FABRIC_SOLUTION = new RegExp(
+    `\\bInstall\\s+fabric-api,\\s*(?:version\\s+(${FABRIC_VERSION})\\s+or\\s+later|any\\s+version)(?=[.!\\s]|$)`, "i"
+  );
+  const FABRIC_DETAIL = new RegExp(
+    `\\bMod\\s+'([^\\r\\n]{1,100}?)'\\s+\\(([A-Za-z0-9_.-]{1,120})\\)\\s+([A-Za-z0-9._+~-]{1,80})\\s+requires\\s+(?:version\\s+(${FABRIC_VERSION})\\s+or\\s+later|any\\s+version)\\s+of\\s+fabric-api,\\s+which\\s+is\\s+missing\\b`, "i"
+  );
+  const MAX_FABRIC_DEPENDENTS = 8;
+
+  function fabricFinding(line, minimum, dependents = [], quality = 2, source = "detail") {
+    const requirement = minimum ? ` Требуется версия ${minimum} или новее.` : " Версия в этой строке не уточняется.";
+    const names = dependents.length ? ` В логе её требуют: ${dependents.map((item) => `${item.name} ${item.version}`).join(", ")}.` : "";
+    const item = finding("mod-dependencies", "Не найден Fabric API",
+      "Fabric сообщает, что необходимая зависимость fabric-api не найдена." + requirement + names
+        + " Файл может отсутствовать, быть выключенным или не подходить этой сборке.",
+      ["Останови все окна этой сборки и сохрани резервную копию важных миров и модов.",
+        "Проверь папку mods: Fabric API может уже находиться там или быть выключен с окончанием .disabled. Не добавляй вторую копию.",
+        `В официальном списке выбери Fabric API для точной версии Minecraft и загрузчика Fabric${minimum ? `, версия не ниже ${minimum}` : ""}; проверь и остальные требования лога.`,
+        "Скачай совместимый .jar и положи его в mods этой сборки, не распаковывая. Если API уже есть, проверь его версию и включение; замени только подтверждённо неподходящий файл вручную после создания копии.",
+        "Запусти сборку снова. Если ошибка останется, проверь полный лог: могут быть и другие недостающие зависимости."],
+      line, 92, quality);
+    item.fabricApi = { minimum, dependents, source };
+    return item;
+  }
+
+  // Числовые части сравниваем как строки, чтобы не потерять точность больших
+  // чисел; +build — метаданные. Неизвестный формат не сравниваем наугад.
+  function compareFabricMinimum(a, b) {
+    const parts = (value) => {
+      const match = String(value).match(/^(\d+(?:\.\d+)*)(?:\+[A-Za-z0-9.-]+)?$/);
+      return match ? match[1].split(".") : null;
+    };
+    const left = parts(a), right = parts(b);
+    if (!left || !right) return null;
+    for (let i = 0; i < Math.max(left.length, right.length); i++) {
+      const l = (left[i] || "0").replace(/^0+(?=\d)/, "");
+      const r = (right[i] || "0").replace(/^0+(?=\d)/, "");
+      if (l.length !== r.length) return l.length > r.length ? 1 : -1;
+      if (l !== r) return l > r ? 1 : -1;
+    }
+    return 0;
+  }
+
+  function mergeFabricFindings(previous, candidate) {
+    const old = previous.fabricApi, next = candidate.fabricApi;
+    let useCandidate = false;
+    if (next.minimum && !old.minimum) useCandidate = true;
+    else if (next.minimum && old.minimum) {
+      const comparison = compareFabricMinimum(next.minimum, old.minimum);
+      useCandidate = comparison === 1 || ((comparison === 0 || comparison === null) && candidate.quality > previous.quality);
+    } else if (!next.minimum && !old.minimum && candidate.quality > previous.quality) useCandidate = true;
+    const dependents = old.dependents.slice();
+    for (const dep of next.dependents) {
+      if (dependents.length >= MAX_FABRIC_DEPENDENTS) break;
+      if (!dependents.some((item) => item.id.toLowerCase() === dep.id.toLowerCase())) dependents.push(dep);
+    }
+    if (!useCandidate && dependents.length === old.dependents.length) return null;
+    const chosen = useCandidate ? candidate : previous;
+    return fabricFinding(chosen.evidence, chosen.fabricApi.minimum, dependents,
+      Math.max(previous.quality, candidate.quality), chosen.fabricApi.source);
+  }
+
   /** Вернуть подтверждённый сигнатурой признак, но не делать вывод по самому коду выхода. */
   function analyzeLine(value, options = {}) {
     const line = cleanLine(value);
@@ -104,6 +168,13 @@
         ["Сохрани резервную копию сборки и миров.",
           "В полном логе найди названия повторяющихся файлов и проверь папку mods.",
           "В копии сборки отключи только подтверждённый дубликат и убедись, что оставшаяся версия подходит Minecraft и загрузчику."], line, 85);
+    }
+    const solution = line.match(FABRIC_SOLUTION);
+    if (solution) return fabricFinding(line, solution[1] || null, [], solution[1] ? 4 : 2, "solution");
+    const detail = line.match(FABRIC_DETAIL);
+    if (detail) {
+      const dependent = { name: detail[1], id: detail[2], version: detail[3] };
+      return fabricFinding(line, detail[4] || null, [dependent], detail[4] ? 3 : 2, "detail");
     }
     if (/incompatible mods found|some of your mods are incompatible|modresolutionexception|missing (?:or unsupported )?mandatory dependenc|mod\s+[^\n]{0,140}\s+requires\s+[^\n]{1,160}/i.test(line)) {
       return finding("mod-dependencies", "Несовместимые моды или зависимости",
@@ -195,14 +266,20 @@
       return group || null;
     }
 
-    begin(instance, attemptId) {
+    begin(instance, attemptId, context = null) {
       if (!instance || !attemptId) return null;
       const group = this.group(instance, true);
       const existing = group.runs.find((run) => run.id === attemptId);
       if (existing) return existing;
+      // Сохраняем настройки именно этой попытки: позже пользователь может
+      // сменить версию игры/загрузчик, и старую подсказку нельзя применять к новой.
+      const snapshot = context && typeof context === "object" ? {
+        mcVersion: String(context.mcVersion || "").slice(0, 80),
+        loader: String(context.loader || "").slice(0, 30)
+      } : null;
       const run = {
         id: attemptId, runId: null, account: "", startedAt: this.now(), endedAt: null,
-        status: "preparing", code: null, error: "", stopRequested: false,
+        status: "preparing", code: null, error: "", stopRequested: false, context: snapshot,
         findings: new Map(), findingsLimited: false
       };
       group.runs.push(run);
@@ -270,6 +347,12 @@
     addFinding(run, candidate) {
       if (!candidate) return false;
       const previous = run.findings.get(candidate.id);
+      if (previous && previous.fabricApi && candidate.fabricApi) {
+        const merged = mergeFabricFindings(previous, candidate);
+        if (!merged) return false;
+        run.findings.set(candidate.id, merged);
+        return true;
+      }
       if (previous && previous.quality >= candidate.quality) return false;
       if (!previous && run.findings.size >= MAX_FINDINGS) {
         // В ограниченной истории оставляем более важные сигналы, даже если

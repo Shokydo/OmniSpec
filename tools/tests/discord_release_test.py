@@ -5,7 +5,9 @@ import io
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
+import tempfile
 import textwrap
 import unittest
 import urllib.error
@@ -62,6 +64,26 @@ def execute(secret, opener):
 
 
 class DiscordReleaseTests(unittest.TestCase):
+    def test_release_body_contains_only_notes_for_exact_tag(self):
+        build = runpy.run_path(str(ROOT / "tools/release_body.py"))["build_release_body"]
+        body = build("v0.49.1")
+        self.assertIn("## What's Changed", body)
+        self.assertIn("Fabric API", body)
+        self.assertIn("OmniSpec-Setup.exe", body)
+        self.assertNotIn("Fabric API", build("v0.49.2"))
+        with tempfile.TemporaryDirectory() as tmp:
+            notes = Path(tmp) / "notes"
+            notes.mkdir()
+            (Path(tmp) / "secret.md").write_text("must not be read", encoding="utf-8")
+            self.assertNotIn("must not be read", build("../secret", notes))
+            result = subprocess.run(
+                ["python3", str(ROOT / "tools/release_body.py")], cwd=tmp,
+                env={**os.environ, "RELEASE_TAG": "v0.49.1"}, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((Path(tmp) / "dist/release-notes.md").read_text(encoding="utf-8"), body)
+        self.assertIn("body_path: dist/release-notes.md", WORKFLOW)
+
     def test_success_posts_blue_embed_without_mentions_or_redirects(self):
         opener = FakeOpener()
         output = execute(FAKE_URL, opener)

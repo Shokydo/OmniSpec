@@ -24,12 +24,12 @@ async function createPage(browser, options = {}) {
     const now = Math.floor(Date.now() / 1000);
     const instances = [
       {id:'pack-a',name:'Тестовая сборка',mc_version:'1.20.1',loader:{type:'forge',version:'47.3.0'},created:now,playtime_secs:0,icon:null},
-      {id:'pack-b',name:'Вторая сборка',mc_version:'1.21.1',loader:{type:'fabric',version:'0.16.9'},created:now,playtime_secs:0,icon:null}
+      {id:'pack-b',name:'Вторая сборка',mc_version:'26.3',loader:{type:'fabric',version:'0.18.0'},created:now,playtime_secs:0,icon:null}
     ];
     const accounts = [{uuid:'user-1',username:'Steve',kind:'offline'}, {uuid:'user-2',username:'Alex',kind:'offline'}];
     const callbacks = {};
     const mock = window.__testTauri = {
-      launches: [], opened: [], calls: [], active: new Map(), callbacks,
+      launches: [], opened: [], openedUrls: [], calls: [], active: new Map(), callbacks,
       emit(name, payload) { if (!callbacks[name]) throw new Error(`No listener: ${name}`); callbacks[name]({payload}); },
       log(index, line) {
         const run = this.launches[index];
@@ -63,6 +63,7 @@ async function createPage(browser, options = {}) {
           case 'list_java': return [];
           case 'instance_path': return `/test/${args.instanceId}`;
           case 'open_path': this.opened.push(args.path); return null;
+          case 'open_url': this.openedUrls.push(args.url); return null;
           case 'launch_instance': {
             const run = {args,runId:`${args.instanceId}#${this.launches.length+1}`};
             this.launches.push(run);
@@ -211,6 +212,68 @@ async function bodyContains(page, text) {
       await page.waitForTimeout(500);
       assert((await page.locator('#errors-dynamic').innerText()).includes('Конфликт модулей Java'), 'запоздавшая загрузка модов не подменяет вкладку');
       assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_FAST_EXIT: no ghost process, late stderr, screenshot conflict — OK');
+      await page.close();
+    }
+
+    // Пользовательская рекомендация Fabric: точный минимум, настройки запуска,
+    // ручные действия вместо молчаливой установки или создания дубликатов.
+    {
+      const {page,errors} = await createPage(browser);
+      await choosePack(page,'pack-b'); await page.click('#btn-play'); await attemptCount(page,1);
+      await page.evaluate(() => {
+        const m = window.__testTauri;
+        m.log(0,'net.fabricmc.loader.impl.FormattedException: Some of your mods are incompatible with the game or each other!');
+        m.log(0,' - Install fabric-api, version 0.145.1 or later.');
+        m.log(0," - Mod 'EntityCulling' (entityculling) 1.12.1 requires version 0.145.1 or later of fabric-api, which is missing!");
+        m.log(0," - Mod 'TRansition' (transition) 1.0.28 requires version 0.140.0 or later of fabric-api, which is missing!");
+        m.log(0," - Mod 'TRender' (trender) 1.0.17 requires version 0.141.0 or later of fabric-api, which is missing!");
+        m.log(0," - Mod '<img src=x onerror=alert(1)>' (evil) 1.0 requires any version of fabric-api, which is missing!");
+        m.exit(0,1);
+        const r=m.launches[0]; r.resolve({run_id:r.runId,account:'Steve',java_major:25});
+      });
+      await bodyContains(page,'Не найден Fabric API');
+      await page.waitForFunction(() => !window.omnispecDebug.state.preparing.has('pack-b'));
+      const text = await page.locator('#errors-dynamic').innerText();
+      assert(text.includes('0.145.1') && text.includes('Minecraft 26.3') && text.includes('Fabric'));
+      assert(text.includes('EntityCulling 1.12.1') && text.includes('TRansition 1.0.28') && text.includes('TRender 1.0.17'));
+      assert(text.includes('Не добавляй вторую копию') && text.includes('.disabled'));
+      assert.equal(await page.locator('#errors-dynamic img').count(),0,'имена модов из лога экранируются');
+      assert.equal(await page.locator('[data-diagnostic="mod-dependencies"]').count(),1);
+      assert.deepEqual(await page.evaluate(() => window.__testTauri.openedUrls),[], 'страница не открывается без нажатия');
+      assert.equal(await page.evaluate(() => window.__testTauri.calls.some(x => /^install_mod/.test(x.command))),false,'диагностика не устанавливает файлы');
+      await page.locator('[data-errors-action="fabric-api-versions"]').click();
+      await page.locator('[data-errors-action="fabric-api-folder"]').click();
+      assert.deepEqual(await page.evaluate(() => window.__testTauri.openedUrls), ['https://modrinth.com/mod/fabric-api/versions']);
+      assert.deepEqual(await page.evaluate(() => window.__testTauri.opened), ['/instances/pack-b/minecraft/mods']);
+      await page.locator('[data-errors-action="copy"]').click();
+      const copied = await page.evaluate(() => window.__testTauri.copied);
+      assert(copied.includes('Minecraft 26.3') && copied.includes('0.145.1'));
+      assert(!copied.includes('Install fabric-api'), 'в буфер не попадает сырой лог');
+      // Проверка ещё и в обработчике: настройки могли измениться после отрисовки.
+      await page.evaluate(() => { window.omnispecDebug.state.instances.find(x => x.id === 'pack-b').mc_version='26.1'; });
+      await page.locator('[data-errors-action="fabric-api-versions"]').click();
+      assert.equal((await page.evaluate(() => window.__testTauri.openedUrls)).length,1,'старая кнопка не открывает страницу после смены версии');
+      await bodyContains(page,'Настройки изменились после этого запуска');
+      assert.equal(await page.locator('[data-errors-action="fabric-api-versions"]').count(),0);
+      assert((await page.locator('#errors-dynamic').innerText()).includes('Minecraft 26.3 / Fabric'));
+      assert((await page.locator('#errors-dynamic').innerText()).includes('Minecraft 26.1 / Fabric'));
+      assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_FABRIC_API: exact minimum, safe manual actions, configuration change — OK');
+      await page.close();
+    }
+
+    // Тот же текст не должен предлагать установку Fabric API в Forge-сборку.
+    {
+      const {page,errors} = await createPage(browser);
+      await choosePack(page); await page.click('#btn-play'); await attemptCount(page,1);
+      await page.evaluate(() => {
+        const m=window.__testTauri; m.log(0,' - Install fabric-api, version 0.145.1 or later.'); m.exit(0,1);
+        const r=m.launches[0]; r.resolve({run_id:r.runId,account:'Steve'});
+      });
+      await bodyContains(page,'не устанавливай её вслепую');
+      assert.equal(await page.locator('[data-errors-action="fabric-api-versions"]').count(),0);
+      assert.equal(await page.locator('[data-errors-action="fabric-api-folder"]').count(),0);
+      assert.equal(await page.evaluate(() => window.__testTauri.calls.some(x => /^install_mod/.test(x.command))),false);
+      assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_FABRIC_WRONG_LOADER: no unsuitable actions — OK');
       await page.close();
     }
 

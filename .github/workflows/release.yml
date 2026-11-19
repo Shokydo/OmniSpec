@@ -107,6 +107,15 @@ jobs:
           name: setup-icon
           path: setup-icon.png
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Подготовить описание релиза и список изменений
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python tools/release_body.py
+
       - name: Публикация релиза
         uses: softprops/action-gh-release@v2
         with:
@@ -117,20 +126,7 @@ jobs:
             dist/OmniSpec-Setup.exe.sha256
           generate_release_notes: true
           make_latest: true
-          body: |
-            ## OmniSpec ${{ github.ref_name }}
-
-            **Как установить:** два способа на выбор:
-            * `OmniSpec-Setup.exe` — установщик с кнопками: покажет, что и куда
-              поставит, даст поменять папку установки, сделает ярлыки на рабочем
-              столе и в «Пуск» и запустит лаунчер;
-            * `OmniSpec.exe` — портативная версия: скачал и запустил, ничего не ставится.
-
-            Java и файлы Minecraft лаунчер скачает сам при первом запуске.
-
-            **Обновления:** лаунчер сам проверяет этот репозиторий и предлагает обновиться.
-
-            Требования: Windows 10/11 (на «десятке» нужен WebView2 — обычно уже установлен).
+          body_path: dist/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
