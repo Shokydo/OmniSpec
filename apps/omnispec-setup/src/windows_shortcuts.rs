@@ -1,6 +1,7 @@
 //! Настоящие .lnk через Windows Shell, без cmd/PowerShell и экранирования путей.
 
 use std::ffi::OsString;
+use std::io::Write;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
@@ -18,6 +19,10 @@ use windows::Win32::UI::Shell::{
 
 use crate::common::APP_NAME;
 use omnispec_core::windows_shortcut::SHORTCUT_CWD_ARG;
+
+/// Файл принадлежит установщику; остальные файлы в папке меню не трогаем.
+pub const SHORTCUT_ICON_FILE: &str = "omnispec-shortcut.ico";
+const SHORTCUT_ICON: &[u8] = include_bytes!("../../omnispec-app/icons/icon.ico");
 
 /// COM инициализируется в вызывающем потоке и освобождается ровно один раз.
 struct ComApartment {
@@ -103,11 +108,81 @@ fn shell_safe_path(path: &Path) -> Option<PathBuf> {
     None
 }
 
-fn create_shortcut(link_path: &Path, exe: &Path, dir: &Path) -> Result<(), String> {
+fn write_fallback_icon(start: &Path) -> Result<PathBuf, String> {
+    let file = start.join(SHORTCUT_ICON_FILE);
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&file)
+    {
+        Ok(mut output) => {
+            if let Err(error) = output.write_all(SHORTCUT_ICON) {
+                drop(output);
+                let _ = std::fs::remove_file(&file);
+                return Err(format!(
+                    "не записалась иконка ярлыка {}: {error}",
+                    file.display()
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let existing = std::fs::read(&file).map_err(|error| {
+                format!("не читается иконка ярлыка {}: {error}", file.display())
+            })?;
+            if existing != SHORTCUT_ICON {
+                return Err(format!("не заменяем чужой файл иконки {}", file.display()));
+            }
+        }
+        Err(error) => {
+            return Err(format!(
+                "не создалась иконка ярлыка {}: {error}",
+                file.display()
+            ))
+        }
+    }
+    shell_safe_path(&file).ok_or_else(|| format!(
+        "Windows не может использовать путь иконки ярлыка {}: в нём есть переменные окружения, а короткое имя недоступно", file.display()
+    ))
+}
+
+/// Удаляем только точную копию своей встроенной иконки, не чужой файл.
+pub fn remove_shortcut_icon(start: &Path) -> Result<(), String> {
+    let file = start.join(SHORTCUT_ICON_FILE);
+    match std::fs::symlink_metadata(&file) {
+        Ok(metadata) if !metadata.file_type().is_file() => return Ok(()),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "не проверилась иконка ярлыка {}: {error}",
+                file.display()
+            ))
+        }
+    }
+    let existing = std::fs::read(&file)
+        .map_err(|error| format!("не читается иконка ярлыка {}: {error}", file.display()))?;
+    if existing == SHORTCUT_ICON {
+        std::fs::remove_file(&file)
+            .map_err(|error| format!("не удалилась иконка ярлыка {}: {error}", file.display()))?;
+    }
+    Ok(())
+}
+
+fn shortcut_icon(exe: &Path, start: &Path) -> Result<PathBuf, String> {
+    if let Some(safe) = shell_safe_path(exe) {
+        return Ok(safe);
+    }
+    // Shell может показать стандартную иконку даже при корректном PIDL:
+    // извлечение значка из exe повторно разворачивает %ИМЯ%. Сохраняем
+    // встроенный .ico рядом с ярлыком меню, отдельно от пути установки.
+    write_fallback_icon(start)
+}
+
+fn create_shortcut(link_path: &Path, exe: &Path, dir: &Path, icon: &Path) -> Result<(), String> {
     let path_wide = wide(link_path);
     let exe_wide = wide(exe);
     let dir_wide = shell_safe_path(dir).map(|safe| wide(&safe));
-    let icon_wide = shell_safe_path(exe).map(|safe| wide(&safe));
+    let icon_wide = wide(icon);
     let context = |stage: &str, error: windows::core::Error| {
         format!(
             "не создался ярлык {} ({stage}): {error}",
@@ -139,11 +214,8 @@ fn create_shortcut(link_path: &Path, exe: &Path, dir: &Path) -> Result<(), Strin
             link.SetArguments(PCWSTR(argument.as_ptr()))
                 .map_err(|error| context("аргумент рабочей папки", error))?;
         }
-        if let Some(icon_wide) = &icon_wide {
-            link.SetIconLocation(PCWSTR(icon_wide.as_ptr()), 0)
-                .map_err(|error| context("иконка", error))?;
-        }
-        // Без безопасного пути иконки Shell возьмёт её из целевого PIDL.
+        link.SetIconLocation(PCWSTR(icon_wide.as_ptr()), 0)
+            .map_err(|error| context("иконка", error))?;
         link.SetDescription(windows::core::w!("OmniSpec"))
             .map_err(|error| context("описание", error))?;
         let file: IPersistFile = link.cast().map_err(|error| context("файл", error))?;
@@ -166,8 +238,9 @@ fn make_in_folders(exe: &Path, dir: &Path, desktop: &Path, programs: &Path) -> R
         std::fs::create_dir_all(folder)
             .map_err(|error| format!("не создалась папка ярлыков {}: {error}", folder.display()))?;
     }
-    create_shortcut(&desktop.join(format!("{APP_NAME}.lnk")), exe, dir)?;
-    create_shortcut(&start.join(format!("{APP_NAME}.lnk")), exe, dir)?;
+    let icon = shortcut_icon(exe, &start)?;
+    create_shortcut(&desktop.join(format!("{APP_NAME}.lnk")), exe, dir, &icon)?;
+    create_shortcut(&start.join(format!("{APP_NAME}.lnk")), exe, dir, &icon)?;
     Ok(())
 }
 
@@ -231,9 +304,12 @@ mod tests {
             same_path(&work, dir);
             assert!(read_wide(&arguments).is_empty());
         }
-        // Пустой путь иконки означает стандартную иконку целевого exe.
-        if !read_wide(&icon).is_empty() {
+        if shell_safe_path(exe).is_some() {
             same_path(&icon, exe);
+        } else {
+            let icon_file = PathBuf::from(read_wide(&icon));
+            assert_eq!(icon_file.file_name().unwrap(), SHORTCUT_ICON_FILE);
+            assert_eq!(std::fs::read(icon_file).unwrap(), SHORTCUT_ICON);
         }
         assert_eq!(icon_index, 0);
         assert_eq!(read_wide(&description), APP_NAME);
@@ -271,6 +347,28 @@ mod tests {
         let error = make_in_folders(&exe, &dir, &desktop, &programs).unwrap_err();
         assert!(error.contains("OmniSpec.lnk"), "{error}");
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn fallback_icon_preserves_an_unrelated_file_and_cleans_up_its_own() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("omnispec-icon-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join(SHORTCUT_ICON_FILE);
+        write_fallback_icon(&root).unwrap();
+        write_fallback_icon(&root).unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), SHORTCUT_ICON);
+        remove_shortcut_icon(&root).unwrap();
+        assert!(!file.exists());
+        std::fs::write(&file, b"another user's file").unwrap();
+        assert!(write_fallback_icon(&root).is_err());
+        remove_shortcut_icon(&root).unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), b"another user's file");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

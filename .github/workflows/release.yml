@@ -63,7 +63,7 @@ jobs:
         run: |
           $meta = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
           $version = ($meta.packages | Where-Object { $_.name -eq 'omnispec-setup' }).version
-          ./tools/tests/windows-setup-smoke.ps1 -Setup 'target/release/omnispec-setup.exe' -Launcher 'target/release/omnispec-app.exe' -ExpectedVersion $version
+          ./tools/tests/windows-setup-smoke.ps1 -Setup 'target/release/omnispec-setup.exe' -Launcher 'target/release/omnispec-app.exe' -ExpectedVersion $version -VerifyRealIcon
 
       - name: Проверка иконки установщика
         shell: pwsh

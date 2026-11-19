@@ -528,6 +528,9 @@ fn remove_shortcuts() -> Result<(), String> {
             }
         }
         if let Some(folder) = start {
+            if let Err(error) = crate::windows_shortcuts::remove_shortcut_icon(&folder) {
+                failures.push(error);
+            }
             // Чужие файлы в папке пользователя не трогаем.
             let _ = std::fs::remove_dir(folder);
         }

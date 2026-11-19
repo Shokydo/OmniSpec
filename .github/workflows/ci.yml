@@ -61,6 +61,17 @@ jobs:
           $meta = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
           $version = ($meta.packages | Where-Object { $_.name -eq 'omnispec-setup' }).version
           ./tools/tests/windows-setup-smoke.ps1 -Setup 'target/debug/omnispec-setup.exe' -Launcher $env:OMNISPEC_SETUP_PAYLOAD -ExpectedVersion $version -LaunchProbe
+      - name: Собрать настоящий лаунчер для проверки иконок
+        run: cargo build -p omnispec-app --locked
+      - name: Проверить иконки ярлыков с настоящим лаунчером
+        shell: pwsh
+        run: |
+          $env:OMNISPEC_SETUP_PAYLOAD = 'target/debug/omnispec-app.exe'
+          cargo build -p omnispec-setup --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Установщик с настоящим лаунчером не собрался' }
+          $meta = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($meta.packages | Where-Object { $_.name -eq 'omnispec-setup' }).version
+          ./tools/tests/windows-setup-smoke.ps1 -Setup 'target/debug/omnispec-setup.exe' -Launcher $env:OMNISPEC_SETUP_PAYLOAD -ExpectedVersion $version -VerifyRealIcon
 
   ui-test:
     name: Интерфейс, диагностика и сетевые сбои

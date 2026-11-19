@@ -5,9 +5,11 @@ param(
     [Parameter(Mandatory = $true)][string]$Setup,
     [Parameter(Mandatory = $true)][string]$Launcher,
     [string]$ExpectedVersion = '',
-    [switch]$LaunchProbe
+    [switch]$LaunchProbe,
+    [switch]$VerifyRealIcon
 )
 $ErrorActionPreference = 'Stop'
+if ($VerifyRealIcon) { Add-Type -AssemblyName System.Drawing }
 $Setup = [IO.Path]::GetFullPath($Setup)
 $Launcher = [IO.Path]::GetFullPath($Launcher)
 if (-not (Test-Path -LiteralPath $Setup -PathType Leaf)) { throw "Missing installer: $Setup" }
@@ -44,6 +46,23 @@ public interface IOmniSpecShellLinkW {
 }
 
 public static class OmniSpecShortcutReader {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct SHFILEINFO {
+        public IntPtr icon;
+        public int iconIndex;
+        public uint attributes;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string displayName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)] public string typeName;
+    }
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr SHGetFileInfoW(string path, uint attributes, out SHFILEINFO info, uint size, uint flags);
+    [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr icon);
+    public static IntPtr Icon(string path) {
+        SHFILEINFO info;
+        var result = SHGetFileInfoW(path, 0, out info, (uint)Marshal.SizeOf(typeof(SHFILEINFO)), 0x100);
+        if (result == IntPtr.Zero || info.icon == IntPtr.Zero) throw new Exception("No Shell icon for " + path);
+        return info.icon;
+    }
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetLongPathNameW(string input, StringBuilder output, uint size);
     public static string LongPath(string path) {
@@ -84,6 +103,7 @@ if (-not $desktop -or -not $programs) { throw 'Could not locate Windows known fo
 $startFolder = Join-Path $programs 'OmniSpec'
 $desktopLink = Join-Path $desktop 'OmniSpec.lnk'
 $startLink = Join-Path $startFolder 'OmniSpec.lnk'
+$fallbackIcon = Join-Path $startFolder 'omnispec-shortcut.ico'
 $owned = $false
 $createdStartFolder = -not (Test-Path -LiteralPath $startFolder)
 $marker = Join-Path $startFolder ('other-user-file-' + [Guid]::NewGuid().ToString('N') + '.txt')
@@ -143,14 +163,67 @@ function Assert-Pair([string]$Destination) {
                 throw "Unexpected empty shortcut working directory: $file"
             }
         }
-        if ($link[2]) {
-            Assert-PathEqual $link[2] $exe 'IconLocation'
-        } elseif (($Destination.ToCharArray() | Where-Object { $_ -eq '%' } | Measure-Object).Count -lt 2) {
-            throw "Unexpected empty shortcut icon: $file"
-        } # Иначе Shell использует иконку самой цели через PIDL.
+        if (-not $link[2]) { throw "Missing shortcut icon: $file" }
+        $iconPath = [OmniSpecShortcutReader]::LongPath($link[2])
+        $exePath = [OmniSpecShortcutReader]::LongPath($exe)
+        if (-not [String]::Equals($iconPath, $exePath, [StringComparison]::OrdinalIgnoreCase)) {
+            if (($Destination.ToCharArray() | Where-Object { $_ -eq '%' } | Measure-Object).Count -lt 2) {
+                throw "Unexpected fallback icon: $($link[2])"
+            }
+            Assert-PathEqual $link[2] $fallbackIcon 'Fallback IconLocation'
+            $sourceIcon = Join-Path $PSScriptRoot '../../apps/omnispec-app/icons/icon.ico'
+            if ((Get-FileHash -LiteralPath $fallbackIcon -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $sourceIcon -Algorithm SHA256).Hash) {
+                throw 'Fallback shortcut icon differs from the embedded OmniSpec icon'
+            }
+        }
         if ($link[3] -ne '0' -or $link[4] -ne 'OmniSpec') { throw "Unexpected shortcut properties: $file" }
     }
 }
+function Get-ShellBitmap([string]$Path) {
+    $handle = [OmniSpecShortcutReader]::Icon($Path)
+    try {
+        $icon = [System.Drawing.Icon]::FromHandle($handle)
+        try { return $icon.ToBitmap() } finally { $icon.Dispose() }
+    } finally { [void][OmniSpecShortcutReader]::DestroyIcon($handle) }
+}
+function Measure-IconDifference($Expected, $Actual, [bool]$SkipShortcutArrow) {
+    if ($Expected.Width -ne $Actual.Width -or $Expected.Height -ne $Actual.Height) { throw 'Icon dimensions differ' }
+    $sum = 0.0; $count = 0
+    for ($y = 0; $y -lt $Expected.Height; $y++) {
+        for ($x = 0; $x -lt $Expected.Width; $x++) {
+            if ($SkipShortcutArrow -and $x -lt ($Expected.Width / 2) -and $y -ge ($Expected.Height / 2)) { continue }
+            $a = $Expected.GetPixel($x, $y); $b = $Actual.GetPixel($x, $y)
+            $sum += [Math]::Abs([int]$a.R - [int]$b.R) + [Math]::Abs([int]$a.G - [int]$b.G) + [Math]::Abs([int]$a.B - [int]$b.B)
+            $count += 3
+        }
+    }
+    return $sum / $count
+}
+function Assert-RealShortcutIcons {
+    # Используем именно собранный лаунчер, а не тестовый exe без ресурсов.
+    $expectedPath = (Resolve-Path (Join-Path $PSScriptRoot '../../apps/omnispec-app/icons/32x32.png')).Path
+    $expected = [System.Drawing.Bitmap]::FromFile($expectedPath)
+    $launcherIcon = Get-ShellBitmap $Launcher
+    try {
+        $baseline = Measure-IconDifference $expected $launcherIcon $false
+        if ($baseline -gt 12) { throw "Actual launcher icon does not match OmniSpec: $baseline" }
+        foreach ($file in @($desktopLink, $startLink)) {
+            # Новый путь исключает устаревший Shell icon cache от прежней установки.
+            $copy = Join-Path $root (([Guid]::NewGuid().ToString('N')) + '.lnk')
+            [IO.File]::Copy($file, $copy)
+            try {
+                $actual = Get-ShellBitmap $copy
+                try {
+                    $diff = Measure-IconDifference $launcherIcon $actual $true
+                    Write-Host "WINDOWS_REAL_SHORTCUT_ICON difference=$diff path=$file"
+                    if ($diff -gt 15) { throw "Shortcut shows the wrong launcher icon: $diff" }
+                } finally { $actual.Dispose() }
+            } finally { Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue }
+        }
+        Write-Host 'WINDOWS_REAL_SHORTCUT_ICONS_OK'
+    } finally { $expected.Dispose(); $launcherIcon.Dispose() }
+}
+
 function Assert-ShortcutLaunch([string]$Destination) {
     # Только для собственного безопасного тестового payload в CI. Проверяем
     # не только содержимое .lnk, но и фактическую работу Shell при открытии.
@@ -189,8 +262,8 @@ function Assert-Installation([string]$Destination, [bool]$Portable) {
 }
 
 try {
-    foreach ($file in @($desktopLink, $startLink)) {
-        if (Test-Path -LiteralPath $file) { throw "Refusing to overwrite an existing shortcut: $file" }
+    foreach ($file in @($desktopLink, $startLink, $fallbackIcon)) {
+        if (Test-Path -LiteralPath $file) { throw "Refusing to overwrite an existing shortcut or icon: $file" }
     }
     $owned = $true
     New-Item -ItemType Directory -Force -Path $root, $desktop, $programs, (Join-Path $root 'LocalAppData') | Out-Null
@@ -268,6 +341,7 @@ try {
     Assert-Success $result 'Environment-like-path install'
     Assert-Installation $envPath $true
     if ($LaunchProbe) { Assert-ShortcutLaunch $envPath }
+    if ($VerifyRealIcon) { Assert-RealShortcutIcons }
     $envLink = [OmniSpecShortcutReader]::Read($desktopLink)
     $mode = if ($envLink[1]) { 'safe short path' } else { 'launcher restores its working directory' }
     Write-Host "WINDOWS_ENV_PATH_OK: $mode"
@@ -279,6 +353,7 @@ try {
     while ((Test-Path -LiteralPath $envUninstall) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
     if (Test-Path -LiteralPath $envUninstall) { throw 'Environment-like-path uninstaller did not delete itself' }
     if ((Test-Path -LiteralPath $desktopLink) -or (Test-Path -LiteralPath $startLink)) { throw 'Environment-like-path uninstall left shortcuts behind' }
+    if (Test-Path -LiteralPath $fallbackIcon) { throw 'Environment-like-path uninstall left its fallback icon behind' }
     Write-Host 'WINDOWS_ENV_PATH_UNINSTALL_OK'
 
     # Проверяем удаление на обычном пути; пользовательские файлы в меню и данные
@@ -303,7 +378,7 @@ try {
     Write-Host 'WINDOWS_UNINSTALL_SHORTCUTS_OK: shortcuts removed, user data and unrelated menu file preserved'
 } finally {
     if ($owned) {
-        foreach ($file in @($desktopLink, $startLink, $marker)) {
+        foreach ($file in @($desktopLink, $startLink, $fallbackIcon, $marker)) {
             if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Recurse -Force -ErrorAction SilentlyContinue }
         }
         if ($createdStartFolder -and (Test-Path -LiteralPath $startFolder)) {
