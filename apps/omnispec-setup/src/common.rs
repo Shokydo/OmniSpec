@@ -479,7 +479,12 @@ fn schedule_self_delete(path: &Path) {
         };
         let mut child = std::process::Command::new("cmd");
         child
-            .args(["/D", "/V:OFF", "/C", command])
+            .args(["/D", "/V:OFF", "/C"])
+            // cmd.exe не использует правила кавычек CommandLineToArgvW.
+            // Обычный .arg(command) добавлял буквальные обратные слэши перед
+            // кавычками и мешал del найти файл. Команда постоянная, путь идёт
+            // только через окружение, а не вставляется в этот текст.
+            .raw_arg(command)
             .env("OMNISPEC_DELETE_SELF", path)
             .creation_flags(0x0800_0000);
         if let Some(folder) = folder {
