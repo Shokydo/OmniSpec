@@ -59,7 +59,7 @@ assert.equal(analyzeLine('Java finished with exit code 1'), null);
 
 let fabricChanges = 0;
 const fabricStore = new DiagnosticsStore({onChange: () => fabricChanges++});
-fabricStore.begin('fabric-pack', 'user-log', {mcVersion:'26.3',loader:'fabric'});
+fabricStore.begin('fabric-pack', 'user-log', {mcVersion:'26.3',loader:'fabric',loaderVersion:'0.19.3'});
 const event = line => ({instance:'fabric-pack',attempt_id:'user-log',run_id:'fabric-pack#1',line});
 fabricStore.log(event('net.fabricmc.loader.impl.FormattedException: Some of your mods are incompatible with the game or each other!'));
 fabricStore.log(event(userFabricSolution));
@@ -67,7 +67,7 @@ fabricStore.log(event(fabricDetail('EntityCulling','entityculling','1.12.1','0.1
 fabricStore.log(event(fabricDetail('TRansition','transition','1.0.28','0.145.1')));
 fabricStore.log(event(fabricDetail('TRender','trender','1.0.17','0.141.0')));
 const fabricRun = fabricStore.selected('fabric-pack');
-assert.deepEqual(fabricRun.context, {mcVersion:'26.3',loader:'fabric'});
+assert.deepEqual(fabricRun.context, {mcVersion:'26.3',loader:'fabric',loaderVersion:'0.19.3'});
 assert.equal(fabricRun.findings.size, 1, 'уточнение заменяет общий сигнал вместо дублирования');
 const fabricFinding = fabricRun.findings.get('mod-dependencies');
 assert.equal(fabricFinding.fabricApi.minimum, '0.145.1', 'меньшее требование отдельного мода не затирает общее');
@@ -92,14 +92,14 @@ assert.equal(analyzeLine(" - Mod 'Example' (example) 1.0 requires any version of
 assert.equal(analyzeLine('\x1b[31m' + userFabricSolution + '\x1b[0m').fabricApi.minimum, '0.145.1');
 detailedOnly.log(detailEvent(' - Install fabric-api, any version.'));
 assert.equal(detailedOnly.selected('p').findings.get('mod-dependencies').fabricApi.minimum, '0.100.0+1.20.1', 'не теряем указанный минимум из-за any version');
-const changedContext = {mcVersion:'26.3',loader:'fabric'};
+const changedContext = {mcVersion:'26.3',loader:'fabric',loaderVersion:'0.19.3'};
 const parallelFabric = new DiagnosticsStore();
 parallelFabric.begin('p','one',changedContext);
-changedContext.mcVersion = '26.1'; changedContext.loader = 'forge';
+changedContext.mcVersion = '26.1'; changedContext.loader = 'forge'; changedContext.loaderVersion = '42';
 parallelFabric.begin('p','two',changedContext);
 parallelFabric.log({instance:'p',attempt_id:'one',line:userFabricSolution});
 parallelFabric.log({instance:'p',attempt_id:'two',line:' - Install fabric-api, version 0.100.0 or later.'});
-assert.deepEqual(parallelFabric.list('p').find(r => r.id === 'one').context,{mcVersion:'26.3',loader:'fabric'},'снимок настроек неизменяем при смене сборки');
+assert.deepEqual(parallelFabric.list('p').find(r => r.id === 'one').context,{mcVersion:'26.3',loader:'fabric',loaderVersion:'0.19.3'},'снимок настроек неизменяем при смене сборки');
 assert.equal(parallelFabric.list('p').find(r => r.id === 'one').findings.get('mod-dependencies').fabricApi.minimum,'0.145.1');
 assert.equal(parallelFabric.list('p').find(r => r.id === 'two').findings.get('mod-dependencies').fabricApi.minimum,'0.100.0');
 for (let i=0; i<20; i++) detailedOnly.log(detailEvent(fabricDetail('Mod'+i,'mod'+i,'1','0.1.0')));

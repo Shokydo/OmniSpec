@@ -275,7 +275,8 @@
       // сменить версию игры/загрузчик, и старую подсказку нельзя применять к новой.
       const snapshot = context && typeof context === "object" ? {
         mcVersion: String(context.mcVersion || "").slice(0, 80),
-        loader: String(context.loader || "").slice(0, 30)
+        loader: String(context.loader || "").slice(0, 30),
+        loaderVersion: String(context.loaderVersion || "").slice(0, 80)
       } : null;
       const run = {
         id: attemptId, runId: null, account: "", startedAt: this.now(), endedAt: null,

@@ -24,7 +24,7 @@ async function createPage(browser, options = {}) {
     const now = Math.floor(Date.now() / 1000);
     const instances = [
       {id:'pack-a',name:'Тестовая сборка',mc_version:'1.20.1',loader:{type:'forge',version:'47.3.0'},created:now,playtime_secs:0,icon:null},
-      {id:'pack-b',name:'Вторая сборка',mc_version:'26.3',loader:{type:'fabric',version:'0.18.0'},created:now,playtime_secs:0,icon:null}
+      {id:'pack-b',name:'Вторая сборка',mc_version:'26.3',loader:{type:'fabric',version:'0.19.3'},created:now,playtime_secs:0,icon:null}
     ];
     const accounts = [{uuid:'user-1',username:'Steve',kind:'offline'}, {uuid:'user-2',username:'Alex',kind:'offline'}];
     const callbacks = {};
@@ -234,7 +234,8 @@ async function bodyContains(page, text) {
       await bodyContains(page,'Не найден Fabric API');
       await page.waitForFunction(() => !window.omnispecDebug.state.preparing.has('pack-b'));
       const text = await page.locator('#errors-dynamic').innerText();
-      assert(text.includes('0.145.1') && text.includes('Minecraft 26.3') && text.includes('Fabric'));
+      assert(text.includes('0.145.1') && text.includes('Minecraft 26.3') && text.includes('Fabric 0.19.3'));
+      assert(text.includes('требования файла к версии Fabric Loader') && text.includes('fabric.mod.json'));
       assert(text.includes('EntityCulling 1.12.1') && text.includes('TRansition 1.0.28') && text.includes('TRender 1.0.17'));
       assert(text.includes('Не добавляй вторую копию') && text.includes('.disabled'));
       assert.equal(await page.locator('#errors-dynamic img').count(),0,'имена модов из лога экранируются');
@@ -257,6 +258,13 @@ async function bodyContains(page, text) {
       assert.equal(await page.locator('[data-errors-action="fabric-api-versions"]').count(),0);
       assert((await page.locator('#errors-dynamic').innerText()).includes('Minecraft 26.3 / Fabric'));
       assert((await page.locator('#errors-dynamic').innerText()).includes('Minecraft 26.1 / Fabric'));
+      await page.evaluate(() => { const meta=window.omnispecDebug.state.instances.find(x => x.id === 'pack-b'); meta.mc_version='26.3'; meta.loader.version='0.20.0'; });
+      await page.locator('[data-tab="console"]').click();
+      await page.locator('[data-tab="errors"]').click();
+      await bodyContains(page,'Настройки изменились после этого запуска');
+      assert((await page.locator('#errors-dynamic').innerText()).includes('Fabric 0.19.3'));
+      assert((await page.locator('#errors-dynamic').innerText()).includes('Fabric 0.20.0'));
+      assert.equal(await page.locator('[data-errors-action="fabric-api-versions"]').count(),0,'смена версии загрузчика тоже устаревает подсказку');
       assert.deepEqual(errors,[]); console.log('DIAGNOSTICS_FABRIC_API: exact minimum, safe manual actions, configuration change — OK');
       await page.close();
     }

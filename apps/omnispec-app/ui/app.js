@@ -2632,7 +2632,8 @@
     return `${Date.now().toString(36)}-${(++attemptSerial).toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   }
   function diagnosticLaunchContext(meta) {
-    return { mcVersion: meta.mc_version || "", loader: (meta.loader && meta.loader.type) || "vanilla" };
+    return { mcVersion: meta.mc_version || "", loader: (meta.loader && meta.loader.type) || "vanilla",
+      loaderVersion: (meta.loader && meta.loader.version) || "" };
   }
   function changePreparing(instanceId, delta) {
     const count = (state.preparing.get(instanceId) || 0) + delta;
@@ -3961,9 +3962,9 @@
     if (!item.fabricApi) return item;
     const current = diagnosticLaunchContext(meta);
     const original = run && run.context;
-    const changed = original && ((original.mcVersion && original.mcVersion !== current.mcVersion)
-      || (original.loader && original.loader !== current.loader));
-    const formatContext = (context) => `Minecraft ${context.mcVersion || "?"} / ${LOADER_NAMES[context.loader] || context.loader || "?"}`;
+    const changed = original && (original.mcVersion !== current.mcVersion
+      || original.loader !== current.loader || original.loaderVersion !== current.loaderVersion);
+    const formatContext = (context) => `Minecraft ${context.mcVersion || "?"} / ${LOADER_NAMES[context.loader] || context.loader || "?"}${context.loaderVersion ? ` ${context.loaderVersion}` : ""}`;
     if (changed) return { ...item, fabricActions: false,
       steps: [`Настройки изменились после этого запуска: тогда ${formatContext(original)}, сейчас ${formatContext(current)}.`,
         "Запусти сборку снова и проверь новую диагностику: старое требование может больше не относиться к ней.",
@@ -3972,12 +3973,14 @@
       steps: [`Сейчас выбрано ${formatContext(current)}. Сообщение относится к зависимости Fabric; не устанавливай её вслепую.`,
         "Проверь, что выбрана нужная сборка и загрузчик, затем снова запусти игру и изучи полный лог."] };
     const minimum = item.fabricApi.minimum;
-    const contextNote = original ? ` Для этой попытки выбраны Minecraft ${current.mcVersion} и Fabric.`
-      : ` Сейчас выбраны Minecraft ${current.mcVersion} и Fabric. Если настройки менялись после ошибки, сначала повтори запуск.`;
+    const currentLabel = formatContext(current);
+    const contextNote = original ? ` Настройки этой попытки: ${currentLabel}.`
+      : ` Сейчас выбрано ${currentLabel}. Если настройки менялись после ошибки, сначала повтори запуск.`;
     return { ...item, description: item.description + contextNote, fabricActions: true,
       steps: ["Останови все окна этой сборки и сохрани резервную копию важных миров и модов.",
         "Открой папку mods и проверь, нет ли там Fabric API, в том числе выключенного файла с окончанием .disabled. Не добавляй вторую копию.",
         `В официальном списке версий выбери Minecraft ${current.mcVersion} и Fabric${minimum ? `; версия Fabric API должна быть ${minimum} или новее` : ""}. Проверь и остальные требования лога.`,
+        `Проверь требования файла к версии Fabric Loader${current.loaderVersion ? ` (у сборки ${current.loaderVersion})` : " в настройках сборки"} и Java: они могут быть указаны на странице версии или в fabric.mod.json внутри .jar.`,
         "Скачай совместимый .jar и положи в mods этой сборки, не распаковывая. Если API уже есть, проверь его версию и включение; вручную замени только подтверждённо неподходящий файл после создания копии.",
         "Запусти сборку снова. Если ошибка останется, проверь полный лог: могут быть и другие недостающие зависимости."] };
   }
