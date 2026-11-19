@@ -153,9 +153,17 @@ mod tests {
             link.GetIconLocation(&mut icon, &mut icon_index).unwrap();
             link.GetDescription(&mut description).unwrap();
         }
-        assert_eq!(PathBuf::from(read_wide(&target)), exe);
-        assert_eq!(PathBuf::from(read_wide(&work)), dir);
-        assert_eq!(PathBuf::from(read_wide(&icon)), exe);
+        // Shell может развернуть короткое имя профиля RUNNER~1 в runneradmin.
+        // Сравниваем реальные пути, а не их разные строковые представления.
+        for (actual, expected) in [(&target, exe), (&work, dir), (&icon, exe)] {
+            let actual = PathBuf::from(read_wide(actual));
+            assert_eq!(
+                std::fs::canonicalize(&actual).unwrap(),
+                std::fs::canonicalize(expected).unwrap(),
+                "путь ярлыка {}",
+                actual.display()
+            );
+        }
         assert_eq!(icon_index, 0);
         assert_eq!(read_wide(&description), APP_NAME);
     }
