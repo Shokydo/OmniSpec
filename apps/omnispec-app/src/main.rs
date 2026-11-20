@@ -37,6 +37,10 @@ mod presence;
 mod rpc_icons;
 /// Объём физической памяти, доступной операционной системе.
 mod system_memory;
+/// Файлы фона и локальная библиотека Wallpaper Engine.
+mod wallpapers;
+/// Потоковая выдача только выбранных видео на защищённом loopback-адресе.
+mod video_stream;
 
 struct RunningChild {
     child: Mutex<tokio::process::Child>,
@@ -185,6 +189,8 @@ struct AppState {
     modrinth: Modrinth,
     curseforge: CurseForge,
     settings: Mutex<Settings>,
+    /// Потоковый сервер запускается только при выборе видеообоев.
+    video_server: StdMutex<Option<video_stream::VideoServer>>,
     running: Arc<Mutex<HashMap<String, ChildHandle>>>,
     /// Попытки, которые ещё готовятся; дубликаты с аккаунтом разрешены.
     launching: Arc<StdMutex<HashMap<String, usize>>>,
@@ -2796,94 +2802,63 @@ async fn apply_skin(
     Ok(json!({"ok": true, "variant": variant, "account": account.username}))
 }
 
-/// Готовый скин из пресета: фронтенд рисует PNG, мы сохраняем его на диск.
-#[tauri::command]
-fn save_skin_png(
-    state: State<'_, AppState>,
-    data_url: String,
-    name: String,
-) -> Result<String, String> {
-    let payload = data_url
-        .split_once("base64,")
-        .map(|(_, tail)| tail.to_string())
-        .ok_or_else(|| "ожидался PNG в data-URL".to_string())?;
-    let bytes =
-        base64_decode(&payload).ok_or_else(|| "не удалось прочитать картинку".to_string())?;
-    if bytes.len() < 64 {
-        return Err("картинка пустая".into());
-    }
-    let safe: String = name
-        .chars()
-        .map(|ch| {
-            if ch.is_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let dir = state.paths.meta().join("skins");
-    std::fs::create_dir_all(&dir).map_err(err)?;
-    let file_name = if safe.is_empty() {
-        "skin".to_string()
-    } else {
-        safe
-    };
-    let file = dir.join(format!("{file_name}.png"));
-    std::fs::write(&file, bytes).map_err(err)?;
-    Ok(file.to_string_lossy().to_string())
-}
-
-/// Скин из файла: копируем PNG в папку данных, чтобы пресет не зависел от исходника.
-#[tauri::command]
-fn import_skin(state: State<'_, AppState>, path: String) -> Result<Value, String> {
-    let source = PathBuf::from(&path);
-    let bytes =
-        std::fs::read(&source).map_err(|error| format!("не удалось открыть файл: {error}"))?;
-    if bytes.len() < 64 {
-        return Err("файл пустой или это не PNG".into());
-    }
-    // PNG 64×64 (или 64×32 для старых скинов) — проверяем по заголовку IHDR
-    if bytes.len() < 26 || &bytes[1..4] != b"PNG" {
-        return Err("нужен файл PNG со скином".into());
+/// Проверка целого PNG, а не только поддельного заголовка. Ограничение по
+/// размеру и размерам изображения применяется до декодирования.
+fn validate_skin_png(bytes: &[u8]) -> Result<(u32, u32), String> {
+    if bytes.len() < 33 || bytes.len() > 4 * 1024 * 1024
+        || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || &bytes[12..16] != b"IHDR" {
+        return Err("нужен корректный PNG со скином (до 4 МБ)".into());
     }
     let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
     let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
     if width != 64 || (height != 64 && height != 32) {
-        return Err(format!(
-            "нужен скин 64×64 (или 64×32), а тут {width}×{height}"
-        ));
+        return Err(format!("нужен скин 64×64 (или 64×32), а тут {width}×{height}"));
     }
-    let stem = source
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("skin");
-    let safe: String = stem
-        .chars()
-        .map(|ch| {
-            if ch.is_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let dir = state.paths.meta().join("skins");
-    std::fs::create_dir_all(&dir).map_err(err)?;
-    let file_name = format!(
-        "{}-{}.png",
-        if safe.is_empty() {
-            "skin".to_string()
-        } else {
-            safe
-        },
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|value| value.as_secs())
-            .unwrap_or(0)
-    );
-    let target = dir.join(&file_name);
-    std::fs::write(&target, &bytes).map_err(err)?;
+    let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+        .map_err(|_| "PNG повреждён или не читается".to_string())?;
+    if image.width() != width || image.height() != height { return Err("неверный размер PNG".into()); }
+    Ok((width, height))
+}
+
+fn write_skin_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    use std::io::Write;
+    validate_skin_png(bytes)?;
+    let (target, mut file) = wallpapers::create_unique(dir, name, "png")?;
+    let result = file.write_all(bytes).and_then(|_| file.flush());
+    drop(file);
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&target);
+        return Err(format!("не удалось сохранить скин: {error}"));
+    }
+    Ok(target)
+}
+
+/// Копия PNG избранного образа, в том числе если скин пришёл с сервера.
+#[tauri::command]
+fn save_skin_png(state: State<'_, AppState>, data_url: String, name: String) -> Result<String, String> {
+    if !data_url.starts_with("data:image/png;base64,") || data_url.len() > 6 * 1024 * 1024 {
+        return Err("ожидался PNG в data-URL размером до 4 МБ".into());
+    }
+    let payload = data_url.split_once("base64,").map(|(_, tail)| tail).unwrap_or("");
+    let bytes = base64_decode(payload).ok_or_else(|| "не удалось прочитать картинку".to_string())?;
+    let target = write_skin_file(&state.paths.meta().join("skins"), &name, &bytes)?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+/// Каждому PNG выдаём уникальное имя, поэтому пакетный импорт не перезапишет
+/// одноимённые изображения и старые сохранённые записи.
+#[tauri::command]
+fn import_skin(state: State<'_, AppState>, path: String) -> Result<Value, String> {
+    let source = PathBuf::from(&path);
+    let size = std::fs::metadata(&source).map_err(|error| format!("не удалось открыть файл: {error}"))?.len();
+    if size > 4 * 1024 * 1024 { return Err("скин больше 4 МБ".into()); }
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(&source).map_err(|error| format!("не удалось открыть файл: {error}"))?
+        .take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(|error| format!("не удалось прочитать файл: {error}"))?;
+    let (width, height) = validate_skin_png(&bytes)?;
+    let stem = source.file_stem().and_then(|value| value.to_str()).unwrap_or("skin");
+    let target = write_skin_file(&state.paths.meta().join("skins"), stem, &bytes)?;
     Ok(json!({
         "path": target.to_string_lossy().to_string(),
         "name": stem,
@@ -2896,11 +2871,13 @@ fn import_skin(state: State<'_, AppState>, path: String) -> Result<Value, String
 /// Картинка по пути в виде data-URL (для превью своего скина в webview).
 #[tauri::command]
 fn image_data_url(path: String) -> Result<String, String> {
-    let bytes =
-        std::fs::read(&path).map_err(|error| format!("не удалось открыть файл: {error}"))?;
-    if bytes.len() > 16 * 1024 * 1024 {
-        return Err("файл слишком большой".into());
-    }
+    let meta = std::fs::metadata(&path).map_err(|error| format!("не удалось открыть файл: {error}"))?;
+    if !meta.is_file() || meta.len() > 16 * 1024 * 1024 { return Err("файл слишком большой".into()); }
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path).map_err(|error| format!("не удалось открыть файл: {error}"))?
+        .take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(|error| format!("не удалось прочитать файл: {error}"))?;
+    if bytes.len() > 16 * 1024 * 1024 { return Err("файл слишком большой".into()); }
     let mime = match PathBuf::from(&path)
         .extension()
         .and_then(|value| value.to_str())
@@ -3064,6 +3041,22 @@ async fn pick_file(
     .await
     .map_err(|error| error.to_string())?;
     Ok(chosen)
+}
+
+/// Выбор нескольких PNG за один проход. Отмена возвращает пустой список.
+#[tauri::command]
+async fn pick_files(title: Option<String>, extensions: Option<Vec<String>>) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = rfd::FileDialog::new().set_title(title.unwrap_or_else(|| "Выбери файлы".into()));
+        if let Some(extensions) = extensions {
+            let list: Vec<String> = extensions.into_iter().map(|ext| ext.to_lowercase()).collect();
+            let refs: Vec<&str> = list.iter().map(String::as_str).collect();
+            if !refs.is_empty() { dialog = dialog.add_filter("Подходящие файлы", &refs); }
+            dialog = dialog.add_filter("Все файлы", &["*"]);
+        }
+        dialog.pick_files().unwrap_or_default().into_iter()
+            .map(|p| p.to_string_lossy().into_owned()).collect()
+    }).await.map_err(|error| error.to_string())
 }
 
 /// Открыть системный диалог выбора папки.
@@ -3349,66 +3342,130 @@ fn open_in_file_manager(target: &Path) -> Result<(), String> {
     }
 }
 
-/// Свой фон: копируем картинку в данные лаунчера и запоминаем имя файла.
-#[tauri::command]
-fn set_custom_wallpaper(state: State<'_, AppState>, path: String) -> Result<Settings, String> {
-    let source = PathBuf::from(&path);
-    let extension = source
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp") {
-        return Err("подойдёт PNG, JPG или WebP".into());
+/// Успешная запись нового имени происходит под тем же mutex, что и прочие
+/// настройки. Предыдущий фон до этого момента не удаляется и остаётся рабочим.
+async fn select_custom_wallpaper(state: &AppState, name: String) -> Result<Settings, String> {
+    let mut current = state.settings.lock().await;
+    let mut next = current.clone();
+    next.custom_wallpaper = Some(name.clone());
+    next.wallpaper = Some("custom".into());
+    if let Err(error) = next.save(&state.paths) {
+        let _ = std::fs::remove_file(state.paths.root.join("wallpapers").join(name));
+        return Err(format!("не удалось сохранить настройки фона: {error}"));
     }
-    let folder = state.paths.root.join("wallpapers");
-    std::fs::create_dir_all(&folder).map_err(err)?;
-    // старый свой фон убираем, чтобы не копился мусор
-    if let Ok(entries) = std::fs::read_dir(&folder) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("custom.") {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
-    let file_name = format!("custom.{extension}");
-    std::fs::copy(&source, folder.join(&file_name))
-        .map_err(|error| format!("не скопировалась картинка: {error}"))?;
-
-    let mut settings = Settings::load(&state.paths).map_err(err)?;
-    settings.custom_wallpaper = Some(file_name);
-    settings.wallpaper = Some("custom".into());
-    settings.save(&state.paths).map_err(err)?;
-    Ok(settings)
+    *current = next.clone();
+    Ok(next)
 }
 
-/// Свой фон в виде data-URL (webview не читает локальные пути).
 #[tauri::command]
-fn custom_wallpaper(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let settings = Settings::load(&state.paths).map_err(err)?;
-    let Some(name) = settings.custom_wallpaper else {
-        return Ok(None);
+async fn set_custom_wallpaper(state: State<'_, AppState>, path: String) -> Result<Settings, String> {
+    let dir = state.paths.root.join("wallpapers");
+    let name = tauri::async_runtime::spawn_blocking(move || wallpapers::copy_media(Path::new(&path), &dir))
+        .await.map_err(|e| e.to_string())??;
+    select_custom_wallpaper(&state, name).await
+}
+
+/// Прямые ссылки скачиваются с проверкой адресов, лимита, сигнатуры и каждого
+/// redirect; несовместимая страница никогда не запускается в окне лаунчера.
+#[tauri::command]
+async fn download_custom_wallpaper(state: State<'_, AppState>, url: String) -> Result<Settings, String> {
+    let dir = state.paths.root.join("wallpapers");
+    let name = wallpapers::download_media(&url, &dir).await?;
+    select_custom_wallpaper(&state, name).await
+}
+
+/// Только проверенный файл: изображения через узкий asset scope, видео —
+/// потоково через loopback, поскольку GStreamer не воспроизводит asset://.
+#[tauri::command]
+async fn wallpaper_source(app: AppHandle, state: State<'_, AppState>, source: String) -> Result<Option<wallpapers::Media>, String> {
+    // Чтение настроек и регистрация URL атомарны относительно смены файла:
+    // старый запрос не сможет снова открыть уже заменённое видео.
+    let settings = state.settings.lock().await;
+    let result = match source.as_str() {
+        "custom" => settings.custom_wallpaper.as_deref()
+            .map(|name| wallpapers::custom_media(&state.paths.root.join("wallpapers"), name)).transpose(),
+        "workshop" => settings.wallpaper_workshop_project.as_deref()
+            .map(|dir| wallpapers::project_media(Path::new(dir))).transpose(),
+        _ => return Err("неизвестный источник фона".into()),
     };
-    let path = state.paths.root.join("wallpapers").join(&name);
-    let Ok(bytes) = std::fs::read(&path) else {
-        return Ok(None);
+    let mut media = match result {
+        Ok(Some(media)) => media,
+        other => {
+            if let Some(server) = state.video_server.lock().unwrap_or_else(|e| e.into_inner()).as_ref() { server.revoke(&source); }
+            return other;
+        }
     };
-    let mime = match name
-        .rsplit('.')
-        .next()
-        .unwrap_or("png")
-        .to_lowercase()
-        .as_str()
+    if media.kind == "video" {
+        let mut guard = state.video_server.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() { *guard = Some(video_stream::VideoServer::new()?); }
+        media.src = Some(guard.as_ref().unwrap().expose(&source, Path::new(&media.path))?);
+    } else {
+        if let Some(server) = state.video_server.lock().unwrap_or_else(|e| e.into_inner()).as_ref() { server.revoke(&source); }
+        app.asset_protocol_scope().allow_file(&media.path).map_err(|e| format!("не удалось открыть медиа: {e}"))?;
+    }
+    drop(settings);
+    Ok(Some(media))
+}
+
+#[tauri::command]
+async fn scan_wallpaper_library(state: State<'_, AppState>) -> Result<wallpapers::Library, String> {
+    let manual = state.settings.lock().await.wallpaper_steam_path.clone();
+    tauri::async_runtime::spawn_blocking(move || wallpapers::scan_library(manual.as_deref()))
+        .await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn parse_wallpaper_workshop_link(url: String) -> Option<String> {
+    wallpapers::workshop_link(&url)
+}
+
+/// Разрешаем выбор только из найденной библиотеки, проверяя проект повторно.
+#[tauri::command]
+async fn set_workshop_wallpaper(state: State<'_, AppState>, directory: String) -> Result<Settings, String> {
+    let manual = state.settings.lock().await.wallpaper_steam_path.clone();
+    let selected = PathBuf::from(directory).canonicalize().map_err(|_| "проект не найден".to_string())?;
+    let check_path = selected.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let library = wallpapers::scan_library(manual.as_deref())?;
+        if !library.projects.iter().any(|p| Path::new(&p.directory) == check_path) {
+            return Err("проект не найден в выбранной библиотеке Steam".into());
+        }
+        wallpapers::project_media(&check_path)?;
+        Ok(())
+    }).await.map_err(|e| e.to_string())??;
+    let mut current = state.settings.lock().await;
+    let mut next = current.clone();
+    next.wallpaper_workshop_project = Some(selected.to_string_lossy().into_owned());
+    next.wallpaper = Some("workshop".into());
+    next.save(&state.paths).map_err(err)?;
+    *current = next.clone();
+    Ok(next)
+}
+
+/// Сцена/web/application открываются только по явному подтверждению в
+/// официальном Wallpaper Engine (в отдельном окне, не внутри OmniSpec).
+#[tauri::command]
+async fn open_wallpaper_engine(state: State<'_, AppState>, directory: String) -> Result<(), String> {
+    #[cfg(not(windows))]
     {
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        _ => "image/png",
-    };
-    Ok(Some(format!(
-        "data:{mime};base64,{}",
-        base64_encode(&bytes)
-    )))
+        let _ = (state, directory);
+        Err("официальный Wallpaper Engine доступен для запуска из OmniSpec только в Windows".into())
+    }
+    #[cfg(windows)]
+    {
+        let manual = state.settings.lock().await.wallpaper_steam_path.clone();
+        let selected = PathBuf::from(directory).canonicalize().map_err(|_| "проект не найден".to_string())?;
+        let lib = tauri::async_runtime::spawn_blocking(move || wallpapers::scan_library(manual.as_deref()))
+            .await.map_err(|e| e.to_string())??;
+        if !lib.projects.iter().any(|p| Path::new(&p.directory) == selected) {
+            return Err("проект не найден в выбранной библиотеке Steam".into());
+        }
+        let exe = lib.engine.ok_or_else(|| "wallpaper64.exe не найден. Укажи папку Steam с установленным Wallpaper Engine".to_string())?;
+        std::process::Command::new(exe)
+            .args(["-control", "openWallpaper", "-file"]).arg(selected.join("project.json"))
+            .args(["-playInWindow", "OmniSpec Wallpaper", "-width", "1280", "-height", "720"])
+            .spawn().map(|_| ()).map_err(|e| format!("не удалось отправить команду Wallpaper Engine: {e}"))
+    }
 }
 
 /// Где лежит сборка — строка «папка: …» в главном окне.
@@ -3494,6 +3551,7 @@ fn main() {
         paths,
         http,
         settings: Mutex::new(settings),
+        video_server: StdMutex::new(None),
         running: Arc::new(Mutex::new(HashMap::new())),
         launching: Arc::new(StdMutex::new(HashMap::new())),
         content_access: Arc::new(StdMutex::new(ContentAccess::default())),
@@ -3584,7 +3642,12 @@ fn main() {
             import_zip,
             pick_save_path,
             set_custom_wallpaper,
-            custom_wallpaper,
+            download_custom_wallpaper,
+            wallpaper_source,
+            scan_wallpaper_library,
+            parse_wallpaper_workshop_link,
+            set_workshop_wallpaper,
+            open_wallpaper_engine,
             instance_path,
             version_info,
             check_update,
@@ -3605,6 +3668,7 @@ fn main() {
             ms_login_start,
             ms_login_poll,
             pick_file,
+            pick_files,
             pick_dir,
             set_instance_icon_file,
             instance_icon,
@@ -3832,5 +3896,35 @@ mod tests {
         assert_eq!(got[1].len(), 70_000 - 65_536);
         drop(got);
         assert!(writer.write_all(b"too late\n").await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod skin_library_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut data = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(width, height).write_to(&mut data, image::ImageFormat::Png).unwrap();
+        data.into_inner()
+    }
+
+    #[test]
+    fn skins_are_validated_and_same_names_never_overwrite() {
+        let root = std::env::temp_dir().join(format!("omnispec-skins-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let good = png(64, 64);
+        let legacy = png(64, 32);
+        assert_eq!(validate_skin_png(&good).unwrap(), (64, 64));
+        assert_eq!(validate_skin_png(&legacy).unwrap(), (64, 32));
+        assert!(validate_skin_png(&png(128, 64)).is_err());
+        assert!(validate_skin_png(&good[..33]).is_err());
+        let a = write_skin_file(&root, "одинаковое", &good).unwrap();
+        let b = write_skin_file(&root, "одинаковое", &legacy).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(std::fs::read(a).unwrap(), good);
+        assert_eq!(std::fs::read(b).unwrap(), legacy);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

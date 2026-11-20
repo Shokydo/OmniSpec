@@ -1003,6 +1003,7 @@
   function loadWallImage(src) {
     return new Promise((resolve, reject) => {
       const image = new Image();
+      image.crossOrigin = "anonymous";
       image.onload = () => resolve(image);
       image.onerror = () => reject(new Error("фон не открылся"));
       image.src = src;
@@ -1048,19 +1049,10 @@
       } else if (fit === "fill") {
         ctx.drawImage(image, 0, 0, width, height);
       } else {
-        const ratio = iw / Math.max(1, ih);
-        const target = width / height;
-        let dw = width;
-        let dh = height;
         const cover = fit !== "contain";
-        if (ratio > target) {
-          dh = height;
-          dw = height * ratio;
-        } else {
-          dw = width;
-          dh = width / ratio;
-        }
-        if (cover) { dw *= pad; dh *= pad; }
+        const factor = cover ? Math.max(width / iw, height / ih) : Math.min(width / iw, height / ih);
+        const dw = iw * factor * (cover ? pad : 1);
+        const dh = ih * factor * (cover ? pad : 1);
         ctx.drawImage(image, (width - dw) / 2, (height - dh) / 2, dw, dh);
       }
       url = canvas.toDataURL("image/jpeg", 0.92);
@@ -1072,28 +1064,68 @@
     return url;
   }
 
-  /** Показать обои по настройкам (или по переданным значениям — для живого превью). */
+  /** Доступ к локальному медиа даётся только Rust-командой для конкретного файла. */
+  const wallSourceRevision = { custom: 0, workshop: 0 };
+  async function loadWallpaperSource(source) {
+    const revision = ++wallSourceRevision[source];
+    const media = await api.wallpaperSource(source);
+    const key = source === "workshop" ? "workshopWall" : "customWall";
+    if (revision !== wallSourceRevision[source]) return state[key];
+    if (!media) { state[key] = null; return null; }
+    const src = media.src || (TAURI?.core?.convertFileSrc ? TAURI.core.convertFileSrc(media.path) : media.path);
+    state[key] = { ...media, src };
+    return state[key];
+  }
+
+  let wallApplyRevision = 0;
+  /** GIF и видео не проходят через canvas: иначе анимация превратилась бы в один кадр. */
   async function applyWallpaper(overrides = {}) {
+    const revision = ++wallApplyRevision;
     const settings = state.settings || {};
     const layer = $("#wall");
+    const video = $("#wall-video");
     if (!layer) return;
     const name = overrides.wallpaper !== undefined ? overrides.wallpaper : settings.wallpaper;
     const fit = overrides.fit || settings.wallpaper_fit || "cover";
-    const blur = Number(overrides.blur ?? settings.wallpaper_blur ?? 0);
+    const blur = Math.max(0, Math.min(20, Number(overrides.blur ?? settings.wallpaper_blur ?? 0) || 0));
     const dim = Number(overrides.dim ?? settings.wallpaper_dim ?? 40);
-    const known = name === "custom" ? Boolean(state.customWall) : name && WALLS.some(([id]) => id === name);
-    if (!known) {
+    const media = name === "custom" ? state.customWall : name === "workshop" ? state.workshopWall
+      : name && WALLS.some(([id]) => id === name) ? { src: wallUrl(name), kind: "image" } : null;
+    if (!media || !media.src) {
+      if (video && !video.hidden) { video.pause(); video.removeAttribute("src"); video.dataset.wallSrc = ""; video.load(); video.hidden = true; }
       layer.hidden = true;
       layer.style.backgroundImage = "";
       document.body.classList.remove("has-wall");
       return;
     }
-    const src = name === "custom" ? state.customWall : wallUrl(name);
+    const { src, kind } = media;
     layer.hidden = false;
     document.body.classList.add("has-wall");
     layer.style.setProperty("--wall-dim", String(Math.min(100, Math.max(0, dim)) / 100));
-    // основной путь: готовый слой нужного размера
-    const prepared = await prepareWallLayer(src, fit, blur);
+    if (kind === "video" && video) {
+      layer.style.backgroundImage = "";
+      layer.style.filter = "";
+      layer.style.transform = "";
+      video.hidden = false;
+      video.style.objectFit = fit === "fill" ? "fill" : fit === "contain" ? "contain" : "cover";
+      video.style.filter = blur ? `blur(${blur}px)` : "";
+      video.style.transform = blur ? "scale(1.05)" : "";
+      if (video.dataset.wallSrc !== src) {
+        video.dataset.wallSrc = src;
+        video.onerror = () => toast("Не удалось воспроизвести видео: проверь файл и видеокодек системы", "err");
+        video.src = src;
+      }
+      if (!document.hidden) video.play().catch(() => {});
+      layer.dataset.prepared = "";
+      return;
+    }
+    if (video && !video.hidden) {
+      video.pause(); video.removeAttribute("src"); video.dataset.wallSrc = ""; video.load(); video.hidden = true;
+    }
+    // Статичные картинки по-прежнему запекаем для совместимости с WebView2.
+    // GIF рисуется напрямую, и все кадры продолжают меняться.
+    const prepared = kind === "gif" ? null : await prepareWallLayer(src, fit, blur);
+    if (revision !== wallApplyRevision) return;
     if (prepared) {
       layer.style.filter = "";
       layer.style.transform = "";
@@ -1104,7 +1136,6 @@
       forceRepaint();
       return;
     }
-    // запасной путь (canvas недоступен): прямо картинкой и CSS-фильтром
     layer.style.backgroundImage = `url("${src}")`;
     layer.style.backgroundSize = fit === "fill" ? "100% 100%" : fit === "contain" ? "contain" : fit === "tile" ? "auto" : "cover";
     layer.style.backgroundRepeat = fit === "tile" ? "repeat" : "no-repeat";
@@ -1112,6 +1143,12 @@
     layer.style.transform = blur ? "scale(1.05)" : "";
     layer.dataset.prepared = "";
   }
+
+  document.addEventListener("visibilitychange", () => {
+    const video = $("#wall-video");
+    if (!video || video.hidden) return;
+    if (document.hidden) video.pause(); else video.play().catch(() => {});
+  });
 
   /* размер окна изменился — пересобираем слой фона под новый размер */
   let wallResizeTimer = 0;
@@ -1181,7 +1218,8 @@
   /** Картинка текущих обоев (свой фон — data-URL, штатный — файл из assets). */
   function wallpaperSrc() {
     const wallpaper = state.wall && state.wall.wallpaper;
-    if (wallpaper === "custom") return state.customWall || null;
+    const media = wallpaper === "custom" ? state.customWall : wallpaper === "workshop" ? state.workshopWall : null;
+    if (media) return media.kind === "video" ? null : media.src;
     if (wallpaper && WALLS.some(([id]) => id === wallpaper)) return wallUrl(wallpaper);
     return null;
   }
@@ -1189,6 +1227,7 @@
   function loadImage(src) {
     return new Promise((resolve, reject) => {
       const image = new Image();
+      image.crossOrigin = "anonymous";
       image.onload = () => resolve(image);
       image.onerror = () => reject(new Error("картинка не открылась"));
       image.src = src;
@@ -2154,6 +2193,7 @@
     msStart: () => invoke("ms_login_start"),
     msPoll: (deviceCode) => invoke("ms_login_poll", { deviceCode }),
     pickFile: (title, extensions) => invoke("pick_file", { title, extensions }),
+    pickFiles: (title, extensions) => invoke("pick_files", { title, extensions }),
     pickDir: (title) => invoke("pick_dir", { title }),
     pickSave: (title, fileName, extensions) => invoke("pick_save_path", { title, fileName, extensions }),
     setInstanceIconFile: (instanceId, path) => invoke("set_instance_icon_file", { instanceId, path }),
@@ -2161,7 +2201,12 @@
     copyInstanceFile: (instanceId, path, sub) => invoke("copy_instance_file", { instanceId, path, sub }),
     startupFile: () => invoke("startup_file"),
     setCustomWallpaper: (path) => invoke("set_custom_wallpaper", { path }),
-    customWallpaper: () => invoke("custom_wallpaper"),
+    downloadWallpaper: (url) => invoke("download_custom_wallpaper", { url }),
+    wallpaperSource: (source) => invoke("wallpaper_source", { source }),
+    scanWallpaperLibrary: () => invoke("scan_wallpaper_library"),
+    parseWorkshopLink: (url) => invoke("parse_wallpaper_workshop_link", { url }),
+    setWorkshopWallpaper: (directory) => invoke("set_workshop_wallpaper", { directory }),
+    openWallpaperEngine: (directory) => invoke("open_wallpaper_engine", { directory }),
     modrinthProject: (projectId) => invoke("modrinth_project", { projectId }),
     searchCurseforge: (q) => invoke("search_curseforge", q),
     installCurseforgeModpack: (projectId, fileId, opId = null) => invoke("install_curseforge_modpack", { projectId, fileId: fileId || null, opId }),
@@ -2600,6 +2645,7 @@
     msStart: async () => ({ user_code: "K7QP2X4MB", device_code: "demo", verification_uri: "https://www.microsoft.com/link", expires_in: 900, interval: 5 }),
     msPoll: async () => null,
     pickFile: async () => "C:\\Users\\Vanya\\Downloads\\pack.mrpack",
+    pickFiles: async () => ["demo/skins/skin-a.png", "demo/skins/skin-b.png"],
     pickDir: async () => "C:\\OmniSpec",
     setInstanceIconFile: async (instanceId) => {
       const meta = DEMO.instances.find((item) => item.id === instanceId);
@@ -2610,7 +2656,20 @@
     copyInstanceFile: async (_id, path) => String(path).split(/[\\/]/).pop(),
     startupFile: async () => null,
     setCustomWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
-    customWallpaper: async () => null,
+    downloadWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
+    wallpaperSource: async () => null,
+    scanWallpaperLibrary: async () => ({ projects: [], searched: [], engine: null, truncated: false }),
+    parseWorkshopLink: async (url) => {
+      try {
+        const u = new URL(url);
+        const ids = u.searchParams.getAll("id");
+        return ["http:", "https:"].includes(u.protocol) && ["steamcommunity.com", "www.steamcommunity.com"].includes(u.hostname)
+          && ["/sharedfiles/filedetails", "/workshop/filedetails"].includes(u.pathname.replace(/\/$/, ""))
+          && ids.length === 1 && /^\d{1,20}$/.test(ids[0]) ? ids[0] : null;
+      } catch { return null; }
+    },
+    setWorkshopWallpaper: async () => ({ ...DEMO.settings, wallpaper: "workshop" }),
+    openWallpaperEngine: async () => null,
     instancePath: async (id) => `demo/instances/${id}`,
     openUrl: async (url) => { window.open(url, "_blank"); return null; },
     onProgress: (cb) => { demoProgressCb = cb; return Promise.resolve(); },
@@ -2675,6 +2734,8 @@
     fx: "wave",
     shape: "soft",
     customWall: null,
+    workshopWall: null,
+    wallpaperLibrary: { projects: [], searched: [], engine: null, loading: false, loaded: false, error: "", truncated: false, query: "" },
     sound: { on: true, volume: 60 },
     home: {
       extOpen: false, external: null, extLoading: false, extSelected: new Set(),
@@ -8488,6 +8549,19 @@
 
   /** Обновляет чип, поповер, карточку в настройках и экран профиля. */
   function renderAccounts() {
+    const accountId = state.accounts?.active || "";
+    if (state.profileAccountId !== accountId) {
+      state.profileAccountId = accountId;
+      // Нельзя оставлять плащи или разрешение смены скина от другого аккаунта.
+      state.skin = null;
+      state.capes = null;
+      state.capeTexture = null;
+      state.capeTextureSrc = "";
+      if (prefsCategory === "profile" && $("#modal-prefs") && !$("#modal-prefs").hidden) {
+        refreshAccountSkin().then(() => { if (prefsCategory === "profile" && !$("#modal-prefs").hidden) renderPrefs(); });
+        refreshAccountCapes().then(() => { if (prefsCategory === "profile" && !$("#modal-prefs").hidden) renderPrefs(); });
+      }
+    }
     renderAccountChip();
     const pop = $("#account-pop");
     if (pop && !pop.hidden) renderAccountPopover();
@@ -8764,64 +8838,55 @@
       bindFavorites();
       bindSkin();
     }
+    if (prefsCategory === "wall") {
+      bindWallpaperLibrary();
+      if (!state.wallpaperLibrary.loaded && !state.wallpaperLibrary.loading) refreshWallpaperLibrary();
+    } else if (wallPreviewObserver) { wallPreviewObserver.disconnect(); wallPreviewObserver = null; }
     if (keepScroll) body.scrollTop = keepScroll;
   }
 
-  /** Профиль: слева список аккаунтов, справа — активный. */
+  /** Компоновка профиля: аккаунты слева; профиль и избранное справа. */
   function prefsProfile() {
     const accounts = (state.accounts && state.accounts.accounts) || [];
     const activeId = (state.accounts && state.accounts.active) || (accounts[0] && accounts[0].uuid);
     const active = accounts.find((item) => item.uuid === activeId) || null;
     return `
       <div class="profile-grid">
-        <section class="prefs-section">
+        <section class="prefs-section profile-accounts">
           <div class="prefs-label-row">
-            <span class="prefs-label">Аккаунты</span>
-            <div class="spacer"></div>
-            <button class="btn btn-small" data-acc="add-any"><svg class="ic"><use href="#i-plus"/></svg>Добавить аккаунт</button>
+            <span class="prefs-label">Аккаунты</span><div class="spacer"></div>
+            <button class="btn btn-small" data-acc="add-any" title="Добавить аккаунт"><svg class="ic"><use href="#i-plus"/></svg>Добавить</button>
           </div>
           <div class="profile-list">
             ${accounts.map((account) => `
               <div class="profile-row ${account.uuid === activeId ? "is-active" : ""}" data-uuid="${esc(account.uuid)}">
                 ${avatarHtml(account)}
-                <div class="acc-main">
-                  <div class="acc-name">${esc(account.username)}</div>
-                  <div class="acc-sub">${esc(kindLabel(account.kind))}</div>
-                </div>
-                ${account.uuid === activeId
-                  ? '<span class="tag green">активный</span>'
-                  : '<button class="btn btn-small" data-acc="pick">Выбрать</button>'}
-                ${account.kind === "microsoft"
-                  ? '<span class="acc-slot" aria-hidden="true"></span>'
-                  : `<button class="icon-btn" data-acc="rename-one" title="Изменить ник"><svg class="ic"><use href="#i-pencil"/></svg></button>`}
+                <div class="acc-main"><div class="acc-name">${esc(account.username)}</div><div class="acc-sub">${esc(kindLabel(account.kind))}</div></div>
+                ${account.uuid === activeId ? '<span class="tag green">активный</span>' : '<button class="btn btn-small" data-acc="pick">Выбрать</button>'}
+                ${account.kind === "microsoft" ? '<span class="acc-slot" aria-hidden="true"></span>'
+                  : '<button class="icon-btn" data-acc="rename-one" title="Изменить ник"><svg class="ic"><use href="#i-pencil"/></svg></button>'}
                 <button class="icon-btn" data-acc="remove-one" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
               </div>`).join("")}
+            ${accounts.length ? "" : '<div class="skin-note">Добавь аккаунт, чтобы выбрать профиль.</div>'}
           </div>
         </section>
-
-        <section class="prefs-section profile-active">
-          <div class="prefs-label">Аккаунт</div>
-          ${active ? `
-            <div class="profile-card">
+        <div class="profile-summary">
+          <section class="prefs-section profile-active">
+            <div class="prefs-label">Профиль</div>
+            ${active ? `<div class="profile-card">
               ${avatarHtml(active, "lg")}
-              <div class="profile-card-main">
-                <div class="profile-card-name">${esc(active.username)}</div>
-                <div class="profile-card-sub">${esc(kindLabel(active.kind))}</div>
-              </div>
+              <div class="profile-card-main"><div class="profile-card-name">${esc(active.username)}</div><div class="profile-card-sub">${esc(kindLabel(active.kind))}</div></div>
               <div class="profile-card-actions">
-                ${active.kind === "microsoft" ? "" : `<button class="btn btn-small" data-acc="rename">Изменить ник</button>`}
+                ${active.kind === "microsoft" ? "" : '<button class="btn btn-small" data-acc="rename">Изменить ник</button>'}
                 <button class="btn btn-small" data-acc="remove">Выйти</button>
               </div>
-            </div>
-`
-            : `<div class="profile-card is-empty"><span class="muted">Аккаунта пока нет</span></div>`}
-          <div class="fav-head">
-            <span class="prefs-label">Образы</span>
-            <div class="spacer"></div>
-            <span class="muted" style="font-size:10.5px">скин + плащ · до ${FAV_SLOTS}</span>
-          </div>
-          ${favoriteSlotsHtml()}
-        </section>
+            </div>` : '<div class="profile-card is-empty"><span class="muted">Аккаунта пока нет</span></div>'}
+          </section>
+          <section class="prefs-section profile-favorites">
+            <div class="prefs-label-row"><span class="prefs-label">Избранное</span><div class="spacer"></div><span class="muted" style="font-size:10.5px">скин + плащ · до ${FAV_SLOTS}</span></div>
+            ${favoriteSlotsHtml()}
+          </section>
+        </div>
       </div>
       ${skinSectionHtml()}`;
   }
@@ -8960,10 +9025,48 @@
     }).join("");
   }
 
+  function wallpaperLibraryHtml(settings) {
+    const library = state.wallpaperLibrary;
+    const projects = library.projects || [];
+    const typeLabel = { video: "Видео", scene: "Сцена", web: "Web", application: "Приложение", unknown: "Проект" };
+    return `
+      <div class="prefs-section we-section">
+        <div class="prefs-label-row"><span class="prefs-label">Wallpaper Engine · Steam Workshop</span><div class="spacer"></div>
+          <button class="btn btn-small" id="we-refresh" ${library.loading ? "disabled" : ""}>${library.loading ? "Поиск…" : "Обновить"}</button>
+          <button class="btn btn-small" id="we-folder" ${library.loading ? "disabled" : ""}>Папка Steam…</button>
+        </div>
+        <div class="skin-note">${settings.wallpaper_steam_path ? `Дополнительная папка: ${esc(settings.wallpaper_steam_path)}` : "Поиск в стандартных папках Steam и на других дисках."}
+          ${settings.wallpaper_steam_path ? '<button class="we-reset-path" id="we-auto">Вернуть автопоиск</button>' : ""}</div>
+        <div class="we-link-row">
+          <input class="input" id="wall-link" value="${esc(library.link || "")}" placeholder="Ссылка Steam Workshop или прямая ссылка GIF / MP4" spellcheck="false" aria-label="Ссылка на обои">
+          <button class="btn" id="wall-link-add" ${library.linkBusy ? "disabled" : ""}>${library.linkBusy ? "Загрузка…" : "Добавить"}</button>
+        </div>
+        <div class="skin-note">Для Workshop сначала подпишись и дождись загрузки в Steam, затем нажми «Обновить». Прямой файл до 512 МБ сохраняется в лаунчер.</div>
+        <div class="skin-note">Видео и GIF воспроизводятся внутри OmniSpec без звука. Сцены, web и приложения открываются отдельно через установленный Wallpaper Engine в Windows; они не становятся фоном лаунчера.</div>
+        ${library.error ? `<div class="skin-import-errors" role="alert">${esc(library.error)}</div>` : ""}
+        <div class="we-library-head">
+          <span class="muted">${library.loading ? "Ищем проекты…" : `Найдено: ${projects.length}${library.truncated ? " (показаны первые)" : ""}`}</span>
+          ${projects.length ? `<input class="input we-search" id="we-search" value="${esc(library.query || "")}" placeholder="Поиск обоев" aria-label="Поиск обоев">` : ""}
+        </div>
+        ${projects.length ? `<div class="we-grid" id="we-grid">
+          ${projects.map((project, index) => `
+            <article class="we-card ${library.highlight === project.workshop_id ? "is-highlighted" : ""}" data-we-card="${index}" data-we-search="${esc(`${project.title} ${project.workshop_id || ""} ${typeLabel[project.kind] || ""}`.toLowerCase())}">
+              <div class="we-thumb">${project.preview ? `<img alt="" data-we-preview="${esc(project.preview)}" loading="lazy">` : '<span>Нет превью</span>'}
+                <span class="we-type">${esc(typeLabel[project.kind] || "Проект")}</span></div>
+              <div class="we-title" title="${esc(project.title)}">${esc(project.title)}</div>
+              ${project.workshop_id ? `<div class="we-id">Workshop ${esc(project.workshop_id)}</div>` : '<div class="we-id">Локальный проект</div>'}
+              <div class="we-actions">
+                ${project.playable ? `<button class="btn btn-small btn-primary" data-we-apply="${index}" aria-label="Установить «${esc(project.title)}» как фон">На фон</button>` : ""}
+                <button class="btn btn-small" data-we-open="${index}" title="Открыть отдельно через Wallpaper Engine" aria-label="Открыть «${esc(project.title)}» в Wallpaper Engine">В Wallpaper Engine</button>
+              </div>
+            </article>`).join("")}
+        </div>` : `<div class="we-empty">${library.loading ? "" : "Проекты не найдены. Укажи папку Steam, библиотеку на другом диске или папку обоев Wallpaper Engine."}</div>`}
+      </div>`;
+  }
+
   function prefsWall(settings) {
     const recent = ((state.wall.recent && state.wall.recent.length) ? state.wall.recent : (settings.wallpaper_recent || []))
-      .filter((id) => WALLS.some(([wall]) => wall === id))
-      .slice(0, 6);
+      .filter((id) => WALLS.some(([wall]) => wall === id)).slice(0, 6);
     const groups = [
       { label: "Градиенты", ids: ["aurora", "waves", "blobs"] },
       { label: "Текстуры", ids: ["grid", "dots", "noise", "stripes"] },
@@ -8971,50 +9074,164 @@
     ];
     return `
       <div class="prefs-section">
-        <div class="prefs-label-row">
-          <span class="prefs-label">Обои</span>
-          <div class="spacer"></div>
-          <button class="wall-none ${!state.wall.wallpaper ? "is-active" : ""}" data-wall="">Убрать фон</button>
-        </div>
+        <div class="prefs-label-row"><span class="prefs-label">Обои</span><div class="spacer"></div>
+          <button class="wall-none ${!state.wall.wallpaper ? "is-active" : ""}" data-wall="">Убрать фон</button></div>
         <div class="wall-own">
-          <button class="wall-chip ${state.wall.wallpaper === "custom" ? "is-active" : ""}" data-wall="custom"
-                  ${state.customWall ? `style="background-image:url('${state.customWall}')"` : ""}>
-            <span>${state.customWall ? "Свой фон" : "Свой фон…"}</span>
+          <button class="wall-chip ${state.wall.wallpaper === "custom" ? "is-active" : ""}" data-wall="custom" id="wall-custom-chip">
+            <span>${state.customWall ? (state.customWall.kind === "video" ? "Своё видео" : "Свой фон") : "Свой фон…"}</span>
           </button>
-          <button class="btn" id="wall-pick">${state.customWall ? "Заменить картинку…" : "Выбрать картинку…"}</button>
+          ${state.workshopWall ? `<button class="wall-chip ${state.wall.wallpaper === "workshop" ? "is-active" : ""}" data-wall="workshop"><span>Steam · видео</span></button>` : ""}
+          <button class="btn" id="wall-pick">${state.customWall ? "Заменить файл…" : "Выбрать файл…"}</button>
         </div>
-        ${groups.map((group) => `
-          <div class="wall-group">
-            <div class="wall-group-name">${esc(group.label)}</div>
-            <div class="wall-grid">${wallGridHtml(group.ids)}</div>
-          </div>`).join("")}
-        ${recent.length ? `
-          <div class="wall-group">
-            <div class="wall-group-name">Недавние</div>
-            <div class="wall-grid">${wallGridHtml(recent)}</div>
-          </div>` : ""}
+        <div class="skin-note">PNG, JPG, WebP, GIF, MP4 или WebM · до 512 МБ. Видео воспроизводится без звука.</div>
+        ${groups.map((group) => `<div class="wall-group"><div class="wall-group-name">${esc(group.label)}</div><div class="wall-grid">${wallGridHtml(group.ids)}</div></div>`).join("")}
+        ${recent.length ? `<div class="wall-group"><div class="wall-group-name">Недавние</div><div class="wall-grid">${wallGridHtml(recent)}</div></div>` : ""}
       </div>
       <div class="prefs-section">
         <div class="prefs-label">Как показывать</div>
         <div class="prefs-inline">
-          <div class="field">
-            <label>Заполнение</label>
-            <select class="select" id="wall-fit">
-              ${[["cover", "Заполнить"], ["contain", "Вписать"], ["fill", "Растянуть"], ["tile", "Плиткой"]]
-                .map(([value, label]) => `<option value="${value}" ${state.wall.fit === value ? "selected" : ""}>${label}</option>`).join("")}
-            </select>
-          </div>
-          <div class="field" style="flex:1;min-width:170px">
-            <label>Размытие</label>
-            <div class="range"><input type="range" id="wall-blur" min="0" max="20" value="${state.wall.blur}"><span class="tag" id="wall-blur-value">${state.wall.blur}</span></div>
-          </div>
-          <div class="field" style="flex:1;min-width:170px">
-            <label>Затемнение</label>
-            <div class="range"><input type="range" id="wall-dim" min="0" max="100" value="${state.wall.dim}"><span class="tag" id="wall-dim-value">${state.wall.dim}%</span></div>
-          </div>
+          <div class="field"><label>Заполнение</label><select class="select" id="wall-fit">
+            ${[["cover", "Заполнить"], ["contain", "Вписать"], ["fill", "Растянуть"], ["tile", "Плиткой"]]
+              .map(([value, label]) => `<option value="${value}" ${state.wall.fit === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
+          <div class="field" style="flex:1;min-width:170px"><label>Размытие</label><div class="range"><input type="range" id="wall-blur" min="0" max="20" value="${state.wall.blur}"><span class="tag" id="wall-blur-value">${state.wall.blur}</span></div></div>
+          <div class="field" style="flex:1;min-width:170px"><label>Затемнение</label><div class="range"><input type="range" id="wall-dim" min="0" max="100" value="${state.wall.dim}"><span class="tag" id="wall-dim-value">${state.wall.dim}%</span></div></div>
         </div>
+        <div class="skin-note">Для видео режим «Плиткой» работает как «Заполнить».</div>
+      </div>
+      ${wallpaperLibraryHtml(settings)}`;
+  }
 
-      </div>`;
+  let wallPreviewObserver = null;
+  let wallpaperScanTask = null;
+  function refreshWallpaperLibrary() {
+    if (wallpaperScanTask) return wallpaperScanTask;
+    const library = state.wallpaperLibrary;
+    library.loading = true;
+    library.error = "";
+    if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
+    wallpaperScanTask = (async () => {
+      try {
+        const result = await api.scanWallpaperLibrary();
+        if (!result) throw new Error("не удалось получить библиотеку");
+        library.projects = result.projects || [];
+        library.searched = result.searched || [];
+        library.engine = result.engine || null;
+        library.truncated = Boolean(result.truncated);
+        library.loaded = true;
+      } catch (error) {
+        library.error = String(error);
+        library.loaded = true;
+      } finally {
+        library.loading = false;
+        wallpaperScanTask = null;
+        if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
+      }
+    })();
+    return wallpaperScanTask;
+  }
+
+  function filterWallpaperCards() {
+    const query = (state.wallpaperLibrary.query || "").trim().toLowerCase();
+    $$("#we-grid [data-we-card]").forEach((card) => { card.hidden = Boolean(query && !card.dataset.weSearch.includes(query)); });
+  }
+
+  function bindWallpaperLibrary() {
+    const library = state.wallpaperLibrary;
+    const customChip = $("#wall-custom-chip");
+    if (customChip && state.customWall && state.customWall.kind !== "video") customChip.style.backgroundImage = `url("${state.customWall.src}")`;
+    $("#we-refresh")?.addEventListener("click", refreshWallpaperLibrary);
+    $("#we-folder")?.addEventListener("click", async () => {
+      const path = await api.pickDir("Папка Steam, библиотеки Steam или Wallpaper Engine").catch((error) => { toast(String(error), "err"); return null; });
+      if (!path) return;
+      try {
+        const next = { ...(state.settings || {}), wallpaper_steam_path: path };
+        await api.saveSettings(next); state.settings = next;
+        await refreshWallpaperLibrary();
+      } catch (error) { toast(`Не удалось сохранить папку: ${error}`, "err"); }
+    });
+    $("#we-auto")?.addEventListener("click", async () => {
+      try {
+        const next = { ...(state.settings || {}), wallpaper_steam_path: null };
+        await api.saveSettings(next); state.settings = next;
+        await refreshWallpaperLibrary();
+      } catch (error) { toast(String(error), "err"); }
+    });
+    $("#we-search")?.addEventListener("input", (event) => { library.query = event.target.value; filterWallpaperCards(); });
+    filterWallpaperCards();
+    const link = $("#wall-link");
+    link?.addEventListener("input", () => { library.link = link.value; });
+    link?.addEventListener("keydown", (event) => { if (event.key === "Enter") $("#wall-link-add")?.click(); });
+    $("#wall-link-add")?.addEventListener("click", addWallpaperLink);
+    $$("[data-we-apply]").forEach((button) => button.addEventListener("click", async () => {
+      const project = library.projects[Number(button.dataset.weApply)];
+      if (!project || !project.playable) return;
+      button.disabled = true;
+      try {
+        state.settings = await api.setWorkshopWallpaper(project.directory);
+        await loadWallpaperSource("workshop");
+        state.wall.wallpaper = "workshop";
+        state.wall.recent = rememberWallpaper(state.wall.recent, "workshop");
+        await persistWallpaper();
+        applyWallpaper(state.wall);
+        renderPrefs();
+        toast(`Видео «${project.title}» выбрано как фон`, "ok");
+      } catch (error) { toast(String(error), "err"); button.disabled = false; }
+    }));
+    $$("[data-we-open]").forEach((button) => button.addEventListener("click", async () => {
+      const project = library.projects[Number(button.dataset.weOpen)];
+      if (!project) return;
+      const confirmed = await askConfirm({ title: "Открыть в Wallpaper Engine",
+        text: "Проект откроется в отдельном окне Wallpaper Engine в Windows, не внутри OmniSpec. Web-обои и приложения могут выполнять код автора — продолжай только если доверяешь ему. Заранее запусти Wallpaper Engine.", ok: "Открыть" });
+      if (!confirmed) return;
+      try { await api.openWallpaperEngine(project.directory); toast("Команда отправлена в Wallpaper Engine", "ok"); }
+      catch (error) { toast(String(error), "err"); }
+    }));
+    if (wallPreviewObserver) wallPreviewObserver.disconnect();
+    const images = $$("#we-grid [data-we-preview]");
+    const load = async (image) => {
+      const data = await api.imageDataUrl(image.dataset.wePreview).catch(() => null);
+      if (data && image.isConnected) image.src = data;
+    };
+    if ("IntersectionObserver" in window) {
+      wallPreviewObserver = new IntersectionObserver((entries) => entries.forEach((entry) => {
+        if (entry.isIntersecting) { wallPreviewObserver?.unobserve(entry.target); load(entry.target); }
+      }), { root: $("#prefs-body"), rootMargin: "180px" });
+      images.forEach((image) => wallPreviewObserver.observe(image));
+    } else images.slice(0, 100).forEach(load);
+  }
+
+  async function addWallpaperLink() {
+    const library = state.wallpaperLibrary;
+    const url = String(library.link || $("#wall-link")?.value || "").trim();
+    if (!url || library.linkBusy) return;
+    library.linkBusy = true; renderPrefs();
+    try {
+      const id = await api.parseWorkshopLink(url);
+      if (id) {
+        if (!library.loaded || library.loading) await refreshWallpaperLibrary();
+        const item = library.projects.find((project) => project.workshop_id === id);
+        if (item) {
+          library.query = id; library.highlight = id; library.linkBusy = false; renderPrefs();
+          $("#we-grid .is-highlighted")?.scrollIntoView({ block: "nearest" });
+          toast(`Обои «${item.title}» найдены в библиотеке`, "ok");
+        } else {
+          library.linkBusy = false; renderPrefs();
+          const confirmed = await askConfirm({ title: "Обои ещё не скачаны",
+            text: "Откроется страница Steam Workshop. Подпишись на обои, дождись загрузки в Steam, затем вернись и нажми «Обновить». Для подписки может потребоваться приобретённый Wallpaper Engine.", ok: "Открыть Steam" });
+          if (confirmed) await api.openUrl(`https://steamcommunity.com/sharedfiles/filedetails/?id=${id}`);
+        }
+      } else {
+        state.settings = await api.downloadWallpaper(url);
+        await loadWallpaperSource("custom");
+        state.wall.wallpaper = "custom";
+        state.wall.recent = rememberWallpaper(state.wall.recent, "custom");
+        await persistWallpaper();
+        applyWallpaper(state.wall);
+        library.link = "";
+        toast("Файл обоев загружен и выбран", "ok");
+      }
+    } catch (error) { toast(String(error), "err"); }
+    finally { library.linkBusy = false; if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs(); }
   }
 
   function prefsFx() {
@@ -9625,16 +9842,19 @@
     }));
     const wallPick = $("#wall-pick");
     if (wallPick) wallPick.addEventListener("click", async () => {
-      const path = await api.pickFile("Свой фон", ["png", "jpg", "jpeg", "webp"]).catch(() => null);
+      const path = await api.pickFile("Свой фон: изображение, GIF или видео", ["png", "jpg", "jpeg", "webp", "gif", "mp4", "m4v", "webm"]).catch((error) => { toast(String(error), "err"); return null; });
       if (!path) return;
+      wallPick.disabled = true;
       try {
-        const updated = await api.setCustomWallpaper(path);
-        state.settings = updated;
-        state.customWall = await api.customWallpaper().catch(() => null);
+        state.settings = await api.setCustomWallpaper(path);
+        await loadWallpaperSource("custom");
         state.wall.wallpaper = "custom";
+        state.wall.recent = rememberWallpaper(state.wall.recent, "custom");
+        await persistWallpaper();
         applyWallpaper(state.wall);
         renderPrefs();
-      } catch (err) { toast(String(err), "err"); }
+        toast("Фон выбран", "ok");
+      } catch (err) { toast(String(err), "err"); wallPick.disabled = false; }
     });
     const soundSwitch = $("#set-sound");
     if (soundSwitch) soundSwitch.addEventListener("click", () => {
@@ -9663,6 +9883,8 @@
 
     $$("#prefs-body [data-wall]").forEach((chip) => chip.addEventListener("click", async () => {
       const picked = chip.dataset.wall || null;
+      if (picked === "custom" && !state.customWall) return toast("Сначала выбери файл фона", "err");
+      if (picked === "workshop" && !state.workshopWall) return toast("Выбранное видео Workshop недоступно", "err");
       state.wall.wallpaper = picked;
       state.wall.recent = rememberWallpaper(state.wall.recent, picked);
       $$("#prefs-body [data-wall]").forEach((el) => el.classList.toggle("is-active", el === chip));
@@ -9684,6 +9906,8 @@
       $("#wall-dim-value").textContent = `${state.wall.dim}%`;
       applyWallpaper(state.wall);
     });
+    if (blur) blur.addEventListener("change", persistWallpaper);
+    if (dim) dim.addEventListener("change", persistWallpaper);
 
     const memory = $("#set-memory");
     if (memory) memory.addEventListener("input", () => updateMemoryRange(memory));
@@ -10116,21 +10340,21 @@
   function skinState() {
     if (!state.skin) {
       state.skin = {
-        preset: null, variant: "classic", yaw: -18, pitch: 6, licensed: false, touchedVariant: false,
+        selectedSkin: null, variant: "classic", yaw: -18, pitch: 6, licensed: false, touchedVariant: false,
         currentPath: "", currentName: "", texture: null, dataUrl: "", fromAccount: false
       };
     }
     return state.skin;
   }
 
-  /** Сохранённые пресеты — это скины, которые пользователь загрузил сам. */
-  function userSkinPresets() {
+  /** Старый ключ настроек остаётся совместимым с уже сохранёнными скинами. */
+  function userSkinLibrary() {
     const list = state.settings && Array.isArray(state.settings.skin_presets) ? state.settings.skin_presets : [];
     return list.filter((item) => item && item.id && item.path);
   }
 
-  function findSkinPreset(id) {
-    return userSkinPresets().find((preset) => preset.id === id) || null;
+  function findLibrarySkin(id) {
+    return userSkinLibrary().find((item) => item.id === id) || null;
   }
 
   /** Строка под кнопками: обновляется без перерисовки всего профиля. */
@@ -10143,13 +10367,17 @@
   }
 
   async function saveSkinFavorites(next) {
-    state.settings = { ...(state.settings || {}), skin_favorites: next.slice(0, FAV_SLOTS) };
+    const favorites = next.slice(0, FAV_SLOTS);
+    const updated = { ...(state.settings || {}), skin_favorites: favorites };
     try {
-      await api.saveSettings(state.settings);
+      await api.saveSettings(updated);
+      state.settings = { ...(state.settings || {}), skin_favorites: favorites };
+      renderPrefs();
+      return true;
     } catch (error) {
-      toast(String(error), "err");
+      toast(`Не удалось сохранить избранное: ${error}`, "err");
+      return false;
     }
-    renderPrefs();
   }
 
   function activeCapeId() {
@@ -10217,28 +10445,22 @@
     if (Number.isFinite(Number(fav.angle))) skin.yaw = Number(fav.angle);
     skin.favorite = fav.id;
 
-    // плащ: переключаем только у лицензии и если он отличается
+    // Плащ меняется только у лицензии через Mojang. При отказе не показываем
+    // чужой плащ так, будто он действительно надет на аккаунт.
     const capes = capeState();
     const wanted = fav.capeId || "";
+    let capeError = "";
     if (capes.licensed && wanted !== activeCapeId()) {
       try {
         await api.setCape(wanted || null);
         capes.list.forEach((cape) => { cape.active = wanted ? cape.id === wanted : false; });
-      } catch (error) {
-        toast(`Плащ не применён: ${error}`, "err");
-      }
+      } catch (error) { capeError = String(error); }
     }
-    // в превью сразу показываем плащ из образа, не дожидаясь сервера
-    if (fav.capeDataUrl) {
-      const capeTexture = await textureFromImage(fav.capeDataUrl);
-      state.capeTexture = capeTexture || state.capeTexture;
-      state.capeTextureSrc = fav.capeDataUrl;
-    } else {
-      state.capeTexture = null;
-      state.capeTextureSrc = "";
-    }
+    await loadCapeTexture();
+    skin.selectedSkin = null;
     renderPrefs();
-    toast(`Образ «${fav.name}» применён`, "ok");
+    if (capeError) toast(`Скин выбран; плащ не применён: ${capeError}`, "err");
+    else toast(`Образ «${fav.name}» выбран. Чтобы сменить скин, нажми «Применить к аккаунту».`, "ok");
   }
 
   async function saveFavorite() {
@@ -10268,8 +10490,9 @@
       capeDataUrl,
       angle: Math.round(Number(skin.yaw) || 0)
     };
-    await saveSkinFavorites([...favorites, favorite]);
+    if (!await saveSkinFavorites([...favorites, favorite])) return;
     skin.favorite = favorite.id;
+    renderPrefs();
     toast(`Образ «${name}» сохранён`, "ok");
   }
 
@@ -10283,11 +10506,12 @@
         if (fav) applyFavorite(fav);
       });
       const del = slot.querySelector("[data-del-fav]");
-      if (del) del.addEventListener("click", (event) => {
+      if (del) del.addEventListener("click", async (event) => {
         event.stopPropagation();
         const next = skinFavorites().filter((item) => item.id !== del.dataset.delFav);
+        if (!await saveSkinFavorites(next)) return;
         if (skinState().favorite === del.dataset.delFav) skinState().favorite = "";
-        saveSkinFavorites(next);
+        renderPrefs();
         toast("Образ удалён", "ok");
       });
     });
@@ -10296,7 +10520,7 @@
   function skinStatusText() {
     const skin = skinState();
     const variant = skin.variant === "slim" ? "slim, руки 3 px" : "wide, руки 4 px";
-    if (skin.currentName) return `Выбран скин «${skin.currentName}» · ${variant}.`;
+    if (skin.currentName) return `Выбран скин «${skin.currentName}» · ${variant}.${skin.licensed ? "" : " Смена скина доступна только лицензионному аккаунту."}`;
     return skin.licensed
       ? "В модели сейчас твой скин с сервера. Загрузи PNG 64×64, чтобы поставить новый."
       : "Смена скина возможна только у лицензионного аккаунта.";
@@ -10311,67 +10535,55 @@
   function skinSectionHtml() {
     const skin = skinState();
     const licensed = Boolean(skin.licensed);
-    const presets = userSkinPresets();
+    const library = userSkinLibrary();
     const variant = skin.variant === "slim" ? "slim" : "classic";
-    const status = skinStatusText();
     return `
-      <section class="prefs-section skin-section">
-        <div class="prefs-label-row">
-          <span class="prefs-label">Скин аккаунта</span>
-          <div class="spacer"></div>
-          <span class="tag ${licensed ? "green" : ""}">${licensed ? "лицензия" : "только лицензия"}</span>
-          <button class="icon-btn" id="skin-refresh" title="Загрузить скин с сервера заново">
-            <svg class="ic"><use href="#i-refresh"/></svg>
-          </button>
-        </div>
-
-        <div class="skin-top">
-          <span class="skin-top-label">Ширина рук</span>
-          <div class="chips" id="skin-variant">
-            <button class="chip ${variant === "classic" ? "is-active" : ""}" data-variant="classic">Wide (4 px)</button>
-            <button class="chip ${variant === "slim" ? "is-active" : ""}" data-variant="slim">Slim (3 px)</button>
-          </div>
-        </div>
-
-        <div class="skin-layout">
-          <div class="skin-col skin-col-capes">
-            <div class="skin-col-head">Плащи</div>
-            ${capeColumnHtml()}
+      <div class="profile-skin-grid">
+        <section class="prefs-section profile-model skin-section">
+          <div class="prefs-label-row">
+            <span class="prefs-label">Модель игрока</span><div class="spacer"></div>
+            <button class="icon-btn" id="skin-refresh" title="Обновить скин аккаунта"><svg class="ic"><use href="#i-refresh"/></svg></button>
           </div>
           <div class="skin-stage ${skin.texture ? "" : "is-empty"}">
-            ${skin.texture
-              ? `<canvas id="skin-canvas"></canvas><span class="skin-stage-hint">ЛКМ — повернуть</span>`
-              : `<div class="skin-stage-empty">Скин появится здесь в объёме.<br>Загрузи PNG 64×64.</div>`}
+            ${skin.texture ? '<canvas id="skin-canvas"></canvas><span class="skin-stage-hint">ЛКМ — повернуть</span>'
+              : '<div class="skin-stage-empty">Скин появится здесь в объёме.<br>Выбери PNG 64×64.</div>'}
           </div>
-          <div class="skin-col skin-col-presets">
-            <div class="skin-col-head">
-              Пресеты
-              <button class="icon-btn" id="skin-save-preset" title="Сохранить пресет" ${skin.currentPath ? "" : "disabled"}>
-                <svg class="ic"><use href="#i-plus"/></svg>
-              </button>
-            </div>
-            <div class="skin-presets" id="skin-presets">
-              ${presets.length
-                ? presets.map((preset) => `
-                  <button class="skin-preset is-user ${preset.id === skin.preset ? "is-active" : ""}" data-preset="${esc(preset.id)}" title="${esc(preset.name)}">
-                    <span class="skin-mini" data-thumb-path="${esc(preset.path)}"></span>
-                    <span class="skin-preset-name">${esc(preset.name)}</span>
-                    <span class="preset-del" data-del-preset="${esc(preset.id)}" title="Удалить пресет">×</span>
-                  </button>`).join("")
-                : `<div class="skin-note">Пресетов пока нет — загрузи скин и нажми «+».</div>`}
+          <div class="skin-model-options">
+            <div class="skin-top-label">Ширина рук</div>
+            <div class="chips" id="skin-variant">
+              <button class="chip ${variant === "classic" ? "is-active" : ""}" data-variant="classic">Wide · 4 px</button>
+              <button class="chip ${variant === "slim" ? "is-active" : ""}" data-variant="slim">Slim · 3 px</button>
             </div>
           </div>
-        </div>
-
-        <div class="skin-row">
-          <button class="btn" id="skin-upload">Загрузить скин…</button>
-          <button class="btn btn-primary" id="skin-apply" ${licensed ? "" : "disabled"}>Применить к аккаунту</button>
-        </div>
-        <div class="skin-note ${licensed ? "" : "warn"}" id="skin-status">${status}</div>
-      </section>`;
+          <button class="btn btn-primary skin-apply" id="skin-apply" ${licensed ? "" : "disabled"}>Применить к аккаунту</button>
+          <div class="skin-note ${licensed ? "" : "warn"}" id="skin-status">${esc(skinStatusText())}</div>
+        </section>
+        <section class="prefs-section profile-capes">
+          <div class="prefs-label-row"><span class="prefs-label">Плащи</span><div class="spacer"></div>
+            <button class="icon-btn" id="cape-refresh" title="Обновить плащи аккаунта"><svg class="ic"><use href="#i-refresh"/></svg></button>
+          </div>
+          ${capeColumnHtml()}
+        </section>
+        <section class="prefs-section profile-skins">
+          <div class="prefs-label-row"><span class="prefs-label">Скины <span class="muted">${library.length}</span></span><div class="spacer"></div>
+            <button class="btn btn-small" id="skin-upload" ${skin.importing ? "disabled" : ""}><svg class="ic"><use href="#i-plus"/></svg>${skin.importing ? "Загружаем…" : "Загрузить PNG…"}</button>
+          </div>
+          <div class="skin-note">Выбери один или несколько PNG 64×64 / 64×32. Они сразу сохранятся в библиотеке.</div>
+          ${skin.importErrors?.length ? `<div class="skin-import-errors" role="alert"><b>Не удалось загрузить ${skin.importErrors.length}:</b> ${skin.importErrors.map(esc).join("; ")}</div>` : ""}
+          <div class="skin-library" id="skin-library">
+            ${library.length ? library.map((item) => `
+              <div class="skin-library-item ${item.id === skin.selectedSkin ? "is-active" : ""}">
+                <button class="skin-library-select" data-skin-id="${esc(item.id)}" title="${esc(item.name)}">
+                  <span class="skin-mini" data-thumb-path="${esc(item.path)}"></span><span class="skin-library-name">${esc(item.name)}</span>
+                </button>
+                <button class="skin-library-remove" data-del-skin="${esc(item.id)}" title="Убрать из библиотеки" aria-label="Убрать ${esc(item.name)} из библиотеки">×</button>
+              </div>`).join("") : '<div class="skin-note">Библиотека пуста — загрузи свои скины.</div>'}
+          </div>
+        </section>
+      </div>`;
   }
 
-  /** Плащи — левая колонка раздела «Скин». */
+  /** Показываем только официальные плащи текущего аккаунта. */
   function capeColumnHtml() {
     const capes = capeState();
     const licensed = Boolean(capes.licensed);
@@ -10504,7 +10716,7 @@
     return canvas;
   }
 
-  async function loadSkinFile(filePath, name, presetId) {
+  async function loadSkinFile(filePath, name, libraryId) {
     const skin = skinState();
     const dataUrl = await api.imageDataUrl(filePath).catch(() => null);
     if (!dataUrl) return false;
@@ -10516,7 +10728,7 @@
     skin.currentPath = filePath;
     skin.currentName = name || "скин";
     skin.fromAccount = false;
-    if (presetId !== undefined) skin.preset = presetId;
+    if (libraryId !== undefined) skin.selectedSkin = libraryId;
     return true;
   }
 
@@ -10601,29 +10813,27 @@
       });
     }
 
-    $$("#skin-presets .skin-preset").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const preset = findSkinPreset(btn.dataset.preset);
-        if (!preset) return;
-        const loaded = await loadSkinFile(preset.path, preset.name, preset.id);
-        if (!loaded) {
-          btn.classList.remove("is-active");
-          return toast(`Файл пресета «${preset.name}» не читается — загрузи скин заново`, "err");
-        }
-        if (preset.variant === "classic" || preset.variant === "slim") skin.variant = preset.variant;
-        if (Number.isFinite(Number(preset.angle))) skin.yaw = Number(preset.angle);
-        renderPrefs();
-      });
-      const del = btn.querySelector("[data-del-preset]");
-      if (del) del.addEventListener("click", (event) => {
-        event.stopPropagation();
-        deleteSkinPreset(del.dataset.delPreset);
-      });
-    });
+    $$("#skin-library [data-skin-id]").forEach((btn) => btn.addEventListener("click", async () => {
+      const item = findLibrarySkin(btn.dataset.skinId);
+      if (!item) return;
+      const loaded = await loadSkinFile(item.path, item.name, item.id);
+      if (!loaded) return toast(`Файл скина «${item.name}» не читается — загрузи его заново`, "err");
+      if (item.variant === "classic" || item.variant === "slim") skin.variant = item.variant;
+      if (Number.isFinite(Number(item.angle))) skin.yaw = Number(item.angle);
+      skin.favorite = "";
+      renderPrefs();
+    }));
+    $$("#skin-library [data-del-skin]").forEach((btn) => btn.addEventListener("click", () => removeLibrarySkin(btn.dataset.delSkin)));
 
     $$("#skin-variant .chip").forEach((chip) => chip.addEventListener("click", () => {
       skin.variant = chip.dataset.variant === "slim" ? "slim" : "classic";
       skin.touchedVariant = true;
+      if (skin.selectedSkin) {
+        const list = Array.isArray(state.settings?.skin_presets) ? state.settings.skin_presets : [];
+        const next = { ...(state.settings || {}), skin_presets: list.map((item) => item.id === skin.selectedSkin ? { ...item, variant: skin.variant } : item) };
+        state.settings = next;
+        api.saveSettings(next).catch((error) => toast(`Не удалось сохранить модель: ${error}`, "err"));
+      }
       $$("#skin-variant .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
       redrawSkinPreview();
       refreshSkinStatus();
@@ -10631,8 +10841,6 @@
 
     const upload = $("#skin-upload");
     if (upload) upload.addEventListener("click", uploadSkin);
-    const savePreset = $("#skin-save-preset");
-    if (savePreset) savePreset.addEventListener("click", saveSkinPreset);
     const apply = $("#skin-apply");
     if (apply) apply.addEventListener("click", applySkinToAccount);
     const refresh = $("#skin-refresh");
@@ -10644,90 +10852,79 @@
       toast(fresh ? "Скин обновлён с сервера" : "Сервер не отдал скин — попробуй позже", fresh ? "ok" : "err");
     });
 
-    window.addEventListener("resize", () => {
-      if ($("#skin-canvas")) redrawSkinPreview();
-    }, { passive: true });
   }
+
+  window.addEventListener("resize", () => { if ($("#skin-canvas")) redrawSkinPreview(); }, { passive: true });
 
   async function uploadSkin() {
-    const path = await api.pickFile("Скин 64×64 PNG", ["png"]).catch(() => null);
-    if (!path) return;
+    const skin = skinState();
+    if (skin.importing) return;
+    const paths = await api.pickFiles("Выбери один или несколько PNG-скинов", ["png"]).catch((error) => { toast(String(error), "err"); return []; });
+    if (!Array.isArray(paths) || !paths.length) return;
+    skin.importing = true;
+    skin.importErrors = [];
+    renderPrefs();
+    const imported = [];
+    for (const path of paths) {
+      try {
+        const item = await api.importSkin(path);
+        if (!item || !item.path) throw new Error("файл не сохранён");
+        imported.push({
+          id: `skin-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+          name: item.name || "Скин", path: item.path, variant: skin.variant || "classic", angle: Math.round(Number(skin.yaw) || 0)
+        });
+      } catch (error) {
+        const name = String(path).split(/[\\/]/).pop() || "PNG";
+        skin.importErrors.push(`${name}: ${error}`);
+      }
+    }
+    if (imported.length) {
+      const previous = Array.isArray(state.settings?.skin_presets) ? state.settings.skin_presets : [];
+      const next = { ...(state.settings || {}), skin_presets: [...previous, ...imported] };
+      try {
+        await api.saveSettings(next);
+        // Не заменяем параллельно изменённые настройки устаревшим снимком.
+        state.settings = { ...(state.settings || {}), skin_presets: next.skin_presets };
+        if (skinState() === skin) await loadSkinFile(imported[0].path, imported[0].name, imported[0].id);
+      } catch (error) {
+        skin.importErrors.push(`Не удалось сохранить библиотеку: ${error}. Файлы остались в папке скинов лаунчера.`);
+      }
+    }
+    skin.importing = false;
+    renderPrefs();
+    if (skin.importErrors.length) toast(`Загружено: ${imported.length}; ошибок: ${skin.importErrors.length}. Подробности в библиотеке.`, "err");
+    else toast(`Скинов добавлено: ${imported.length}`, "ok");
+  }
+
+  async function removeLibrarySkin(id) {
+    const item = findLibrarySkin(id);
+    if (!item) return;
+    const confirmed = await askConfirm({
+      title: "Убрать скин из библиотеки",
+      text: `Скин «${item.name}» исчезнет из списка. Сам файл останется в папке лаунчера, избранные образы не удалятся.`,
+      ok: "Убрать"
+    });
+    if (!confirmed) return;
+    const all = Array.isArray(state.settings?.skin_presets) ? state.settings.skin_presets : [];
+    const next = { ...(state.settings || {}), skin_presets: all.filter((entry) => entry.id !== id) };
     try {
-      const imported = await api.importSkin(path);
-      const skin = skinState();
-      const loaded = await loadSkinFile(imported.path, imported.name, null);
-      if (!loaded) return toast("Не удалось прочитать скин", "err");
-      skin.preset = null;
-      toast(`Скин «${imported.name}» загружен — сохрани пресет, чтобы не искать файл снова`, "ok");
+      await api.saveSettings(next);
+      state.settings = { ...(state.settings || {}), skin_presets: next.skin_presets };
+      if (skinState().selectedSkin === id) skinState().selectedSkin = null;
+      toast("Скин убран из библиотеки", "ok");
       renderPrefs();
-    } catch (error) {
-      toast(String(error), "err");
-    }
-  }
-
-  async function saveSkinPreset() {
-    const skin = skinState();
-    if (!skin.currentPath) return toast("Сначала загрузи скин", "err");
-    const name = await promptModal({
-      title: "Сохранить пресет скина",
-      label: "Название",
-      value: skin.currentName || `Пресет ${userSkinPresets().length + 1}`
-    });
-    if (!name) return;
-    const preset = {
-      id: `skin-${Date.now().toString(36)}`,
-      name,
-      path: skin.currentPath,
-      variant: skin.variant || "classic",
-      angle: Math.round(Number(skin.yaw) || 0)
-    };
-    const known = userSkinPresets().find((item) => item.path === preset.path);
-    const list = known
-      ? userSkinPresets().map((item) => (item.path === preset.path ? { ...item, name, variant: preset.variant, angle: preset.angle } : item))
-      : [...userSkinPresets(), preset];
-    const next = { ...(state.settings || {}), skin_presets: list };
-    state.settings = next;
-    try {
-      await api.saveSettings(next);
-    } catch (error) {
-      toast(String(error), "err");
-      return;
-    }
-    skin.preset = known ? known.id : preset.id;
-    toast(`Пресет «${name}» сохранён`, "ok");
-    renderPrefs();
-  }
-
-  async function deleteSkinPreset(id) {
-    const preset = findSkinPreset(id);
-    if (!preset) return;
-    const okPreset = await askConfirm({
-      title: "Удалить пресет",
-      text: `Пресет скина «${preset.name}» будет удалён из списка. Сам файл скина остаётся в папке лаунчера.`,
-      ok: "Удалить"
-    });
-    if (!okPreset) return;
-    const next = { ...(state.settings || {}), skin_presets: userSkinPresets().filter((item) => item.id !== id) };
-    state.settings = next;
-    try {
-      await api.saveSettings(next);
-    } catch (error) {
-      toast(String(error), "err");
-      return;
-    }
-    const skin = skinState();
-    if (skin.preset === id) skin.preset = null;
-    toast("Пресет удалён", "ok");
-    renderPrefs();
+    } catch (error) { toast(String(error), "err"); }
   }
 
   async function applySkinToAccount() {
     const skin = skinState();
     if (!skin.licensed) return toast("Смена скина только для лицензии", "err");
-    if (!skin.currentPath) return toast("Сначала загрузи скин", "err");
+    if (!skin.currentPath && !skin.dataUrl) return toast("Сначала выбери скин", "err");
     const button = $("#skin-apply");
     if (button) button.disabled = true;
     try {
+      // Избранный образ может содержать PNG с сервера, но не локальный путь.
+      if (!skin.currentPath) skin.currentPath = await api.saveSkinPng(skin.dataUrl, skin.currentName || "favorite");
       await api.applySkin(skin.currentPath, skin.variant || "classic");
       // скин сменился в аккаунте — забираем его заново, чтобы модель и голова не отставали
       skin.fromAccount = true;
@@ -12158,7 +12355,7 @@
         ? state.settings.wallpaper_recent.slice(0, 6)
         : []
     };
-    state.customWall = await api.customWallpaper().catch(() => null);
+    await Promise.all([loadWallpaperSource("custom").catch(() => null), loadWallpaperSource("workshop").catch(() => null)]);
     applyWallpaper();
     await loadAccounts();
     bindFileDrop();

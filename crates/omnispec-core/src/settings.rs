@@ -202,6 +202,12 @@ pub struct Settings {
     /// Свой фон: имя файла в <данные>/wallpapers.
     #[serde(default)]
     pub custom_wallpaper: Option<String>,
+    /// Папка проекта выбранных видеообоев Wallpaper Engine (без копирования видео).
+    #[serde(default)]
+    pub wallpaper_workshop_project: Option<String>,
+    /// Дополнительная папка Steam / Wallpaper Engine, выбранная пользователем.
+    #[serde(default)]
+    pub wallpaper_steam_path: Option<String>,
     /// Звуковые эффекты интерфейса.
     #[serde(default = "default_true")]
     pub sound_fx: bool,
@@ -213,9 +219,12 @@ pub struct Settings {
     #[serde(default)]
     pub categories: Vec<Category>,
 
-    /// Сохранённые пользователем пресеты скина.
+    /// Библиотека загруженных скинов. Старое имя ключа сохраняет все прежние записи.
     #[serde(default)]
     pub skin_presets: Vec<SkinPreset>,
+    /// Избранные образы. Храним произвольные поля старых записей без потерь.
+    #[serde(default)]
+    pub skin_favorites: Vec<serde_json::Value>,
 
     /// Тема интерфейса (id пресета из OmniPanel: dark, navy, light, … + custom).
     #[serde(default = "default_theme")]
@@ -306,12 +315,12 @@ pub struct Category {
     pub collapsed: bool,
 }
 
-/// Пресет скина: палитра + модель, чтобы пресетов могло быть сколько угодно.
+/// Запись библиотеки; формат совпадает со старыми пользовательскими пресетами.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkinPreset {
     pub id: String,
     pub name: String,
-    /// PNG скина, скопированный в папку лаунчера: пресет не зависит от исходника.
+    /// PNG скина, скопированный в папку лаунчера.
     #[serde(default)]
     pub path: String,
     /// classic (wide) | slim.
@@ -356,10 +365,13 @@ impl Default for Settings {
             update_prerelease: false,
             shape: default_shape(),
             custom_wallpaper: None,
+            wallpaper_workshop_project: None,
+            wallpaper_steam_path: None,
             sound_fx: true,
             sound_volume: default_sound_volume(),
             categories: Vec::new(),
             skin_presets: Vec::new(),
+            skin_favorites: Vec::new(),
             theme: default_theme(),
             theme_bg: None,
             theme_accent: None,
@@ -485,6 +497,28 @@ mod discord_tests {
             assert_eq!(restored.initial_tab, tab);
             assert_eq!(restored.ui_scale, 125);
         }
+    }
+
+    #[test]
+    fn old_skin_library_and_favorites_survive_unrelated_settings_saves() {
+        let input = r#"{
+          "username":"LegacyPlayer",
+          "custom_wallpaper":"custom.png",
+          "skin_presets":[{"id":"old-1","name":"Старый скин","path":"/data/skin.png","variant":"slim","angle":17}],
+          "skin_favorites":[{"id":"fav-1","name":"Образ","skinPath":"/data/skin.png","skinDataUrl":"data:image/png;base64,AA==","capeId":"cape-1","futureField":{"keep":true},"angle":17}]
+        }"#;
+        let mut settings: Settings = serde_json::from_str(input).unwrap();
+        assert_eq!(settings.skin_presets[0].id, "old-1");
+        assert_eq!(settings.skin_favorites[0]["futureField"]["keep"], true);
+        assert_eq!(settings.custom_wallpaper.as_deref(), Some("custom.png"));
+        assert!(settings.wallpaper_steam_path.is_none());
+        settings.ui_scale = 125;
+        let restored: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.skin_presets[0].path, "/data/skin.png");
+        assert_eq!(restored.skin_presets[0].variant, "slim");
+        assert_eq!(restored.skin_favorites[0]["capeId"], "cape-1");
+        assert_eq!(restored.skin_favorites[0]["futureField"]["keep"], true);
+        assert_eq!(restored.ui_scale, 125);
     }
 
     #[test]

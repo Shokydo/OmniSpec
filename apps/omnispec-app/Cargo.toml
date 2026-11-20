@@ -9,10 +9,12 @@ license.workspace = true
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
+dirs = { workspace = true }
+getrandom = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
 futures = { workspace = true }
 # Согласованная пользователем публикация локальной иконки для Discord RPC.
 reqwest = { workspace = true, features = ["multipart"] }
@@ -33,7 +35,7 @@ image = "0.25"
 encoding_rs = "0.8"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_SystemInformation"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_SystemInformation", "Win32_System_Registry"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
