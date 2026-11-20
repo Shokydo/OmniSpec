@@ -146,7 +146,8 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
         assert.equal(await page.locator(`[data-dv-category="${category}"]`).count(),1,category);
       }
       await page.locator('[data-dv-category="magic"]').click();
-      await page.locator('#dv-loader').selectOption('fabric');
+      await page.locator('#dv-loader').click();
+      await page.locator('[data-dv-loader="fabric"]').click();
       await page.locator('#dv-query').fill('magic test');
       await waitHome(page,'modrinth','modpack','magic test');
       let last = (await calls(page,'search_modrinth')).filter(c => c.args.query === 'magic test').at(-1);
@@ -187,6 +188,36 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
       assert.equal(await page.locator('#dv-results [data-project="mr-mod"]').count(),1);
       assert.deepEqual(errors,[]);
       console.log('HOME_FILTERS: server filters, categories, loader, paging and stale responses — OK');
+      await page.close();
+    }
+
+    // Клавиатура и фокус работают как у доступного выпадающего списка.
+    {
+      const {page,errors} = await newPage(browser);
+      const trigger = page.locator('#dv-loader'), menu = page.locator('#dv-loader-options');
+      await trigger.focus(); await page.keyboard.press('ArrowDown');
+      assert(await menu.isVisible()); assert.equal(await trigger.getAttribute('aria-expanded'),'true');
+      assert.equal(await page.evaluate(() => document.activeElement.dataset.dvLoader),'fabric');
+      await page.keyboard.press('End');
+      assert.equal(await page.evaluate(() => document.activeElement.dataset.dvLoader),'neoforge');
+      await page.keyboard.press('Home');
+      assert.equal(await page.evaluate(() => document.activeElement.dataset.dvLoader),'');
+      await page.keyboard.press('Escape');
+      assert(await menu.isHidden()); assert.equal(await trigger.getAttribute('aria-expanded'),'false');
+      assert(await trigger.evaluate(el => document.activeElement === el));
+      await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+      await waitHome(page,'modrinth','modpack');
+      assert.equal(await page.locator('#dv-loader-label').innerText(),'Fabric');
+      assert.equal(await page.locator('[data-dv-loader="fabric"]').getAttribute('aria-selected'),'true');
+      assert.equal((await calls(page,'search_modrinth')).at(-1).args.loader,'fabric');
+      assert(await trigger.evaluate(el => document.activeElement === el));
+      await trigger.click(); await page.keyboard.press('Tab');
+      assert(await menu.isHidden());
+      assert.notEqual(await page.evaluate(() => document.activeElement.tagName),'BODY', 'Tab оставляет фокус в интерфейсе');
+      await trigger.click(); await page.locator('#dv-query').click();
+      assert(await menu.isHidden()); assert.equal(await trigger.getAttribute('aria-expanded'),'false');
+      assert.deepEqual(errors,[]);
+      console.log('HOME_LOADER_ACCESSIBILITY: arrows, selection, Escape, Tab and outside click — OK');
       await page.close();
     }
 

@@ -40,11 +40,17 @@ impl AccountStore {
     }
 
     pub fn save_to(&self, file: &Path) -> Result<()> {
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let text = serde_json::to_string_pretty(self)?;
-        std::fs::write(file, text)?;
+        use std::io::Write;
+        let parent = file.parent().filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent)?;
+        // Сначала полностью записываем соседний временный файл, затем атомарно
+        // заменяем accounts.json. Не оставляем обрезанный файл с токенами при
+        // ошибке записи или закрытии приложения посреди сохранения.
+        let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+        serde_json::to_writer_pretty(&mut temp, self)?;
+        temp.flush()?;
+        temp.persist(file).map_err(|error| error.error)?;
         Ok(())
     }
 
@@ -119,6 +125,23 @@ mod tests {
         assert_eq!(store.accounts.len(), 1);
         assert!(store.set_active(&steve.uuid));
         assert_eq!(store.current().unwrap().username, "Steve");
+    }
+
+    #[test]
+    fn saves_atomically_over_an_existing_account_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("accounts.json");
+        let mut store = AccountStore::default();
+        let first = Account::offline("Alex").unwrap();
+        store.upsert(first.clone());
+        store.set_active(&first.uuid);
+        store.save_to(&file).unwrap();
+        store.upsert(Account::offline("Steve").unwrap());
+        store.save_to(&file).unwrap();
+        let loaded = AccountStore::load_from(&file).unwrap();
+        assert_eq!(loaded.accounts, store.accounts);
+        assert_eq!(loaded.active, store.active);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "no temporary file remains");
     }
 
     #[test]

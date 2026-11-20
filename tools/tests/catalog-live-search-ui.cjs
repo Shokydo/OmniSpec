@@ -256,7 +256,10 @@ async function switchSource(page, scope, source) {
 
     // При высокой области выдачи sentinel остаётся видимым между страницами:
     // плитка должна продолжать догрузку до заполнения области или конца выдачи.
-    await page.setViewportSize({width:1280,height:2400});
+    // Адаптивная сетка ограничивает число колонок в узком окне: все 75
+    // тестовых карточек должны помещаться, иначе sentinel закономерно уходит
+    // за край и его не следует догружать без прокрутки.
+    await page.setViewportSize({width:1280,height:4000});
     await switchSource(page,'dl','modrinth');
     await page.locator('[data-dl-view="grid"]').click();
     for (const source of ['modrinth','curseforge']) {

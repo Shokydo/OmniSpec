@@ -109,7 +109,9 @@ pub async fn download_new_content(
         use tokio::io::AsyncReadExt;
         let mut file = tokio::fs::File::open(&staged).await?;
         let mut hasher = Sha1::new();
-        let mut buffer = [0u8; 64 * 1024];
+        // Буфер живёт через await: на куче он не раздувает future установки
+        // и не копируется десятками килобайт при каждом вложенном вызове.
+        let mut buffer = vec![0u8; 64 * 1024];
         loop {
             let count = file.read(&mut buffer).await?;
             if count == 0 { break; }
@@ -451,6 +453,33 @@ mod compatibility_tests {
     }
 
     #[test]
+    fn installation_futures_do_not_embed_large_io_buffers() {
+        // Tauri создаёт и перемещает future команды на рабочих потоках; большие
+        // inline-буферы копируются вместе с каждым вложенным future.
+        let temp = tempfile::tempdir().unwrap();
+        let paths = Paths::new(temp.path()).unwrap();
+        let meta = instance("1.21.1", "fabric");
+        let http = crate::net::Http::new();
+        let modrinth = Modrinth::new(http.clone());
+        let curseforge = crate::curseforge::CurseForge::with_key(http.clone(), "fixture");
+        let reporter = Reporter::none();
+        let download = download_new_content(&http, temp.path(), "a.jar", "http://127.0.0.1/file", None, None, &reporter);
+        let project = install_project(&modrinth, &paths, &meta, "fixture", &reporter);
+        let version = install_version(&modrinth, &paths, &meta, "fixture", &reporter);
+        let cf = crate::curseforge::install::install(&curseforge, &paths, &meta, "fixture", None, &reporter);
+        let sizes = [
+            ("download", std::mem::size_of_val(&download)),
+            ("modrinth project", std::mem::size_of_val(&project)),
+            ("modrinth version", std::mem::size_of_val(&version)),
+            ("curseforge", std::mem::size_of_val(&cf)),
+        ];
+        for (name, bytes) in sizes { println!("INSTALL_FUTURE_SIZE {name}: {bytes} bytes"); }
+        for (name, bytes) in sizes {
+            assert!(bytes < 48 * 1024, "{name} future is unexpectedly large: {bytes} bytes");
+        }
+    }
+
+    #[test]
     fn selected_file_requires_exact_game_loader_and_project() {
         let v = version();
         assert!(validate_project_version(&v, "p1", "mod", &instance("1.21.1", "fabric")).is_ok());
@@ -493,6 +522,54 @@ mod compatibility_tests {
         assert_eq!(std::fs::read(&dest).unwrap(), b"validated mod");
         assert!(!staged.exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn download_with_limited_stack_validates_and_preserves_files() {
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().to_path_buf();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/file", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let mut requests = 0;
+            while requests < 3 && Instant::now() < deadline {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(value) => value,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5)); continue;
+                    }
+                    Err(error) => panic!("local server: {error}"),
+                };
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc").unwrap();
+                requests += 1;
+            }
+            requests
+        });
+        let worker = std::thread::Builder::new().name("small-install-stack".into()).stack_size(1024 * 1024)
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                runtime.block_on(async {
+                    let http = crate::net::Http::new();
+                    let reporter = Reporter::none();
+                    let good = "a9993e364706816aba3e25717850c26c9cd0d89d";
+                    assert!(download_new_content(&http, &dir, "ok.jar", &url, Some(3), Some(good), &reporter).await.unwrap());
+                    assert!(!download_new_content(&http, &dir, "ok.jar", &url, Some(3), Some(good), &reporter).await.unwrap());
+                    assert!(download_new_content(&http, &dir, "bad-hash.jar", &url, Some(3), Some("0000000000000000000000000000000000000000"), &reporter).await.is_err());
+                    assert!(download_new_content(&http, &dir, "bad-size.jar", &url, Some(4), Some(good), &reporter).await.is_err());
+                    assert_eq!(std::fs::read(dir.join("ok.jar")).unwrap(), b"abc");
+                    assert!(!dir.join("bad-hash.jar").exists() && !dir.join("bad-size.jar").exists());
+                    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "временные файлы удалены");
+                });
+            }).unwrap();
+        worker.join().unwrap();
+        assert_eq!(server.join().unwrap(), 3, "повторная установка не перекачивает файл");
     }
 
     #[tokio::test]

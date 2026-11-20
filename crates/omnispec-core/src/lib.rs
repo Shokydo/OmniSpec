@@ -10,6 +10,7 @@ pub mod content;
 pub mod curseforge;
 pub mod diagnostic_install;
 pub mod error;
+pub mod file_lock;
 pub mod game;
 pub mod instances;
 pub mod loaders;

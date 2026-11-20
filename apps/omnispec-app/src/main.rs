@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -41,9 +41,23 @@ mod system_memory;
 mod wallpapers;
 /// Потоковая выдача только выбранных видео на защищённом loopback-адресе.
 mod video_stream;
+/// Восстановление только своих живых процессов после перезапуска.
+mod game_sessions;
+/// Проверенные ответы профиля Minecraft и ограниченная загрузка текстур.
+mod profile_service;
+/// Защищённая доставка кадров выбранной сцены в WebView.
+#[cfg(any(windows, test))]
+mod scene_stream;
+/// Windows Graphics Capture только для своего окна Wallpaper Engine.
+#[cfg(windows)]
+mod scene_capture;
 
 struct RunningChild {
-    child: Mutex<tokio::process::Child>,
+    /// После перезапуска Child недоступен; работаем с проверенным PID/временем.
+    child: Mutex<Option<tokio::process::Child>>,
+    record: Option<StdMutex<game_sessions::SessionRecord>>,
+    account: String,
+    started_at: u64,
     /// Реальная папка этого процесса не зависит от последующих правок профиля.
     game_dir: PathBuf,
     /// Отмечаем только успешно отправленный запрос на остановку.
@@ -51,9 +65,6 @@ struct RunningChild {
 }
 type ChildHandle = Arc<RunningChild>;
 
-// Идентификатор не переиспользуется, пока работает лаунчер: поздний вывод от
-// первого окна нельзя принять за вывод нового запуска той же сборки.
-static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Резервируем попытку до асинхронной подготовки. Иначе два быстрых нажатия
 /// «Играть» могут одновременно увидеть пустой `running` и запустить два окна.
@@ -185,12 +196,21 @@ struct AppState {
     /// Путь, с которым лаунчер запустили (`.mrpack` двойным щелчком или drag&drop в ярлык).
     startup_file: Option<String>,
     accounts: Mutex<AccountStore>,
+    /// Повторить сохранение нового refresh-токена, если диск временно недоступен.
+    accounts_dirty: AtomicBool,
     http: Http,
     modrinth: Modrinth,
     curseforge: CurseForge,
     settings: Mutex<Settings>,
     /// Потоковый сервер запускается только при выборе видеообоев.
     video_server: StdMutex<Option<video_stream::VideoServer>>,
+    #[cfg(windows)]
+    scene_manager: Arc<StdMutex<Option<scene_capture::SceneManager>>>,
+    #[cfg(windows)]
+    scene_revision: Arc<std::sync::atomic::AtomicU64>,
+    /// Подготовка + запись настроек + фиксация сцены — одна операция.
+    #[cfg(windows)]
+    scene_operation: Mutex<()>,
     running: Arc<Mutex<HashMap<String, ChildHandle>>>,
     /// Попытки, которые ещё готовятся; дубликаты с аккаунтом разрешены.
     launching: Arc<StdMutex<HashMap<String, usize>>>,
@@ -276,6 +296,62 @@ fn system_memory() -> Option<system_memory::SystemMemory> {
 
 /* ==================== НАСТРОЙКИ ==================== */
 
+#[cfg(windows)]
+fn scene_bounds(app: &AppHandle) -> scene_capture::Bounds {
+    let Some(window) = app.get_webview_window("main") else { return scene_capture::Bounds::default(); };
+    match (window.outer_position(), window.outer_size()) {
+        (Ok(pos), Ok(size)) => scene_capture::Bounds { x: pos.x, y: pos.y, width: size.width, height: size.height },
+        _ => scene_capture::Bounds::default(),
+    }
+}
+
+/// Смена фона отменяет ожидающий запуск и закрывает только наше окно WE.
+/// Дожидаемся очистки, пока настройки ещё заблокированы: иначе запоздалый
+/// stop мог бы закрыть уже восстановленную сцену с тем же номером ревизии.
+#[cfg(windows)]
+async fn invalidate_scene(state: &AppState) {
+    let epoch = state.scene_revision.fetch_add(1, Ordering::AcqRel) + 1;
+    let revision = state.scene_revision.clone();
+    let manager = state.scene_manager.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
+        if revision.load(Ordering::Acquire) == epoch {
+            if let Some(manager) = guard.as_mut() { manager.stop(); }
+        }
+    }).await;
+}
+
+/// Пока удерживается scene_operation, завершаем abort до следующего prepare.
+/// Иначе запоздалая очистка могла бы отменить новый кандидат той же ревизии.
+#[cfg(windows)]
+async fn stop_scene_epoch(state: &AppState, epoch: u64) {
+    let manager = state.scene_manager.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(manager) = manager.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            manager.abort(epoch);
+        }
+    }).await;
+}
+
+#[cfg(windows)]
+fn commit_scene(state: &AppState, epoch: u64) -> Result<(), String> {
+    let mut guard = state.scene_manager.lock().unwrap_or_else(|e| e.into_inner());
+    guard.as_mut().ok_or("подготовленная сцена больше не доступна")?.commit(epoch)
+}
+
+#[cfg(windows)]
+async fn start_scene(state: &AppState, app: &AppHandle, engine: String, project: PathBuf, epoch: u64) -> Result<wallpapers::Media, String> {
+    let manager = state.scene_manager.clone();
+    let revision = state.scene_revision.clone();
+    let bounds = scene_bounds(app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() { *guard = Some(scene_capture::SceneManager::new()?); }
+        let src = guard.as_mut().unwrap().prepare(Path::new(&engine), &project, bounds, revision, epoch)?;
+        Ok(wallpapers::Media { path: project.to_string_lossy().into_owned(), kind: "scene".into(), src: Some(src) })
+    }).await.map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     Ok(state.settings.lock().await.clone())
@@ -310,9 +386,14 @@ async fn save_settings(state: State<'_, AppState>, mut settings: Settings) -> Re
         || current.java_path_legacy != settings.java_path_legacy || current.auto_java != settings.auto_java {
         Some(reserve_content_write("__settings__", &state.content_access)?)
     } else { None };
+    #[cfg(windows)]
+    let wallpaper_changed = current.wallpaper != settings.wallpaper
+        || current.wallpaper_workshop_project != settings.wallpaper_workshop_project;
     settings.save(&state.paths).map_err(err)?;
     state.presence.configure(settings.discord_rpc);
     *current = settings;
+    #[cfg(windows)]
+    if wallpaper_changed { invalidate_scene(&state).await; }
     state.rpc_upload_allowed.send_replace(
         current.discord_rpc && current.discord_instance_icon && current.discord_upload_local_icon
     );
@@ -649,12 +730,8 @@ async fn launch_instance(
         }
         reservation
     };
-    // Глобальный счётчик, а не первый свободный номер: прежние события могли
-    // ещё находиться в очереди UI при следующем запуске той же сборки.
-    let run_id = format!(
-        "{instance_id}#{}",
-        NEXT_RUN_ID.fetch_add(1, Ordering::Relaxed)
-    );
+    // Случайный id не повторяется и после перезапуска лаунчера.
+    let run_id = game_sessions::new_run_id(&instance_id)?;
 
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let settings = state.settings.lock().await.clone();
@@ -692,9 +769,35 @@ async fn launch_instance(
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let game_dir = PathBuf::from(&plan.game_dir);
+    let game_dir = game_dir.canonicalize().unwrap_or(game_dir);
+    let started_at = game_sessions::now();
+    let record = child.id().and_then(game_sessions::identify).map(|process| game_sessions::SessionRecord {
+        run_id: run_id.clone(), instance_id: instance_id.clone(), account: account.username.clone(),
+        game_dir: game_dir.to_string_lossy().into_owned(), started_at, checkpoint_at: started_at,
+        ended_at: None, process,
+    });
+    let record = match record {
+        Some(record) => match game_sessions::save(&state.paths.root, &record) {
+            Ok(()) => Some(record),
+            Err(error) => {
+                emit_game_log(&app, &instance_id, &run_id, attempt_id.as_deref(),
+                    format!("[omnispec] Не удалось сохранить состояние игры для перезапуска лаунчера: {error}"));
+                // Не создаём журнал позднее из устаревшего снимка: другая копия
+                // могла бы принять уже завершённый запуск за новый. Пока это
+                // окно открыто, обычный счётчик продолжает учитывать время.
+                None
+            }
+        },
+        None => {
+            emit_game_log(&app, &instance_id, &run_id, attempt_id.as_deref(),
+                "[omnispec] ОС не позволила проверить идентификатор игры; восстановление после перезапуска недоступно".into());
+            None
+        }
+    };
     let child = Arc::new(RunningChild {
-        child: Mutex::new(child),
-        game_dir: game_dir.canonicalize().unwrap_or(game_dir),
+        child: Mutex::new(Some(child)),
+        record: record.map(StdMutex::new), account: account.username.clone(), started_at,
+        game_dir,
         stop_requested: AtomicBool::new(false),
     });
     state
@@ -737,67 +840,99 @@ async fn launch_instance(
         ));
     }
 
-    // Следим за завершением процесса.
-    {
-        let app = app.clone();
-        let id = instance_id.clone();
-        let session = run_id.clone();
-        let attempt = attempt_id.clone();
-        let child = child.clone();
-        let running = state.running.clone();
-        let paths = state.paths.clone();
-        // время использования: считаем от запуска до выхода из игры
-        let started = std::time::Instant::now();
-        tokio::spawn(async move {
-            // раз в минуту дописываем время на диск: если лаунчер закроют или
-            // он обновится, статистика не потеряется
-            let mut flushed: u64 = 0;
-            loop {
-                tokio::time::sleep(Duration::from_millis(700)).await;
-                let elapsed = started.elapsed().as_secs();
-                if elapsed >= flushed + 60 {
-                    instances::add_playtime(&paths, &id, elapsed - flushed);
-                    flushed = elapsed;
-                }
-                let (status, stopped) = {
-                    let mut guard = child.child.lock().await;
-                    let status = guard.try_wait().ok().flatten();
-                    (status, child.stop_requested.load(Ordering::Relaxed))
-                };
-                if let Some(status) = status {
-                    let code = status.code().unwrap_or(-1);
-                    // накопленное время игры в часах показываем в списке сборок
-                    instances::add_playtime(&paths, &id, elapsed.saturating_sub(flushed));
-                    running.lock().await.remove(&session);
-                    // stderr нередко содержит решающую ошибку в самом конце.
-                    // Даём обоим потокам закончить до события выхода; таймаут
-                    // защищает от дочернего процесса, унаследовавшего pipe.
-                    if !finish_pumps(pumps, Duration::from_secs(3)).await {
-                        emit_game_log(
-                            &app,
-                            &id,
-                            &session,
-                            attempt.as_deref(),
-                            "[omnispec] Не удалось полностью дочитать вывод игры после её завершения".into(),
-                        );
-                    }
-                    let _ = app.emit(
-                        "game-exit",
-                        json!({"instance": id, "code": code, "run_id": session, "attempt_id": attempt, "stopped": stopped}),
-                    );
-                    break;
-                }
-            }
-        });
-    }
+    // Один наблюдатель работает и с собственным Child, и после восстановления.
+    monitor_game(app.clone(), instance_id.clone(), run_id.clone(), attempt_id.clone(),
+        child, state.running.clone(), state.paths.clone(), pumps, false);
 
     let mut summary = launch_summary(&plan);
     if let Some(map) = summary.as_object_mut() {
         map.insert("run_id".into(), json!(run_id));
         map.insert("account".into(), json!(account.username));
         map.insert("account_uuid".into(), json!(account.uuid));
+        map.insert("started_at".into(), json!(started_at));
     }
     Ok(summary)
+}
+
+/// После восстановления код выхода неизвестен — не выдаём его за ошибку.
+/// Логи stdout/stderr восстановить нельзя: их pipes принадлежали старому окну.
+fn monitor_game(
+    app: AppHandle,
+    id: String,
+    session: String,
+    attempt: Option<String>,
+    child: ChildHandle,
+    running: Arc<Mutex<HashMap<String, ChildHandle>>>,
+    paths: Paths,
+    pumps: Vec<tokio::task::JoinHandle<()>>,
+    recovered: bool,
+) {
+    tauri::async_runtime::spawn(async move {
+        let started = std::time::Instant::now();
+        let mut flushed: u64 = 0;
+        let mut first = true;
+        let mut observed_alive = !recovered;
+        loop {
+            if !first { tokio::time::sleep(Duration::from_millis(700)).await; }
+            first = false;
+            let (finished, code, stopped) = {
+                let mut guard = child.child.lock().await;
+                let stopped = child.stop_requested.load(Ordering::Relaxed);
+                if let Some(process) = guard.as_mut() {
+                    match process.try_wait() {
+                        Ok(Some(status)) => (true, Some(status.code().unwrap_or(-1)), stopped),
+                        _ => (false, None, stopped),
+                    }
+                } else {
+                    let alive = child.record.as_ref().map(|r| {
+                        let r = r.lock().unwrap_or_else(|e| e.into_inner());
+                        game_sessions::is_alive(&r.process)
+                    }).unwrap_or(false);
+                    (!alive, None, stopped)
+                }
+            };
+            let elapsed = started.elapsed().as_secs();
+            if let Some(record) = &child.record {
+                let mut record = record.lock().unwrap_or_else(|e| e.into_inner());
+                let now = game_sessions::now();
+                if finished {
+                    // Время выхода неизвестно, если восстановленный процесс
+                    // завершился прежде, чем мы успели подтвердить его жизнь.
+                    let until = if observed_alive { now } else { record.checkpoint_at };
+                    record.ended_at = Some(until);
+                    if let Err(error) = game_sessions::finalize(&paths, &record, until) {
+                        emit_game_log(&app, &id, &session, attempt.as_deref(), format!(
+                            "[omnispec] Не удалось сохранить итоговое время игры; журнал оставлен для повтора: {error}"
+                        ));
+                    }
+                } else {
+                    observed_alive = true;
+                    let delta = now.saturating_sub(record.checkpoint_at);
+                    if delta >= 60 || (recovered && flushed == 0) {
+                        // Журнал и счётчик согласованы между копиями лаунчера:
+                        // удалённую другой копией сессию нельзя воскресить.
+                        let _ = game_sessions::checkpoint(&paths, &mut record, now);
+                        flushed = elapsed.saturating_add(1);
+                    }
+                }
+            } else if elapsed >= flushed + 60 || finished {
+                instances::add_playtime(&paths, &id, elapsed.saturating_sub(flushed));
+                flushed = elapsed;
+            }
+            if finished {
+                running.lock().await.remove(&session);
+                if !finish_pumps(pumps, Duration::from_secs(3)).await {
+                    emit_game_log(&app, &id, &session, attempt.as_deref(),
+                        "[omnispec] Не удалось полностью дочитать вывод игры после её завершения".into());
+                }
+                let _ = app.emit("game-exit", json!({
+                    "instance": id, "code": code, "run_id": session,
+                    "attempt_id": attempt, "stopped": stopped, "recovered": recovered
+                }));
+                break;
+            }
+        }
+    });
 }
 
 fn launch_summary(plan: &LaunchPlan) -> Value {
@@ -924,6 +1059,9 @@ async fn stop_instance(
 ) -> Result<(), String> {
     // run_id задан — гасим только это окно (дубликат), иначе все окна сборки
     let exact = run_key(&instance_id, run_id);
+    if exact.as_ref().is_some_and(|key| run_instance_id(key) != instance_id) {
+        return Err("этот запуск относится к другой сборке".into());
+    }
     let handles: Vec<ChildHandle> = {
         let running = state.running.lock().await;
         running
@@ -946,7 +1084,13 @@ async fn stop_instance(
 
 async fn request_stop(child: &ChildHandle) -> Result<(), String> {
     let mut guard = child.child.lock().await;
-    guard.start_kill().map_err(err)?;
+    if let Some(process) = guard.as_mut() {
+        process.start_kill().map_err(err)?;
+    } else {
+        let record = child.record.as_ref().ok_or("идентификатор процесса недоступен")?
+            .lock().unwrap_or_else(|e| e.into_inner());
+        game_sessions::terminate(&record.process)?;
+    }
     // Пока замок занят, наблюдатель не успеет прочитать код завершения.
     child.stop_requested.store(true, Ordering::Relaxed);
     Ok(())
@@ -962,6 +1106,25 @@ async fn running_instances(state: State<'_, AppState>) -> Result<Vec<String>, St
             result.push(id);
         }
     }
+    Ok(result)
+}
+
+#[derive(Serialize)]
+struct RunningSessionInfo {
+    instance_id: String,
+    run_id: String,
+    account: String,
+    started_at: u64,
+}
+
+#[tauri::command]
+async fn running_sessions(state: State<'_, AppState>) -> Result<Vec<RunningSessionInfo>, String> {
+    let running = state.running.lock().await;
+    let mut result: Vec<_> = running.iter().map(|(key, child)| RunningSessionInfo {
+        instance_id: run_instance_id(key).to_string(), run_id: key.clone(),
+        account: child.account.clone(), started_at: child.started_at,
+    }).collect();
+    result.sort_by(|a, b| (a.started_at, &a.run_id).cmp(&(b.started_at, &b.run_id)));
     Ok(result)
 }
 
@@ -2501,253 +2664,251 @@ async fn net_check(state: State<'_, AppState>) -> Result<String, String> {
     }
 }
 
-/// Открыть ссылку в системном браузере.
-#[tauri::command]
-fn open_url(url: String) -> Result<(), String> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
+/// Проверяем ссылку до передачи системе; управляющие символы и прочие схемы
+/// не должны попасть в обработчик внешних ссылок.
+fn browser_url(raw: &str) -> Result<String, String> {
+    if raw.len() > 16_384 || raw.chars().any(char::is_control) {
+        return Err("недопустимая ссылка".into());
+    }
+    let url = reqwest::Url::parse(raw).map_err(|_| "недопустимая ссылка".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err("разрешены только http(s)-ссылки".into());
     }
-    #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("cmd")
-        .args(["/C", "start", "", &url])
-        .spawn();
-    #[cfg(target_os = "macos")]
-    let result = std::process::Command::new("open").arg(&url).spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let result = std::process::Command::new("xdg-open").arg(&url).spawn();
+    Ok(url.to_string())
+}
 
-    result.map(|_| ()).map_err(err)
+/// Открыть ссылку в системном браузере без интерпретации через командный shell.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let url = browser_url(&url)?;
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let operation: Vec<u16> = "open".encode_utf16().chain(Some(0)).collect();
+        let address: Vec<u16> = url.encode_utf16().chain(Some(0)).collect();
+        let result = unsafe {
+            ShellExecuteW(std::ptr::null_mut(), operation.as_ptr(), address.as_ptr(),
+                std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL)
+        } as isize;
+        if result <= 32 { return Err(format!("не удалось открыть ссылку (код Windows {result})")); }
+        Ok(())
+    }
+    #[cfg(target_os = "macos")]
+    { std::process::Command::new("open").arg(&url).spawn().map(|_| ()).map_err(err) }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    { std::process::Command::new("xdg-open").arg(&url).spawn().map(|_| ()).map_err(err) }
 }
 
 /* ==================== АККАУНТЫ ==================== */
 
 #[derive(Serialize)]
+struct AccountSummary {
+    username: String,
+    uuid: String,
+    kind: String,
+}
+
+impl From<&Account> for AccountSummary {
+    fn from(account: &Account) -> Self {
+        Self { username: account.username.clone(), uuid: account.uuid.clone(), kind: account.kind.clone() }
+    }
+}
+
+#[derive(Serialize)]
 struct AccountsInfo {
-    accounts: Vec<Account>,
+    // Токены нужны Rust для запуска игры, но не интерфейсу WebView.
+    accounts: Vec<AccountSummary>,
     active: Option<String>,
 }
 
-/// Выбранный аккаунт; если его нет — офлайн-аккаунт из настроек.
-async fn current_account(state: &AppState, settings: &Settings) -> Result<Account, String> {
+fn account_summaries(store: &AccountStore) -> Vec<AccountSummary> {
+    store.accounts.iter().map(AccountSummary::from).collect()
+}
+
+fn save_pending_accounts(state: &AppState, store: &AccountStore) -> Result<(), String> {
+    if state.accounts_dirty.load(Ordering::Acquire) {
+        store.save(&state.paths).map_err(|error| format!("не удалось сохранить обновлённый вход: {error}"))?;
+        state.accounts_dirty.store(false, Ordering::Release);
+    }
+    Ok(())
+}
+
+/// Под блокировкой хранилища: параллельные запросы профиля и запуска не
+/// обновляют один и тот же refresh-токен одновременно внутри лаунчера.
+async fn refresh_account_locked(state: &AppState, settings: &Settings, store: &mut AccountStore, account: &Account) -> Result<Account, String> {
+    if account.refresh_token.trim().is_empty() {
+        return Err("срок входа Microsoft истёк и нет refresh-токена — войди в аккаунт заново".into());
+    }
+    let client_id = settings.ms_client_id.clone().unwrap_or_default();
+    let session = microsoft::refresh(&state.http, &client_id, &account.refresh_token).await
+        .map_err(|error| format!("не удалось обновить вход Microsoft: {error}. Проверь сеть или войди заново"))?;
+    let fresh = Account::from_session(session);
+    if !profile_service::same_profile_id(&account.uuid, &fresh.uuid) {
+        return Err("Microsoft вернул другой аккаунт; текущий вход не заменён".into());
+    }
+    // Сначала удерживаем новый токен в памяти, затем сохраняем. Если диск
+    // недоступен, следующая операция повторит запись вместо молчаливой потери.
+    store.upsert(fresh.clone());
+    state.accounts_dirty.store(true, Ordering::Release);
+    save_pending_accounts(state, store)?;
+    Ok(fresh)
+}
+
+/// Выбранный аккаунт; optional UUID не позволяет применить скин/плащ к
+/// другому аккаунту, если выбор поменялся перед обработкой команды.
+async fn current_account_checked(state: &AppState, settings: &Settings, expected: Option<&str>) -> Result<Account, String> {
     let mut store = state.accounts.lock().await;
+    save_pending_accounts(state, &store)?;
     let account = store.current().cloned().unwrap_or_else(|| {
         Account::offline(&settings.username).unwrap_or_else(|_| Account {
-            username: "Player".into(),
-            uuid: omnispec_core::auth::offline_uuid("Player"),
-            kind: "offline".into(),
-            access_token: String::new(),
-            refresh_token: String::new(),
-            expires_at: 0,
+            username: "Player".into(), uuid: omnispec_core::auth::offline_uuid("Player"),
+            kind: "offline".into(), access_token: String::new(), refresh_token: String::new(), expires_at: 0,
         })
     });
-
-    // Лицензионный токен живёт час — обновляем заранее, иначе игра не пустит на сервер.
-    if account.needs_refresh() && !account.refresh_token.is_empty() {
-        let client_id = settings.ms_client_id.clone().unwrap_or_default();
-        match microsoft::refresh(&state.http, &client_id, &account.refresh_token).await {
-            Ok(session) => {
-                let fresh = Account::from_session(session);
-                store.upsert(fresh.clone());
-                let _ = store.save(&state.paths);
-                return Ok(fresh);
-            }
-            Err(error) => {
-                return Err(format!(
-                    "не удалось обновить вход в Microsoft ({error}) — зайди в аккаунт заново"
-                ))
-            }
-        }
+    if expected.is_some_and(|uuid| !profile_service::same_profile_id(uuid, &account.uuid)) {
+        return Err("аккаунт переключён — повтори действие для выбранного аккаунта".into());
+    }
+    if account.needs_refresh() {
+        return refresh_account_locked(state, settings, &mut store, &account).await;
     }
     Ok(account)
 }
 
-/// Аккаунт для запуска: конкретный (дубликат сборки) или выбранный в лаунчере.
-async fn account_for(
-    state: &AppState,
-    settings: &Settings,
-    uuid: Option<&str>,
-) -> Result<Account, String> {
-    let Some(uuid) = uuid else {
-        return current_account(state, settings).await;
-    };
+async fn current_account(state: &AppState, settings: &Settings) -> Result<Account, String> {
+    current_account_checked(state, settings, None).await
+}
+
+/// После HTTP 401 пробуем обновить один раз, даже если локальный срок ещё не
+/// истёк. Если другой запрос уже обновил токен, используем его, не обновляя повторно.
+async fn refresh_rejected_account(state: &AppState, settings: &Settings, rejected: &Account) -> Result<Account, String> {
     let mut store = state.accounts.lock().await;
-    let account = store
-        .accounts
-        .iter()
-        .find(|account| account.uuid == uuid || account.username.eq_ignore_ascii_case(uuid))
-        .cloned()
-        .ok_or_else(|| "аккаунт не найден".to_string())?;
-    if account.needs_refresh() && !account.refresh_token.is_empty() {
-        let client_id = settings.ms_client_id.clone().unwrap_or_default();
-        match microsoft::refresh(&state.http, &client_id, &account.refresh_token).await {
-            Ok(session) => {
-                let fresh = Account::from_session(session);
-                store.upsert(fresh.clone());
-                let _ = store.save(&state.paths);
-                Ok(fresh)
-            }
-            Err(error) => Err(format!(
-                "не удалось обновить вход в Microsoft ({error}) — зайди в аккаунт заново"
-            )),
-        }
-    } else {
-        Ok(account)
+    save_pending_accounts(state, &store)?;
+    let current = store.current().cloned().ok_or("аккаунт был удалён")?;
+    if !profile_service::same_profile_id(&current.uuid, &rejected.uuid) || !current.is_microsoft() {
+        return Err("аккаунт переключён — повтори действие для выбранного аккаунта".into());
     }
+    if current.access_token != rejected.access_token && !current.access_token.is_empty() {
+        return Ok(current);
+    }
+    refresh_account_locked(state, settings, &mut store, &current).await
+}
+
+async fn current_minecraft_profile(state: &AppState, settings: &Settings, mut account: Account) -> Result<(Account, Value), String> {
+    for attempt in 0..2 {
+        match profile_service::profile(&state.http, profile_service::PROFILE_URL, &account.access_token).await {
+            Ok(profile) => {
+                profile_service::verify_profile_identity(&profile, &account.uuid)?;
+                return Ok((account, profile));
+            }
+            Err(profile_service::ProfileError::Unauthorized) if attempt == 0 => {
+                account = refresh_rejected_account(state, settings, &account).await?;
+            }
+            Err(profile_service::ProfileError::Unauthorized) => return Err("Minecraft отклонил вход после обновления. Войди в Microsoft заново".into()),
+            Err(profile_service::ProfileError::Other(message)) => return Err(message),
+        }
+    }
+    Err("не удалось получить профиль Minecraft".into())
+}
+
+/// Аккаунт для запуска: конкретный (дубликат сборки) или выбранный в лаунчере.
+async fn account_for(state: &AppState, settings: &Settings, uuid: Option<&str>) -> Result<Account, String> {
+    let Some(uuid) = uuid else { return current_account(state, settings).await; };
+    let mut store = state.accounts.lock().await;
+    save_pending_accounts(state, &store)?;
+    let account = store.accounts.iter()
+        .find(|account| account.uuid == uuid || account.username.eq_ignore_ascii_case(uuid))
+        .cloned().ok_or_else(|| "аккаунт не найден".to_string())?;
+    if account.needs_refresh() { refresh_account_locked(state, settings, &mut store, &account).await }
+    else { Ok(account) }
 }
 
 /// Текущий скин лицензионного аккаунта: вариант (classic/slim) и PNG в data-URL.
 #[tauri::command]
-async fn account_skin(state: State<'_, AppState>) -> Result<Value, String> {
+async fn account_skin(state: State<'_, AppState>, account_uuid: Option<String>) -> Result<Value, String> {
     let settings = state.settings.lock().await.clone();
-    let account = current_account(&state, &settings).await?;
-    if account.kind != "microsoft" || account.access_token.is_empty() {
-        return Ok(json!({"licensed": false, "variant": "classic", "data_url": Value::Null}));
+    let account = current_account_checked(&state, &settings, account_uuid.as_deref()).await?;
+    if !account.is_microsoft() {
+        return Ok(json!({"account_uuid": account.uuid, "licensed": false, "variant": "classic", "data_url": Value::Null}));
     }
-    let profile: Value = state
-        .http
-        .inner()
-        .get("https://api.minecraftservices.com/minecraft/profile")
-        .header("Authorization", format!("Bearer {}", account.access_token))
-        .send()
-        .await
-        .map_err(|error| format!("не удалось получить профиль скина: {error}"))?
-        .json()
-        .await
-        .map_err(|error| format!("не удалось прочитать профиль скина: {error}"))?;
-
-    let skins = profile
-        .get("skins")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let active = skins
-        .iter()
-        .find(|skin| skin.get("state").and_then(|value| value.as_str()) == Some("ACTIVE"))
-        .or_else(|| skins.first());
-    let variant = active
-        .and_then(|skin| skin.get("variant"))
-        .and_then(|value| value.as_str())
-        .unwrap_or("CLASSIC")
-        .to_lowercase();
-    let url = active
-        .and_then(|skin| skin.get("url"))
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string());
-
-    let mut data_url = Value::Null;
-    if let Some(url) = url {
-        if let Ok(response) = state.http.inner().get(&url).send().await {
-            if let Ok(bytes) = response.bytes().await {
-                data_url = json!(format!("data:image/png;base64,{}", base64_encode(&bytes)));
-            }
-        }
-    }
-    Ok(json!({"licensed": true, "variant": variant, "data_url": data_url}))
+    let (account, profile) = current_minecraft_profile(&state, &settings, account).await?;
+    let skins = profile.get("skins").and_then(Value::as_array)
+        .ok_or("Minecraft не вернул список скинов")?;
+    // Никогда не показываем неактивную старую текстуру как действующий скин.
+    let active = skins.iter().find(|skin| skin.get("state").and_then(Value::as_str) == Some("ACTIVE"));
+    let Some(active) = active else {
+        return Ok(json!({"account_uuid": account.uuid, "licensed": true, "variant": "classic", "data_url": Value::Null,
+            "message": "У аккаунта нет активной текстуры; Minecraft выберет стандартный скин"}));
+    };
+    let variant = active.get("variant").and_then(Value::as_str).unwrap_or("CLASSIC").to_lowercase();
+    let url = active.get("url").and_then(Value::as_str).ok_or("Minecraft не вернул адрес скина")?;
+    let bytes = profile_service::texture_png(&state.http, url).await?;
+    validate_skin_png(&bytes).map_err(|error| format!("текстура аккаунта: {error}"))?;
+    Ok(json!({"account_uuid": account.uuid, "name": account.username, "licensed": true, "variant": variant,
+        "data_url": format!("data:image/png;base64,{}", base64_encode(&bytes))}))
 }
 
 /// Плащи аккаунта: список с картинками-превью (PNG в data-URL) и отметкой активного.
 #[tauri::command]
-async fn account_capes(state: State<'_, AppState>) -> Result<Value, String> {
+async fn account_capes(state: State<'_, AppState>, account_uuid: Option<String>) -> Result<Value, String> {
     let settings = state.settings.lock().await.clone();
-    let account = current_account(&state, &settings).await?;
-    if account.kind != "microsoft" || account.access_token.is_empty() {
-        return Ok(json!({"licensed": false, "capes": []}));
+    let account = current_account_checked(&state, &settings, account_uuid.as_deref()).await?;
+    if !account.is_microsoft() {
+        return Ok(json!({"account_uuid": account.uuid, "licensed": false, "capes": []}));
     }
-    let profile: Value = state
-        .http
-        .inner()
-        .get("https://api.minecraftservices.com/minecraft/profile")
-        .header("Authorization", format!("Bearer {}", account.access_token))
-        .send()
-        .await
-        .map_err(|error| format!("не удалось получить список плащей: {error}"))?
-        .json()
-        .await
-        .map_err(|error| format!("не удалось прочитать список плащей: {error}"))?;
-
-    let capes = profile
-        .get("capes")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let mut out = Vec::new();
-    for cape in capes {
-        let id = cape
-            .get("id")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
-        let alias = cape
-            .get("alias")
-            .and_then(|value| value.as_str())
-            .unwrap_or("Плащ")
-            .to_string();
-        let active = cape
-            .get("state")
-            .and_then(|value| value.as_str())
-            .map(|value| value == "ACTIVE")
-            .unwrap_or(false);
-        let url = cape
-            .get("url")
-            .and_then(|value| value.as_str())
-            .map(|value| value.to_string());
-        let mut data_url = Value::Null;
-        if let Some(url) = url {
-            if let Ok(response) = state.http.inner().get(&url).send().await {
-                if let Ok(bytes) = response.bytes().await {
-                    data_url = json!(format!("data:image/png;base64,{}", base64_encode(&bytes)));
-                }
-            }
+    let (account, profile) = current_minecraft_profile(&state, &settings, account).await?;
+    let capes = profile.get("capes").and_then(Value::as_array).cloned().unwrap_or_default();
+    // Картинки не блокируют список по одной на долгом соединении. Проблема
+    // отдельного превью не скрывает плащ, но показывается как предупреждение.
+    let out: Vec<(Value, bool)> = futures::stream::iter(capes.into_iter().map(|cape| {
+        let http = &state.http;
+        async move {
+            let id = cape.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+            let alias = cape.get("alias").and_then(Value::as_str).unwrap_or("Плащ").to_string();
+            let active = cape.get("state").and_then(Value::as_str) == Some("ACTIVE");
+            let data = match cape.get("url").and_then(Value::as_str) {
+                Some(url) => profile_service::texture_png(http, url).await.ok(),
+                None => None,
+            };
+            let failed = data.is_none();
+            let data_url = data.map(|bytes| format!("data:image/png;base64,{}", base64_encode(&bytes)));
+            (json!({"id": id, "alias": alias, "active": active, "data_url": data_url}), failed)
         }
-        out.push(json!({
-            "id": id,
-            "alias": alias,
-            "active": active,
-            "data_url": data_url
-        }));
-    }
-    Ok(json!({"licensed": true, "capes": out}))
+    })).buffered(4).collect().await;
+    let missing = out.iter().filter(|(_, failed)| *failed).count();
+    let capes: Vec<Value> = out.into_iter().map(|(value, _)| value).collect();
+    Ok(json!({"account_uuid": account.uuid, "licensed": true, "capes": capes,
+        "warning": if missing > 0 { Some("Не удалось загрузить некоторые изображения плащей") } else { None }}))
 }
 
 /// Включить плащ (`cape_id`) или выключить все плащи (`None`).
 #[tauri::command]
-async fn set_cape(state: State<'_, AppState>, cape_id: Option<String>) -> Result<Value, String> {
+async fn set_cape(state: State<'_, AppState>, cape_id: Option<String>, account_uuid: Option<String>) -> Result<Value, String> {
     let settings = state.settings.lock().await.clone();
-    let account = current_account(&state, &settings).await?;
-    if account.kind != "microsoft" || account.access_token.is_empty() {
-        return Err("плащи есть только у лицензионного аккаунта".into());
-    }
+    let mut account = current_account_checked(&state, &settings, account_uuid.as_deref()).await?;
+    if !account.is_microsoft() { return Err("плащи есть только у лицензионного аккаунта".into()); }
     let url = "https://api.minecraftservices.com/minecraft/profile/capes/active";
-    let request = match cape_id {
-        Some(id) => state
-            .http
-            .inner()
-            .put(url)
-            .header("Authorization", format!("Bearer {}", account.access_token))
-            .json(&json!({ "capeId": id })),
-        None => state
-            .http
-            .inner()
-            .delete(url)
-            .header("Authorization", format!("Bearer {}", account.access_token)),
-    };
-    let response = request
-        .send()
-        .await
-        .map_err(|error| format!("не удалось изменить плащ: {error}"))?;
-    let status = response.status();
-    if status.is_success() {
-        return Ok(json!({ "ok": true }));
+    for attempt in 0..2 {
+        let request = match cape_id.as_deref() {
+            Some(id) => state.http.inner().put(url).json(&json!({ "capeId": id })),
+            None => state.http.inner().delete(url),
+        };
+        let response = request.bearer_auth(&account.access_token).timeout(Duration::from_secs(20)).send().await
+            .map_err(|error| format!("не удалось изменить плащ: {error}"))?;
+        let status = response.status();
+        if status.is_success() { return Ok(json!({ "ok": true, "account_uuid": account.uuid })); }
+        if status.as_u16() == 401 && attempt == 0 {
+            account = refresh_rejected_account(&state, &settings, &account).await?;
+            continue;
+        }
+        return Err(match status.as_u16() {
+            401 => "Minecraft отклонил вход после обновления. Войди в Microsoft заново".into(),
+            403 => "Minecraft не разрешил изменить плащ; проверь, что он принадлежит аккаунту".into(),
+            429 => "Minecraft временно ограничил частоту запросов; попробуй позже".into(),
+            _ => format!("Minecraft не принял изменение плаща (HTTP {status})"),
+        });
     }
-    let text = response.text().await.unwrap_or_default();
-    let message = if text.contains("does not own cape") {
-        "на аккаунте нет такого плаща".to_string()
-    } else if status.as_u16() == 401 {
-        "вход в Microsoft устарел — зайди в аккаунт заново".to_string()
-    } else {
-        format!("Mojang не принял запрос ({status})")
-    };
-    Err(message)
+    Err("не удалось изменить плащ".into())
 }
 
 /// Смена скина пресетом: загружаем PNG в Mojang (только лицензия).
@@ -2756,14 +2917,18 @@ async fn apply_skin(
     state: State<'_, AppState>,
     path: String,
     variant: String,
+    account_uuid: Option<String>,
 ) -> Result<Value, String> {
     let settings = state.settings.lock().await.clone();
-    let account = current_account(&state, &settings).await?;
-    if account.kind != "microsoft" || account.access_token.is_empty() {
-        return Err("скин можно менять только у лицензионного аккаунта".into());
-    }
-    let bytes =
-        std::fs::read(&path).map_err(|error| format!("не удалось открыть файл: {error}"))?;
+    let mut account = current_account_checked(&state, &settings, account_uuid.as_deref()).await?;
+    if !account.is_microsoft() { return Err("скин можно менять только у лицензионного аккаунта".into()); }
+    use std::io::Read;
+    let meta = std::fs::metadata(&path).map_err(|error| format!("не удалось открыть файл: {error}"))?;
+    if !meta.is_file() || meta.len() > 4 * 1024 * 1024 { return Err("нужен PNG со скином до 4 МБ".into()); }
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path).map_err(|error| format!("не удалось открыть файл: {error}"))?
+        .take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(|error| format!("не удалось прочитать файл: {error}"))?;
+    validate_skin_png(&bytes)?;
     let variant = match variant.to_lowercase().as_str() {
         "slim" => "slim",
         _ => "classic",
@@ -2779,27 +2944,27 @@ async fn apply_skin(
     body.extend_from_slice(&bytes);
     body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
 
-    let response = state
-        .http
-        .inner()
-        .post("https://api.minecraftservices.com/minecraft/profile/skins")
-        .header("Authorization", format!("Bearer {}", account.access_token))
-        .header(
-            "Content-Type",
-            format!("multipart/form-data; boundary={boundary}"),
-        )
-        .body(body)
-        .send()
-        .await
-        .map_err(|error| format!("не удалось отправить скин: {error}"))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let text = response.text().await.unwrap_or_default();
-        let short: String = text.chars().take(220).collect();
-        return Err(format!("Mojang не принял скин ({status}): {short}"));
+    for attempt in 0..2 {
+        let response = state.http.inner().post("https://api.minecraftservices.com/minecraft/profile/skins")
+            .bearer_auth(&account.access_token)
+            .header("Content-Type", format!("multipart/form-data; boundary={boundary}"))
+            .body(body.clone()).timeout(Duration::from_secs(30)).send().await
+            .map_err(|error| format!("не удалось отправить скин: {error}"))?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(json!({"ok": true, "variant": variant, "account": account.username, "account_uuid": account.uuid}));
+        }
+        if status.as_u16() == 401 && attempt == 0 {
+            account = refresh_rejected_account(&state, &settings, &account).await?;
+            continue;
+        }
+        return Err(match status.as_u16() {
+            401 => "Minecraft отклонил вход после обновления. Войди в Microsoft заново".into(),
+            429 => "Minecraft временно ограничил смену скина; попробуй позже".into(),
+            _ => format!("Minecraft не принял скин (HTTP {status})"),
+        });
     }
-    Ok(json!({"ok": true, "variant": variant, "account": account.username}))
+    Err("не удалось отправить скин".into())
 }
 
 /// Проверка целого PNG, а не только поддельного заголовка. Ограничение по
@@ -2897,7 +3062,7 @@ fn image_data_url(path: String) -> Result<String, String> {
 async fn accounts_info(state: State<'_, AppState>) -> Result<AccountsInfo, String> {
     let store = state.accounts.lock().await;
     Ok(AccountsInfo {
-        accounts: store.accounts.clone(),
+        accounts: account_summaries(&store),
         active: store.current().map(|account| account.uuid.clone()),
     })
 }
@@ -2913,7 +3078,7 @@ async fn account_add_offline(
     store.set_active(&account.uuid);
     store.save(&state.paths).map_err(err)?;
     Ok(AccountsInfo {
-        accounts: store.accounts.clone(),
+        accounts: account_summaries(&store),
         active: store.active.clone(),
     })
 }
@@ -2945,7 +3110,7 @@ async fn account_rename(
     account.username = trimmed.to_string();
     store.save(&state.paths).map_err(err)?;
     Ok(AccountsInfo {
-        accounts: store.accounts.clone(),
+        accounts: account_summaries(&store),
         active: store.active.clone(),
     })
 }
@@ -2961,7 +3126,7 @@ async fn account_set_active(
     }
     store.save(&state.paths).map_err(err)?;
     Ok(AccountsInfo {
-        accounts: store.accounts.clone(),
+        accounts: account_summaries(&store),
         active: store.active.clone(),
     })
 }
@@ -2972,7 +3137,7 @@ async fn account_remove(state: State<'_, AppState>, uuid: String) -> Result<Acco
     store.remove(&uuid);
     store.save(&state.paths).map_err(err)?;
     Ok(AccountsInfo {
-        accounts: store.accounts.clone(),
+        accounts: account_summaries(&store),
         active: store.current().map(|account| account.uuid.clone()),
     })
 }
@@ -3007,7 +3172,7 @@ async fn ms_login_poll(
     store.set_active(&account.uuid);
     store.save(&state.paths).map_err(err)?;
     Ok(Some(AccountsInfo {
-        accounts: store.accounts.clone(),
+        accounts: account_summaries(&store),
         active: store.active.clone(),
     }))
 }
@@ -3354,6 +3519,8 @@ async fn select_custom_wallpaper(state: &AppState, name: String) -> Result<Setti
         return Err(format!("не удалось сохранить настройки фона: {error}"));
     }
     *current = next.clone();
+    #[cfg(windows)]
+    invalidate_scene(state).await;
     Ok(next)
 }
 
@@ -3378,6 +3545,53 @@ async fn download_custom_wallpaper(state: State<'_, AppState>, url: String) -> R
 /// потоково через loopback, поскольку GStreamer не воспроизводит asset://.
 #[tauri::command]
 async fn wallpaper_source(app: AppHandle, state: State<'_, AppState>, source: String) -> Result<Option<wallpapers::Media>, String> {
+    // Сцену восстанавливаем только если она действительно выбрана, а не при
+    // каждой загрузке списка старых обоев. Проверяем библиотеку повторно.
+    if source == "workshop" {
+        let settings = state.settings.lock().await;
+        let chosen = settings.wallpaper_workshop_project.clone();
+        let scene = chosen.as_deref().and_then(|path| wallpapers::project(Path::new(path)))
+            .is_some_and(|p| p.kind == "scene");
+        if scene {
+            if settings.wallpaper.as_deref() != Some("workshop") { return Ok(None); }
+            #[cfg(not(windows))]
+            return Err("сцены Wallpaper Engine доступны только в Windows".into());
+            #[cfg(windows)]
+            {
+                let selected = PathBuf::from(chosen.as_deref().ok_or("сцена не выбрана")?)
+                    .canonicalize().map_err(|_| "сцена недоступна".to_string())?;
+                let manual = settings.wallpaper_steam_path.clone();
+                let epoch = state.scene_revision.load(Ordering::Acquire);
+                drop(settings);
+                let check = selected.clone();
+                let engine = tauri::async_runtime::spawn_blocking(move || validate_workshop(&check, manual.as_deref()))
+                    .await.map_err(|e| e.to_string())??.ok_or("выбран не проект сцены")?;
+                let _operation = state.scene_operation.lock().await;
+                {
+                    let current = state.settings.lock().await;
+                    if state.scene_revision.load(Ordering::Acquire) != epoch
+                        || current.wallpaper.as_deref() != Some("workshop")
+                        || current.wallpaper_workshop_project != chosen {
+                        return Ok(None);
+                    }
+                }
+                let media = start_scene(&state, &app, engine, selected.clone(), epoch).await?;
+                let current = state.settings.lock().await;
+                if state.scene_revision.load(Ordering::Acquire) != epoch
+                    || current.wallpaper.as_deref() != Some("workshop")
+                    || current.wallpaper_workshop_project != chosen {
+                    stop_scene_epoch(&state, epoch).await;
+                    return Ok(None);
+                }
+                if let Err(error) = commit_scene(&state, epoch) {
+                    stop_scene_epoch(&state, epoch).await;
+                    return Err(error);
+                }
+                if let Some(server) = state.video_server.lock().unwrap_or_else(|e| e.into_inner()).as_ref() { server.revoke(&source); }
+                return Ok(Some(media));
+            }
+        }
+    }
     // Чтение настроек и регистрация URL атомарны относительно смены файла:
     // старый запрос не сможет снова открыть уже заменённое видео.
     let settings = state.settings.lock().await;
@@ -3407,6 +3621,18 @@ async fn wallpaper_source(app: AppHandle, state: State<'_, AppState>, source: St
     Ok(Some(media))
 }
 
+/// None — менеджер занят или платформа без WGC; false — выбранный захват
+/// действительно завершился. Эта команда не запускает и не меняет обои.
+#[tauri::command]
+fn wallpaper_scene_status(state: State<'_, AppState>) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        state.scene_manager.try_lock().ok().map(|guard| guard.as_ref().is_some_and(|scene| scene.is_alive()))
+    }
+    #[cfg(not(windows))]
+    { let _ = state; None }
+}
+
 #[tauri::command]
 async fn scan_wallpaper_library(state: State<'_, AppState>) -> Result<wallpapers::Library, String> {
     let manual = state.settings.lock().await.wallpaper_steam_path.clone();
@@ -3419,26 +3645,70 @@ fn parse_wallpaper_workshop_link(url: String) -> Option<String> {
     wallpapers::workshop_link(&url)
 }
 
+/// None — обычное видео, Some — проверенный путь к WE для сцены.
+fn validate_workshop(selected: &Path, manual: Option<&str>) -> Result<Option<String>, String> {
+    let library = wallpapers::scan_library(manual)?;
+    let item = library.projects.iter().find(|p| Path::new(&p.directory) == selected)
+        .ok_or("проект не найден в выбранной библиотеке Steam")?;
+    match item.kind.as_str() {
+        "video" => { wallpapers::project_media(selected)?; Ok(None) }
+        "scene" if cfg!(windows) => library.engine.map(Some)
+            .ok_or_else(|| "Wallpaper Engine не найден. Укажи папку Steam с установленным Wallpaper Engine".into()),
+        "scene" => Err("сцены Wallpaper Engine доступны только в Windows".into()),
+        _ => Err("web-обои и приложения можно открыть только отдельно в Wallpaper Engine".into()),
+    }
+}
+
 /// Разрешаем выбор только из найденной библиотеки, проверяя проект повторно.
+/// Сцена сохраняется лишь после получения реального первого кадра.
 #[tauri::command]
-async fn set_workshop_wallpaper(state: State<'_, AppState>, directory: String) -> Result<Settings, String> {
-    let manual = state.settings.lock().await.wallpaper_steam_path.clone();
+async fn set_workshop_wallpaper(app: AppHandle, state: State<'_, AppState>, directory: String) -> Result<Settings, String> {
+    #[cfg(not(windows))]
+    let _ = &app;
+    let current = state.settings.lock().await;
+    let manual = current.wallpaper_steam_path.clone();
+    #[cfg(windows)]
+    let epoch = state.scene_revision.fetch_add(1, Ordering::AcqRel) + 1;
+    drop(current);
     let selected = PathBuf::from(directory).canonicalize().map_err(|_| "проект не найден".to_string())?;
     let check_path = selected.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        let library = wallpapers::scan_library(manual.as_deref())?;
-        if !library.projects.iter().any(|p| Path::new(&p.directory) == check_path) {
-            return Err("проект не найден в выбранной библиотеке Steam".into());
-        }
-        wallpapers::project_media(&check_path)?;
-        Ok(())
-    }).await.map_err(|e| e.to_string())??;
+    let engine = tauri::async_runtime::spawn_blocking(move || validate_workshop(&check_path, manual.as_deref()))
+        .await.map_err(|e| e.to_string())??;
+    #[cfg(not(windows))]
+    let _ = &engine;
+    #[cfg(windows)]
+    let _operation = state.scene_operation.lock().await;
+    #[cfg(windows)]
+    if state.scene_revision.load(Ordering::Acquire) != epoch { return Err("выбор фона изменился".into()); }
+    #[cfg(windows)]
+    if let Some(engine) = &engine { start_scene(&state, &app, engine.clone(), selected.clone(), epoch).await?; }
     let mut current = state.settings.lock().await;
+    #[cfg(windows)]
+    if state.scene_revision.load(Ordering::Acquire) != epoch {
+        stop_scene_epoch(&state, epoch).await;
+        return Err("выбор фона изменился".into());
+    }
     let mut next = current.clone();
     next.wallpaper_workshop_project = Some(selected.to_string_lossy().into_owned());
     next.wallpaper = Some("workshop".into());
-    next.save(&state.paths).map_err(err)?;
+    if let Err(error) = next.save(&state.paths) {
+        #[cfg(windows)]
+        if engine.is_some() { stop_scene_epoch(&state, epoch).await; }
+        return Err(err(error));
+    }
+    #[cfg(windows)]
+    if engine.is_some() {
+        if let Err(error) = commit_scene(&state, epoch) {
+            // На случай отмены при уничтожении окна восстанавливаем старые
+            // настройки; прежняя сцена ещё не закрыта.
+            let rollback = current.save(&state.paths);
+            stop_scene_epoch(&state, epoch).await;
+            return Err(match rollback { Ok(()) => error, Err(rollback) => format!("{error}; не удалось вернуть старые настройки: {rollback}") });
+        }
+    }
     *current = next.clone();
+    #[cfg(windows)]
+    if engine.is_none() { invalidate_scene(&state).await; }
     Ok(next)
 }
 
@@ -3461,13 +3731,21 @@ async fn open_wallpaper_engine(state: State<'_, AppState>, directory: String) ->
             return Err("проект не найден в выбранной библиотеке Steam".into());
         }
         let exe = lib.engine.ok_or_else(|| "wallpaper64.exe не найден. Укажи папку Steam с установленным Wallpaper Engine".to_string())?;
-        // Canonicalize на Windows выдаёт \\?\-путь; обычная форма совместимее
-        // с внешними приложениями. Для длинных/особых путей префикс сохраняется.
-        let project_file = selected.join("project.json");
-        std::process::Command::new(exe)
-            .args(["-control", "openWallpaper", "-file"]).arg(dunce::simplified(&project_file))
-            .args(["-playInWindow", "OmniSpec Wallpaper", "-width", "1280", "-height", "720"])
-            .spawn().map(|_| ()).map_err(|e| format!("не удалось отправить команду Wallpaper Engine: {e}"))
+        // Внешнее окно тоже запускаем только из проверенного подписанного WE;
+        // путь из пользовательской библиотеки сам по себе не является доверием.
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let exe = PathBuf::from(exe).canonicalize().map_err(|_| "Wallpaper Engine не найден".to_string())?;
+            let revision = std::sync::atomic::AtomicU64::new(0);
+            scene_capture::verify_signature(&exe, &revision, 0)?;
+            let project_file = selected.join("project.json").canonicalize().map_err(|_| "project.json не найден".to_string())?;
+            if project_file.parent() != Some(selected.as_path()) { return Err("project.json находится вне папки проекта".into()); }
+            // Canonicalize на Windows выдаёт \\?\-путь; обычная форма совместимее
+            // с внешними приложениями. Для длинных/особых путей префикс сохраняется.
+            std::process::Command::new(dunce::simplified(&exe))
+                .args(["-control", "openWallpaper", "-file"]).arg(dunce::simplified(&project_file))
+                .args(["-playInWindow", "OmniSpec Wallpaper", "-width", "1280", "-height", "720"])
+                .spawn().map(|_| ()).map_err(|e| format!("не удалось отправить команду Wallpaper Engine: {e}"))
+        }).await.map_err(|error| format!("не удалось запустить Wallpaper Engine: {error}"))?
     }
 }
 
@@ -3546,16 +3824,48 @@ fn main() {
         settings.discord_rpc && settings.discord_instance_icon && settings.discord_upload_local_icon
     );
 
+    // Восстанавливаем только сессии, созданные новой версией лаунчера, и
+    // только при полном совпадении PID и времени создания процесса.
+    let mut restored = Vec::new();
+    let mut restored_map = HashMap::new();
+    for record in game_sessions::records(&paths.root) {
+        if record.ended_at.is_some() || !game_sessions::is_alive(&record.process) {
+            // Если игра закончилась, пока лаунчер был закрыт, точное время
+            // неизвестно: не начисляем период после последней отметки.
+            let until = record.ended_at.unwrap_or(record.checkpoint_at);
+            if let Err(error) = game_sessions::finalize(&paths, &record, until) {
+                eprintln!("[omnispec] не удалось завершить статистику сессии; журнал сохранён: {error}");
+            }
+            continue;
+        }
+        if instances::load(&paths, &record.instance_id).is_err() { continue; }
+        let id = record.instance_id.clone();
+        let run = record.run_id.clone();
+        let handle = Arc::new(RunningChild {
+            child: Mutex::new(None), account: record.account.clone(), started_at: record.started_at,
+            game_dir: PathBuf::from(&record.game_dir), record: Some(StdMutex::new(record)),
+            stop_requested: AtomicBool::new(false),
+        });
+        restored_map.insert(run.clone(), handle.clone());
+        restored.push((id, run, handle));
+    }
     let state = AppState {
         modrinth: Modrinth::new(http.clone()),
         curseforge: CurseForge::new(http.clone()),
         startup_file: startup_path,
         accounts: Mutex::new(AccountStore::load(&paths)),
+        accounts_dirty: AtomicBool::new(false),
         paths,
         http,
         settings: Mutex::new(settings),
         video_server: StdMutex::new(None),
-        running: Arc::new(Mutex::new(HashMap::new())),
+        #[cfg(windows)]
+        scene_manager: Arc::new(StdMutex::new(None)),
+        #[cfg(windows)]
+        scene_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        #[cfg(windows)]
+        scene_operation: Mutex::new(()),
+        running: Arc::new(Mutex::new(restored_map)),
         launching: Arc::new(StdMutex::new(HashMap::new())),
         content_access: Arc::new(StdMutex::new(ContentAccess::default())),
         diagnostic_launches: StdMutex::new(HashMap::new()),
@@ -3566,8 +3876,37 @@ fn main() {
 
     tauri::Builder::default()
         .manage(state)
-        .setup(|app| {
+        .setup(move |app| {
             let _ = app.get_webview_window("main");
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                let handle = app.handle().clone();
+                let manager = app.state::<AppState>().scene_manager.clone();
+                let revision = app.state::<AppState>().scene_revision.clone();
+                let position_revision = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                window.on_window_event(move |event| {
+                    if matches!(event, tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)) {
+                        let position = position_revision.fetch_add(1, Ordering::AcqRel) + 1;
+                        let latest = position_revision.clone();
+                        let manager = manager.clone();
+                        let bounds = scene_bounds(&handle);
+                        tauri::async_runtime::spawn_blocking(move || {
+                            let guard = manager.lock().unwrap_or_else(|e| e.into_inner());
+                            if latest.load(Ordering::Acquire) == position {
+                                if let Some(scene) = guard.as_ref() { scene.place(bounds); }
+                            }
+                        });
+                    } else if matches!(event, tauri::WindowEvent::Destroyed) {
+                        revision.fetch_add(1, Ordering::AcqRel);
+                        if let Ok(mut guard) = manager.try_lock() { guard.take(); }
+                    }
+                });
+            }
+            for (id, run, child) in restored {
+                let state = app.state::<AppState>();
+                monitor_game(app.handle().clone(), id, run, None, child,
+                    state.running.clone(), state.paths.clone(), Vec::new(), true);
+            }
             // Прогрев кешей в фоне: поиск Java и манифест версий уже готовы к
             // первому запуску игры, поэтому «Играть» нажимается без ожидания.
             let paths = app.state::<AppState>().paths.clone();
@@ -3598,6 +3937,7 @@ fn main() {
             launch_instance,
             stop_instance,
             running_instances,
+            running_sessions,
             search_modrinth,
             modrinth_versions,
             modrinth_project,
@@ -3647,6 +3987,7 @@ fn main() {
             set_custom_wallpaper,
             download_custom_wallpaper,
             wallpaper_source,
+            wallpaper_scene_status,
             scan_wallpaper_library,
             parse_wallpaper_workshop_link,
             set_workshop_wallpaper,
@@ -3691,6 +4032,30 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn account_information_sent_to_webview_does_not_contain_tokens() {
+        let mut account = super::Account::offline("Alex").unwrap();
+        account.kind = "microsoft".into();
+        account.access_token = "access-secret".into();
+        account.refresh_token = "refresh-secret".into();
+        let summary = super::AccountSummary::from(&account);
+        let serialized = serde_json::to_string(&summary).unwrap();
+        assert!(serialized.contains("Alex"));
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("access_token"));
+        assert!(!serialized.contains("refresh_token"));
+    }
+
+    #[test]
+    fn external_browser_urls_reject_non_http_and_control_characters() {
+        use super::browser_url;
+        assert_eq!(browser_url("https://example.org/path?a=1&b=2").unwrap(), "https://example.org/path?a=1&b=2");
+        assert_eq!(browser_url("http://example.org/space here").unwrap(), "http://example.org/space%20here");
+        for input in ["file:///etc/passwd", "javascript:alert(1)", "https://", "https://example.org/\ncalc", "https://example.org/\0x"] {
+            assert!(browser_url(input).is_err(), "{input:?}");
+        }
+    }
 
     #[test]
     fn queued_settings_do_not_undo_recovered_last_instance() {
@@ -3841,14 +4206,15 @@ mod tests {
         use std::sync::atomic::{AtomicBool, Ordering};
         let process = tokio::process::Command::new("sleep").arg("30").spawn().unwrap();
         let handle = Arc::new(super::RunningChild {
-            child: tokio::sync::Mutex::new(process),
+            child: tokio::sync::Mutex::new(Some(process)),
+            record: None, account: "test".into(), started_at: 1,
             game_dir: std::path::PathBuf::from("test"),
             stop_requested: AtomicBool::new(false),
         });
         assert!(!handle.stop_requested.load(Ordering::Relaxed));
         super::request_stop(&handle).await.unwrap();
         assert!(handle.stop_requested.load(Ordering::Relaxed));
-        let status = handle.child.lock().await.wait().await.unwrap();
+        let status = handle.child.lock().await.as_mut().unwrap().wait().await.unwrap();
         assert!(!status.success());
     }
 

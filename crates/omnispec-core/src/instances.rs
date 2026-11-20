@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -223,7 +223,20 @@ fn moved_path(paths: &Paths, old: &str, new: &str, value: &str) -> Option<String
 
 static TEMP_SERIAL: AtomicU64 = AtomicU64::new(0);
 // Обновление времени игры, настроек и восстановления не должно терять записи.
+// Mutex сериализует потоки; постоянный файл блокировки — процессы лаунчера,
+// использующие один и тот же корень данных. Все писатели instance.json должны
+// брать обе блокировки перед чтением и удерживать до атомарной замены файла.
 static INSTANCE_WRITE_LOCK: Mutex<()> = Mutex::new(());
+struct InstanceWriteGuard {
+    // Файл освобождается раньше Mutex, чтобы другой поток не обошёл блокировку.
+    _file: crate::file_lock::FileLock,
+    _thread: MutexGuard<'static, ()>,
+}
+fn lock_instance_writes(paths: &Paths) -> Result<InstanceWriteGuard> {
+    let thread = INSTANCE_WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let file = crate::file_lock::FileLock::acquire(&paths.root.join(".omnispec-instances.lock"))?;
+    Ok(InstanceWriteGuard { _file: file, _thread: thread })
+}
 const PENDING_RENAMES_FILE: &str = ".omnispec-rename-pending.json";
 
 /// Запись в той же папке через временный файл: сбой не обрывает instance.json.
@@ -289,7 +302,7 @@ fn reconcile_meta(paths: &Paths, id: &str, file: &Path) -> Result<InstanceMeta> 
 /// переименовали между ответом и подтверждением, новые id останутся в маркере.
 pub fn acknowledge_renames(paths: &Paths, id: &str, known: &[String]) -> Result<()> {
     if !valid_id(id) { return Err(Error::other("недопустимое имя папки сборки")); }
-    let _guard = INSTANCE_WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let _guard = lock_instance_writes(paths)?;
     let file = paths.instance_file(id);
     let meta = read_meta(&file)?;
     if meta.id != id { return Err(Error::other("папка сборки изменилась; обнови список")); }
@@ -315,7 +328,7 @@ pub fn list(paths: &Paths) -> Result<Vec<InstanceMeta>> {
 
 /// Не меняем идентификатор, пока игра или запись ещё пользуются старым id.
 pub fn list_with_blocked(paths: &Paths, blocked: &HashSet<String>) -> Result<Vec<InstanceMeta>> {
-    let _guard = INSTANCE_WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let _guard = lock_instance_writes(paths)?;
     let dir = paths.instances();
     if !dir.exists() { return Ok(Vec::new()); }
     let mut found = Vec::new();
@@ -364,7 +377,7 @@ pub fn load(paths: &Paths, id: &str) -> Result<InstanceMeta> {
 }
 
 pub fn save(paths: &Paths, meta: &InstanceMeta) -> Result<()> {
-    let _guard = INSTANCE_WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let _guard = lock_instance_writes(paths)?;
     save_unlocked(paths, meta)
 }
 
@@ -460,7 +473,7 @@ pub fn create(paths: &Paths, request: CreateInstanceRequest) -> Result<InstanceM
     ] {
         create_dir_beneath(&game_root, &game_root.join(sub))?;
     }
-    let _guard = INSTANCE_WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let _guard = lock_instance_writes(paths)?;
     write_json_atomic(&paths.instance_file(&id), &serde_json::to_value(&meta)?)?;
     Ok(meta)
 }
@@ -506,12 +519,14 @@ pub fn duplicate(paths: &Paths, id: &str) -> Result<InstanceMeta> {
     meta.playtime_secs = 0;
     // Это новая сборка, а не устаревший снимок исходной: не переносим её
     // статистику и не создаём уведомление о переименовании.
-    let _guard = INSTANCE_WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let _guard = lock_instance_writes(paths)?;
     let file = paths.instance_file(&meta.id);
     let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&file)?)?;
     let object = value.as_object_mut().ok_or_else(|| Error::other("неверный instance.json"))?;
     object.remove("renamed_from");
     object.remove("renamed_froms");
+    // Отметки принадлежат запускам исходной сборки, не её новой копии.
+    object.remove("_omnispec_playtime_checkpoints");
     for (key, value) in serde_json::to_value(&meta)?.as_object().ok_or_else(|| Error::other("неверные данные сборки"))? {
         object.insert(key.clone(), value.clone());
     }
@@ -546,7 +561,7 @@ fn copy_dir_skip(from: &Path, to: &Path, skip: &[&str]) -> Result<()> {
 
 pub fn delete(paths: &Paths, id: &str) -> Result<()> {
     if !valid_id(id) { return Err(Error::other("недопустимое имя папки сборки")); }
-    let _guard = INSTANCE_WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let _guard = lock_instance_writes(paths)?;
     let dir = paths.instance_dir(id);
     if !dir.exists() {
         return Err(Error::not_found(format!("сборка «{id}» не найдена")));
@@ -563,7 +578,10 @@ pub fn touch_play(paths: &Paths, id: &str) -> Result<()> {
 }
 
 pub fn add_playtime(paths: &Paths, id: &str, secs: u64) {
-    let _guard = INSTANCE_WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let _guard = match lock_instance_writes(paths) {
+        Ok(guard) => guard,
+        Err(error) => { eprintln!("[omnispec] не удалось заблокировать статистику: {error}"); return; }
+    };
     if let Ok(mut meta) = load(paths, id) {
         meta.playtime_secs = meta.playtime_secs.saturating_add(secs);
         let _ = save_unlocked(paths, &meta);
@@ -590,6 +608,65 @@ pub fn add_playtime(paths: &Paths, id: &str, secs: u64) {
             }
         }
     }
+}
+
+/// Файл для статистики действующей сборки, даже если папку переместили вручную.
+fn playtime_file(paths: &Paths, id: &str) -> Result<PathBuf> {
+    if !valid_id(id) { return Err(Error::other("недопустимый id сборки")); }
+    if load(paths, id).is_ok() { return Ok(paths.instance_file(id)); }
+    let mut candidates = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(paths.instances()) {
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
+            let file = entry.path().join("instance.json");
+            if read_meta(&file).ok().is_some_and(|meta| meta.id == id) { candidates.push(file); }
+        }
+    }
+    if candidates.len() == 1 { return Ok(candidates.remove(0)); }
+    Err(Error::not_found("не удалось однозначно найти сборку для статистики"))
+}
+
+fn playtime_nonce(run_id: &str) -> Result<&str> {
+    let (_, id) = run_id.rsplit_once('#').ok_or_else(|| Error::other("неверная сессия"))?;
+    if id.len() != 32 || !id.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(Error::other("неверная сессия"));
+    }
+    Ok(id)
+}
+
+/// Время и отметка конкретного запуска записываются одной заменой файла.
+/// Повтор после сбоя между этой записью и обновлением журнала идемпотентен;
+/// параллельные окна учитываются независимо. Неизвестные поля сохраняются.
+pub fn checkpoint_playtime(paths: &Paths, id: &str, run_id: &str, started_at: u64, until: u64) -> Result<()> {
+    let nonce = playtime_nonce(run_id)?;
+    let _guard = lock_instance_writes(paths)?;
+    let file = playtime_file(paths, id)?;
+    let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&file)?)?;
+    let object = value.as_object_mut().ok_or_else(|| Error::other("неверный instance.json"))?;
+    let previous = object.get("_omnispec_playtime_checkpoints")
+        .and_then(|v| v.get(nonce)).and_then(|v| v.as_u64()).unwrap_or(started_at).max(started_at);
+    let checkpoint = until.max(previous);
+    let total = object.get("playtime_secs").and_then(|v| v.as_u64()).unwrap_or(0)
+        .saturating_add(checkpoint.saturating_sub(previous));
+    let checkpoints = object.entry("_omnispec_playtime_checkpoints")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut().ok_or_else(|| Error::other("неверные отметки времени игры"))?;
+    checkpoints.insert(nonce.to_owned(), checkpoint.into());
+    object.insert("playtime_secs".into(), total.into());
+    write_json_atomic(&file, &value)
+}
+
+/// Убирать отметку можно только ПОСЛЕ удаления журнала запуска.
+pub fn clear_playtime_checkpoint(paths: &Paths, id: &str, run_id: &str) -> Result<()> {
+    let nonce = playtime_nonce(run_id)?;
+    let _guard = lock_instance_writes(paths)?;
+    let file = playtime_file(paths, id)?;
+    let mut value: serde_json::Value = serde_json::from_slice(&std::fs::read(&file)?)?;
+    let object = value.as_object_mut().ok_or_else(|| Error::other("неверный instance.json"))?;
+    let Some(checkpoints) = object.get_mut("_omnispec_playtime_checkpoints").and_then(|v| v.as_object_mut()) else { return Ok(()); };
+    if checkpoints.remove(nonce).is_none() { return Ok(()); }
+    if checkpoints.is_empty() { object.remove("_omnispec_playtime_checkpoints"); }
+    write_json_atomic(&file, &value)
 }
 
 /// Папка игры конкретной сборки: своя (место установки), иначе папка лаунчера.
@@ -725,6 +802,82 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn session_checkpoints_are_idempotent_across_restart_and_parallel_windows() {
+        let (root, paths, mut stale) = rename_fixture("checkpoint");
+        let a = "old#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let b = "old#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        checkpoint_playtime(&paths, "old", a, 100, 160).unwrap();
+        checkpoint_playtime(&paths, "old", b, 120, 170).unwrap();
+        assert_eq!(load(&paths, "old").unwrap().playtime_secs, 110);
+        // Авария после записи instance.json, но до обновления журнала.
+        checkpoint_playtime(&paths, "old", a, 100, 160).unwrap();
+        checkpoint_playtime(&paths, "old", a, 100, 155).unwrap(); // часы пошли назад
+        checkpoint_playtime(&paths, "old", a, 100, 190).unwrap();
+        assert_eq!(load(&paths, "old").unwrap().playtime_secs, 140);
+        stale.notes = "сохранено при работающих сессиях".into();
+        save(&paths, &stale).unwrap();
+        checkpoint_playtime(&paths, "old", a, 100, 190).unwrap();
+        assert_eq!(load(&paths, "old").unwrap().playtime_secs, 140);
+        // Внешний перенос папки не выбрасывает накопленную статистику.
+        std::fs::rename(paths.instance_dir("old"), paths.instance_dir("new")).unwrap();
+        checkpoint_playtime(&paths, "old", a, 100, 200).unwrap();
+        assert_eq!(read_meta(&paths.instance_file("new")).unwrap().playtime_secs, 150);
+        clear_playtime_checkpoint(&paths, "old", a).unwrap();
+        clear_playtime_checkpoint(&paths, "old", b).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(paths.instance_file("new")).unwrap()).unwrap();
+        assert!(saved.get("_omnispec_playtime_checkpoints").is_none());
+        assert_eq!(saved["notes"], "сохранено при работающих сессиях");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn checkpoint_process_worker() {
+        let Ok(root) = std::env::var("OMNISPEC_CHECKPOINT_WORKER_ROOT") else { return; };
+        let index: u64 = std::env::var("OMNISPEC_CHECKPOINT_WORKER_INDEX").unwrap().parse().unwrap();
+        let root = PathBuf::from(root);
+        let paths = Paths::new(&root).unwrap();
+        let id = format!("old#{index:032x}");
+        std::fs::write(root.join(format!("ready-{index}")), b"ready").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !root.join("go").exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(root.join("go").exists(), "parent did not start workers");
+        for second in 1..=40 {
+            checkpoint_playtime(&paths, "old", &id, 100, 100 + second).unwrap();
+        }
+    }
+
+    #[test]
+    fn session_checkpoints_from_separate_processes_do_not_lose_updates() {
+        const WORKERS: u64 = 8;
+        let (root, paths, _) = rename_fixture("cross-process-time");
+        let exe = std::env::current_exe().unwrap();
+        let mut children: Vec<_> = (0..WORKERS).map(|index| {
+            std::process::Command::new(&exe)
+                .args(["--exact", "instances::tests::checkpoint_process_worker", "--nocapture"])
+                .env("OMNISPEC_CHECKPOINT_WORKER_ROOT", &root)
+                .env("OMNISPEC_CHECKPOINT_WORKER_INDEX", index.to_string())
+                .stdout(std::process::Stdio::null())
+                .spawn().unwrap()
+        }).collect();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !(0..WORKERS).all(|index| root.join(format!("ready-{index}")).exists())
+            && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!((0..WORKERS).all(|index| root.join(format!("ready-{index}")).exists()), "workers did not start");
+        std::fs::write(root.join("go"), b"go").unwrap();
+        for child in &mut children { assert!(child.wait().unwrap().success(), "checkpoint worker failed"); }
+        let actual = load(&paths, "old").unwrap().playtime_secs;
+        println!("CROSS_PROCESS_CHECKPOINTS expected={} actual={actual}", WORKERS * 40);
+        assert_eq!(actual, WORKERS * 40);
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(paths.instance_file("old")).unwrap()).unwrap();
+        assert_eq!(value["_omnispec_playtime_checkpoints"].as_object().unwrap().len(), WORKERS as usize);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn rename_fixture(label: &str) -> (PathBuf, Paths, InstanceMeta) {
         let root = std::env::temp_dir().join(format!("omnispec-rename-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -854,6 +1007,7 @@ mod tests {
         let file = paths.instance_file("old");
         let mut json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
         json["future_field"] = serde_json::json!({"preserve": true});
+        json["_omnispec_playtime_checkpoints"] = serde_json::json!({"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": 123});
         std::fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
         std::fs::write(old.join(PENDING_RENAMES_FILE), b"[\"earlier\"]").unwrap();
         let copy = duplicate(&paths, "old").unwrap();
@@ -868,6 +1022,9 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("game/saves/test")).unwrap(), b"world");
         let copied: serde_json::Value = serde_json::from_slice(&std::fs::read(paths.instance_file(&copy.id)).unwrap()).unwrap();
         assert_eq!(copied["future_field"]["preserve"], true);
+        assert!(copied.get("_omnispec_playtime_checkpoints").is_none());
+        let original: serde_json::Value = serde_json::from_slice(&std::fs::read(paths.instance_file("old")).unwrap()).unwrap();
+        assert!(original.get("_omnispec_playtime_checkpoints").is_some(), "copying must not affect the original session");
         let _ = std::fs::remove_dir_all(root);
     }
 

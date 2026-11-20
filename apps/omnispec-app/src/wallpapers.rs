@@ -1,6 +1,6 @@
 //! Безопасное чтение локальной библиотеки Wallpaper Engine и медиафонов.
-//! Workshop-проекты не выполняются в WebView: только их метаданные, превью и
-//! обычное видео. Сцены/web/application можно отдельно открыть в официальном WE.
+//! Workshop-проекты не выполняются в WebView: только их метаданные, превью,
+//! обычное видео и на Windows кадры сцены из официального Wallpaper Engine.
 
 use std::collections::HashSet;
 use std::io::{Read, Write};
@@ -47,6 +47,9 @@ pub struct Library {
     pub projects: Vec<Project>,
     pub searched: Vec<String>,
     pub engine: Option<String>,
+    /// Нужны Windows и обнаруженная установка WE; работоспособность WGC
+    /// проверяется только при попытке запуска конкретной сцены.
+    pub scene_capture: bool,
     pub truncated: bool,
 }
 
@@ -301,7 +304,7 @@ pub fn project_media(dir: &Path) -> Result<Media, String> {
         .to_ascii_lowercase()
         != "video"
     {
-        return Err("сцены, web и приложения нельзя встроить в OmniSpec; открой их отдельно через Wallpaper Engine".into());
+        return Err("проект не является обычным видео Wallpaper Engine".into());
     }
     let name = doc
         .get("file")
@@ -561,6 +564,7 @@ pub fn scan_library(manual: Option<&str>) -> Result<Library, String> {
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
             .collect(),
+        scene_capture: cfg!(windows) && engine.is_some(),
         engine,
         truncated,
     })

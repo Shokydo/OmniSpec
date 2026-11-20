@@ -200,11 +200,14 @@ async function verifyInstallation(page, source, view, mode, number) {
   } else {
     selector = `${card} ${source === 'modrinth' ? '[data-install]' : '[data-cf-install]'}`;
   }
+  // Playwright сам прокручивает элемент, чтобы он стал кликабельным, особенно
+  // у высоких плиток и при открытой панели загрузок. Фиксируем позицию ПОСЛЕ
+  // этого шага, но ДО реального клика и появления статуса установки.
+  await page.locator(selector).click({trial:true});
+  before.top = await page.locator(root).evaluate(el => el.scrollTop);
   const index = await clickInstall(page,selector);
-  // В очень узком окне браузер может прокрутить кнопку на несколько пикселей,
-  // чтобы кликнуть по видимой части. Завершение установки не должно сдвигать её снова.
   const afterClick = await page.locator(root).evaluate(el => el.scrollTop);
-  assert(Math.abs(afterClick - before.top) <= 12,'клик не должен возвращать каталог наверх');
+  assert(Math.abs(afterClick - before.top) <= 12,`клик не должен возвращать каталог наверх: до=${before.top}, после=${afterClick}`);
   before.top = afterClick;
   assert(await page.locator(card).evaluate(el => el.classList.contains('is-downloading')));
   assert(!(await page.locator(card).evaluate(el => el.classList.contains('is-installed'))),'не подтверждённый мод не отмечается');

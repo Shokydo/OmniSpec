@@ -1078,21 +1078,45 @@
   }
 
   let wallApplyRevision = 0;
+  function reportSceneFailure(src) {
+    if (state.wall?.wallpaper !== "workshop" || state.workshopWall?.src !== src || state.workshopWall?.kind !== "scene") return;
+    const message = "Поток сцены остановлен. Запусти Wallpaper Engine и нажми «Восстановить обои» в настройках фона.";
+    if (state.wallpaperLibrary.sceneError === message) return;
+    state.wallpaperLibrary.sceneError = message;
+    toast(message, "err");
+    if (prefsCategory === "wall" && $("#modal-prefs") && !$("#modal-prefs").hidden) renderPrefs();
+  }
+  let sceneHealthBusy = false;
+  setInterval(async () => {
+    const media = state.workshopWall;
+    if (sceneHealthBusy || state.wall?.wallpaper !== "workshop" || media?.kind !== "scene") return;
+    sceneHealthBusy = true;
+    try {
+      const alive = await api.wallpaperSceneStatus();
+      if (alive === false) reportSceneFailure(media.src);
+    } catch (_) { /* состояние неизвестно — не сообщаем о ложной остановке */ }
+    finally { sceneHealthBusy = false; }
+  }, 5000);
+
   /** GIF и видео не проходят через canvas: иначе анимация превратилась бы в один кадр. */
   async function applyWallpaper(overrides = {}) {
     const revision = ++wallApplyRevision;
     const settings = state.settings || {};
     const layer = $("#wall");
     const video = $("#wall-video");
+    const scene = $("#wall-scene");
     if (!layer) return;
     const name = overrides.wallpaper !== undefined ? overrides.wallpaper : settings.wallpaper;
     const fit = overrides.fit || settings.wallpaper_fit || "cover";
     const blur = Math.max(0, Math.min(20, Number(overrides.blur ?? settings.wallpaper_blur ?? 0) || 0));
     const dim = Number(overrides.dim ?? settings.wallpaper_dim ?? 40);
+    // URL сцены отзывается при уходе с неё; повторно выбираем её в библиотеке.
+    if (name !== "workshop" && state.workshopWall?.kind === "scene") state.workshopWall = null;
     const media = name === "custom" ? state.customWall : name === "workshop" ? state.workshopWall
       : name && WALLS.some(([id]) => id === name) ? { src: wallUrl(name), kind: "image" } : null;
     if (!media || !media.src) {
       if (video && !video.hidden) { video.pause(); video.removeAttribute("src"); video.dataset.wallSrc = ""; video.load(); video.hidden = true; }
+      if (scene && !scene.hidden) { scene.removeAttribute("src"); scene.dataset.wallSrc = ""; scene.hidden = true; }
       layer.hidden = true;
       layer.style.backgroundImage = "";
       document.body.classList.remove("has-wall");
@@ -1102,6 +1126,22 @@
     layer.hidden = false;
     document.body.classList.add("has-wall");
     layer.style.setProperty("--wall-dim", String(Math.min(100, Math.max(0, dim)) / 100));
+    if (kind === "scene" && scene) {
+      if (video && !video.hidden) { video.pause(); video.removeAttribute("src"); video.dataset.wallSrc = ""; video.load(); video.hidden = true; }
+      layer.style.backgroundImage = ""; layer.style.filter = ""; layer.style.transform = "";
+      scene.hidden = false;
+      scene.style.objectFit = fit === "fill" ? "fill" : fit === "contain" ? "contain" : "cover";
+      scene.style.filter = blur ? `blur(${blur}px)` : "";
+      scene.style.transform = blur ? "scale(1.05)" : "";
+      if (scene.dataset.wallSrc !== src) {
+        scene.dataset.wallSrc = src;
+        scene.onerror = () => reportSceneFailure(src);
+        scene.src = src;
+      }
+      layer.dataset.prepared = "";
+      return;
+    }
+    if (scene && !scene.hidden) { scene.removeAttribute("src"); scene.dataset.wallSrc = ""; scene.hidden = true; }
     if (kind === "video" && video) {
       layer.style.backgroundImage = "";
       layer.style.filter = "";
@@ -1219,7 +1259,7 @@
   function wallpaperSrc() {
     const wallpaper = state.wall && state.wall.wallpaper;
     const media = wallpaper === "custom" ? state.customWall : wallpaper === "workshop" ? state.workshopWall : null;
-    if (media) return media.kind === "video" ? null : media.src;
+    if (media) return ["video", "scene"].includes(media.kind) ? null : media.src;
     if (wallpaper && WALLS.some(([id]) => id === wallpaper)) return wallUrl(wallpaper);
     return null;
   }
@@ -1567,7 +1607,7 @@
       const run = diagnostics.started(meta.id, attemptId, plan && plan.run_id, plan && plan.account);
       // game-exit может прийти раньше ответа команды: не возвращаем мёртвое окно в список.
       if (run && run.status === "running") {
-        addSession(meta.id, plan && plan.run_id, plan && plan.account);
+        addSession(meta.id, plan && plan.run_id, plan && plan.account, plan && plan.started_at);
         const who = (plan && plan.account) ? ` · ${plan.account}` : "";
         toast(`Дубликат запущен${who}`, "ok");
         pushLog(meta.id, `[omnispec] дубликат запущен${who}`, "dim");
@@ -2135,6 +2175,7 @@
     launch: (id, accountUuid = null, attemptId = null) => invoke("launch_instance", { instanceId: id, accountUuid, attemptId }),
     stop: (id, runId) => invoke("stop_instance", { instanceId: id, runId: runId || null }),
     running: () => invoke("running_instances"),
+    runningSessions: () => invoke("running_sessions"),
     search: (q) => invoke("search_modrinth", q),
     modrinthVersions: (projectId, mc, loader) => invoke("modrinth_versions", { projectId, mcVersion: mc, loader }),
     installMod: (instanceId, projectId, opId = null) => invoke("install_mod", { instanceId, projectId, opId }),
@@ -2203,6 +2244,7 @@
     setCustomWallpaper: (path) => invoke("set_custom_wallpaper", { path }),
     downloadWallpaper: (url) => invoke("download_custom_wallpaper", { url }),
     wallpaperSource: (source) => invoke("wallpaper_source", { source }),
+    wallpaperSceneStatus: () => invoke("wallpaper_scene_status"),
     scanWallpaperLibrary: () => invoke("scan_wallpaper_library"),
     parseWorkshopLink: (url) => invoke("parse_wallpaper_workshop_link", { url }),
     setWorkshopWallpaper: (directory) => invoke("set_workshop_wallpaper", { directory }),
@@ -2215,10 +2257,10 @@
     curseforgeProject: (projectId) => invoke("curseforge_project", { projectId }),
     curseforgeReady: () => invoke("curseforge_ready"),
     installCurseforge: (instanceId, projectId, fileId, opId = null) => invoke("install_curseforge", { instanceId, projectId, fileId: fileId || null, opId }),
-    accountSkin: () => invoke("account_skin"),
-    accountCapes: () => invoke("account_capes"),
-    setCape: (capeId) => invoke("set_cape", { capeId }),
-    applySkin: (path, variant) => invoke("apply_skin", { path, variant }),
+    accountSkin: (accountUuid) => invoke("account_skin", { accountUuid: accountUuid || null }),
+    accountCapes: (accountUuid) => invoke("account_capes", { accountUuid: accountUuid || null }),
+    setCape: (capeId, accountUuid) => invoke("set_cape", { capeId, accountUuid: accountUuid || null }),
+    applySkin: (path, variant, accountUuid) => invoke("apply_skin", { path, variant, accountUuid: accountUuid || null }),
     saveSkinPng: (dataUrl, name) => invoke("save_skin_png", { dataUrl, name }),
     imageDataUrl: (path) => invoke("image_data_url", { path }),
     importSkin: (path) => invoke("import_skin", { path }),
@@ -2431,6 +2473,7 @@
     },
     stop: async () => null,
     running: async () => [],
+    runningSessions: async () => null,
     search: async (q) => {
       const type = (q && q.projectType) || "mod";
       // демо-выдача никогда не смешивает типы: ресурспаки отдельно, шейдеры отдельно
@@ -2658,6 +2701,7 @@
     setCustomWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
     downloadWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
     wallpaperSource: async () => null,
+    wallpaperSceneStatus: async () => null,
     scanWallpaperLibrary: async () => ({ projects: [], searched: [], engine: null, truncated: false }),
     parseWorkshopLink: async (url) => {
       try {
@@ -2721,7 +2765,7 @@
     discover: {
       query: "", type: "modpack", loader: "", categories: { modrinth: "", curseforge: "" },
       results: [], total: 0, loading: false, loadingMore: false, error: null, moreError: null,
-      retrySeconds: 0, tried: false, view: "grid", source: "modrinth"
+      retrySeconds: 0, tried: false, view: "grid", source: "modrinth", filtersCollapsed: false
     },
     wall: { wallpaper: null, fit: "cover", blur: 0, dim: 40 },
     downloads: { active: false, title: "", done: 0, total: 0, files: new Map(), state: "active", op: "", collapsed: false, timer: null },
@@ -2735,7 +2779,7 @@
     shape: "soft",
     customWall: null,
     workshopWall: null,
-    wallpaperLibrary: { projects: [], searched: [], engine: null, loading: false, loaded: false, error: "", truncated: false, query: "" },
+    wallpaperLibrary: { projects: [], searched: [], engine: null, sceneCapture: false, loading: false, loaded: false, error: "", sceneError: "", truncated: false, query: "" },
     sound: { on: true, volume: 60 },
     home: {
       extOpen: false, external: null, extLoading: false, extSelected: new Set(),
@@ -3045,11 +3089,11 @@
 
   /* ==================== САЙДБАР ==================== */
   /** Сессии запуска: у сборки может работать несколько окон (дубликаты). */
-  function addSession(instanceId, runId, account) {
+  function addSession(instanceId, runId, account, startedAt) {
     if (!state.sessions) state.sessions = new Map();
     if (!state.sessions.has(instanceId)) state.sessions.set(instanceId, new Map());
     const key = runId || `local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    state.sessions.get(instanceId).set(key, { account: account || "", runId: key });
+    state.sessions.get(instanceId).set(key, { account: account || "", runId: key, startedAt: Number(startedAt) || Math.floor(Date.now() / 1000) });
     state.running.add(instanceId);
     state.runningRevision += 1;
   }
@@ -3588,11 +3632,18 @@
   function syncPresence(forceMode) {
     if (!IS_APP) return;
     const sequence = ++presenceSequence;
-    const meta = selected();
-    const running = !!(meta && state.running.has(meta.id));
-    const mode = forceMode || (running ? "playing" : "idle");
+    const selectedMeta = selected();
+    // Игра остаётся в RPC, даже если пользователь открыл главную страницу
+    // или смотрит настройки другой сборки. При нескольких окнах предпочитаем
+    // выбранную запущенную сборку, затем первую подтверждённую сессию.
+    const playingMeta = selectedMeta && state.running.has(selectedMeta.id) ? selectedMeta
+      : state.instances.find((item) => state.running.has(item.id));
+    const meta = forceMode === "launching" ? selectedMeta : (playingMeta || selectedMeta);
+    const mode = forceMode || (playingMeta ? "playing" : "idle");
     if (mode === "idle") presenceStartedAt = null;
-    else if (!presenceStartedAt) presenceStartedAt = Math.floor(Date.now() / 1000);
+    else if (mode === "playing" && meta && sessionsOf(meta.id).length) {
+      presenceStartedAt = sessionsOf(meta.id)[0].startedAt || Math.floor(Date.now() / 1000);
+    } else if (!presenceStartedAt) presenceStartedAt = Math.floor(Date.now() / 1000);
     const details = meta ? meta.name : "OmniSpec";
     const variant = meta ? `MC ${meta.mc_version} · ${loaderLabel(meta.loader)}` : "";
     const stateText = mode === "playing" ? variant : mode === "launching" ? "Запускает" : "В ожидании";
@@ -5932,8 +5983,41 @@
     return level === 1 || level === 2 || level === 3 ? level : 2;
   }
 
-  function modsColumns(level = modsGridLevel()) {
-    return level === 1 ? 12 : level === 3 ? 6 : 9;
+  // Ползунок задаёт максимум, а не число, которое нужно принудительно
+  // втиснуть в узкое окно. Вычитаем фактический padding и учитываем gap.
+  function catalogColumns(level, width = 0, gap = 8) {
+    const wanted = level === 1 ? 12 : level === 3 ? 6 : 9;
+    if (width <= 0) return wanted;
+    return Math.max(1, Math.min(wanted, Math.floor((width + gap) / (120 + gap))));
+  }
+  function modsColumns(level = modsGridLevel(), width = 0, gap = 8) {
+    return catalogColumns(level, width, gap);
+  }
+
+  let catalogResizeObserver = null;
+  let catalogResizeBound = false;
+  function syncCatalogColumns() {
+    const results = $("#dv-results, #mr-results, #cf-results");
+    if (!results || !results.isConnected) return;
+    const css = getComputedStyle(results);
+    const width = results.clientWidth - (parseFloat(css.paddingLeft) || 0) - (parseFloat(css.paddingRight) || 0);
+    const gap = parseFloat(css.columnGap) || 0;
+    const level = results.id === "dv-results" ? feedGridLevel() : modsGridLevel();
+    const columns = String(catalogColumns(level, width, gap));
+    if (results.style.getPropertyValue("--feed-cols") !== columns) results.style.setProperty("--feed-cols", columns);
+  }
+  function bindCatalogResize() {
+    const results = $("#dv-results, #mr-results, #cf-results");
+    if (catalogResizeObserver) catalogResizeObserver.disconnect();
+    if (results && typeof ResizeObserver !== "undefined") {
+      catalogResizeObserver ||= new ResizeObserver(() => syncCatalogColumns());
+      catalogResizeObserver.observe(results);
+    }
+    if (!catalogResizeBound) {
+      catalogResizeBound = true;
+      window.addEventListener("resize", syncCatalogColumns);
+    }
+    syncCatalogColumns();
   }
 
   function mrGridLevel() { return modsGridLevel(); }
@@ -6054,7 +6138,7 @@
       results.classList.toggle("is-grid", view === "grid");
       results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
       if (view === "grid") results.classList.add(`feed-grid-${modsGridLevel()}`);
-      results.style.setProperty("--feed-cols", String(modsColumns()));
+      syncCatalogColumns();
       // После смены раскладки конец списка может оказаться прямо на экране.
       if (state.modsSource === "curseforge") cfWatchMore();
       else watchMore();
@@ -6136,11 +6220,11 @@
         if (results) {
           results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
           if (state.modsView === "grid") results.classList.add(`feed-grid-${level}`);
-          results.style.setProperty("--feed-cols", String(modsColumns(level)));
           if (state.modsSource === "curseforge") cfWatchMore();
           else watchMore();
         }
         state.settings = { ...(state.settings || {}), mods_grid: level };
+        syncCatalogColumns();
         api.saveSettings(state.settings).catch(() => {});
       });
     }
@@ -6208,6 +6292,7 @@
     bindResultEvents();
     const retry = $("#mr-retry");
     if (retry) retry.addEventListener("click", () => runSearch());
+    bindCatalogResize();
     watchMore();
     if (!cfg.tried && !cfg.loading && !cfg.error) runSearch();
   }
@@ -6382,35 +6467,18 @@
     </section>`;
   }
 
-  /** Размер плиток в «Готовых сборках»: 1 — 12 в ряд, 2 — 6 (по умолчанию), 3 — 4. */
+  /** Размер плиток: не более 12, 9 или 6 колонок соответственно. */
   function feedGridLevel() {
     const level = Number(state.settings && state.settings.feed_grid);
     return level === 1 || level === 2 || level === 3 ? level : 2;
   }
 
-  /** Сколько карточек в ряд при текущей ширине окна и выбранном размере. */
-  /** Сколько карточек в ряд: 1 → 12, 2 → 9 (стандарт), 3 → 6 — как написано в подсказке к ползунку. */
   function feedColumns(level = feedGridLevel(), width = 0) {
-    const wanted = level === 1 ? 12 : level === 3 ? 6 : 9;
-    // Фильтры занимают часть ширины: не сжимаем кнопки карточки до наложения.
-    return width > 0 ? Math.max(1, Math.min(wanted, Math.floor((width + 8) / 120))) : wanted;
+    return catalogColumns(level, width);
   }
 
-  /** Пересчитать число колонок у уже отрисованной ленты. */
-  function syncFeedColumns() {
-    const results = document.getElementById("dv-results");
-    if (!results) return;
-    const level = feedGridLevel();
-    results.style.setProperty("--feed-cols", String(feedColumns(level, results.clientWidth || 0)));
-  }
-
-  let feedResizeBound = false;
-  function bindFeedResize() {
-    syncFeedColumns();
-    if (feedResizeBound) return;
-    feedResizeBound = true;
-    window.addEventListener("resize", () => syncFeedColumns());
-  }
+  function syncFeedColumns() { syncCatalogColumns(); }
+  function bindFeedResize() { bindCatalogResize(); }
 
   /** «Недавнее» — максимум один ряд: сколько карточек влезет по ширине, столько и видно. */
   function syncRecentRow() {
@@ -6466,13 +6534,28 @@
   function homeCatalogFiltersHtml(cfg, source) {
     const categories = PACK_CATEGORIES[source] || PACK_CATEGORIES.modrinth;
     const active = cfg.categories[source] || "";
-    return `<aside class="home-catalog-sidebar" aria-label="Фильтры каталога">
-      <div class="home-filter-group">
+    const collapsed = Boolean(cfg.filtersCollapsed);
+    const selectedLoader = LOADER_NAMES[cfg.loader] || "Любой загрузчик";
+    const toggleLabel = collapsed ? `Развернуть фильтры; загрузчик: ${selectedLoader}` : "Свернуть фильтры";
+    return `<aside class="home-catalog-sidebar${collapsed ? " is-collapsed" : ""}" aria-label="Фильтры каталога">
+      <div class="home-filter-head">
+        <button type="button" class="home-filters-toggle" id="home-filters-toggle" aria-expanded="${!collapsed}" aria-controls="home-catalog-filters" aria-label="${esc(toggleLabel)}" title="${esc(toggleLabel)}"><svg class="ic" aria-hidden="true"><use href="#i-chev"/></svg></button>
         <label class="home-filter-label" for="dv-loader">Загрузчик</label>
-        <select class="select" id="dv-loader">
-          <option value="">Любой загрузчик</option>
-          ${CATALOG_LOADERS.map((loader) => `<option value="${loader}" ${cfg.loader === loader ? "selected" : ""}>${LOADER_NAMES[loader]}</option>`).join("")}
-        </select>
+      </div>
+      <div id="home-catalog-filters"${collapsed ? " hidden" : ""}>
+      <div class="home-filter-group">
+        <div class="home-loader" id="home-loader">
+          <button type="button" class="home-loader-trigger" id="dv-loader" aria-haspopup="listbox" aria-expanded="false" aria-controls="dv-loader-options">
+            <span id="dv-loader-label">${esc(LOADER_NAMES[cfg.loader] || "Любой загрузчик")}</span>
+            <svg class="ic"><use href="#i-chev"/></svg>
+          </button>
+          <div class="home-loader-menu" id="dv-loader-options" role="listbox" aria-label="Загрузчик" hidden>
+            ${[["", "Любой загрузчик"], ...CATALOG_LOADERS.map((loader) => [loader, LOADER_NAMES[loader]])].map(([value, label]) => `
+              <button type="button" role="option" tabindex="-1" data-dv-loader="${value}" aria-selected="${cfg.loader === value}" class="home-loader-option ${cfg.loader === value ? "is-active" : ""}">
+                <span>${esc(label)}</span><svg class="ic"><use href="#i-check"/></svg>
+              </button>`).join("")}
+          </div>
+        </div>
       </div>
       ${cfg.type === "modpack" ? `<details class="home-category-group" open>
         <summary>Категория <svg class="ic"><use href="#i-chev"/></svg></summary>
@@ -6481,8 +6564,101 @@
           ${categories.map(([id, label, icon]) => `<button type="button" data-dv-category="${id}" class="home-category ${active === id ? "is-active" : ""}" aria-pressed="${active === id}"><svg class="ic"><use href="#${icon}"/></svg>${esc(label)}</button>`).join("")}
         </div>
       </details>` : `<div class="home-filter-note">Выбирай загрузчик, чтобы найти подходящие моды.</div>`}
+      </div>
     </aside>`;
   }
+
+  function bindHomeFilterToggle(cfg) {
+    const toggle = $("#home-filters-toggle");
+    const sidebar = $(".home-catalog-sidebar");
+    const panel = $("#home-catalog-filters");
+    toggle.addEventListener("click", () => {
+      const collapsed = !cfg.filtersCollapsed;
+      if (collapsed) closeHomeLoader();
+      cfg.filtersCollapsed = collapsed;
+      sidebar.classList.toggle("is-collapsed", collapsed);
+      panel.hidden = collapsed;
+      toggle.setAttribute("aria-expanded", String(!collapsed));
+      const label = collapsed ? `Развернуть фильтры; загрузчик: ${LOADER_NAMES[cfg.loader] || "Любой загрузчик"}` : "Свернуть фильтры";
+      toggle.setAttribute("aria-label", label);
+      toggle.title = label;
+      syncFeedColumns();
+    });
+  }
+
+  // Стилевой listbox заменяет системное меню, но остаётся управляемым клавиатурой.
+  function closeHomeLoader(restoreFocus = false) {
+    const trigger = $("#dv-loader"), menu = $("#dv-loader-options");
+    if (!trigger || !menu || menu.hidden) return;
+    menu.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus) trigger.focus();
+  }
+  function bindHomeLoaderFilter(cfg) {
+    const trigger = $("#dv-loader"), menu = $("#dv-loader-options");
+    const options = $$("[data-dv-loader]", menu);
+    const open = (index) => {
+      menu.hidden = false;
+      menu.classList.remove("is-up");
+      menu.style.maxHeight = "";
+      // При большом масштабе и прокрутке снизу может не хватить места.
+      // Открываем список вверх либо ограничиваем его собственную прокрутку.
+      const scroll = $("#home-scroll")?.getBoundingClientRect();
+      const triggerRect = trigger.getBoundingClientRect();
+      const top = Math.max(0, scroll?.top || 0);
+      const bottom = Math.min(window.innerHeight, scroll?.bottom || window.innerHeight);
+      const spacing = 6 * uiZoom();
+      const below = Math.max(0, bottom - triggerRect.bottom - spacing);
+      const above = Math.max(0, triggerRect.top - top - spacing);
+      const flip = menu.getBoundingClientRect().height > below && above > below;
+      menu.classList.toggle("is-up", flip);
+      const available = flip ? above : below;
+      menu.style.maxHeight = `${Math.max(0, available / uiZoom())}px`;
+      trigger.setAttribute("aria-expanded", "true");
+      (options[index] || options[0]).focus();
+    };
+    trigger.addEventListener("click", () => {
+      if (!menu.hidden) return closeHomeLoader();
+      open(Math.max(0, options.findIndex((option) => option.dataset.dvLoader === cfg.loader)));
+    });
+    trigger.addEventListener("keydown", (event) => {
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const current = Math.max(0, options.findIndex((option) => option.dataset.dvLoader === cfg.loader));
+      open(event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
+        : event.key === "ArrowDown" ? Math.min(current + 1, options.length - 1) : Math.max(0, current - 1));
+    });
+    menu.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.preventDefault(); closeHomeLoader(true); return; }
+      // Фокус сначала возвращаем на trigger: иначе скрытый option может
+      // отправить Tab в начало страницы вместо следующего/предыдущего поля.
+      if (event.key === "Tab") { closeHomeLoader(true); return; }
+      const i = options.indexOf(document.activeElement);
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
+          : event.key === "ArrowDown" ? Math.min(i + 1, options.length - 1) : Math.max(i - 1, 0);
+        options[next].focus();
+      }
+    });
+    options.forEach((option) => option.addEventListener("click", () => {
+      const value = option.dataset.dvLoader || "";
+      const changed = cfg.loader !== value;
+      cfg.loader = value;
+      $("#dv-loader-label").textContent = LOADER_NAMES[value] || "Любой загрузчик";
+      options.forEach((item) => {
+        const selected = (item.dataset.dvLoader || "") === value;
+        item.classList.toggle("is-active", selected);
+        item.setAttribute("aria-selected", String(selected));
+      });
+      closeHomeLoader(true);
+      if (changed) dvReset();
+    }));
+  }
+  document.addEventListener("pointerdown", (event) => {
+    const wrap = $("#home-loader");
+    if (wrap && !wrap.contains(event.target)) closeHomeLoader();
+  });
 
   function renderDiscover() {
     const cfg = state.discover;
@@ -6547,10 +6723,8 @@
       renderDiscover();
       dvReset();
     }));
-    $("#dv-loader").addEventListener("change", (event) => {
-      cfg.loader = event.target.value;
-      dvReset();
-    });
+    bindHomeLoaderFilter(cfg);
+    bindHomeFilterToggle(cfg);
     $$("#tab-body [data-dv-category]").forEach((button) => button.addEventListener("click", () => {
       const category = button.dataset.dvCategory || "";
       if ((cfg.categories[source] || "") === category) return;
@@ -7914,6 +8088,7 @@
     bindCfEvents();
     const retry = $("#cf-retry");
     if (retry) retry.addEventListener("click", () => cfRunSearch());
+    bindCatalogResize();
     cfWatchMore();
     if (!cfg.tried && !cfg.loading && !cfg.error) cfRunSearch();
   }
@@ -8307,6 +8482,8 @@
     return list.find((item) => item.uuid === activeId) || list[0] || null;
   }
 
+  function currentProfileId() { return activeAccount()?.uuid || ""; }
+
   /** Скин аккаунта: у лицензии голова по UUID, у офлайна — по нику. */
   /** Метка кеша скинов: раз в час и принудительно после смены скина. */
   function skinStampBump() {
@@ -8338,12 +8515,12 @@
    */
   function ownSkinHeadUrl(account) {
     const skin = state.skin;
-    if (!skin || !skin.texture || !skin.fromAccount) return "";
+    if (!skin || !skin.accountTexture) return "";
     const active = activeAccount();
     if (!active || !account || account.uuid !== active.uuid) return "";
     if (skin.headUrl && skin.headStamp === skinStamp()) return skin.headUrl;
     try {
-      skin.headUrl = headThumb(skin.texture, 64).toDataURL("image/png");
+      skin.headUrl = headThumb(skin.accountTexture, 64).toDataURL("image/png");
       skin.headStamp = skinStamp();
     } catch (error) {
       return "";
@@ -8549,7 +8726,7 @@
 
   /** Обновляет чип, поповер, карточку в настройках и экран профиля. */
   function renderAccounts() {
-    const accountId = state.accounts?.active || "";
+    const accountId = currentProfileId();
     if (state.profileAccountId !== accountId) {
       state.profileAccountId = accountId;
       // Нельзя оставлять плащи или разрешение смены скина от другого аккаунта.
@@ -8557,8 +8734,12 @@
       state.capes = null;
       state.capeTexture = null;
       state.capeTextureSrc = "";
+      // Свою голову из профиля Minecraft загружаем и при запуске, и при
+      // переключении вне настроек; не зависим только от стороннего кеша.
+      if (activeAccount()?.kind === "microsoft") {
+        refreshAccountSkin().then(() => { if (prefsCategory === "profile" && $("#modal-prefs") && !$("#modal-prefs").hidden) renderPrefs(); });
+      }
       if (prefsCategory === "profile" && $("#modal-prefs") && !$("#modal-prefs").hidden) {
-        refreshAccountSkin().then(() => { if (prefsCategory === "profile" && !$("#modal-prefs").hidden) renderPrefs(); });
         refreshAccountCapes().then(() => { if (prefsCategory === "profile" && !$("#modal-prefs").hidden) renderPrefs(); });
       }
     }
@@ -8799,7 +8980,6 @@
     refreshAccountSkin().then(() => {
       if (!$("#modal-prefs").hidden && prefsCategory === "profile") renderPrefs();
     });
-    capeState().loading = true;
     refreshAccountCapes().then(() => {
       if (!$("#modal-prefs").hidden && prefsCategory === "profile") renderPrefs();
     });
@@ -9042,7 +9222,9 @@
           <button class="btn" id="wall-link-add" ${library.linkBusy ? "disabled" : ""}>${library.linkBusy ? "Загрузка…" : "Добавить"}</button>
         </div>
         <div class="skin-note">Для Workshop сначала подпишись и дождись загрузки в Steam, затем нажми «Обновить». Прямой файл до 512 МБ сохраняется в лаунчер.</div>
-        <div class="skin-note">Видео и GIF воспроизводятся внутри OmniSpec без звука. Сцены, web и приложения открываются отдельно через установленный Wallpaper Engine в Windows; они не становятся фоном лаунчера.</div>
+        <div class="skin-note">Видео и GIF — внутри OmniSpec без звука. Сцены на Windows передаются кадрами из запущенного Wallpaper Engine; может отображаться его вспомогательное окно и индикатор захвата. Web-обои и приложения открываются только отдельно. Если анимация стоит, проверь правила паузы в Wallpaper Engine.</div>
+        ${settings.wallpaper === "workshop" && settings.wallpaper_workshop_project ? `<button class="btn btn-small" id="we-retry" ${library.retrying ? "disabled" : ""}>${library.retrying ? "Восстанавливаем…" : "Восстановить обои"}</button>` : ""}
+        ${library.sceneError ? `<div class="skin-import-errors" role="alert">${esc(library.sceneError)}</div>` : ""}
         ${library.error ? `<div class="skin-import-errors" role="alert">${esc(library.error)}</div>` : ""}
         <div class="we-library-head">
           <span class="muted">${library.loading ? "Ищем проекты…" : `Найдено: ${projects.length}${library.truncated ? " (показаны первые)" : ""}`}</span>
@@ -9056,7 +9238,7 @@
               <div class="we-title" title="${esc(project.title)}">${esc(project.title)}</div>
               ${project.workshop_id ? `<div class="we-id">Workshop ${esc(project.workshop_id)}</div>` : '<div class="we-id">Локальный проект</div>'}
               <div class="we-actions">
-                ${project.playable ? `<button class="btn btn-small btn-primary" data-we-apply="${index}" aria-label="Установить «${esc(project.title)}» как фон">На фон</button>` : ""}
+                ${project.playable || (project.kind === "scene" && library.sceneCapture) ? `<button class="btn btn-small btn-primary" data-we-apply="${index}" aria-label="Установить «${esc(project.title)}» как фон">На фон</button>` : ""}
                 <button class="btn btn-small" data-we-open="${index}" title="Открыть отдельно через Wallpaper Engine" aria-label="Открыть «${esc(project.title)}» в Wallpaper Engine">В Wallpaper Engine</button>
               </div>
             </article>`).join("")}
@@ -9080,7 +9262,7 @@
           <button class="wall-chip ${state.wall.wallpaper === "custom" ? "is-active" : ""}" data-wall="custom" id="wall-custom-chip">
             <span>${state.customWall ? (state.customWall.kind === "video" ? "Своё видео" : "Свой фон") : "Свой фон…"}</span>
           </button>
-          ${state.workshopWall ? `<button class="wall-chip ${state.wall.wallpaper === "workshop" ? "is-active" : ""}" data-wall="workshop"><span>Steam · видео</span></button>` : ""}
+          ${state.workshopWall ? `<button class="wall-chip ${state.wall.wallpaper === "workshop" ? "is-active" : ""}" data-wall="workshop"><span>Steam · ${state.workshopWall.kind === "scene" ? "сцена" : "видео"}</span></button>` : ""}
           <button class="btn" id="wall-pick">${state.customWall ? "Заменить файл…" : "Выбрать файл…"}</button>
         </div>
         <div class="skin-note">PNG, JPG, WebP, GIF, MP4 или WebM · до 512 МБ. Видео воспроизводится без звука.</div>
@@ -9116,6 +9298,7 @@
         library.projects = result.projects || [];
         library.searched = result.searched || [];
         library.engine = result.engine || null;
+        library.sceneCapture = Boolean(result.scene_capture);
         library.truncated = Boolean(result.truncated);
         library.loaded = true;
       } catch (error) {
@@ -9140,6 +9323,28 @@
     const customChip = $("#wall-custom-chip");
     if (customChip && state.customWall && state.customWall.kind !== "video") customChip.style.backgroundImage = `url("${state.customWall.src}")`;
     $("#we-refresh")?.addEventListener("click", refreshWallpaperLibrary);
+    $("#we-retry")?.addEventListener("click", async () => {
+      if (library.retrying) return;
+      const project = state.settings?.wallpaper_workshop_project;
+      library.retrying = true;
+      renderPrefs();
+      try {
+        const media = await loadWallpaperSource("workshop");
+        if (state.wall?.wallpaper !== "workshop" || state.settings?.wallpaper_workshop_project !== project) return;
+        if (!media) throw new Error("выбранные обои недоступны");
+        library.sceneError = "";
+        await applyWallpaper(state.wall);
+        toast("Обои восстановлены", "ok");
+      } catch (error) {
+        if (state.wall?.wallpaper === "workshop" && state.settings?.wallpaper_workshop_project === project) {
+          library.sceneError = String(error?.message || error);
+          toast(`Не удалось восстановить обои: ${library.sceneError}`, "err");
+        }
+      } finally {
+        library.retrying = false;
+        if (prefsCategory === "wall" && $("#modal-prefs") && !$("#modal-prefs").hidden) renderPrefs();
+      }
+    });
     $("#we-folder")?.addEventListener("click", async () => {
       const path = await api.pickDir("Папка Steam, библиотеки Steam или Wallpaper Engine").catch((error) => { toast(String(error), "err"); return null; });
       if (!path) return;
@@ -9164,7 +9369,12 @@
     $("#wall-link-add")?.addEventListener("click", addWallpaperLink);
     $$("[data-we-apply]").forEach((button) => button.addEventListener("click", async () => {
       const project = library.projects[Number(button.dataset.weApply)];
-      if (!project || !project.playable) return;
+      if (!project || !(project.playable || (project.kind === "scene" && library.sceneCapture))) return;
+      if (project.kind === "scene") {
+        const confirmed = await askConfirm({ title: "Сцена Wallpaper Engine на фоне",
+          text: "Запусти Wallpaper Engine заранее. Он откроет вспомогательное окно выбранной сцены; OmniSpec захватит его изображение. Окно или системная рамка захвата могут быть видны, звук зависит от настроек Wallpaper Engine. Используй только доверенные проекты.", ok: "Включить" });
+        if (!confirmed) return;
+      }
       button.disabled = true;
       try {
         state.settings = await api.setWorkshopWallpaper(project.directory);
@@ -9172,9 +9382,10 @@
         state.wall.wallpaper = "workshop";
         state.wall.recent = rememberWallpaper(state.wall.recent, "workshop");
         await persistWallpaper();
+        library.sceneError = "";
         applyWallpaper(state.wall);
         renderPrefs();
-        toast(`Видео «${project.title}» выбрано как фон`, "ok");
+        toast(`${project.kind === "scene" ? "Сцена" : "Видео"} «${project.title}» ${project.kind === "scene" ? "выбрана" : "выбрано"} как фон`, "ok");
       } catch (error) { toast(String(error), "err"); button.disabled = false; }
     }));
     $$("[data-we-open]").forEach((button) => button.addEventListener("click", async () => {
@@ -9183,8 +9394,10 @@
       const confirmed = await askConfirm({ title: "Открыть в Wallpaper Engine",
         text: "Проект откроется в отдельном окне Wallpaper Engine в Windows, не внутри OmniSpec. Web-обои и приложения могут выполнять код автора — продолжай только если доверяешь ему. Заранее запусти Wallpaper Engine.", ok: "Открыть" });
       if (!confirmed) return;
+      button.disabled = true;
       try { await api.openWallpaperEngine(project.directory); toast("Команда отправлена в Wallpaper Engine", "ok"); }
       catch (error) { toast(String(error), "err"); }
+      finally { button.disabled = false; }
     }));
     if (wallPreviewObserver) wallPreviewObserver.disconnect();
     const images = $$("#we-grid [data-we-preview]");
@@ -10217,22 +10430,24 @@
   };
 
   /**
-   * Плащ: пластина 10×16 за спиной (тело заканчивается на z = 2), толщина 1 px.
-   * Развёртка 64×32 как в Blockbench: рисунок плаща лежит в 1..11 × 1..17 — это
-   * НАРУЖНАЯ сторона, её видно сзади (south, +Z). Внутренняя подкладка — 12..22.
-   * Раньше стороны были перепутаны, поэтому рисунок не читался.
+   * Плащ 10×16×1, закреплён у плеч и немного отклонён от спины,
+   * как в Minecraft. Внешняя сторона официальной текстуры — 1..11 × 1..17;
+   * 12..22 — подкладка. Отдельный наклон не должен вращать остальную модель.
    */
   const SKIN_CAPE = {
     n: "Cape",
-    b: [-5, 8, 2, 5, 24, 3],
+    b: [-5, 8, 2.25, 5, 24, 3.25],
     i: 0,
+    cape: true,
     uv: {
-      south: [1, 1, 11, 17],
-      north: [12, 1, 22, 17],
-      east: [0, 1, 1, 17],
-      west: [11, 1, 12, 17],
-      up: [11, 1, 1, 0],
-      down: [12, 0, 11, 1]
+      // Порядок координат важен: наружную сторону Minecraft поворачивает
+      // вместе с моделью, а не зеркалит. Верх/низ имеют ширину 10 пикселей.
+      south: [11, 1, 1, 17],
+      north: [22, 1, 12, 17],
+      east: [1, 1, 0, 17],
+      west: [12, 1, 11, 17],
+      up: [1, 1, 11, 0],
+      down: [21, 0, 11, 1]
     }
   };
 
@@ -10291,13 +10506,20 @@
     if (capeTexture) parts.push({ ...SKIN_CAPE, tex: capeTexture });
 
     const faces = [];
+    const capeAngle = 10.8 * Math.PI / 180;
+    const capeCos = Math.cos(capeAngle), capeSin = Math.sin(capeAngle);
+    const tiltCape = ([x, y, z]) => {
+      const dy = y - 24, dz = z - 2.25;
+      return [x, 24 + dy * capeCos + dz * capeSin, 2.25 + dz * capeCos - dy * capeSin];
+    };
+    const tiltCapeNormal = ([x, y, z]) => [x, y * capeCos + z * capeSin, z * capeCos - y * capeSin];
     parts.forEach((part) => {
       const corners = skinFaceCorners(part.b, part.i);
       Object.keys(part.uv).forEach((dir) => {
-        const normal = rotate(SKIN_FACE_NORMALS[dir]);
+        const normal = rotate(part.cape ? tiltCapeNormal(SKIN_FACE_NORMALS[dir]) : SKIN_FACE_NORMALS[dir]);
         if (normal[2] >= -0.001) return; // грань смотрит от камеры
-        const pts = corners[dir].map(rotate).map(project);
-        faces.push({ uv: part.uv[dir], pts, tex: part.tex || texture, depth: (pts[0][2] + pts[1][2] + pts[2][2] + pts[3][2]) / 4 });
+        const pts = corners[dir].map((point) => rotate(part.cape ? tiltCape(point) : point)).map(project);
+        faces.push({ uv: part.uv[dir], pts, cape: part.cape, tex: part.tex || texture, depth: (pts[0][2] + pts[1][2] + pts[2][2] + pts[3][2]) / 4 });
       });
     });
 
@@ -10319,9 +10541,14 @@
       ctx.closePath();
       ctx.clip();
       // аффинное преобразование: прямоугольник текстуры → четырёхугольник на экране
-      const a = (p1[0] - p0[0]) / uw, b = (p1[1] - p0[1]) / uw;
-      const c = (p3[0] - p0[0]) / vh, d = (p3[1] - p0[1]) / vh;
-      const e = p0[0] - a * u1 - c * v1, f = p0[1] - b * u1 - d * v1;
+      // У плаща UV могут идти в обратном направлении; игнорирование знака
+      // зеркалило рисунок. Поведение старой модели скина не меняем.
+      const flipU = face.cape && face.uv[0] > face.uv[2];
+      const flipV = face.cape && face.uv[1] > face.uv[3];
+      const a = (p1[0] - p0[0]) / (flipU ? -uw : uw), b = (p1[1] - p0[1]) / (flipU ? -uw : uw);
+      const c = (p3[0] - p0[0]) / (flipV ? -vh : vh), d = (p3[1] - p0[1]) / (flipV ? -vh : vh);
+      const startU = flipU ? u2 : u1, startV = flipV ? v2 : v1;
+      const e = p0[0] - a * startU - c * startV, f = p0[1] - b * startU - d * startV;
       ctx.setTransform(a, b, c, d, e, f);
       ctx.drawImage(face.tex, 0, 0);
       ctx.restore();
@@ -10341,7 +10568,8 @@
     if (!state.skin) {
       state.skin = {
         selectedSkin: null, variant: "classic", yaw: -18, pitch: 6, licensed: false, touchedVariant: false,
-        currentPath: "", currentName: "", texture: null, dataUrl: "", fromAccount: false
+        currentPath: "", currentName: "", texture: null, dataUrl: "", fromAccount: false,
+        accountTexture: null, requestSerial: 0, selectionRevision: 0, loading: false, error: "", notice: ""
       };
     }
     return state.skin;
@@ -10426,10 +10654,17 @@
 
   async function applyFavorite(fav) {
     const skin = skinState();
+    const accountId = currentProfileId();
     let loaded = false;
-    if (fav.skinPath) loaded = await loadSkinFile(fav.skinPath, fav.skinName || fav.name, null);
+    if (fav.skinPath) {
+      const revision = skin.selectionRevision + 1;
+      loaded = await loadSkinFile(fav.skinPath, fav.skinName || fav.name, null);
+      if (state.skin !== skin || currentProfileId() !== accountId || skin.selectionRevision !== revision) return;
+    }
     if (!loaded && fav.skinDataUrl) {
+      const revision = ++skin.selectionRevision;
       const texture = await textureFromImage(fav.skinDataUrl);
+      if (state.skin !== skin || currentProfileId() !== accountId || skin.selectionRevision !== revision) return;
       if (texture) {
         skin.texture = texture;
         skin.dataUrl = fav.skinDataUrl;
@@ -10451,12 +10686,21 @@
     const wanted = fav.capeId || "";
     let capeError = "";
     if (capes.licensed && wanted !== activeCapeId()) {
-      try {
-        await api.setCape(wanted || null);
-        capes.list.forEach((cape) => { cape.active = wanted ? cape.id === wanted : false; });
-      } catch (error) { capeError = String(error); }
+      if (capes.busy) capeError = "дождись завершения предыдущего изменения плаща";
+      else {
+        capes.busy = true;
+        try {
+          ++capes.requestSerial; capes.loading = false;
+          await api.setCape(wanted || null, accountId);
+          if (state.capes !== capes || state.skin !== skin || currentProfileId() !== accountId) return;
+          capes.list.forEach((cape) => { cape.active = wanted ? cape.id === wanted : false; });
+        } catch (error) { capeError = String(error); }
+        finally { capes.busy = false; }
+      }
     }
+    if (state.capes !== capes || state.skin !== skin || currentProfileId() !== accountId) return;
     await loadCapeTexture();
+    if (state.skin !== skin || currentProfileId() !== accountId) return;
     skin.selectedSkin = null;
     renderPrefs();
     if (capeError) toast(`Скин выбран; плащ не применён: ${capeError}`, "err");
@@ -10520,10 +10764,14 @@
   function skinStatusText() {
     const skin = skinState();
     const variant = skin.variant === "slim" ? "slim, руки 3 px" : "wide, руки 4 px";
-    if (skin.currentName) return `Выбран скин «${skin.currentName}» · ${variant}.${skin.licensed ? "" : " Смена скина доступна только лицензионному аккаунту."}`;
-    return skin.licensed
-      ? "В модели сейчас твой скин с сервера. Загрузи PNG 64×64, чтобы поставить новый."
-      : "Смена скина возможна только у лицензионного аккаунта.";
+    let text = skin.currentName
+      ? `Выбран скин «${skin.currentName}» · ${variant}.${skin.licensed ? "" : " Смена скина доступна только лицензионному аккаунту."}`
+      : skin.licensed ? "Загрузи PNG 64×64, чтобы поставить новый скин."
+        : "Смена скина возможна только у лицензионного аккаунта.";
+    if (skin.loading) text += " Загружаем скин аккаунта…";
+    else if (skin.error) text += ` Не удалось обновить скин: ${skin.error}`;
+    else if (skin.notice) text += ` ${skin.notice}`;
+    return text;
   }
 
   /** Перерисовать только строку статуса. */
@@ -10602,14 +10850,15 @@
         </button>
         ${cards}
         ${!licensed ? `<div class="cape-note">Плащи есть только у лицензионного аккаунта.</div>`
-          : (!list.length && !capes.loading ? `<div class="cape-note">${capes.error ? esc(capes.error) : "У аккаунта нет плащей."}</div>` : "")}
+          : (capes.error && !capes.loading ? `<div class="cape-note">${esc(capes.error)}</div>`
+            : (!list.length && !capes.loading ? `<div class="cape-note">У аккаунта нет плащей.</div>` : ""))}
         ${capes.loading ? `<div class="cape-note">Загружаем плащи…</div>` : ""}
       </div>`;
   }
 
   /* ==================== ПЛАЩИ АККАУНТА ==================== */
   function capeState() {
-    if (!state.capes) state.capes = { licensed: false, list: [], loading: false, error: "" };
+    if (!state.capes) state.capes = { licensed: false, list: [], loading: false, error: "", busy: false, requestSerial: 0, textureRevision: 0 };
     return state.capes;
   }
 
@@ -10630,8 +10879,10 @@
   /** Плащи подгружаем при открытии профиля. */
   /** Текстура активного плаща — её и рисуем на модели за спиной. */
   async function loadCapeTexture() {
-    const list = capeState().list || [];
-    const active = list.find((cape) => cape.active);
+    const capes = capeState();
+    const accountId = currentProfileId();
+    const revision = ++capes.textureRevision;
+    const active = (capes.list || []).find((cape) => cape.active);
     const src = (active && active.data_url) || "";
     if (!src) {
       state.capeTexture = null;
@@ -10640,6 +10891,7 @@
     }
     if (state.capeTexture && state.capeTextureSrc === src) return state.capeTexture;
     const texture = await textureFromImage(src);
+    if (state.capes !== capes || currentProfileId() !== accountId || capes.textureRevision !== revision) return null;
     state.capeTexture = texture || null;
     state.capeTextureSrc = texture ? src : "";
     return state.capeTexture;
@@ -10647,17 +10899,32 @@
 
   async function refreshAccountCapes() {
     const capes = capeState();
-    capes.loading = true;
-    const info = await api.accountCapes().catch((error) => {
-      capes.error = String(error || "");
-      return null;
-    });
-    capes.loading = false;
-    if (!info) return;
-    capes.licensed = Boolean(info.licensed);
-    capes.list = info.capes || [];
+    if (capes.busy) return false;
+    const active = activeAccount();
+    const accountId = active?.uuid || "";
+    const request = ++capes.requestSerial;
+    const current = () => state.capes === capes && currentProfileId() === accountId && capes.requestSerial === request;
+    capes.licensed = Boolean(active && active.kind === "microsoft");
+    capes.loading = capes.licensed;
     capes.error = "";
-    await loadCapeTexture();
+    if (!capes.licensed) { capes.list = []; await loadCapeTexture(); return false; }
+    try {
+      const info = await api.accountCapes(accountId);
+      if (!current()) return false;
+      if (!info || !info.licensed) throw new Error("сервер не подтвердил профиль Minecraft");
+      if (info.account_uuid && String(info.account_uuid).toLowerCase().replace(/-/g, "") !== String(accountId).toLowerCase().replace(/-/g, "")) {
+        throw new Error("сервер вернул профиль другого аккаунта");
+      }
+      capes.list = Array.isArray(info.capes) ? info.capes : [];
+      capes.error = info.warning || "";
+      await loadCapeTexture();
+      return current();
+    } catch (error) {
+      if (current()) capes.error = String(error?.message || error || "не удалось получить плащи");
+      return false;
+    } finally {
+      if (current()) capes.loading = false;
+    }
   }
 
   function bindCapes() {
@@ -10665,24 +10932,37 @@
     thumbs.forEach((canvas) => paintCapeThumb(canvas, canvas.dataset.capeSrc));
     const refresh = $("#cape-refresh");
     if (refresh) refresh.addEventListener("click", async () => {
-      await refreshAccountCapes();
+      const capes = capeState();
+      if (capes.busy) return toast("Дождись завершения изменения плаща", "err");
+      const accountId = currentProfileId();
+      const pending = refreshAccountCapes();
+      const request = capes.requestSerial;
+      const fresh = await pending;
+      if (state.capes !== capes || currentProfileId() !== accountId || capes.requestSerial !== request) return;
       renderPrefs();
-      toast("Список плащей обновлён", "ok");
+      toast(fresh && !capes.error ? "Список плащей обновлён" : (capes.error || "Выбери лицензионный аккаунт"), fresh && !capes.error ? "ok" : "err");
     });
     $$("#skin-capes .cape-card").forEach((card) => card.addEventListener("click", async () => {
       const id = card.dataset.capeId || null;
       const capes = capeState();
+      const accountId = currentProfileId();
+      if (!capes.licensed) return toast("Плащи есть только у лицензионного аккаунта", "err");
+      if (capes.busy) return toast("Дождись завершения изменения плаща", "err");
       const current = (capes.list.find((cape) => cape.active) || {}).id || "";
       if ((id || "") === current) return;
+      capes.busy = true;
       try {
-        await api.setCape(id);
+        ++capes.requestSerial; capes.loading = false;
+        await api.setCape(id, accountId);
+        if (state.capes !== capes || currentProfileId() !== accountId) return;
         capes.list.forEach((cape) => { cape.active = id ? cape.id === id : false; });
         await loadCapeTexture();
+        if (state.capes !== capes || currentProfileId() !== accountId) return;
         renderPrefs();
         toast(id ? "Плащ включён" : "Плащ выключен", "ok");
       } catch (error) {
         toast(String(error), "err");
-      }
+      } finally { capes.busy = false; }
     }));
   }
 
@@ -10718,11 +10998,11 @@
 
   async function loadSkinFile(filePath, name, libraryId) {
     const skin = skinState();
+    const revision = ++skin.selectionRevision;
     const dataUrl = await api.imageDataUrl(filePath).catch(() => null);
-    if (!dataUrl) return false;
-    skin.dataUrl = dataUrl;
+    if (!dataUrl || state.skin !== skin || skin.selectionRevision !== revision) return false;
     const texture = await textureFromImage(dataUrl);
-    if (!texture) return false;
+    if (!texture || state.skin !== skin || skin.selectionRevision !== revision) return false;
     skin.texture = texture;
     skin.dataUrl = dataUrl;
     skin.currentPath = filePath;
@@ -10845,11 +11125,14 @@
     if (apply) apply.addEventListener("click", applySkinToAccount);
     const refresh = $("#skin-refresh");
     if (refresh) refresh.addEventListener("click", async () => {
-      const fresh = await refreshAccountSkin(true);
-      skinStampBump();
-      renderPrefs();
+      const accountId = currentProfileId();
+      const pending = refreshAccountSkin(true);
+      const request = skin.requestSerial;
+      const fresh = await pending;
+      if (state.skin !== skin || currentProfileId() !== accountId || skin.requestSerial !== request) return;
+      if (fresh) skinStampBump();
       renderAccounts();
-      toast(fresh ? "Скин обновлён с сервера" : "Сервер не отдал скин — попробуй позже", fresh ? "ok" : "err");
+      toast(fresh ? "Скин обновлён с сервера" : (skin.error || skin.notice || "Выбери лицензионный аккаунт"), fresh ? "ok" : "err");
     });
 
   }
@@ -10920,20 +11203,33 @@
     const skin = skinState();
     if (!skin.licensed) return toast("Смена скина только для лицензии", "err");
     if (!skin.currentPath && !skin.dataUrl) return toast("Сначала выбери скин", "err");
+    const account = activeAccount();
+    const accountId = account?.uuid || "";
+    const selection = skin.selectionRevision;
+    const name = skin.currentName || "скин";
+    const variant = skin.variant || "classic";
     const button = $("#skin-apply");
     if (button) button.disabled = true;
     try {
       // Избранный образ может содержать PNG с сервера, но не локальный путь.
-      if (!skin.currentPath) skin.currentPath = await api.saveSkinPng(skin.dataUrl, skin.currentName || "favorite");
-      await api.applySkin(skin.currentPath, skin.variant || "classic");
-      // скин сменился в аккаунте — забираем его заново, чтобы модель и голова не отставали
-      skin.fromAccount = true;
+      const path = skin.currentPath || await api.saveSkinPng(skin.dataUrl, name);
+      if (state.skin !== skin || currentProfileId() !== accountId || skin.selectionRevision !== selection) {
+        return toast("Выбор изменился — примени скин ещё раз", "err");
+      }
+      await api.applySkin(path, variant, accountId);
+      // Запрос уже мог успешно завершиться, пока пользователь переключался.
+      if (state.skin !== skin || currentProfileId() !== accountId) {
+        return toast(`Скин аккаунта «${account?.username || "Minecraft"}» обновлён`, "ok");
+      }
+      if (skin.selectionRevision === selection) skin.fromAccount = true;
       skinStampBump();
-      await refreshAccountSkin(true);
+      const pending = refreshAccountSkin(true);
+      const request = skin.requestSerial;
+      const fresh = await pending;
+      if (state.skin !== skin || currentProfileId() !== accountId || skin.requestSerial !== request) return;
       renderAccounts();
-      refreshSkinStatus();
-      await redrawSkinPreview();
-      toast(`Скин «${skin.currentName}» обновлён`, "ok");
+      if (fresh) toast(`Скин «${name}» обновлён`, "ok");
+      else toast(`Скин принят Minecraft, но предпросмотр не обновлён: ${skin.error || skin.notice || "попробуй позже"}`, "err");
     } catch (error) {
       toast(String(error), "err");
     } finally {
@@ -10948,33 +11244,60 @@
    */
   async function refreshAccountSkin(force = false) {
     const skin = skinState();
-    const active = ((state.accounts && state.accounts.accounts) || [])
-      .find((item) => state.accounts && item.uuid === state.accounts.active) || null;
-    const licensedByAccount = Boolean(active && active.kind === "microsoft");
-    const info = await api.accountSkin().catch(() => null);
-    if (!info) {
-      // профиль скина не ответил — но лицензию видно по самому аккаунту
-      if (licensedByAccount) skin.licensed = true;
-      return false;
-    }
-    skin.licensed = Boolean(info.licensed) || licensedByAccount;
-    if (info.variant && !skin.touchedVariant) skin.variant = info.variant === "slim" ? "slim" : "classic";
-    // свой файл, выбранный в этом сеансе, не перебиваем серверным
-    const keepLocal = skin.currentPath && !skin.fromAccount;
-    if (info.data_url && (force ? !keepLocal : !skin.texture)) {
+    const active = activeAccount();
+    const accountId = active?.uuid || "";
+    const request = ++skin.requestSerial;
+    const selection = skin.selectionRevision;
+    const current = () => state.skin === skin && currentProfileId() === accountId && skin.requestSerial === request;
+    skin.licensed = Boolean(active && active.kind === "microsoft");
+    skin.loading = skin.licensed;
+    skin.error = "";
+    skin.notice = "";
+    if (!skin.licensed) return false;
+    refreshSkinStatus();
+    try {
+      const info = await api.accountSkin(accountId);
+      if (!current()) return false;
+      if (!info || !info.licensed) throw new Error("сервер не подтвердил профиль Minecraft");
+      if (info.account_uuid && String(info.account_uuid).toLowerCase().replace(/-/g, "") !== String(accountId).toLowerCase().replace(/-/g, "")) {
+        throw new Error("сервер вернул профиль другого аккаунта");
+      }
+      if (!info.data_url) {
+        skin.accountTexture = null;
+        skin.headUrl = "";
+        if (skin.fromAccount && skin.selectionRevision === selection) {
+          skin.texture = null; skin.dataUrl = ""; skin.currentName = ""; skin.currentPath = ""; skin.fromAccount = false;
+        }
+        skin.notice = info.message || "Сервер не вернул активную текстуру скина.";
+        renderAccountChip(); renderPrefsAccountCard();
+        return false;
+      }
       const texture = await textureFromImage(info.data_url);
-      if (texture) {
+      if (!current()) return false;
+      if (!texture) throw new Error("текстура скина не читается");
+      // Голова аккаунта хранится отдельно от выбранного пользователем локального
+      // файла: предпросмотр не должен менять аватар до применения скина.
+      skin.accountTexture = texture;
+      skin.headUrl = ""; skin.headStamp = "";
+      const keepLocal = (!skin.fromAccount && Boolean(skin.currentPath || skin.dataUrl)) || skin.selectionRevision !== selection;
+      if (!keepLocal && (force || !skin.texture)) {
         skin.texture = texture;
         skin.dataUrl = info.data_url;
         skin.fromAccount = true;
-        if (!keepLocal) {
-          skin.currentPath = "";
-          skin.currentName = info.name || "скин аккаунта";
-        }
+        skin.currentPath = "";
+        skin.currentName = info.name || "скин аккаунта";
       }
+      if (!keepLocal && info.variant && !skin.touchedVariant) skin.variant = info.variant === "slim" ? "slim" : "classic";
+      renderAccountChip(); renderPrefsAccountCard();
+      const pop = $("#account-pop");
+      if (pop && !pop.hidden) renderAccountPopover();
+      return true;
+    } catch (error) {
+      if (current()) skin.error = String(error?.message || error || "неизвестная ошибка");
+      return false;
+    } finally {
+      if (current()) { skin.loading = false; refreshSkinStatus(); }
     }
-    if (force && info.variant && !skin.touchedVariant) skin.variant = info.variant === "slim" ? "slim" : "classic";
-    return Boolean(info.licensed || licensedByAccount);
   }
 
   /* ==================== НАСТРОЙКИ СБОРКИ (свои у каждой) ==================== */
@@ -11309,13 +11632,30 @@
       let selectionChanged = false;
       try {
         const instances = await api.instances();
-        const running = await api.running().catch(() => null);
+        const sessions = await api.runningSessions().catch(() => null);
+        const running = Array.isArray(sessions) ? null : await api.running().catch(() => null);
         const previous = state.selectedId;
         state.instances = instances;
         // Ответ может запоздать за game-exit или запуском другого окна.
-        if (running && state.runningRevision === runningRevision) {
+        if (state.runningRevision === runningRevision && Array.isArray(sessions)) {
+          const next = new Map();
+          for (const item of sessions) {
+            if (!item || !item.instance_id || !item.run_id || !instances.some((meta) => meta.id === item.instance_id)) continue;
+            if (!next.has(item.instance_id)) next.set(item.instance_id, new Map());
+            next.get(item.instance_id).set(item.run_id, { account: item.account || "", runId: item.run_id, startedAt: Number(item.started_at) || 0 });
+          }
+          state.sessions = next;
+          state.running = new Set(next.keys());
+          state.runningRevision += 1;
+        } else if (running && state.runningRevision === runningRevision) {
+          // Совместимость с демо и более старым бэкендом.
           state.running = new Set([...running, ...state.sessions.keys()]);
           state.runningRevision += 1;
+        } else if (state.runningRevision !== runningRevision) {
+          // Во время первого ответа могла завершиться одна игра, а другие
+          // ещё не попали в UI. Не применяем старый снимок и запрашиваем новый
+          // после завершения текущего coalesced refresh.
+          setTimeout(() => refreshInstances(), 0);
         }
         const last = state.settings?.last_instance;
         if (last && !instances.some((item) => item.id === last)) {
@@ -11382,7 +11722,7 @@
       const run = diagnostics.started(meta.id, attemptId, plan && plan.run_id, plan && plan.account);
       // Завершение и последние строки могут прийти раньше ответа launch_instance.
       if (run && run.status === "running") {
-        addSession(meta.id, plan && plan.run_id, plan && plan.account);
+        addSession(meta.id, plan && plan.run_id, plan && plan.account, plan && plan.started_at);
         pushLog(meta.id, `[omnispec] Java ${(plan && (plan.java_major || plan.major)) || "—"}: ${(plan && plan.java) || "java"}`, "dim");
         pushLog(meta.id, `[omnispec] Память ${(plan && plan.memory_mb) || "—"} МБ, артефактов в classpath: ${(plan && plan.classpath_entries) ?? "—"}`, "dim");
       }
@@ -12073,14 +12413,16 @@
       const run = diagnostics.exit(payload);
       const stopped = typeof payload.stopped === "boolean" ? payload.stopped : Boolean(run && run.status === "stopped");
       dropSession(payload.instance, payload.run_id);
-      pushLog(payload.instance, stopped ? `[omnispec] Игра остановлена пользователем (код ${payload.code})` : `[omnispec] Игра завершилась с кодом ${payload.code}`, stopped || payload.code === 0 ? "ok" : "err");
+      const hasCode = Number.isInteger(payload.code);
+      const endText = stopped ? "Игра остановлена пользователем" : "Игра завершилась";
+      pushLog(payload.instance, `[omnispec] ${endText}${hasCode ? ` (код ${payload.code})` : ""}`, stopped || !hasCode || payload.code === 0 ? "ok" : "err");
       // время игры пишется в мету сборки на стороне ядра — подтягиваем его
       await refreshInstances();
       if (state.tab === "discover") renderDiscover();
       renderSidebar();
       updateStatus();
       syncPresence();
-      if (payload.code !== 0 && !stopped) toast(`Игра закрылась с ошибкой (код ${payload.code}). Открой вкладку «Ошибки».`, "err");
+      if (hasCode && payload.code !== 0 && !stopped) toast(`Игра закрылась с ошибкой (код ${payload.code}). Открой вкладку «Ошибки».`, "err");
     });
     await api.onToast((payload) => toast(payload.message, payload.kind || ""));
   }
@@ -12355,7 +12697,14 @@
         ? state.settings.wallpaper_recent.slice(0, 6)
         : []
     };
-    await Promise.all([loadWallpaperSource("custom").catch(() => null), loadWallpaperSource("workshop").catch(() => null)]);
+    // Ожидание запуска сцены не должно задерживать статус игр и Discord.
+    loadWallpaperSource("custom").then(() => applyWallpaper(state.wall)).catch(() => null);
+    loadWallpaperSource("workshop").then(() => applyWallpaper(state.wall)).catch((error) => {
+      if (state.wall.wallpaper === "workshop") {
+        state.wallpaperLibrary.sceneError = String(error?.message || error);
+        toast(`Не удалось восстановить обои Workshop: ${state.wallpaperLibrary.sceneError}`, "err");
+      }
+    });
     applyWallpaper();
     await loadAccounts();
     bindFileDrop();

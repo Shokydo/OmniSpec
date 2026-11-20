@@ -37,7 +37,7 @@ async function setup(page) {
         {title:'Сцена <script>alert(1)</script>',directory:'/steam/456',kind:'scene',workshop_id:'456',preview:null,playable:false},
         {title:'Веб обои',directory:'/steam/789',kind:'web',workshop_id:'789',preview:null,playable:false},
         {title:'Приложение',directory:'/steam/444',kind:'application',workshop_id:'444',preview:null,playable:false}
-      ], serial:0, png, gif, scanDelay:120,
+      ], serial:0, png, gif, scanDelay:120, sceneCapture:false, failScene:false, sceneAlive:true, failRestore:false,
       accounts:[{uuid:'licensed',username:'Alex',kind:'microsoft'},{uuid:'offline',username:'Offline',kind:'offline'}],
       capes:[{id:'cape-1',alias:'Migrator',active:true,data_url:png},{id:'cape-2',alias:'Vanilla',active:false,data_url:png}],
       async invoke(command,args={}) {
@@ -61,7 +61,7 @@ async function setup(page) {
           case 'image_data_url': return args.path.includes('preview') ? this.gif : this.png;
           case 'scan_wallpaper_library':
             await new Promise(resolve=>setTimeout(resolve,this.scanDelay));
-            return {projects:this.projects,searched:['/steam'],engine:'wallpaper64.exe',truncated:false};
+            return {projects:this.projects,searched:['/steam'],engine:'wallpaper64.exe',scene_capture:this.sceneCapture,truncated:false};
           case 'parse_wallpaper_workshop_link': {
             try { const u=new URL(args.url); const a=u.searchParams.getAll('id'); return u.hostname==='steamcommunity.com' && a.length===1 && /^\d+$/.test(a[0]) ? a[0] : null; }
             catch { return null; }
@@ -71,8 +71,12 @@ async function setup(page) {
           case 'download_custom_wallpaper':
             this.settings={...this.settings,wallpaper:'custom',custom_wallpaper:args.url.endsWith('.gif')?'download.gif':'download.mp4'}; return JSON.parse(JSON.stringify(this.settings));
           case 'set_workshop_wallpaper':
+            if (this.failScene && args.directory==='/steam/fail') throw 'кадры сцены недоступны';
             this.settings={...this.settings,wallpaper:'workshop',wallpaper_workshop_project:args.directory}; return JSON.parse(JSON.stringify(this.settings));
+          case 'wallpaper_scene_status': return this.sceneAlive;
           case 'wallpaper_source':
+            if(args.source==='workshop' && this.failRestore) throw 'Wallpaper Engine остановлен';
+            if(args.source==='workshop' && this.settings.wallpaper==='workshop' && this.settings.wallpaper_workshop_project==='/steam/456') return {path:'/steam/456',src:this.gif,kind:'scene'};
             if(args.source==='workshop' && this.settings.wallpaper_workshop_project) return {path:'/steam/123/movie.mp4',src:'data:video/mp4;base64,AAAAHGZ0eXBpc29t',kind:'video'};
             if(args.source==='custom' && this.settings.custom_wallpaper) return this.settings.custom_wallpaper.endsWith('.gif')
               ? {path:'/wall/anim.gif',src:this.gif,kind:'gif'}
@@ -205,7 +209,47 @@ async function assertCalls(page, command, count) {
     await waitSaved(page,()=>window.__profileTest.settings.wallpaper_steam_path==='/custom/SteamLibrary');
     await page.waitForFunction(()=>!window.omnispecDebug.state.wallpaperLibrary.loading);
     if (process.env.OMNISPEC_UI_SHOTS) await page.screenshot({path:path.join(process.env.OMNISPEC_UI_SHOTS,'wallpaper.png')});
+
+    // Положительный Windows-сценарий использует мок кадров; реальный WE/WGC
+    // этим браузерным тестом не проверяется.
+    await page.evaluate(()=>{
+      const t=window.__profileTest; t.sceneCapture=true; t.failScene=true;
+      t.projects.push({title:'Сцена с ошибкой',directory:'/steam/fail',kind:'scene',workshop_id:'9999',playable:false});
+    });
+    await page.locator('#we-refresh').click();
+    await page.waitForSelector('[data-we-card="4"] [data-we-apply]');
+    const before=await page.evaluate(()=>window.__profileTest.calls.filter(c=>c.command==='set_workshop_wallpaper').length);
+    await page.locator('[data-we-apply="1"]').click();
+    assert.match(await page.locator('#confirm-text').innerText(),/вспомогательное окно/);
+    await page.locator('#confirm-cancel').click();
+    await assertCalls(page,'set_workshop_wallpaper',before);
+    await page.locator('[data-we-apply="1"]').click();
+    await page.locator('#confirm-ok').click();
+    await page.waitForFunction(()=>window.omnispecDebug.state.workshopWall?.kind==='scene' && !document.querySelector('#wall-scene').hidden);
+    assert(await page.locator('#wall-video').isHidden());
+    assert.match(await page.locator('#wall-scene').getAttribute('src'),/^data:image\/gif/);
+    assert.equal(await page.evaluate(()=>window.__profileTest.settings.wallpaper_workshop_project),'/steam/456');
+    // Emulate the external capture stopping after the first frame. A failed
+    // retry keeps the saved selection; a later successful retry clears the warning.
+    await page.evaluate(()=>{window.__profileTest.sceneAlive=false;window.__profileTest.failRestore=true;});
+    await page.waitForFunction(()=>window.omnispecDebug.state.wallpaperLibrary.sceneError.includes('Поток сцены остановлен'),null,{timeout:9000});
+    assert(await page.locator('#we-retry').isVisible());
+    await page.locator('#we-retry').click();
+    await page.waitForFunction(()=>window.omnispecDebug.state.wallpaperLibrary.sceneError.includes('Wallpaper Engine остановлен'));
+    assert.equal(await page.evaluate(()=>window.__profileTest.settings.wallpaper_workshop_project),'/steam/456');
+    assert(!(await page.locator('#wall-scene').isHidden()),'failed restart does not drop the last frame');
+    await page.evaluate(()=>{window.__profileTest.sceneAlive=true;window.__profileTest.failRestore=false;});
+    await page.locator('#we-retry').click();
+    await page.waitForFunction(()=>!window.omnispecDebug.state.wallpaperLibrary.sceneError && !window.omnispecDebug.state.wallpaperLibrary.retrying);
+    await page.locator('[data-we-apply="4"]').click();
+    await page.locator('#confirm-ok').click();
+    await page.waitForFunction(()=>window.__profileTest.calls.some(c=>c.command==='set_workshop_wallpaper' && c.args.directory==='/steam/fail'));
+    assert.equal(await page.evaluate(()=>window.__profileTest.settings.wallpaper_workshop_project),'/steam/456','неудачный выбор сохраняет прошлую сцену');
+    assert(!(await page.locator('#wall-scene').isHidden()));
+    await page.reload();
+    await page.waitForFunction(()=>window.omnispecDebug?.state.workshopWall?.kind==='scene' && !document.querySelector('#wall-scene').hidden);
+    assert.equal(await page.evaluate(()=>window.__profileTest.settings.wallpaper_workshop_project),'/steam/456','сцена восстанавливается после перезапуска UI');
     assert.deepEqual(errors,[],'ошибок JS нет');
-    console.log('profile-wallpaper-ui: layout, migration, batch, favorites, capes, animated media, Steam and links passed');
+    console.log('profile-wallpaper-ui: layout, migration, favorites, capes, media, Steam, scene selection/failure/restore and links passed (scene mocked)');
   } finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

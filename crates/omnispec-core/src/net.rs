@@ -174,6 +174,8 @@ pub struct Http {
     /// Нужен, когда сеть/прокси/антивирус ломают HTTP/2 — самая частая причина
     /// «error sending request» на Windows.
     fallback: reqwest::Client,
+    /// Для ресурсов, у которых разрешён только исходный проверенный адрес.
+    no_redirect: Option<reqwest::Client>,
 }
 
 impl Default for Http {
@@ -214,7 +216,10 @@ impl Http {
             .timeout(Duration::from_secs(120))
             .build()
             .unwrap_or_default();
-        Self { client, fallback }
+        let no_redirect = base_builder(proxy)
+            .redirect(reqwest::redirect::Policy::none())
+            .build().ok();
+        Self { client, fallback, no_redirect }
     }
 
     /// GET с повторами: первая попытка обычная, дальше — запасной HTTP/1.1-клиент.
@@ -272,6 +277,12 @@ impl Http {
     /// Доступ к внутреннему reqwest-клиенту (нужен для query-параметров Modrinth).
     pub fn inner(&self) -> &reqwest::Client {
         &self.client
+    }
+
+    /// Тот же прокси, но без автоматического перехода на непроверенный адрес.
+    /// Если создание клиента не удалось, вызывающий не должен обходить проверку.
+    pub fn without_redirect(&self) -> Option<&reqwest::Client> {
+        self.no_redirect.as_ref()
     }
 
     pub async fn get_json<T: DeserializeOwned>(&self, url: &str) -> Result<T> {

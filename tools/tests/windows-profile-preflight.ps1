@@ -1,6 +1,15 @@
 # Real Windows Tauri/WebView2 regression; all data and the fake engine are disposable.
 # Uses Windows UI Automation and the real multi-file picker, not a mocked backend.
+# The externally signed probe is trusted only on the disposable CI runner; it is
+# NOT Wallpaper Engine and must never be used as a production certificate.
+param(
+  [Parameter(Mandatory=$true)][string]$SignedEngine,
+  [string]$Launcher = 'target/debug/omnispec-app.exe'
+)
 $ErrorActionPreference = 'Stop'
+if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or -not $env:RUNNER_TEMP -or $env:RUNNER_OS -ne 'Windows') {
+  throw 'Run only on a disposable GitHub-hosted Windows runner.'
+}
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms
@@ -187,7 +196,7 @@ function AssertAnimated([string]$label) {
   Write-Host "WINDOWS_${label}_VISIBLE_FRAMES_OK $($samples -join '; ')"
 }
 function StartLauncher {
-  $script:proc=Start-Process -FilePath (Resolve-Path 'target/debug/omnispec-app.exe').Path -PassThru
+  $script:proc=Start-Process -FilePath (Resolve-Path $Launcher).Path -PassThru
   for($i=0;$i -lt 100;$i++) {
     Start-Sleep -Milliseconds 400;$script:proc.Refresh()
     if($script:proc.HasExited){throw "App exited: $($script:proc.ExitCode)"}
@@ -240,8 +249,9 @@ try {
   $item=Get-Item $reg; $regHad=$item.GetValueNames() -contains 'SteamPath'
   if($regHad){$regOld=$item.GetValue('SteamPath')}
   New-ItemProperty -Path $reg -Name SteamPath -Value $steam -PropertyType String -Force | Out-Null
-  & rustc --edition 2021 -O 'tools/tests/windows-wallpaper-engine-probe.rs' -o (Join-Path $engine 'wallpaper64.exe')
-  if($LASTEXITCODE -ne 0){throw 'Fake Wallpaper Engine probe did not compile'}
+  $probe=(Resolve-Path $SignedEngine).Path
+  if((Get-AuthenticodeSignature -LiteralPath $probe).Status -ne 'Valid'){throw 'Fake engine must be signed and trusted by the disposable parent preflight'}
+  Copy-Item -LiteralPath $probe -Destination (Join-Path $engine 'wallpaper64.exe')
   $old=Join-Path $data 'meta\skins\old.png'
   WriteJson (Join-Path $data 'settings.json') @{
     onboarded=$true;update_enabled=$false;discord_rpc=$false;click_fx='off';ambient='off';trail=$false;sound_fx=$false;ui_scale=100
@@ -316,5 +326,8 @@ try {
   if($regCreated){Remove-Item -Path $reg -Recurse -Force -ErrorAction SilentlyContinue}
   elseif($regHad){New-ItemProperty -Path $reg -Name SteamPath -Value $regOld -PropertyType String -Force | Out-Null}
   else {Remove-ItemProperty -Path $reg -Name SteamPath -ErrorAction SilentlyContinue}
+  Remove-Item Env:\OMNISPEC_HOME -ErrorAction SilentlyContinue
+  Remove-Item Env:\WEBVIEW2_USER_DATA_FOLDER -ErrorAction SilentlyContinue
+  Remove-Item Env:\OMNISPEC_TEST_WE_LOG -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }

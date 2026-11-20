@@ -74,19 +74,36 @@ struct TokenResponse {
     expires_in: Option<u64>,
     #[serde(default)]
     error: Option<String>,
-    #[serde(default)]
-    error_description: Option<String>,
+}
+
+/// Ответ может содержать токены даже при повреждённом JSON. Не возвращаем его
+/// содержимое или произвольное error_description в интерфейс и логи.
+fn token_response(text: &str) -> Result<TokenResponse> {
+    serde_json::from_str(text).map_err(|_| Error::Other("Microsoft прислал некорректный ответ входа".into()))
+}
+
+fn device_response(text: &str) -> Result<DeviceCodeResponse> {
+    serde_json::from_str(text).map_err(|_| Error::Other("Microsoft не выдал код устройства; проверь client id и сеть".into()))
+}
+
+fn oauth_error(context: &str, code: &str) -> Error {
+    let detail = match code {
+        "expired_token" => "код истёк — начни вход заново (expired_token)",
+        "invalid_grant" => "вход истёк или отозван — войди заново (invalid_grant)",
+        "invalid_client" | "unauthorized_client" => "идентификатор приложения не разрешён Microsoft",
+        "invalid_scope" => "Microsoft не разрешил запрошенные права (invalid_scope)",
+        "access_denied" | "authorization_declined" => "вход отклонён пользователем или Microsoft",
+        "server_error" | "temporarily_unavailable" => "служба Microsoft временно недоступна",
+        _ => "Microsoft отклонил запрос входа; проверь сеть и попробуй снова",
+    };
+    Error::Other(format!("{context}: {detail}"))
 }
 
 impl TokenResponse {
     /// Токен или внятная ошибка (вместо «missing field»).
     fn into_token(self, context: &str) -> Result<(String, String, u64)> {
-        if let Some(error) = self.error.clone() {
-            let detail = self
-                .error_description
-                .or(self.error)
-                .unwrap_or_else(|| context.to_string());
-            return Err(Error::Other(format!("{context}: {detail}")));
+        if let Some(error) = self.error.as_deref() {
+            return Err(oauth_error(context, error));
         }
         let token = self
             .access_token
@@ -108,16 +125,6 @@ pub struct MicrosoftSession {
     pub refresh_token: String,
     /// Когда истечёт `access_token` (unix-время).
     pub expires_at: u64,
-}
-
-/// Первые 200 символов ответа — чтобы ошибка была читаемой, а не простынёй.
-fn clip(text: &str) -> String {
-    let trimmed = text.trim();
-    if trimmed.chars().count() <= 200 {
-        return trimmed.to_string();
-    }
-    let short: String = trimmed.chars().take(200).collect();
-    format!("{short}…")
 }
 
 fn now_secs() -> u64 {
@@ -144,12 +151,7 @@ pub async fn start_device_code(http: &Http, client_id: &str) -> Result<DeviceCod
             ],
         )
         .await?;
-    let parsed: DeviceCodeResponse = serde_json::from_str(&text).map_err(|_| {
-        Error::Other(format!(
-            "Microsoft не выдал код устройства (проверь client id в настройках). Ответ: {}",
-            clip(&text)
-        ))
-    })?;
+    let parsed = device_response(&text)?;
     Ok(DeviceCode {
         user_code: parsed.user_code,
         device_code: parsed.device_code,
@@ -180,9 +182,7 @@ pub async fn poll_device_code(
             ],
         )
         .await?;
-    let token: TokenResponse = serde_json::from_str(&text).map_err(|_| {
-        Error::Other(format!("Microsoft ответил неожиданным JSON: {}", clip(&text)))
-    })?;
+    let token = token_response(&text)?;
     if let Some(error) = &token.error {
         // Штатные состояния опроса — не ошибки, просто ждём дальше.
         if error == "authorization_pending" || error == "slow_down" {
@@ -193,15 +193,13 @@ pub async fn poll_device_code(
                 "код истёк — нажми «Добавить аккаунт» и получи новый".into(),
             ));
         }
-        let detail = token
-            .error_description
-            .clone()
-            .unwrap_or_else(|| error.clone());
-        return Err(Error::Other(format!("Microsoft: {detail}")));
+        return Err(oauth_error("Microsoft", error));
     }
     let (access, refresh, expires_in) = token.into_token("вход через Microsoft")?;
-    let expires_at = now_secs() + expires_in.max(60);
-    let session = chain(http, &access, &refresh, expires_at).await?;
+    // Это срок MSA-токена, не токена Minecraft. Нужен только как безопасный
+    // запасной вариант, если Minecraft не вернул expires_in.
+    let fallback_expires_at = now_secs().saturating_add(expires_in);
+    let session = chain(http, &access, &refresh, fallback_expires_at).await?;
     Ok(Some(session))
 }
 
@@ -223,12 +221,39 @@ pub async fn refresh(http: &Http, client_id: &str, refresh_token: &str) -> Resul
             ],
         )
         .await?;
-    let token: TokenResponse = serde_json::from_str(&text).map_err(|_| {
-        Error::Other(format!("Microsoft ответил неожиданным JSON: {}", clip(&text)))
-    })?;
+    let token = token_response(&text)?;
     let (access, refresh, expires_in) = token.into_token("не удалось обновить вход")?;
-    let expires_at = now_secs() + expires_in.max(60);
-    chain(http, &access, &refresh, expires_at).await
+    // OAuth-сервер вправе не вернуть новый refresh-токен. Не затираем старый
+    // пустой строкой; если вернул новый, сохраняем именно его.
+    let refresh = select_refresh_token(refresh, refresh_token);
+    let fallback_expires_at = now_secs().saturating_add(expires_in);
+    chain(http, &access, &refresh, fallback_expires_at).await
+}
+
+fn select_refresh_token(returned: String, previous: &str) -> String {
+    if returned.trim().is_empty() { previous.to_string() } else { returned }
+}
+
+/// Срок относится именно к Minecraft access_token, который передаётся игре.
+/// Начало запроса безопаснее времени его окончания при медленном соединении.
+fn minecraft_credentials(login: &serde_json::Value, requested_at: u64, fallback: u64) -> Result<(String, u64)> {
+    let token = login.get("access_token").and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| Error::Other("Minecraft не выдал токен доступа".into()))?;
+    let expires_at = login.get("expires_in").and_then(|value| value.as_u64())
+        .filter(|seconds| *seconds > 0)
+        .map(|seconds| requested_at.saturating_add(seconds))
+        .unwrap_or(fallback);
+    Ok((token.to_string(), expires_at))
+}
+
+fn profile_status_error(status: reqwest::StatusCode) -> Error {
+    match status.as_u16() {
+        401 => Error::Other("Minecraft отклонил токен входа. Повтори вход в Microsoft".into()),
+        404 => Error::Other("у этого аккаунта нет профиля Minecraft: Java Edition (или профиль не создан)".into()),
+        429 => Error::Other("Minecraft временно ограничил частоту запросов. Подожди и попробуй снова".into()),
+        _ => Error::Other(format!("не удалось получить профиль Minecraft: HTTP {status}")),
+    }
 }
 
 /// Xbox Live → XSTS → Minecraft. Общая часть для входа и обновления.
@@ -236,7 +261,7 @@ async fn chain(
     http: &Http,
     msa_token: &str,
     refresh_token: &str,
-    expires_at: u64,
+    fallback_expires_at: u64,
 ) -> Result<MicrosoftSession> {
     // 3. Xbox Live
     let xbl_body = serde_json::json!({
@@ -280,24 +305,17 @@ async fn chain(
     let login_body = serde_json::json!({
         "identityToken": format!("XBL3.0 x={user_hash};{xsts_token}")
     });
+    let requested_at = now_secs();
     let login: serde_json::Value =
         serde_json::from_str(&http.post_json(MC_LOGIN_URL, &login_body).await?)?;
-    let access_token = login
-        .get("access_token")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| Error::Other("Minecraft не выдал токен доступа".into()))?
-        .to_string();
+    let (access_token, expires_at) = minecraft_credentials(&login, requested_at, fallback_expires_at)?;
 
-    // 6. Профиль: ник и UUID. Если игры нет — здесь будет 404.
-    let profile_text = http
-        .get_with_bearer(MC_PROFILE_URL, &access_token)
-        .await
-        .map_err(|_| {
-            Error::Other(
-                "у этого аккаунта нет Minecraft: Java Edition (или профиль не создан)".into(),
-            )
-        })?;
-    let profile: serde_json::Value = serde_json::from_str(&profile_text)?;
+    // 6. Только 404 означает отсутствие профиля. Сбой сети, 401, 429 и 5xx
+    // не должны превращаться в ложное сообщение «игра не куплена».
+    let response = http.inner().get(MC_PROFILE_URL).bearer_auth(&access_token).send().await
+        .map_err(|error| Error::http(MC_PROFILE_URL, error))?;
+    if !response.status().is_success() { return Err(profile_status_error(response.status())); }
+    let profile: serde_json::Value = response.json().await?;
     let name = profile
         .get("name")
         .and_then(|value| value.as_str())
@@ -386,8 +404,49 @@ mod tests {
     }
 
     #[test]
+    fn malformed_auth_responses_never_expose_tokens_or_device_codes() {
+        let bad_token = r#"{"access_token":"TOP_SECRET_TOKEN","expires_in":"invalid"}"#;
+        let bad_device = r#"{"device_code":"TOP_SECRET_DEVICE","expires_in":"invalid"}"#;
+        assert!(!token_response(bad_token).unwrap_err().to_string().contains("TOP_SECRET"));
+        assert!(!device_response(bad_device).unwrap_err().to_string().contains("TOP_SECRET"));
+        let answer = token_response(r#"{"error":"invalid_grant","error_description":"TOP_SECRET_DESCRIPTION"}"#).unwrap();
+        let error = answer.into_token("вход").unwrap_err().to_string();
+        assert!(error.contains("invalid_grant"));
+        assert!(!error.contains("TOP_SECRET"));
+        let unknown = token_response(r#"{"error":"TOP_SECRET_UNKNOWN"}"#).unwrap();
+        assert!(!unknown.into_token("вход").unwrap_err().to_string().contains("TOP_SECRET"));
+    }
+
+    #[test]
     fn xsts_errors_are_human() {
         let value = serde_json::json!({ "XErr": 2148916233u64 });
         assert!(xsts_error(&value).to_lowercase().contains("профил"));
+    }
+
+    #[test]
+    fn minecraft_expiry_is_not_the_oauth_expiry() {
+        let login = serde_json::json!({"access_token":"mc-test", "expires_in":86400});
+        assert_eq!(minecraft_credentials(&login, 1_000, 4_600).unwrap(), ("mc-test".into(), 87_400));
+        let missing = serde_json::json!({"access_token":"mc-test"});
+        assert_eq!(minecraft_credentials(&missing, 1_000, 4_600).unwrap().1, 4_600);
+        let zero = serde_json::json!({"access_token":"mc-test", "expires_in":0});
+        assert_eq!(minecraft_credentials(&zero, 1_000, 4_600).unwrap().1, 4_600);
+        assert!(minecraft_credentials(&serde_json::json!({"access_token":""}), 1, 2).is_err());
+        assert_eq!(minecraft_credentials(&login, u64::MAX - 1, 2).unwrap().1, u64::MAX);
+    }
+
+    #[test]
+    fn refresh_token_is_preserved_unless_a_new_one_is_returned() {
+        assert_eq!(select_refresh_token(String::new(), "old"), "old");
+        assert_eq!(select_refresh_token("  ".into(), "old"), "old");
+        assert_eq!(select_refresh_token("new".into(), "old"), "new");
+    }
+
+    #[test]
+    fn profile_errors_distinguish_missing_game_from_network_or_rate_limit() {
+        assert!(profile_status_error(reqwest::StatusCode::NOT_FOUND).to_string().contains("нет профиля"));
+        assert!(profile_status_error(reqwest::StatusCode::UNAUTHORIZED).to_string().contains("токен"));
+        assert!(profile_status_error(reqwest::StatusCode::TOO_MANY_REQUESTS).to_string().contains("частоту"));
+        assert!(profile_status_error(reqwest::StatusCode::SERVICE_UNAVAILABLE).to_string().contains("503"));
     }
 }
