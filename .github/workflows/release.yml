@@ -114,28 +114,13 @@ jobs:
           name: setup-icon
           path: setup-icon.png
 
-      - uses: actions/setup-python@v5
+      - name: Сохранить файлы Windows для единой публикации
+        uses: actions/upload-artifact@v4
         with:
-          python-version: "3.12"
-
-      - name: Подготовить описание релиза и список изменений
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: python tools/release_body.py
-
-      - name: Публикация релиза
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/OmniSpec.exe
-            dist/OmniSpec.exe.sha256
-            dist/OmniSpec-Setup.exe
-            dist/OmniSpec-Setup.exe.sha256
-          generate_release_notes: true
-          make_latest: true
-          body_path: dist/release-notes.md
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: release-windows
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
 
   linux:
     name: Linux (портативный бинарник)
@@ -175,20 +160,67 @@ jobs:
           sha256sum dist/OmniSpec | sed 's|dist/||' > dist/OmniSpec.sha256
           sha256sum dist/omnispec-setup.bin | sed 's|dist/||' > dist/omnispec-setup.bin.sha256
 
-      - name: Добавить файлы в релиз
+      - name: Сохранить файлы Linux для единой публикации
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Опубликовать полный релиз
+    needs: [windows, linux]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-windows
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-linux
+          path: dist
+      - name: Подготовить описание релиза и список изменений
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 tools/release_body.py
+      # Пока загружаются файлы, новая версия остаётся черновиком: старые
+      # лаунчеры не увидят обновление только с одной платформой.
+      - name: Загрузить оба комплекта в черновик
+        id: release_draft
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
+          fail_on_unmatched_files: true
           files: |
+            dist/OmniSpec.exe
+            dist/OmniSpec.exe.sha256
+            dist/OmniSpec-Setup.exe
+            dist/OmniSpec-Setup.exe.sha256
             dist/OmniSpec
             dist/OmniSpec.sha256
             dist/omnispec-setup.bin
             dist/omnispec-setup.bin.sha256
+          generate_release_notes: true
+          body_path: dist/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Сверить все файлы и сделать релиз публичным
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_ID: ${{ steps.release_draft.outputs.id }}
+        run: python3 tools/publish_release.py
 
   announce:
     name: Анонс в Discord
-    needs: [windows, linux]
+    needs: [publish]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:

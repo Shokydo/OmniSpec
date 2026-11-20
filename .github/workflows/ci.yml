@@ -12,8 +12,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Проверить Discord-анонсы и отсутствие открытых вебхуков
-        run: python3 tools/tests/discord_release_test.py
+      - name: Проверить анонс и безопасную публикацию релиза
+        run: |
+          python3 tools/tests/discord_release_test.py
+          python3 tools/tests/release_publish_test.py
 
       - name: Установить Rust
         uses: dtolnay/rust-toolchain@stable

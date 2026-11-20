@@ -160,6 +160,8 @@ input, select, textarea { font: inherit; color: inherit; }
 .icon-btn {
   width: var(--h-sm); height: var(--h-sm);
   display: inline-grid; place-items: center;
+  /* Нативные отступы button сужают маленькую ячейку и сдвигают SVG. */
+  padding: 0;
   border-radius: var(--r-sm);
   color: var(--dim-2);
   border: 1px solid transparent;
@@ -603,6 +605,8 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .fm-row.open .arrow { transform: rotate(90deg); }
 .fm-row .ico { width: 13px; flex: none; display: grid; place-items: center; color: var(--dim-2); }
+/* Атрибуты SVG переопределяются общей .ic: размер должен совпадать с ячейкой дерева. */
+.fm-row .ico .ic, .fm-item .fname .ico .ic { width: 13px; height: 13px; }
 .fm-row:hover .ico, .fm-row.active .ico { color: var(--dim); }
 .fm-row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .fm-row .tag { flex: none; font-size: 9px; color: var(--dim-2); }
@@ -1279,7 +1283,7 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
 /* выбор иконки сборки */
 .icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(34px, 1fr)); gap: 5px; max-width: 430px; }
 .icon-chip {
-  height: 34px; display: grid; place-items: center;
+  height: 34px; display: grid; place-items: center; padding: 0;
   border-radius: var(--r-sm);
   border: 1px solid var(--line);
   background: var(--bg-3);
@@ -2100,7 +2104,8 @@ input, select, textarea, button { font-family: inherit; }
 
 /* буквенная заглушка вместо иконки проекта */
 .card-letter {
-  font-size: 40px; font-weight: 600;
+  /* Высота строки должна помещаться в маленькую иконку списка. */
+  font-size: 40px; font-weight: 600; line-height: 1;
   color: var(--line-3);
   letter-spacing: -.04em;
 }
@@ -2626,8 +2631,8 @@ body.has-wall .home-import { background: var(--bg-2a); }
 .proj-box { width: min(880px, 96vw); height: min(660px, 90vh); }
 .proj-body { display: flex; flex-direction: column; gap: 12px; }
 .proj-top { display: flex; align-items: center; gap: 12px; }
-.proj-icon { width: 48px; height: 48px; flex: none; border-radius: var(--r); overflow: hidden; background: var(--bg-3); border: 1px solid var(--line-2); }
-.proj-icon img { width: 100%; height: 100%; object-fit: cover; }
+.proj-icon { width: 48px; height: 48px; flex: none; display: grid; place-items: center; border-radius: var(--r); overflow: hidden; background: var(--bg-3); border: 1px solid var(--line-2); }
+.proj-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .proj-head { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .proj-title { font-size: 14px; font-weight: 650; }
 .proj-sub { font-size: 11px; color: var(--dim-2); }
@@ -2801,7 +2806,10 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 
 /* --- окно «Все сборки» --- */
 .builds-box {
-  width: min(1180px, 94vw); height: min(760px, 88vh);
+  /* При увеличенном интерфейсе кнопка закрытия должна оставаться в окне. */
+  width: min(1180px, calc(94vw / var(--ui-zoom, 1)));
+  height: min(760px, calc(86vh / var(--ui-zoom, 1)));
+  max-height: calc(86vh / var(--ui-zoom, 1));
   display: flex; flex-direction: column;
 }
 .builds-body { flex: 1 1 auto; overflow-y: auto; padding: 4px 18px 20px; }
@@ -3413,7 +3421,7 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 .skin-library-select { width: 100%; padding: 6px 4px; border: 0; background: transparent; color: var(--dim); display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .skin-library-select:hover { color: var(--text); }
 .skin-library-name { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.skin-library-remove { position: absolute; right: 3px; top: 3px; width: 21px; height: 21px; border: 0; border-radius: 4px; background: var(--bg-3); color: var(--dim-2); font-size: 16px; line-height: 1; }
+.skin-library-remove { position: absolute; right: 3px; top: 3px; width: 21px; height: 21px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: var(--bg-3); color: var(--dim-2); font-size: 16px; line-height: 1; }
 .skin-library-remove:hover { color: var(--red); background: var(--bg-5); }
 .skin-import-errors { margin-top: 10px; color: var(--red); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 
