@@ -109,6 +109,16 @@ class DiscordReleaseTests(unittest.TestCase):
             self.assertEqual((Path(tmp) / "dist/release-notes.md").read_text(encoding="utf-8"), body)
         self.assertIn("body_path: dist/release-notes.md", WORKFLOW)
 
+    def test_wallpaper_controls_notes_state_the_scene_audio_limit(self):
+        build = runpy.run_path(str(ROOT / "tools/release_body.py"))["build_release_body"]
+        body = build("v0.49.10")
+        self.assertIn("Wallpaper Engine", body)
+        self.assertIn("звук видео Workshop", body)
+        self.assertIn("звук сцен", body.lower())
+        self.assertIn("пока не регулируется", body)
+        self.assertIn("рабочего стола", body)
+        self.assertNotIn("пока не регулируется", build("v0.49.9"))
+
     def test_release_assets_are_safe_for_legacy_linux_updaters(self):
         # Versions through v0.49.5 considered every omnispec* name without a dot
         # to be a launcher. The installer must not match, regardless of order.
