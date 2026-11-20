@@ -205,6 +205,13 @@ pub struct Settings {
     /// Папка проекта выбранных видеообоев Wallpaper Engine (без копирования видео).
     #[serde(default)]
     pub wallpaper_workshop_project: Option<String>,
+    /// Загружать библиотеку и воспроизводить выбранные обои WE в OmniSpec.
+    /// Выключение не меняет выбор и не останавливает обои рабочего стола.
+    #[serde(default = "default_true")]
+    pub wallpaper_engine_enabled: bool,
+    /// Звук только видео Workshop в WebView; сцены воспроизводит сам WE.
+    #[serde(default)]
+    pub wallpaper_workshop_audio: bool,
     /// Дополнительная папка Steam / Wallpaper Engine, выбранная пользователем.
     #[serde(default)]
     pub wallpaper_steam_path: Option<String>,
@@ -366,6 +373,8 @@ impl Default for Settings {
             shape: default_shape(),
             custom_wallpaper: None,
             wallpaper_workshop_project: None,
+            wallpaper_engine_enabled: true,
+            wallpaper_workshop_audio: false,
             wallpaper_steam_path: None,
             sound_fx: true,
             sound_volume: default_sound_volume(),
@@ -484,6 +493,23 @@ mod discord_tests {
             assert!(settings.discord_instance_icon);
             assert!(!settings.discord_upload_local_icon);
         }
+    }
+
+    #[test]
+    fn wallpaper_engine_controls_keep_legacy_defaults_and_selection() {
+        let old: Settings = serde_json::from_str(r#"{
+            "wallpaper":"workshop", "wallpaper_workshop_project":"/steam/project"
+        }"#).unwrap();
+        assert!(old.wallpaper_engine_enabled, "existing installations keep loading WE");
+        assert!(!old.wallpaper_workshop_audio, "videos were previously muted");
+        let mut changed = old;
+        changed.wallpaper_engine_enabled = false;
+        changed.wallpaper_workshop_audio = true;
+        let restored: Settings = serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
+        assert!(!restored.wallpaper_engine_enabled);
+        assert!(restored.wallpaper_workshop_audio);
+        assert_eq!(restored.wallpaper.as_deref(), Some("workshop"));
+        assert_eq!(restored.wallpaper_workshop_project.as_deref(), Some("/steam/project"));
     }
 
     #[test]

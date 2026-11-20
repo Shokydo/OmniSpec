@@ -1066,11 +1066,14 @@
 
   /** Доступ к локальному медиа даётся только Rust-командой для конкретного файла. */
   const wallSourceRevision = { custom: 0, workshop: 0 };
+  function wallpaperEngineEnabled() { return state.settings?.wallpaper_engine_enabled !== false; }
+  function wallpaperWorkshopAudioEnabled() { return state.settings?.wallpaper_workshop_audio === true; }
   async function loadWallpaperSource(source) {
     const revision = ++wallSourceRevision[source];
-    const media = await api.wallpaperSource(source);
     const key = source === "workshop" ? "workshopWall" : "customWall";
-    if (revision !== wallSourceRevision[source]) return state[key];
+    if (source === "workshop" && !wallpaperEngineEnabled()) { state[key] = null; return null; }
+    const media = await api.wallpaperSource(source);
+    if (revision !== wallSourceRevision[source] || (source === "workshop" && !wallpaperEngineEnabled())) return null;
     if (!media) { state[key] = null; return null; }
     const src = media.src || (TAURI?.core?.convertFileSrc ? TAURI.core.convertFileSrc(media.path) : media.path);
     state[key] = { ...media, src };
@@ -1078,8 +1081,43 @@
   }
 
   let wallApplyRevision = 0;
+  let wallVideoPlayRevision = 0;
+  let wallAudioNeedsGesture = false;
+
+  // Некоторые WebView/браузеры запрещают автозапуск со звуком даже для
+  // сохранённого пользователем выбора. Не оставляем видео чёрным: играем
+  // без звука и пробуем восстановить его после следующего жеста пользователя.
+  function playWallpaperVideo(video, fromGesture = false) {
+    if (!video || video.hidden || document.hidden || !video.dataset.wallSrc) return;
+    const revision = ++wallVideoPlayRevision;
+    const src = video.dataset.wallSrc;
+    const wantsAudio = video.dataset.wallAudio === "1";
+    if (!wantsAudio) wallAudioNeedsGesture = false;
+    video.muted = !wantsAudio || (wallAudioNeedsGesture && !fromGesture);
+    const tryingAudio = wantsAudio && !video.muted;
+    video.play().then(() => {
+      if (revision === wallVideoPlayRevision && tryingAudio) wallAudioNeedsGesture = false;
+    }).catch((error) => {
+      if (revision !== wallVideoPlayRevision || video.hidden || video.dataset.wallSrc !== src
+          || video.dataset.wallAudio !== "1" || !tryingAudio || error?.name !== "NotAllowedError") return;
+      const first = !wallAudioNeedsGesture;
+      wallAudioNeedsGesture = true;
+      video.muted = true;
+      video.play().catch(() => {});
+      if (first) toast("Чтобы включить звук видео, нажми в окне OmniSpec", "");
+    });
+  }
+
+  ["pointerdown", "keydown"].forEach((type) => document.addEventListener(type, (event) => {
+    if (!wallAudioNeedsGesture) return;
+    // Не включаем звук непосредственно перед нажатием на выключатель.
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("#we-audio, #we-enabled")) return;
+    playWallpaperVideo($("#wall-video"), true);
+  }, { capture: true }));
+
   function reportSceneFailure(src) {
-    if (state.wall?.wallpaper !== "workshop" || state.workshopWall?.src !== src || state.workshopWall?.kind !== "scene") return;
+    if (!wallpaperEngineEnabled() || state.wall?.wallpaper !== "workshop" || state.workshopWall?.src !== src || state.workshopWall?.kind !== "scene") return;
     const message = "Поток сцены остановлен. Запусти Wallpaper Engine и нажми «Восстановить обои» в настройках фона.";
     if (state.wallpaperLibrary.sceneError === message) return;
     state.wallpaperLibrary.sceneError = message;
@@ -1089,7 +1127,7 @@
   let sceneHealthBusy = false;
   setInterval(async () => {
     const media = state.workshopWall;
-    if (sceneHealthBusy || state.wall?.wallpaper !== "workshop" || media?.kind !== "scene") return;
+    if (sceneHealthBusy || !wallpaperEngineEnabled() || state.wall?.wallpaper !== "workshop" || media?.kind !== "scene") return;
     sceneHealthBusy = true;
     try {
       const alive = await api.wallpaperSceneStatus();
@@ -1101,6 +1139,7 @@
   /** GIF и видео не проходят через canvas: иначе анимация превратилась бы в один кадр. */
   async function applyWallpaper(overrides = {}) {
     const revision = ++wallApplyRevision;
+    ++wallVideoPlayRevision;
     const settings = state.settings || {};
     const layer = $("#wall");
     const video = $("#wall-video");
@@ -1112,7 +1151,7 @@
     const dim = Number(overrides.dim ?? settings.wallpaper_dim ?? 40);
     // URL сцены отзывается при уходе с неё; повторно выбираем её в библиотеке.
     if (name !== "workshop" && state.workshopWall?.kind === "scene") state.workshopWall = null;
-    const media = name === "custom" ? state.customWall : name === "workshop" ? state.workshopWall
+    const media = name === "custom" ? state.customWall : name === "workshop" && wallpaperEngineEnabled() ? state.workshopWall
       : name && WALLS.some(([id]) => id === name) ? { src: wallUrl(name), kind: "image" } : null;
     if (!media || !media.src) {
       if (video && !video.hidden) { video.pause(); video.removeAttribute("src"); video.dataset.wallSrc = ""; video.load(); video.hidden = true; }
@@ -1147,6 +1186,11 @@
       layer.style.filter = "";
       layer.style.transform = "";
       video.hidden = false;
+      // Только видео Workshop управляется этим переключателем; свои файлы
+      // по-прежнему без звука, сцены звучат в отдельном процессе WE.
+      const wantsAudio = name === "workshop" && wallpaperWorkshopAudioEnabled();
+      video.dataset.wallAudio = wantsAudio ? "1" : "0";
+      video.muted = !wantsAudio || wallAudioNeedsGesture;
       video.style.objectFit = fit === "fill" ? "fill" : fit === "contain" ? "contain" : "cover";
       video.style.filter = blur ? `blur(${blur}px)` : "";
       video.style.transform = blur ? "scale(1.05)" : "";
@@ -1155,7 +1199,7 @@
         video.onerror = () => toast("Не удалось воспроизвести видео: проверь файл и видеокодек системы", "err");
         video.src = src;
       }
-      if (!document.hidden) video.play().catch(() => {});
+      if (!document.hidden) playWallpaperVideo(video);
       layer.dataset.prepared = "";
       return;
     }
@@ -1187,7 +1231,8 @@
   document.addEventListener("visibilitychange", () => {
     const video = $("#wall-video");
     if (!video || video.hidden) return;
-    if (document.hidden) video.pause(); else video.play().catch(() => {});
+    if (document.hidden) { ++wallVideoPlayRevision; video.pause(); }
+    else playWallpaperVideo(video);
   });
 
   /* размер окна изменился — пересобираем слой фона под новый размер */
@@ -2244,6 +2289,8 @@
     setCustomWallpaper: (path) => invoke("set_custom_wallpaper", { path }),
     downloadWallpaper: (url) => invoke("download_custom_wallpaper", { url }),
     wallpaperSource: (source) => invoke("wallpaper_source", { source }),
+    setWallpaperEngineEnabled: (enabled) => invoke("set_wallpaper_engine_enabled", { enabled }),
+    setWallpaperWorkshopAudio: (enabled) => invoke("set_wallpaper_workshop_audio", { enabled }),
     wallpaperSceneStatus: () => invoke("wallpaper_scene_status"),
     scanWallpaperLibrary: () => invoke("scan_wallpaper_library"),
     parseWorkshopLink: (url) => invoke("parse_wallpaper_workshop_link", { url }),
@@ -2701,6 +2748,14 @@
     setCustomWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
     downloadWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
     wallpaperSource: async () => null,
+    setWallpaperEngineEnabled: async (enabled) => {
+      DEMO.settings = { ...DEMO.settings, wallpaper_engine_enabled: enabled };
+      return { ...DEMO.settings };
+    },
+    setWallpaperWorkshopAudio: async (enabled) => {
+      DEMO.settings = { ...DEMO.settings, wallpaper_workshop_audio: enabled };
+      return { ...DEMO.settings };
+    },
     wallpaperSceneStatus: async () => null,
     scanWallpaperLibrary: async () => ({ projects: [], searched: [], engine: null, truncated: false }),
     parseWorkshopLink: async (url) => {
@@ -6157,7 +6212,11 @@
     const dvView = ownsFocus && active.dataset.dvView;
     const dvType = ownsFocus && active.dataset.dvType;
     const dvSource = ownsFocus && active.dataset.dvSource;
+    const homeScroll = root.querySelector("#home-scroll");
+    const homeScrollTop = homeScroll?.scrollTop || 0;
     root.innerHTML = html;
+    const nextHomeScroll = root.querySelector("#home-scroll");
+    if (nextHomeScroll) nextHomeScroll.scrollTop = homeScrollTop;
     let replacement = id ? document.getElementById(id) : null;
     if (!replacement && dlView) replacement = $$("[data-dl-view]", root).find((el) => el.dataset.dlView === dlView);
     if (!replacement && dvView) replacement = $$("[data-dv-view]", root).find((el) => el.dataset.dvView === dvView);
@@ -6329,14 +6388,17 @@
     const running = state.running.has(meta.id);
     const icon = instanceIconHtml(meta);
     const letter = !isImageIcon(meta.icon) && !(meta.icon && INSTANCE_ICONS.includes(meta.icon));
+    const detail = `MC ${meta.mc_version} · ${loaderLabel(meta.loader)}`;
     return `<button class="home-card ${meta.id === state.selectedId ? "is-active" : ""}" data-home-id="${esc(meta.id)}">
       <span class="home-card-icon ${letter ? "is-letter" : ""}">${letter ? `<span class="card-letter">${esc(icon)}</span>` : icon}</span>
       <span class="home-card-body">
-        <span class="home-card-name">${esc(meta.name)}</span>
-        <span class="home-card-sub">MC ${esc(meta.mc_version)} · ${esc(loaderLabel(meta.loader))}</span>
+        <span class="home-card-top">
+          <span class="home-card-name" title="${esc(meta.name)}">${esc(meta.name)}</span>
+          <span class="home-card-time" title="Время игры">${esc(playtimeLabel(meta.playtime_secs))}</span>
+          ${running ? '<span class="home-card-dot" title="Запущена"></span>' : ""}
+        </span>
+        <span class="home-card-sub" title="${esc(detail)}">${esc(detail)}</span>
       </span>
-      <span class="home-card-time" title="Время игры">${esc(playtimeLabel(meta.playtime_secs))}</span>
-      ${running ? '<span class="home-card-dot" title="Запущена"></span>' : ""}
     </button>`;
   }
 
@@ -6660,6 +6722,33 @@
     if (wrap && !wrap.contains(event.target)) closeHomeLoader();
   });
 
+  function bindHomeCatalogFilters(cfg) {
+    bindHomeLoaderFilter(cfg);
+    bindHomeFilterToggle(cfg);
+    $$("#home-catalog-filters [data-dv-category]").forEach((button) => button.addEventListener("click", () => {
+      const source = cfg.source || "modrinth";
+      const category = button.dataset.dvCategory || "";
+      if ((cfg.categories[source] || "") === category) return;
+      cfg.categories[source] = category;
+      $$("#home-catalog-filters [data-dv-category]").forEach((item) => {
+        const active = (item.dataset.dvCategory || "") === category;
+        item.classList.toggle("is-active", active);
+        item.setAttribute("aria-pressed", String(active));
+      });
+      dvReset();
+    }));
+  }
+
+  // При смене типа/источника заменяем только боковой фильтр: сама строка,
+  // поле поиска, фокус и контейнер прокрутки остаются теми же DOM-узлами.
+  function updateHomeCatalogFilters(cfg) {
+    const sidebar = $(".home-catalog-sidebar");
+    if (!sidebar) return;
+    sidebar.outerHTML = homeCatalogFiltersHtml(cfg, cfg.source || "modrinth");
+    bindHomeCatalogFilters(cfg);
+    syncFeedColumns();
+  }
+
   function renderDiscover() {
     const cfg = state.discover;
     const view = cfg.view || "grid";
@@ -6720,22 +6809,18 @@
     $$("#tab-body [data-dv-type]").forEach((button) => button.addEventListener("click", () => {
       if (cfg.type === button.dataset.dvType) return;
       cfg.type = button.dataset.dvType;
-      renderDiscover();
-      dvReset();
-    }));
-    bindHomeLoaderFilter(cfg);
-    bindHomeFilterToggle(cfg);
-    $$("#tab-body [data-dv-category]").forEach((button) => button.addEventListener("click", () => {
-      const category = button.dataset.dvCategory || "";
-      if ((cfg.categories[source] || "") === category) return;
-      cfg.categories[source] = category;
-      $$("#tab-body [data-dv-category]").forEach((item) => {
-        const active = (item.dataset.dvCategory || "") === category;
+      $$("#tab-body [data-dv-type]").forEach((item) => {
+        const active = item.dataset.dvType === cfg.type;
         item.classList.toggle("is-active", active);
         item.setAttribute("aria-pressed", String(active));
       });
+      const search = $("#dv-query");
+      search.placeholder = cfg.type === "mod" ? "Найти мод" : "Найти сборку";
+      search.setAttribute("aria-label", cfg.type === "mod" ? "Поиск модов" : "Поиск готовых сборок");
+      updateHomeCatalogFilters(cfg);
       dvReset();
     }));
+    bindHomeCatalogFilters(cfg);
     $$("#tab-body [data-dv-source]").forEach((button) => button.addEventListener("click", () => {
       const source = button.dataset.dvSource;
       if (source === state.discover.source) {
@@ -6745,12 +6830,27 @@
       state.discover.source = source;
       state.settings = { ...(state.settings || {}), feed_source: source };
       api.saveSettings(state.settings).catch(() => {});
-      renderDiscover();
+      updateSourceButtons("dv", source);
+      updateHomeCatalogFilters(cfg);
       dvReset();
     }));
     $$("#tab-body [data-dv-view]").forEach((btn) => btn.addEventListener("click", () => {
-      state.discover.view = btn.dataset.dvView;
-      renderDiscover();
+      const view = btn.dataset.dvView;
+      if (view !== "list" && view !== "grid") return;
+      cfg.view = view;
+      $$("#tab-body [data-dv-view]").forEach((item) => {
+        const active = item.dataset.dvView === view;
+        item.classList.toggle("is-active", active);
+        item.setAttribute("aria-pressed", String(active));
+      });
+      const results = $("#dv-results");
+      if (results) {
+        results.classList.toggle("is-grid", view === "grid");
+        results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
+        if (view === "grid") results.classList.add(`feed-grid-${feedGridLevel()}`);
+        syncFeedColumns();
+        dvWatch();
+      }
     }));
     bindFeedResize();
     bindRecentResize();
@@ -9020,7 +9120,7 @@
     }
     if (prefsCategory === "wall") {
       bindWallpaperLibrary();
-      if (!state.wallpaperLibrary.loaded && !state.wallpaperLibrary.loading) refreshWallpaperLibrary();
+      if (wallpaperEngineEnabled() && !state.wallpaperLibrary.controlBusy && !state.wallpaperLibrary.loaded && !state.wallpaperLibrary.loading) refreshWallpaperLibrary();
     } else if (wallPreviewObserver) { wallPreviewObserver.disconnect(); wallPreviewObserver = null; }
     if (keepScroll) body.scrollTop = keepScroll;
   }
@@ -9208,21 +9308,36 @@
   function wallpaperLibraryHtml(settings) {
     const library = state.wallpaperLibrary;
     const projects = library.projects || [];
+    const enabled = settings.wallpaper_engine_enabled !== false;
+    const audio = settings.wallpaper_workshop_audio === true;
+    const busy = Boolean(library.controlBusy || library.audioBusy);
     const typeLabel = { video: "Видео", scene: "Сцена", web: "Web", application: "Приложение", unknown: "Проект" };
     return `
       <div class="prefs-section we-section">
         <div class="prefs-label-row"><span class="prefs-label">Wallpaper Engine · Steam Workshop</span><div class="spacer"></div>
-          <button class="btn btn-small" id="we-refresh" ${library.loading ? "disabled" : ""}>${library.loading ? "Поиск…" : "Обновить"}</button>
-          <button class="btn btn-small" id="we-folder" ${library.loading ? "disabled" : ""}>Папка Steam…</button>
+          <button class="btn btn-small" id="we-refresh" ${!enabled || busy || library.loading ? "disabled" : ""}>${library.loading ? "Поиск…" : "Обновить"}</button>
+          <button class="btn btn-small" id="we-folder" ${!enabled || busy || library.loading ? "disabled" : ""}>Папка Steam…</button>
         </div>
-        <div class="skin-note">${settings.wallpaper_steam_path ? `Дополнительная папка: ${esc(settings.wallpaper_steam_path)}` : "Поиск в стандартных папках Steam и на других дисках."}
-          ${settings.wallpaper_steam_path ? '<button class="we-reset-path" id="we-auto">Вернуть автопоиск</button>' : ""}</div>
+        <div class="we-controls">
+          <div class="we-control-row">
+            <div class="we-control-text"><strong>Загружать Wallpaper Engine в OmniSpec</strong><span>При выключении фон и поиск останавливаются, выбор сохраняется. Обои рабочего стола не меняются.</span></div>
+            <button type="button" class="switch ${enabled ? "on" : ""}" id="we-enabled" role="switch" aria-label="Загружать Wallpaper Engine в OmniSpec" aria-checked="${enabled}" ${busy ? "disabled" : ""}></button>
+          </div>
+          <div class="we-control-row">
+            <div class="we-control-text"><strong>Звук видео Workshop в OmniSpec</strong><span>Только видео в лаунчере; на собственные файлы и звук рабочего стола не влияет.</span></div>
+            <button type="button" class="switch ${audio ? "on" : ""}" id="we-audio" role="switch" aria-label="Звук видео Workshop в OmniSpec" aria-checked="${audio}" ${busy || library.audioBusy ? "disabled" : ""}></button>
+          </div>
+        </div>
+        <div class="skin-note">Звук сцен воспроизводит сам Wallpaper Engine. Отдельно выключить его для окна OmniSpec без риска затронуть рабочий стол пока нельзя.</div>
+        ${enabled ? `<div class="skin-note">${settings.wallpaper_steam_path ? `Дополнительная папка: ${esc(settings.wallpaper_steam_path)}` : "Поиск в стандартных папках Steam и на других дисках."}
+          ${settings.wallpaper_steam_path ? '<button class="we-reset-path" id="we-auto">Вернуть автопоиск</button>' : ""}</div>` : ""}
         <div class="we-link-row">
           <input class="input" id="wall-link" value="${esc(library.link || "")}" placeholder="Ссылка Steam Workshop или прямая ссылка GIF / MP4" spellcheck="false" aria-label="Ссылка на обои">
           <button class="btn" id="wall-link-add" ${library.linkBusy ? "disabled" : ""}>${library.linkBusy ? "Загрузка…" : "Добавить"}</button>
         </div>
         <div class="skin-note">Для Workshop сначала подпишись и дождись загрузки в Steam, затем нажми «Обновить». Прямой файл до 512 МБ сохраняется в лаунчер.</div>
-        <div class="skin-note">Видео и GIF — внутри OmniSpec без звука. Сцены на Windows передаются кадрами из запущенного Wallpaper Engine; может отображаться его вспомогательное окно и индикатор захвата. Web-обои и приложения открываются только отдельно. Если анимация стоит, проверь правила паузы в Wallpaper Engine.</div>
+        ${enabled ? `
+        <div class="skin-note">GIF не содержит звука. Сцены на Windows передаются кадрами из запущенного Wallpaper Engine; может отображаться его вспомогательное окно и индикатор захвата. Web-обои и приложения открываются только отдельно. Если анимация стоит, проверь правила паузы в Wallpaper Engine.</div>
         ${settings.wallpaper === "workshop" && settings.wallpaper_workshop_project ? `<button class="btn btn-small" id="we-retry" ${library.retrying ? "disabled" : ""}>${library.retrying ? "Восстанавливаем…" : "Восстановить обои"}</button>` : ""}
         ${library.sceneError ? `<div class="skin-import-errors" role="alert">${esc(library.sceneError)}</div>` : ""}
         ${library.error ? `<div class="skin-import-errors" role="alert">${esc(library.error)}</div>` : ""}
@@ -9243,6 +9358,7 @@
               </div>
             </article>`).join("")}
         </div>` : `<div class="we-empty">${library.loading ? "" : "Проекты не найдены. Укажи папку Steam, библиотеку на другом диске или папку обоев Wallpaper Engine."}</div>`}
+        ` : `<div class="we-empty" role="status">Wallpaper Engine выключен в OmniSpec. Последний проект сохранён; выбранный фон восстановится после включения.</div>`}
       </div>`;
   }
 
@@ -9262,7 +9378,7 @@
           <button class="wall-chip ${state.wall.wallpaper === "custom" ? "is-active" : ""}" data-wall="custom" id="wall-custom-chip">
             <span>${state.customWall ? (state.customWall.kind === "video" ? "Своё видео" : "Свой фон") : "Свой фон…"}</span>
           </button>
-          ${state.workshopWall ? `<button class="wall-chip ${state.wall.wallpaper === "workshop" ? "is-active" : ""}" data-wall="workshop"><span>Steam · ${state.workshopWall.kind === "scene" ? "сцена" : "видео"}</span></button>` : ""}
+          ${state.workshopWall || settings.wallpaper_workshop_project ? `<button class="wall-chip ${state.wall.wallpaper === "workshop" ? "is-active" : ""}" data-wall="workshop" ${!wallpaperEngineEnabled() ? "disabled title=\"Включи Wallpaper Engine ниже\"" : ""}><span>Steam · ${!wallpaperEngineEnabled() ? "выключено" : state.workshopWall?.kind === "scene" ? "сцена" : state.workshopWall ? "видео" : "сохранено"}</span></button>` : ""}
           <button class="btn" id="wall-pick">${state.customWall ? "Заменить файл…" : "Выбрать файл…"}</button>
         </div>
         <div class="skin-note">PNG, JPG, WebP, GIF, MP4 или WebM · до 512 МБ. Видео воспроизводится без звука.</div>
@@ -9285,15 +9401,31 @@
 
   let wallPreviewObserver = null;
   let wallpaperScanTask = null;
+  let wallpaperScanRevision = 0;
+  let wallpaperControlRevision = 0;
+
+  function clearWallpaperLibrary() {
+    wallpaperScanRevision += 1;
+    wallpaperScanTask = null; // новый поиск не ждёт отменённого обхода
+    if (wallPreviewObserver) { wallPreviewObserver.disconnect(); wallPreviewObserver = null; }
+    Object.assign(state.wallpaperLibrary, {
+      projects: [], searched: [], engine: null, sceneCapture: false, truncated: false,
+      loading: false, loaded: false, error: "", sceneError: "", retrying: false
+    });
+  }
+
   function refreshWallpaperLibrary() {
+    if (!wallpaperEngineEnabled()) return Promise.resolve();
     if (wallpaperScanTask) return wallpaperScanTask;
     const library = state.wallpaperLibrary;
+    const revision = wallpaperScanRevision;
     library.loading = true;
     library.error = "";
     if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
     wallpaperScanTask = (async () => {
       try {
         const result = await api.scanWallpaperLibrary();
+        if (revision !== wallpaperScanRevision || !wallpaperEngineEnabled()) return;
         if (!result) throw new Error("не удалось получить библиотеку");
         library.projects = result.projects || [];
         library.searched = result.searched || [];
@@ -9302,15 +9434,103 @@
         library.truncated = Boolean(result.truncated);
         library.loaded = true;
       } catch (error) {
+        if (revision !== wallpaperScanRevision || !wallpaperEngineEnabled()) return;
         library.error = String(error);
         library.loaded = true;
       } finally {
-        library.loading = false;
-        wallpaperScanTask = null;
-        if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
+        if (revision === wallpaperScanRevision) {
+          library.loading = false;
+          wallpaperScanTask = null;
+          if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
+        }
       }
     })();
     return wallpaperScanTask;
+  }
+
+  async function restoreSavedWorkshop(notify = false) {
+    const library = state.wallpaperLibrary;
+    const revision = wallpaperControlRevision;
+    const project = state.settings?.wallpaper_workshop_project;
+    if (!wallpaperEngineEnabled() || state.wall?.wallpaper !== "workshop" || !project) return;
+    library.retrying = true;
+    if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
+    try {
+      const media = await loadWallpaperSource("workshop");
+      if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()
+          || state.wall?.wallpaper !== "workshop" || state.settings?.wallpaper_workshop_project !== project) return;
+      if (!media) throw new Error("выбранные обои недоступны");
+      library.sceneError = "";
+      await applyWallpaper(state.wall);
+      if (notify) toast("Обои восстановлены", "ok");
+    } catch (error) {
+      if (revision === wallpaperControlRevision && wallpaperEngineEnabled()
+          && state.wall?.wallpaper === "workshop" && state.settings?.wallpaper_workshop_project === project) {
+        library.sceneError = String(error?.message || error);
+        toast(`Не удалось восстановить обои: ${library.sceneError}`, "err");
+      }
+    } finally {
+      if (revision === wallpaperControlRevision) {
+        library.retrying = false;
+        if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
+      }
+    }
+  }
+
+  async function changeWallpaperEngineEnabled(enabled) {
+    const library = state.wallpaperLibrary;
+    if (library.controlBusy || library.audioBusy || enabled === wallpaperEngineEnabled()) return;
+    const before = wallpaperEngineEnabled();
+    const wallBefore = state.wall?.wallpaper;
+    ++wallpaperControlRevision;
+    ++wallSourceRevision.workshop;
+    library.controlBusy = true;
+    state.settings = { ...(state.settings || {}), wallpaper_engine_enabled: enabled };
+    state.workshopWall = null;
+    clearWallpaperLibrary();
+    applyWallpaper(state.wall);
+    renderPrefs();
+    try {
+      const saved = await api.setWallpaperEngineEnabled(enabled);
+      // Во время команды мог завершиться предыдущий выбор сцены. Используем
+      // записанный backend выбор, если пользователь сам не сменил фон.
+      if (saved && state.wall?.wallpaper === wallBefore && Object.prototype.hasOwnProperty.call(saved, "wallpaper")) {
+        state.settings = { ...state.settings, wallpaper: saved.wallpaper,
+          wallpaper_workshop_project: saved.wallpaper_workshop_project };
+        state.wall.wallpaper = saved.wallpaper || null;
+      }
+      library.controlBusy = false;
+      if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
+      if (enabled) void restoreSavedWorkshop();
+    } catch (error) {
+      state.settings = { ...(state.settings || {}), wallpaper_engine_enabled: before };
+      library.controlBusy = false;
+      toast(`Не удалось сохранить настройку Wallpaper Engine: ${error}`, "err");
+      if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
+      if (before) void restoreSavedWorkshop();
+      else applyWallpaper(state.wall);
+    }
+  }
+
+  async function changeWallpaperWorkshopAudio(enabled) {
+    const library = state.wallpaperLibrary;
+    if (library.controlBusy || library.audioBusy || enabled === wallpaperWorkshopAudioEnabled()) return;
+    const before = wallpaperWorkshopAudioEnabled();
+    library.audioBusy = true;
+    state.settings = { ...(state.settings || {}), wallpaper_workshop_audio: enabled };
+    // До первого await: у WebView сохраняется пользовательский жест для звука.
+    applyWallpaper(state.wall);
+    renderPrefs();
+    try {
+      await api.setWallpaperWorkshopAudio(enabled);
+    } catch (error) {
+      state.settings = { ...(state.settings || {}), wallpaper_workshop_audio: before };
+      applyWallpaper(state.wall);
+      toast(`Не удалось сохранить звук видео: ${error}`, "err");
+    } finally {
+      library.audioBusy = false;
+      if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
+    }
   }
 
   function filterWallpaperCards() {
@@ -9322,42 +9542,30 @@
     const library = state.wallpaperLibrary;
     const customChip = $("#wall-custom-chip");
     if (customChip && state.customWall && state.customWall.kind !== "video") customChip.style.backgroundImage = `url("${state.customWall.src}")`;
+    $("#we-enabled")?.addEventListener("click", () => changeWallpaperEngineEnabled(!wallpaperEngineEnabled()));
+    $("#we-audio")?.addEventListener("click", () => changeWallpaperWorkshopAudio(!wallpaperWorkshopAudioEnabled()));
     $("#we-refresh")?.addEventListener("click", refreshWallpaperLibrary);
-    $("#we-retry")?.addEventListener("click", async () => {
-      if (library.retrying) return;
-      const project = state.settings?.wallpaper_workshop_project;
-      library.retrying = true;
-      renderPrefs();
-      try {
-        const media = await loadWallpaperSource("workshop");
-        if (state.wall?.wallpaper !== "workshop" || state.settings?.wallpaper_workshop_project !== project) return;
-        if (!media) throw new Error("выбранные обои недоступны");
-        library.sceneError = "";
-        await applyWallpaper(state.wall);
-        toast("Обои восстановлены", "ok");
-      } catch (error) {
-        if (state.wall?.wallpaper === "workshop" && state.settings?.wallpaper_workshop_project === project) {
-          library.sceneError = String(error?.message || error);
-          toast(`Не удалось восстановить обои: ${library.sceneError}`, "err");
-        }
-      } finally {
-        library.retrying = false;
-        if (prefsCategory === "wall" && $("#modal-prefs") && !$("#modal-prefs").hidden) renderPrefs();
-      }
+    $("#we-retry")?.addEventListener("click", () => {
+      if (!library.retrying) void restoreSavedWorkshop(true);
     });
     $("#we-folder")?.addEventListener("click", async () => {
+      const revision = wallpaperControlRevision;
       const path = await api.pickDir("Папка Steam, библиотеки Steam или Wallpaper Engine").catch((error) => { toast(String(error), "err"); return null; });
-      if (!path) return;
+      if (!path || revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
       try {
         const next = { ...(state.settings || {}), wallpaper_steam_path: path };
-        await api.saveSettings(next); state.settings = next;
+        await api.saveSettings(next);
+        state.settings = { ...(state.settings || {}), wallpaper_steam_path: path };
+        clearWallpaperLibrary();
         await refreshWallpaperLibrary();
       } catch (error) { toast(`Не удалось сохранить папку: ${error}`, "err"); }
     });
     $("#we-auto")?.addEventListener("click", async () => {
       try {
         const next = { ...(state.settings || {}), wallpaper_steam_path: null };
-        await api.saveSettings(next); state.settings = next;
+        await api.saveSettings(next);
+        state.settings = { ...(state.settings || {}), wallpaper_steam_path: null };
+        clearWallpaperLibrary();
         await refreshWallpaperLibrary();
       } catch (error) { toast(String(error), "err"); }
     });
@@ -9369,31 +9577,42 @@
     $("#wall-link-add")?.addEventListener("click", addWallpaperLink);
     $$("[data-we-apply]").forEach((button) => button.addEventListener("click", async () => {
       const project = library.projects[Number(button.dataset.weApply)];
-      if (!project || !(project.playable || (project.kind === "scene" && library.sceneCapture))) return;
+      const revision = wallpaperControlRevision;
+      if (!wallpaperEngineEnabled() || !project || !(project.playable || (project.kind === "scene" && library.sceneCapture))) return;
       if (project.kind === "scene") {
         const confirmed = await askConfirm({ title: "Сцена Wallpaper Engine на фоне",
           text: "Запусти Wallpaper Engine заранее. Он откроет вспомогательное окно выбранной сцены; OmniSpec захватит его изображение. Окно или системная рамка захвата могут быть видны, звук зависит от настроек Wallpaper Engine. Используй только доверенные проекты.", ok: "Включить" });
         if (!confirmed) return;
       }
+      if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
       button.disabled = true;
       try {
-        state.settings = await api.setWorkshopWallpaper(project.directory);
-        await loadWallpaperSource("workshop");
+        const saved = await api.setWorkshopWallpaper(project.directory);
+        if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
+        state.settings = { ...(state.settings || {}), wallpaper: saved.wallpaper,
+          wallpaper_workshop_project: saved.wallpaper_workshop_project };
         state.wall.wallpaper = "workshop";
+        await loadWallpaperSource("workshop");
+        if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled() || state.wall.wallpaper !== "workshop") return;
         state.wall.recent = rememberWallpaper(state.wall.recent, "workshop");
         await persistWallpaper();
+        if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
         library.sceneError = "";
         applyWallpaper(state.wall);
         renderPrefs();
         toast(`${project.kind === "scene" ? "Сцена" : "Видео"} «${project.title}» ${project.kind === "scene" ? "выбрана" : "выбрано"} как фон`, "ok");
-      } catch (error) { toast(String(error), "err"); button.disabled = false; }
+      } catch (error) {
+        if (revision === wallpaperControlRevision && wallpaperEngineEnabled()) toast(String(error), "err");
+        button.disabled = false;
+      }
     }));
     $$("[data-we-open]").forEach((button) => button.addEventListener("click", async () => {
       const project = library.projects[Number(button.dataset.weOpen)];
-      if (!project) return;
+      const revision = wallpaperControlRevision;
+      if (!wallpaperEngineEnabled() || !project) return;
       const confirmed = await askConfirm({ title: "Открыть в Wallpaper Engine",
         text: "Проект откроется в отдельном окне Wallpaper Engine в Windows, не внутри OmniSpec. Web-обои и приложения могут выполнять код автора — продолжай только если доверяешь ему. Заранее запусти Wallpaper Engine.", ok: "Открыть" });
-      if (!confirmed) return;
+      if (!confirmed || revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
       button.disabled = true;
       try { await api.openWallpaperEngine(project.directory); toast("Команда отправлена в Wallpaper Engine", "ok"); }
       catch (error) { toast(String(error), "err"); }
@@ -9421,7 +9640,10 @@
     try {
       const id = await api.parseWorkshopLink(url);
       if (id) {
+        if (!wallpaperEngineEnabled()) throw new Error("Включи Wallpaper Engine в OmniSpec, чтобы найти обои Workshop");
+        const revision = wallpaperControlRevision;
         if (!library.loaded || library.loading) await refreshWallpaperLibrary();
+        if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
         const item = library.projects.find((project) => project.workshop_id === id);
         if (item) {
           library.query = id; library.highlight = id; library.linkBusy = false; renderPrefs();
@@ -10097,7 +10319,31 @@
     $$("#prefs-body [data-wall]").forEach((chip) => chip.addEventListener("click", async () => {
       const picked = chip.dataset.wall || null;
       if (picked === "custom" && !state.customWall) return toast("Сначала выбери файл фона", "err");
-      if (picked === "workshop" && !state.workshopWall) return toast("Выбранное видео Workshop недоступно", "err");
+      if (picked === "workshop" && !wallpaperEngineEnabled()) return toast("Сначала включи Wallpaper Engine в OmniSpec", "err");
+      if (picked === "workshop" && !state.workshopWall) {
+        const project = state.settings?.wallpaper_workshop_project;
+        if (!project) return toast("Выбранные обои Workshop недоступны", "err");
+        const revision = wallpaperControlRevision;
+        chip.disabled = true;
+        try {
+          const saved = await api.setWorkshopWallpaper(project);
+          if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
+          state.settings = { ...(state.settings || {}), wallpaper: saved.wallpaper,
+            wallpaper_workshop_project: saved.wallpaper_workshop_project };
+          state.wall.wallpaper = "workshop";
+          await loadWallpaperSource("workshop");
+          if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled() || state.wall.wallpaper !== "workshop") return;
+          state.wall.recent = rememberWallpaper(state.wall.recent, "workshop");
+          await persistWallpaper();
+          if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
+          applyWallpaper(state.wall);
+          renderPrefs();
+        } catch (error) {
+          if (revision === wallpaperControlRevision && wallpaperEngineEnabled()) toast(String(error), "err");
+          chip.disabled = false;
+        }
+        return;
+      }
       state.wall.wallpaper = picked;
       state.wall.recent = rememberWallpaper(state.wall.recent, picked);
       $$("#prefs-body [data-wall]").forEach((el) => el.classList.toggle("is-active", el === chip));
@@ -12699,8 +12945,8 @@
     };
     // Ожидание запуска сцены не должно задерживать статус игр и Discord.
     loadWallpaperSource("custom").then(() => applyWallpaper(state.wall)).catch(() => null);
-    loadWallpaperSource("workshop").then(() => applyWallpaper(state.wall)).catch((error) => {
-      if (state.wall.wallpaper === "workshop") {
+    if (wallpaperEngineEnabled()) loadWallpaperSource("workshop").then(() => applyWallpaper(state.wall)).catch((error) => {
+      if (wallpaperEngineEnabled() && state.wall.wallpaper === "workshop") {
         state.wallpaperLibrary.sceneError = String(error?.message || error);
         toast(`Не удалось восстановить обои Workshop: ${state.wallpaperLibrary.sceneError}`, "err");
       }

@@ -120,11 +120,38 @@ fn place(window: isize, bounds: Bounds) {
     unsafe { SetWindowPos(window as _, HWND_BOTTOM, bounds.x, bounds.y, width, height, SWP_NOACTIVATE); }
 }
 
-struct EngineWindow { engine: PathBuf, title: String }
+struct EngineWindow { engine: PathBuf, title: String, open_sent: bool, observed: bool }
 impl Drop for EngineWindow {
     fn drop(&mut self) {
+        if !self.open_sent { return; }
         // Команда адресована только уникальному имени этого окна, не всем обоям.
         let _ = control(&self.engine, &["-control", "closeWallpaper", "-location", &self.title], None);
+        let engine = self.engine.clone();
+        let title = self.title.clone();
+        let observed = self.observed;
+        // WE может обработать open уже после отмены и первой команды close.
+        // Недолго ждём только собственное случайное имя и повторяем адресное
+        // закрытие; окно рабочего стола и чужие pop-out не затрагиваем.
+        let _ = std::thread::Builder::new().name("omnispec-scene-cleanup".into()).spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(if observed { 4 } else { 30 });
+            let mut seen = observed;
+            let mut absent = 0;
+            while Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(200));
+                let ours = Window::from_name(&title).ok().is_some_and(|window| {
+                    window.title().ok().as_deref() == Some(title.as_str())
+                        && verified_window_owner(window, &engine).is_some()
+                });
+                if ours {
+                    seen = true;
+                    absent = 0;
+                    let _ = control(&engine, &["-control", "closeWallpaper", "-location", &title], None);
+                } else if seen {
+                    absent += 1;
+                    if absent >= 3 { break; }
+                }
+            }
+        });
     }
 }
 
@@ -238,7 +265,7 @@ impl SceneManager {
         if sequence.load(Ordering::Acquire) != epoch { return Err("выбор фона изменился".into()); }
         verify_signature(&engine, &sequence, epoch)?;
         let title = random_title()?;
-        let guard = EngineWindow { engine: engine.clone(), title: title.clone() };
+        let mut guard = EngineWindow { engine: engine.clone(), title: title.clone(), open_sent: false, observed: false };
         let project_file = project.join("project.json").canonicalize().map_err(|_| "project.json не найден".to_string())?;
         if project_file.parent() != Some(project.as_path()) { return Err("project.json находится вне папки сцены".into()); }
         let (width, height) = bounds.capture_size();
@@ -248,6 +275,7 @@ impl SceneManager {
                 "-x", &bounds.x.to_string(), "-y", &bounds.y.to_string(), "-borderless"])
             .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
             .spawn().map_err(|e| format!("не удалось открыть сцену Wallpaper Engine: {e}"))?;
+        guard.open_sent = true;
         let deadline = Instant::now() + Duration::from_secs(18);
         let (window, owner) = loop {
             if sequence.load(Ordering::Acquire) != epoch { return Err("выбор фона изменился".into()); }
@@ -259,6 +287,7 @@ impl SceneManager {
             }
             std::thread::sleep(Duration::from_millis(150));
         };
+        guard.observed = true;
         if owner != engine { verify_signature(&owner, &sequence, epoch)?; }
         // После проверки подписи ещё раз сверяем владельца: HWND мог исчезнуть
         // или быть переиспользован между поиском и запуском захвата.

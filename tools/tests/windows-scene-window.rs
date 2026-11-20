@@ -53,19 +53,40 @@ unsafe extern "system" fn procedure(hwnd:Handle,msg:u32,w:usize,l:isize)->isize 
     }
 }
 fn value(args:&[String],key:&str)->Option<String>{args.windows(2).find(|p|p[0]==key).map(|p|p[1].clone())}
+fn record(event:&str,title:&str){
+    if let Some(path)=std::env::var_os("OMNISPEC_SCENE_FIXTURE_LOG") {
+        use std::io::Write;
+        if let Ok(mut file)=std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _=writeln!(file,"{event}:{title}");
+        }
+    }
+}
 fn main(){
     let args:Vec<String>=std::env::args().skip(1).collect();
     match value(&args,"-control").as_deref(){
-        Some("closeWallpaper") => if let Some(title)=value(&args,"-location") { unsafe {
-            let hwnd=FindWindowW(null(),wide(&title).as_ptr()); if !hwnd.is_null(){PostMessageW(hwnd,0x0010,0,0);}
-        }},
+        Some("closeWallpaper") => {
+            let title=value(&args,"-location");
+            record("close",title.as_deref().unwrap_or("<all>"));
+            if let Some(title)=title { unsafe {
+                let hwnd=FindWindowW(null(),wide(&title).as_ptr()); if !hwnd.is_null(){PostMessageW(hwnd,0x0010,0,0);}
+            }}
+        },
+        Some("mute") | Some("unmute") => record("global-audio-command",value(&args,"-control").as_deref().unwrap_or("")),
         Some("openWallpaper") => if let Some(title)=value(&args,"-playInWindow") { unsafe {
-            let class=wide("OmniSpecTestingWindow"); let title=wide(&title); let instance=GetModuleHandleW(null());
+            // Optional deterministic delay models WE processing an open command
+            // after OmniSpec has already cancelled the pending scene.
+            record("open",&title);
+            if let Ok(ms)=std::env::var("OMNISPEC_SCENE_FIXTURE_DELAY_MS").unwrap_or_default().parse::<u64>() {
+                std::thread::sleep(std::time::Duration::from_millis(ms.min(10_000)));
+            }
+            let class=wide("OmniSpecTestingWindow"); let wide_title=wide(&title); let instance=GetModuleHandleW(null());
             let wc=WindowClass{style:0,proc:Some(procedure),class_extra:0,window_extra:0,instance,icon:null_mut(),cursor:null_mut(),background:null_mut(),menu:null(),class:class.as_ptr()};
             if RegisterClassW(&wc)==0{return;}
-            let hwnd=CreateWindowExW(0,class.as_ptr(),title.as_ptr(),0x80000000|0x10000000,
+            let hwnd=CreateWindowExW(0,class.as_ptr(),wide_title.as_ptr(),0x80000000|0x10000000,
                 40,40,320,240,null_mut(),null_mut(),instance,null_mut());
-            if hwnd.is_null(){return;} SetTimer(hwnd,1,350,null_mut());
+            if hwnd.is_null(){return;}
+            record("created",&title);
+            SetTimer(hwnd,1,350,null_mut());
             let mut msg:Message=std::mem::zeroed();
             while GetMessageW(&mut msg,null_mut(),0,0)>0 {TranslateMessage(&msg);DispatchMessageW(&msg);}
         }},

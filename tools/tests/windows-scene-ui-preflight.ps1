@@ -18,10 +18,15 @@ using System;
 using System.Runtime.InteropServices;
 public static class OmniSceneUiProbe {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern IntPtr FindWindow(string className,string windowName);
+  // PowerShell converts $null to an empty string for a typed argument. Pass a
+  // true null class from C# so FindWindow matches any class by window title.
+  public static IntPtr FindByTitle(string title) { return FindWindow(null,title); }
   [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hwnd,int x,int y,int w,int h,bool repaint);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags,uint dx,uint dy,uint data,UIntPtr extra);
   public static void ClickAt(int x,int y) { SetCursorPos(x,y); mouse_event(0x0002,0,0,0,UIntPtr.Zero); System.Threading.Thread.Sleep(60); mouse_event(0x0004,0,0,0,UIntPtr.Zero); }
+  public static void Wheel(int delta) { mouse_event(0x0800,0,0,unchecked((uint)delta),UIntPtr.Zero); }
 }
 '@
 $root=Join-Path $env:RUNNER_TEMP ('omnispec-scene-ui-'+[Guid]::NewGuid().ToString('N'))
@@ -35,8 +40,14 @@ $all=[System.Windows.Automation.Condition]::TrueCondition
 $script:proc=$null; $script:ui=$null
 $env:OMNISPEC_HOME=$data
 $env:WEBVIEW2_USER_DATA_FOLDER=Join-Path $root 'webview'
+$fixtureLog=Join-Path $root 'scene-opens.log'
+# The fake WE opens its window later than it receives the command. This is
+# deliberately slow to exercise cancellation before the HWND exists.
+$env:OMNISPEC_SCENE_FIXTURE_LOG=$fixtureLog
+$env:OMNISPEC_SCENE_FIXTURE_DELAY_MS='8000'
 $launcherPath=(Resolve-Path $Launcher).Path
 $fixturePath=(Resolve-Path $SignedFixture).Path
+$script:sentinel=$null
 
 function WriteJson([string]$file,$value) {
   New-Item -ItemType Directory -Force -Path (Split-Path $file -Parent) | Out-Null
@@ -88,15 +99,56 @@ function WaitWallpaper($expected,[int]$seconds=40) {
   }
   throw "Wallpaper was not saved as '$expected'"
 }
+function WaitCondition([string]$description,[scriptblock]$check,[int]$seconds=30) {
+  $end=[DateTime]::UtcNow.AddSeconds($seconds)
+  while([DateTime]::UtcNow -lt $end) { if(& $check){return}; Start-Sleep -Milliseconds 150 }
+  throw "$description was not observed"
+}
+function WaitIntegration([bool]$expected,[int]$seconds=30) {
+  WaitCondition "WE integration $expected" {
+    try {
+      $s=[IO.File]::ReadAllText((Join-Path $data 'settings.json')) | ConvertFrom-Json
+      return $s.wallpaper_engine_enabled -eq $expected
+    } catch {return $false}
+  } $seconds
+}
+function SceneOpens {
+  if(-not (Test-Path $fixtureLog)){return @()}
+  try {return @(Get-Content -LiteralPath $fixtureLog | Where-Object {$_ -like 'open:OmniSpec Scene *'})} catch {return @()}
+}
+function WaitSceneOpen([int]$previous,[int]$seconds=30) {
+  WaitCondition 'scene open command' { @(SceneOpens).Count -gt $previous } $seconds
+  $opens=@(SceneOpens)
+  return $opens[-1].Substring(5)
+}
+function WaitReadyId([string]$id,[int]$seconds=30) {
+  $end=[DateTime]::UtcNow.AddSeconds($seconds)
+  while([DateTime]::UtcNow -lt $end) {
+    try { $node=ById $id; if($null -ne $node -and $node.Current.IsEnabled){return $node} } catch {}
+    Start-Sleep -Milliseconds 150
+  }
+  throw "Enabled element not found: $id"
+}
 function Click($node) {
   $pattern=$null
   if($node.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$pattern)){try{$pattern.ScrollIntoView()}catch{}}
+  $pattern=$null
+  if($node.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern,[ref]$pattern)){$pattern.Toggle();return}
   $pattern=$null
   if($node.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){$pattern.Invoke();return}
   try {$node.SetFocus();[System.Windows.Forms.SendKeys]::SendWait(' ');return}catch{}
   $rect=$node.Current.BoundingRectangle
   if($rect.Width -le 0 -or $rect.Height -le 0){throw 'Cannot click an empty UI rectangle'}
   [OmniSceneUiProbe]::ClickAt([int](($rect.Left+$rect.Right)/2),[int](($rect.Top+$rect.Bottom)/2))
+}
+# WebView2's off-screen elements can lack Invoke/ScrollItem patterns. Scroll
+# the actual settings viewport as a user would before targeting its controls.
+function ScrollPrefs([bool]$down) {
+  [void][OmniSceneUiProbe]::SetForegroundWindow($script:proc.MainWindowHandle)
+  [void][OmniSceneUiProbe]::SetCursorPos(500,300)
+  $delta=if($down){-1200}else{1200}
+  for($i=0;$i -lt 4;$i++){[OmniSceneUiProbe]::Wheel($delta);Start-Sleep -Milliseconds 100}
+  Start-Sleep -Milliseconds 250
 }
 function Screenshot([string]$name) {
   try {
@@ -162,10 +214,84 @@ try {
   WriteJson (Join-Path $data 'settings.json') @{
     onboarded=$true;update_enabled=$false;discord_rpc=$false;click_fx='off';ambient='off';trail=$false;sound_fx=$false;ui_scale=100
     wallpaper='workshop';wallpaper_steam_path=$steam;wallpaper_workshop_project=$project;wallpaper_fit='cover';wallpaper_dim=0;wallpaper_blur=0
+    wallpaper_engine_enabled=$false;wallpaper_workshop_audio=$false
   }
+  # A separate fake window stands in for an unrelated desktop wallpaper. It
+  # must survive every address-specific close made for OmniSpec's window.
+  # A single token avoids depending on Start-Process command-line quoting; the
+  # actual OmniSpec scene titles still exercise spaced names.
+  $sentinelTitle='OmniSpec-unrelated-desktop-sentinel'
+  $env:OMNISPEC_SCENE_FIXTURE_DELAY_MS='0'
+  $script:sentinel=Start-Process -FilePath $engine -ArgumentList @('-control','openWallpaper','-playInWindow',$sentinelTitle) -PassThru
+  WaitCondition 'unrelated fake desktop window' { [OmniSceneUiProbe]::FindByTitle($sentinelTitle) -ne [IntPtr]::Zero } 15
+  $env:OMNISPEC_SCENE_FIXTURE_DELAY_MS='8000'
   StartLauncher
+  Start-Sleep -Seconds 2
+  if(@(SceneOpens).Count -ne 0){throw 'A disabled integration opened a scene at startup'}
+  Click (WaitId 'btn-quick-settings')
+  Click (WaitButton 'Фон')
+  [void](WaitReadyId 'we-enabled')
+
+  # Start restoration, then switch off after openWallpaper was sent but before
+  # the delayed HWND exists. A late-created window must still get closed.
+  $count=@(SceneOpens).Count
+  Click (WaitReadyId 'we-enabled')
+  WaitIntegration $true
+  $script:cancelledTitle=WaitSceneOpen $count
+  if([OmniSceneUiProbe]::FindByTitle($script:cancelledTitle) -ne [IntPtr]::Zero){throw 'Cancellation test was too slow: fixture window already exists'}
+  Click (WaitReadyId 'we-enabled')
+  WaitIntegration $false
+  WaitCondition 'late fake window creation' {
+    try {return @(Get-Content -LiteralPath $fixtureLog) -contains ('created:'+$script:cancelledTitle)} catch {return $false}
+  } 20
+  WaitCondition 'late fake window cleanup' { [OmniSceneUiProbe]::FindByTitle($script:cancelledTitle) -eq [IntPtr]::Zero } 15
+  Start-Sleep -Seconds 1
+  if([OmniSceneUiProbe]::FindByTitle($script:cancelledTitle) -ne [IntPtr]::Zero){throw 'Cancelled scene window survived'}
+  if([OmniSceneUiProbe]::FindByTitle($sentinelTitle) -eq [IntPtr]::Zero){throw 'An unrelated desktop window was closed'}
+  $saved=[IO.File]::ReadAllText((Join-Path $data 'settings.json')) | ConvertFrom-Json
+  if($saved.wallpaper -ne 'workshop' -or $saved.wallpaper_workshop_project -ne $project){throw 'Disabling lost the selected project'}
+  Write-Host 'WINDOWS_SCENE_UI_LATE_CANCELLATION_AND_SENTINEL_OK (fake WE)'
+
+  # Re-enable, verify actual changing WebView2 pixels, and then stop the active
+  # scene while leaving the unrelated window and the selection intact.
+  $count=@(SceneOpens).Count
+  Click (WaitReadyId 'we-enabled')
+  WaitIntegration $true
+  $script:activeTitle=WaitSceneOpen $count
+  Click (WaitId 'prefs-save')
   AssertAnimated 'FIRST_RESTORE'
   Screenshot 'scene-first.png'
+  Click (WaitId 'btn-quick-settings')
+  Click (WaitButton 'Фон')
+  Click (WaitReadyId 'we-enabled')
+  WaitIntegration $false
+  WaitCondition 'active scene cleanup' { [OmniSceneUiProbe]::FindByTitle($script:activeTitle) -eq [IntPtr]::Zero } 15
+  if([OmniSceneUiProbe]::FindByTitle($sentinelTitle) -eq [IntPtr]::Zero){throw 'An unrelated desktop window was closed on active stop'}
+  Click (WaitReadyId 'we-audio')
+  WaitCondition 'saved video audio preference' {
+    try {return ([IO.File]::ReadAllText((Join-Path $data 'settings.json')) | ConvertFrom-Json).wallpaper_workshop_audio -eq $true} catch {return $false}
+  } 15
+  $bad=@(Get-Content -LiteralPath $fixtureLog | Where-Object {$_ -eq 'close:<all>' -or $_ -eq ('close:'+$sentinelTitle) -or $_ -like 'global-audio-command:*'})
+  if($bad.Count){throw "An unsafe global/foreign command was sent: $($bad -join ', ')"}
+  Write-Host 'WINDOWS_SCENE_UI_ACTIVE_DISABLE_ISOLATION_OK (fake WE)'
+
+  # Disabled state and the saved project survive restarting the actual Tauri
+  # application, which must not send a scene command until explicitly enabled.
+  $count=@(SceneOpens).Count
+  StopLauncher
+  StartLauncher
+  Start-Sleep -Seconds 3
+  if(@(SceneOpens).Count -ne $count){throw 'Restart reopened a disabled scene'}
+  $saved=[IO.File]::ReadAllText((Join-Path $data 'settings.json')) | ConvertFrom-Json
+  if($saved.wallpaper_engine_enabled -ne $false -or $saved.wallpaper_workshop_audio -ne $true -or $saved.wallpaper_workshop_project -ne $project){throw 'Preferences or selection were not retained across restart'}
+  if([OmniSceneUiProbe]::FindByTitle($sentinelTitle) -eq [IntPtr]::Zero){throw 'An unrelated desktop window was closed on restart'}
+  Click (WaitId 'btn-quick-settings')
+  Click (WaitButton 'Фон')
+  Click (WaitReadyId 'we-enabled')
+  WaitIntegration $true
+  Click (WaitId 'prefs-save')
+  AssertAnimated 'RESTORED_AFTER_RESTART'
+  Write-Host 'WINDOWS_SCENE_UI_DISABLED_RESTART_AND_REENABLE_OK (fake WE)'
 
   # Kill only the fake fixture, not any real process. The app must report a
   # stopped capture and allow retry without losing the selected project.
@@ -185,8 +311,10 @@ try {
   # the background off must finish cleanup before this scene is selected again.
   Click (WaitId 'btn-quick-settings')
   Click (WaitButton 'Фон')
+  ScrollPrefs $false
   Click (WaitButton 'Убрать фон')
   WaitWallpaper $null
+  ScrollPrefs $true
   Click (WaitButton 'Установить «Signed fake scene» как фон' 90)
   Click (WaitId 'confirm-ok')
   WaitWallpaper 'workshop' 60
@@ -204,6 +332,8 @@ try {
   $originalError=$_
   Write-Host "SCENE_UI_FAILURE $($originalError.Exception.Message)"
   Write-Host $originalError.ScriptStackTrace
+  if(Test-Path -LiteralPath $fixtureLog){Write-Host "SCENE_FIXTURE_EVENTS`n$([IO.File]::ReadAllText($fixtureLog))"}
+  if($script:sentinel){try {$script:sentinel.Refresh();Write-Host "SCENE_SENTINEL_EXITED $($script:sentinel.HasExited)"} catch {}}
   Screenshot 'scene-failure.png'
   throw $originalError
 } finally {
@@ -211,5 +341,7 @@ try {
   StopOnlyFixture
   Remove-Item Env:\OMNISPEC_HOME -ErrorAction SilentlyContinue
   Remove-Item Env:\WEBVIEW2_USER_DATA_FOLDER -ErrorAction SilentlyContinue
+  Remove-Item Env:\OMNISPEC_SCENE_FIXTURE_LOG -ErrorAction SilentlyContinue
+  Remove-Item Env:\OMNISPEC_SCENE_FIXTURE_DELAY_MS -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }

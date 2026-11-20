@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -204,6 +204,8 @@ struct AppState {
     settings: Mutex<Settings>,
     /// Потоковый сервер запускается только при выборе видеообоев.
     video_server: StdMutex<Option<video_stream::VideoServer>>,
+    /// Отмена обходов библиотеки и выбора при выключении/смене папки.
+    wallpaper_revision: Arc<AtomicU64>,
     #[cfg(windows)]
     scene_manager: Arc<StdMutex<Option<scene_capture::SceneManager>>>,
     #[cfg(windows)]
@@ -316,7 +318,10 @@ async fn invalidate_scene(state: &AppState) {
     let _ = tauri::async_runtime::spawn_blocking(move || {
         let mut guard = manager.lock().unwrap_or_else(|e| e.into_inner());
         if revision.load(Ordering::Acquire) == epoch {
-            if let Some(manager) = guard.as_mut() { manager.stop(); }
+            if let Some(mut manager) = guard.take() {
+                manager.stop(); // только окно с уникальным именем OmniSpec
+                // Drop завершает также loopback-сервер кадров.
+            }
         }
     }).await;
 }
@@ -365,12 +370,21 @@ fn preserve_recovered_last_instance(paths: &Paths, current: &Settings, incoming:
     }
 }
 
+/// Эти поля меняют только адресные команды. Отставший снимок общих настроек
+/// не должен незаметно включить WE или вернуть прежний проект/звук.
+fn preserve_wallpaper_controls(current: &Settings, incoming: &mut Settings) {
+    incoming.wallpaper_engine_enabled = current.wallpaper_engine_enabled;
+    incoming.wallpaper_workshop_audio = current.wallpaper_workshop_audio;
+    incoming.wallpaper_workshop_project = current.wallpaper_workshop_project.clone();
+}
+
 #[tauri::command]
 async fn save_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<(), String> {
     // Записи settings.json не должны обгонять друг друга или видеть частичный файл.
     let mut current = state.settings.lock().await;
     // Снимок настроек мог попасть в очередь ещё до переноса id сборки.
     preserve_recovered_last_instance(&state.paths, &current, &mut settings);
+    preserve_wallpaper_controls(&current, &mut settings);
     // Запрет действует сразу, даже если сохранить файл не удалось: до перезапуска
     // не начнём новых отправок и попытаемся отменить уже начатую.
     if !settings.discord_rpc { current.discord_rpc = false; }
@@ -389,15 +403,50 @@ async fn save_settings(state: State<'_, AppState>, mut settings: Settings) -> Re
     #[cfg(windows)]
     let wallpaper_changed = current.wallpaper != settings.wallpaper
         || current.wallpaper_workshop_project != settings.wallpaper_workshop_project;
+    let wallpaper_path_changed = current.wallpaper_steam_path != settings.wallpaper_steam_path;
     settings.save(&state.paths).map_err(err)?;
     state.presence.configure(settings.discord_rpc);
     *current = settings;
+    if wallpaper_path_changed { state.wallpaper_revision.fetch_add(1, Ordering::AcqRel); }
     #[cfg(windows)]
     if wallpaper_changed { invalidate_scene(&state).await; }
     state.rpc_upload_allowed.send_replace(
         current.discord_rpc && current.discord_instance_icon && current.discord_upload_local_icon
     );
     Ok(())
+}
+
+/// Выключение касается только интеграции OmniSpec, не обоев рабочего стола.
+/// Запись, отзыв видео и отмена сцены защищены той же блокировкой настроек.
+#[tauri::command]
+async fn set_wallpaper_engine_enabled(state: State<'_, AppState>, enabled: bool) -> Result<Settings, String> {
+    let mut current = state.settings.lock().await;
+    if current.wallpaper_engine_enabled != enabled {
+        let mut next = current.clone();
+        next.wallpaper_engine_enabled = enabled;
+        next.save(&state.paths).map_err(err)?;
+        *current = next;
+        state.wallpaper_revision.fetch_add(1, Ordering::AcqRel);
+    }
+    if !enabled {
+        // Свой видеофон продолжает работать, если использует этот сервер.
+        revoke_video_slot(&state, "workshop");
+        #[cfg(windows)]
+        invalidate_scene(&state).await;
+    }
+    Ok(current.clone())
+}
+
+/// Звук управляется исключительно в видеоплеере OmniSpec, не через глобальный
+/// mute Wallpaper Engine и не через общую аудиосессию Windows.
+#[tauri::command]
+async fn set_wallpaper_workshop_audio(state: State<'_, AppState>, enabled: bool) -> Result<Settings, String> {
+    let mut current = state.settings.lock().await;
+    let mut next = current.clone();
+    next.wallpaper_workshop_audio = enabled;
+    next.save(&state.paths).map_err(err)?;
+    *current = next;
+    Ok(current.clone())
 }
 
 /// Статус в Discord: фронт сообщает режим, сборку и время начала.
@@ -3541,6 +3590,14 @@ async fn download_custom_wallpaper(state: State<'_, AppState>, url: String) -> R
     select_custom_wallpaper(&state, name).await
 }
 
+fn revoke_video_slot(state: &AppState, slot: &str) {
+    let mut server = state.video_server.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(active) = server.as_ref() {
+        active.revoke(slot);
+        if active.is_empty() { server.take(); }
+    }
+}
+
 /// Только проверенный файл: изображения через узкий asset scope, видео —
 /// потоково через loopback, поскольку GStreamer не воспроизводит asset://.
 #[tauri::command]
@@ -3549,6 +3606,7 @@ async fn wallpaper_source(app: AppHandle, state: State<'_, AppState>, source: St
     // каждой загрузке списка старых обоев. Проверяем библиотеку повторно.
     if source == "workshop" {
         let settings = state.settings.lock().await;
+        if !settings.wallpaper_engine_enabled { return Ok(None); }
         let chosen = settings.wallpaper_workshop_project.clone();
         let scene = chosen.as_deref().and_then(|path| wallpapers::project(Path::new(path)))
             .is_some_and(|p| p.kind == "scene");
@@ -3562,14 +3620,19 @@ async fn wallpaper_source(app: AppHandle, state: State<'_, AppState>, source: St
                     .canonicalize().map_err(|_| "сцена недоступна".to_string())?;
                 let manual = settings.wallpaper_steam_path.clone();
                 let epoch = state.scene_revision.load(Ordering::Acquire);
+                let library_epoch = state.wallpaper_revision.load(Ordering::Acquire);
+                let revision = state.wallpaper_revision.clone();
                 drop(settings);
                 let check = selected.clone();
-                let engine = tauri::async_runtime::spawn_blocking(move || validate_workshop(&check, manual.as_deref()))
-                    .await.map_err(|e| e.to_string())??.ok_or("выбран не проект сцены")?;
+                let engine = tauri::async_runtime::spawn_blocking(move || {
+                    validate_workshop(&check, manual.as_deref(), || revision.load(Ordering::Acquire) != library_epoch)
+                }).await.map_err(|e| e.to_string())??.ok_or("выбран не проект сцены")?;
                 let _operation = state.scene_operation.lock().await;
                 {
                     let current = state.settings.lock().await;
                     if state.scene_revision.load(Ordering::Acquire) != epoch
+                        || state.wallpaper_revision.load(Ordering::Acquire) != library_epoch
+                        || !current.wallpaper_engine_enabled
                         || current.wallpaper.as_deref() != Some("workshop")
                         || current.wallpaper_workshop_project != chosen {
                         return Ok(None);
@@ -3578,6 +3641,8 @@ async fn wallpaper_source(app: AppHandle, state: State<'_, AppState>, source: St
                 let media = start_scene(&state, &app, engine, selected.clone(), epoch).await?;
                 let current = state.settings.lock().await;
                 if state.scene_revision.load(Ordering::Acquire) != epoch
+                    || state.wallpaper_revision.load(Ordering::Acquire) != library_epoch
+                    || !current.wallpaper_engine_enabled
                     || current.wallpaper.as_deref() != Some("workshop")
                     || current.wallpaper_workshop_project != chosen {
                     stop_scene_epoch(&state, epoch).await;
@@ -3587,7 +3652,7 @@ async fn wallpaper_source(app: AppHandle, state: State<'_, AppState>, source: St
                     stop_scene_epoch(&state, epoch).await;
                     return Err(error);
                 }
-                if let Some(server) = state.video_server.lock().unwrap_or_else(|e| e.into_inner()).as_ref() { server.revoke(&source); }
+                revoke_video_slot(&state, &source);
                 return Ok(Some(media));
             }
         }
@@ -3595,6 +3660,7 @@ async fn wallpaper_source(app: AppHandle, state: State<'_, AppState>, source: St
     // Чтение настроек и регистрация URL атомарны относительно смены файла:
     // старый запрос не сможет снова открыть уже заменённое видео.
     let settings = state.settings.lock().await;
+    if source == "workshop" && !settings.wallpaper_engine_enabled { return Ok(None); }
     let result = match source.as_str() {
         "custom" => settings.custom_wallpaper.as_deref()
             .map(|name| wallpapers::custom_media(&state.paths.root.join("wallpapers"), name)).transpose(),
@@ -3605,7 +3671,7 @@ async fn wallpaper_source(app: AppHandle, state: State<'_, AppState>, source: St
     let mut media = match result {
         Ok(Some(media)) => media,
         other => {
-            if let Some(server) = state.video_server.lock().unwrap_or_else(|e| e.into_inner()).as_ref() { server.revoke(&source); }
+            revoke_video_slot(&state, &source);
             return other;
         }
     };
@@ -3614,7 +3680,7 @@ async fn wallpaper_source(app: AppHandle, state: State<'_, AppState>, source: St
         if guard.is_none() { *guard = Some(video_stream::VideoServer::new()?); }
         media.src = Some(guard.as_ref().unwrap().expose(&source, Path::new(&media.path))?);
     } else {
-        if let Some(server) = state.video_server.lock().unwrap_or_else(|e| e.into_inner()).as_ref() { server.revoke(&source); }
+        revoke_video_slot(&state, &source);
         app.asset_protocol_scope().allow_file(&media.path).map_err(|e| format!("не удалось открыть медиа: {e}"))?;
     }
     drop(settings);
@@ -3635,9 +3701,20 @@ fn wallpaper_scene_status(state: State<'_, AppState>) -> Option<bool> {
 
 #[tauri::command]
 async fn scan_wallpaper_library(state: State<'_, AppState>) -> Result<wallpapers::Library, String> {
-    let manual = state.settings.lock().await.wallpaper_steam_path.clone();
-    tauri::async_runtime::spawn_blocking(move || wallpapers::scan_library(manual.as_deref()))
-        .await.map_err(|e| e.to_string())?
+    let settings = state.settings.lock().await;
+    if !settings.wallpaper_engine_enabled { return Err("Wallpaper Engine выключен в OmniSpec".into()); }
+    let manual = settings.wallpaper_steam_path.clone();
+    let epoch = state.wallpaper_revision.load(Ordering::Acquire);
+    let revision = state.wallpaper_revision.clone();
+    drop(settings);
+    let library = tauri::async_runtime::spawn_blocking(move || {
+        wallpapers::scan_library_cancellable(manual.as_deref(), || revision.load(Ordering::Acquire) != epoch)
+    }).await.map_err(|e| e.to_string())??;
+    let settings = state.settings.lock().await;
+    if !settings.wallpaper_engine_enabled || state.wallpaper_revision.load(Ordering::Acquire) != epoch {
+        return Err("поиск Wallpaper Engine отменён".into());
+    }
+    Ok(library)
 }
 
 #[tauri::command]
@@ -3646,8 +3723,8 @@ fn parse_wallpaper_workshop_link(url: String) -> Option<String> {
 }
 
 /// None — обычное видео, Some — проверенный путь к WE для сцены.
-fn validate_workshop(selected: &Path, manual: Option<&str>) -> Result<Option<String>, String> {
-    let library = wallpapers::scan_library(manual)?;
+fn validate_workshop(selected: &Path, manual: Option<&str>, cancelled: impl Fn() -> bool) -> Result<Option<String>, String> {
+    let library = wallpapers::scan_library_cancellable(manual, cancelled)?;
     let item = library.projects.iter().find(|p| Path::new(&p.directory) == selected)
         .ok_or("проект не найден в выбранной библиотеке Steam")?;
     match item.kind.as_str() {
@@ -3666,23 +3743,46 @@ async fn set_workshop_wallpaper(app: AppHandle, state: State<'_, AppState>, dire
     #[cfg(not(windows))]
     let _ = &app;
     let current = state.settings.lock().await;
+    if !current.wallpaper_engine_enabled { return Err("Wallpaper Engine выключен в OmniSpec".into()); }
     let manual = current.wallpaper_steam_path.clone();
+    let previous_wallpaper = current.wallpaper.clone();
+    let previous_project = current.wallpaper_workshop_project.clone();
+    let library_epoch = state.wallpaper_revision.load(Ordering::Acquire);
+    let revision = state.wallpaper_revision.clone();
     #[cfg(windows)]
     let epoch = state.scene_revision.fetch_add(1, Ordering::AcqRel) + 1;
     drop(current);
     let selected = PathBuf::from(directory).canonicalize().map_err(|_| "проект не найден".to_string())?;
     let check_path = selected.clone();
-    let engine = tauri::async_runtime::spawn_blocking(move || validate_workshop(&check_path, manual.as_deref()))
-        .await.map_err(|e| e.to_string())??;
+    let engine = tauri::async_runtime::spawn_blocking(move || {
+        validate_workshop(&check_path, manual.as_deref(), || revision.load(Ordering::Acquire) != library_epoch)
+    }).await.map_err(|e| e.to_string())??;
     #[cfg(not(windows))]
     let _ = &engine;
     #[cfg(windows)]
     let _operation = state.scene_operation.lock().await;
     #[cfg(windows)]
-    if state.scene_revision.load(Ordering::Acquire) != epoch { return Err("выбор фона изменился".into()); }
+    {
+        let current = state.settings.lock().await;
+        if state.scene_revision.load(Ordering::Acquire) != epoch
+            || state.wallpaper_revision.load(Ordering::Acquire) != library_epoch
+            || !current.wallpaper_engine_enabled
+            || current.wallpaper != previous_wallpaper
+            || current.wallpaper_workshop_project != previous_project {
+            return Err("выбор фона изменился".into());
+        }
+    }
     #[cfg(windows)]
     if let Some(engine) = &engine { start_scene(&state, &app, engine.clone(), selected.clone(), epoch).await?; }
     let mut current = state.settings.lock().await;
+    if state.wallpaper_revision.load(Ordering::Acquire) != library_epoch
+        || !current.wallpaper_engine_enabled
+        || current.wallpaper != previous_wallpaper
+        || current.wallpaper_workshop_project != previous_project {
+        #[cfg(windows)]
+        stop_scene_epoch(&state, epoch).await;
+        return Err("выбор фона изменился".into());
+    }
     #[cfg(windows)]
     if state.scene_revision.load(Ordering::Acquire) != epoch {
         stop_scene_epoch(&state, epoch).await;
@@ -3723,29 +3823,42 @@ async fn open_wallpaper_engine(state: State<'_, AppState>, directory: String) ->
     }
     #[cfg(windows)]
     {
-        let manual = state.settings.lock().await.wallpaper_steam_path.clone();
+        let settings = state.settings.lock().await;
+        if !settings.wallpaper_engine_enabled { return Err("Wallpaper Engine выключен в OmniSpec".into()); }
+        let manual = settings.wallpaper_steam_path.clone();
+        let epoch = state.wallpaper_revision.load(Ordering::Acquire);
+        let revision = state.wallpaper_revision.clone();
+        drop(settings);
         let selected = PathBuf::from(directory).canonicalize().map_err(|_| "проект не найден".to_string())?;
-        let lib = tauri::async_runtime::spawn_blocking(move || wallpapers::scan_library(manual.as_deref()))
-            .await.map_err(|e| e.to_string())??;
+        let scan_revision = revision.clone();
+        let lib = tauri::async_runtime::spawn_blocking(move || {
+            wallpapers::scan_library_cancellable(manual.as_deref(), || scan_revision.load(Ordering::Acquire) != epoch)
+        }).await.map_err(|e| e.to_string())??;
         if !lib.projects.iter().any(|p| Path::new(&p.directory) == selected) {
             return Err("проект не найден в выбранной библиотеке Steam".into());
         }
         let exe = lib.engine.ok_or_else(|| "wallpaper64.exe не найден. Укажи папку Steam с установленным Wallpaper Engine".to_string())?;
         // Внешнее окно тоже запускаем только из проверенного подписанного WE;
         // путь из пользовательской библиотеки сам по себе не является доверием.
-        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let verify_revision = revision.clone();
+        let (exe, project_file) = tauri::async_runtime::spawn_blocking(move || -> Result<_, String> {
             let exe = PathBuf::from(exe).canonicalize().map_err(|_| "Wallpaper Engine не найден".to_string())?;
-            let revision = std::sync::atomic::AtomicU64::new(0);
-            scene_capture::verify_signature(&exe, &revision, 0)?;
+            scene_capture::verify_signature(&exe, &verify_revision, epoch)?;
             let project_file = selected.join("project.json").canonicalize().map_err(|_| "project.json не найден".to_string())?;
             if project_file.parent() != Some(selected.as_path()) { return Err("project.json находится вне папки проекта".into()); }
-            // Canonicalize на Windows выдаёт \\?\-путь; обычная форма совместимее
-            // с внешними приложениями. Для длинных/особых путей префикс сохраняется.
-            std::process::Command::new(dunce::simplified(&exe))
-                .args(["-control", "openWallpaper", "-file"]).arg(dunce::simplified(&project_file))
-                .args(["-playInWindow", "OmniSpec Wallpaper", "-width", "1280", "-height", "720"])
-                .spawn().map(|_| ()).map_err(|e| format!("не удалось отправить команду Wallpaper Engine: {e}"))
-        }).await.map_err(|error| format!("не удалось запустить Wallpaper Engine: {error}"))?
+            Ok((exe, project_file))
+        }).await.map_err(|error| format!("не удалось подготовить Wallpaper Engine: {error}"))??;
+        // Последняя проверка и отправка не обгоняют выключение интеграции.
+        let current = state.settings.lock().await;
+        if !current.wallpaper_engine_enabled || revision.load(Ordering::Acquire) != epoch {
+            return Err("открытие Wallpaper Engine отменено".into());
+        }
+        // Canonicalize на Windows выдаёт \\?\-путь; обычная форма совместимее
+        // с внешними приложениями. Для длинных/особых путей префикс сохраняется.
+        std::process::Command::new(dunce::simplified(&exe))
+            .args(["-control", "openWallpaper", "-file"]).arg(dunce::simplified(&project_file))
+            .args(["-playInWindow", "OmniSpec Wallpaper", "-width", "1280", "-height", "720"])
+            .spawn().map(|_| ()).map_err(|e| format!("не удалось отправить команду Wallpaper Engine: {e}"))
     }
 }
 
@@ -3859,6 +3972,7 @@ fn main() {
         http,
         settings: Mutex::new(settings),
         video_server: StdMutex::new(None),
+        wallpaper_revision: Arc::new(AtomicU64::new(0)),
         #[cfg(windows)]
         scene_manager: Arc::new(StdMutex::new(None)),
         #[cfg(windows)]
@@ -3922,6 +4036,8 @@ fn main() {
             system_memory,
             get_settings,
             save_settings,
+            set_wallpaper_engine_enabled,
+            set_wallpaper_workshop_audio,
             set_presence,
             resolve_presence_icon,
             list_instances,
@@ -4074,6 +4190,28 @@ mod tests {
         preserve_recovered_last_instance(&paths, &current, &mut clear);
         assert_eq!(clear.last_instance, None);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stale_settings_cannot_reenable_or_replace_wallpaper_engine_controls() {
+        let current = super::Settings {
+            wallpaper_engine_enabled: false,
+            wallpaper_workshop_audio: true,
+            wallpaper_workshop_project: Some("chosen".into()),
+            ..super::Settings::default()
+        };
+        let mut stale = super::Settings {
+            wallpaper_engine_enabled: true,
+            wallpaper_workshop_audio: false,
+            wallpaper_workshop_project: Some("old".into()),
+            ui_scale: 125,
+            ..super::Settings::default()
+        };
+        super::preserve_wallpaper_controls(&current, &mut stale);
+        assert!(!stale.wallpaper_engine_enabled);
+        assert!(stale.wallpaper_workshop_audio);
+        assert_eq!(stale.wallpaper_workshop_project.as_deref(), Some("chosen"));
+        assert_eq!(stale.ui_scale, 125, "unrelated settings still change");
     }
 
     #[test]

@@ -434,7 +434,16 @@ fn add_existing(list: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, p: PathBuf
     }
 }
 
-pub fn scan_library(manual: Option<&str>) -> Result<Library, String> {
+#[cfg(test)]
+fn scan_library(manual: Option<&str>) -> Result<Library, String> {
+    scan_library_cancellable(manual, || false)
+}
+
+/// Поиск прерывается при выключении интеграции или смене папки. Повторное
+/// включение использует новую ревизию и не принимает результат старого обхода.
+pub fn scan_library_cancellable(manual: Option<&str>, cancelled: impl Fn() -> bool) -> Result<Library, String> {
+    let check = || if cancelled() { Err("поиск Wallpaper Engine отменён".to_string()) } else { Ok(()) };
+    check()?;
     let mut seeds = default_steam_roots();
     if let Some(raw) = manual.filter(|s| !s.trim().is_empty()) {
         let path = PathBuf::from(raw);
@@ -446,11 +455,13 @@ pub fn scan_library(manual: Option<&str>) -> Result<Library, String> {
     let mut libraries = Vec::new();
     let mut seen = HashSet::new();
     for seed in seeds {
+        check()?;
         add_existing(&mut libraries, &mut seen, seed);
     }
     // Каждая библиотека Steam может быть на другом диске.
     let initial = libraries.clone();
     for root in initial {
+        check()?;
         for file in [
             root.join("steamapps/libraryfolders.vdf"),
             root.join("libraryfolders.vdf"),
@@ -461,6 +472,7 @@ pub fn scan_library(manual: Option<&str>) -> Result<Library, String> {
             {
                 if let Ok(text) = std::fs::read_to_string(file) {
                     for path in vdf_library_paths(&text) {
+                        check()?;
                         add_existing(&mut libraries, &mut seen, path);
                     }
                 }
@@ -471,6 +483,7 @@ pub fn scan_library(manual: Option<&str>) -> Result<Library, String> {
     let mut searched = HashSet::new();
     let mut engine = None;
     for root in &libraries {
+        check()?;
         let steamapps = if root.file_name().is_some_and(|n| n == "steamapps") {
             root.clone()
         } else {
@@ -519,6 +532,7 @@ pub fn scan_library(manual: Option<&str>) -> Result<Library, String> {
         .map(|p| (p.clone(), 0, p.clone()))
         .collect();
     while let Some((dir, depth, root)) = pending.pop() {
+        check()?;
         if visited.len() >= MAX_DIRECTORIES || projects.len() >= MAX_PROJECTS {
             truncated = true;
             break;
@@ -539,11 +553,13 @@ pub fn scan_library(manual: Option<&str>) -> Result<Library, String> {
         let Ok(entries) = std::fs::read_dir(&canonical) else {
             continue;
         };
-        let mut subdirs: Vec<PathBuf> = entries
-            .flatten()
-            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-            .map(|e| e.path())
-            .collect();
+        let mut subdirs = Vec::new();
+        for entry in entries.flatten() {
+            check()?;
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                subdirs.push(entry.path());
+            }
+        }
         subdirs.sort();
         pending.extend(
             subdirs
@@ -552,6 +568,7 @@ pub fn scan_library(manual: Option<&str>) -> Result<Library, String> {
                 .map(|p| (p, depth + 1, root.clone())),
         );
     }
+    check()?;
     projects.sort_by(|a, b| {
         a.title
             .to_lowercase()
@@ -870,6 +887,24 @@ mod tests {
             .unwrap();
         assert!(!escaped.playable && escaped.preview.is_none());
         assert!(project_media(&bad).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn scan_stops_when_cancelled_even_during_directory_traversal() {
+        let root = temp_dir("cancel-scan");
+        let content = root.join("steamapps/workshop/content/431960");
+        for n in 0..64 {
+            std::fs::create_dir_all(content.join(n.to_string())).unwrap();
+        }
+        assert!(scan_library_cancellable(Some(root.to_str().unwrap()), || true).is_err());
+        let checks = std::cell::Cell::new(0usize);
+        let result = scan_library_cancellable(Some(root.to_str().unwrap()), || {
+            checks.set(checks.get() + 1);
+            checks.get() >= 12
+        });
+        assert!(result.is_err());
+        assert_eq!(checks.get(), 12, "the old traversal must stop immediately");
+        assert!(scan_library_cancellable(Some(root.to_str().unwrap()), || false).is_ok());
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

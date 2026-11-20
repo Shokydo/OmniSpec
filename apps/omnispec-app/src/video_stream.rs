@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,12 +17,15 @@ struct Entry {
     slot: String,
     path: PathBuf,
     mime: &'static str,
+    /// Отзыв действует и на уже начатый ответ, а не только на новые запросы.
+    active: Arc<AtomicBool>,
 }
 
 pub struct VideoServer {
     port: u16,
     secret: String,
     entries: Arc<Mutex<HashMap<String, Entry>>>,
+    shutdown: Arc<AtomicBool>,
 }
 
 fn random_hex() -> Result<String, String> {
@@ -36,16 +39,27 @@ impl VideoServer {
     pub fn new() -> Result<Self, String> {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .map_err(|e| format!("не удалось открыть локальное видео: {e}"))?;
+        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         let secret = random_hex()?;
         let entries = Arc::new(Mutex::new(HashMap::<String, Entry>::new()));
+        let shutdown = Arc::new(AtomicBool::new(false));
         let known = entries.clone();
         let token = secret.clone();
+        let stopped = shutdown.clone();
         std::thread::Builder::new()
             .name("omnispec-wall-video".into())
             .spawn(move || {
                 let active = Arc::new(AtomicUsize::new(0));
-                for stream in listener.incoming().flatten() {
+                while !stopped.load(Ordering::Acquire) {
+                    let stream = match listener.accept() {
+                        Ok((stream, _)) => stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(25));
+                            continue;
+                        }
+                        Err(_) => break,
+                    };
                     if active.fetch_add(1, Ordering::AcqRel) >= 16 {
                         active.fetch_sub(1, Ordering::AcqRel);
                         continue;
@@ -76,6 +90,7 @@ impl VideoServer {
             port,
             secret,
             entries,
+            shutdown,
         })
     }
 
@@ -109,13 +124,16 @@ impl VideoServer {
             id.clone()
         } else {
             let id = random_hex()?;
-            entries.retain(|_, entry| entry.slot != slot);
+            entries.retain(|_, entry| {
+                if entry.slot == slot { entry.active.store(false, Ordering::Release); false } else { true }
+            });
             entries.insert(
                 id.clone(),
                 Entry {
                     slot: slot.to_string(),
                     path,
                     mime,
+                    active: Arc::new(AtomicBool::new(true)),
                 },
             );
             id
@@ -130,10 +148,22 @@ impl VideoServer {
     }
 
     pub fn revoke(&self, slot: &str) {
-        self.entries
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|_, entry| entry.slot != slot);
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, entry| {
+            if entry.slot == slot { entry.active.store(false, Ordering::Release); false } else { true }
+        });
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+    }
+}
+
+impl Drop for VideoServer {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        for (_, entry) in self.entries.lock().unwrap_or_else(|e| e.into_inner()).drain() {
+            entry.active.store(false, Ordering::Release);
+        }
     }
 }
 
@@ -168,6 +198,20 @@ fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
     (last >= first).then_some((first, last))
 }
 
+fn copy_while_active(
+    mut input: impl Read, mut output: impl Write, mut remaining: u64, active: &AtomicBool,
+) -> std::io::Result<()> {
+    let mut buffer = [0u8; 64 * 1024];
+    while remaining > 0 && active.load(Ordering::Acquire) {
+        let max = remaining.min(buffer.len() as u64) as usize;
+        let count = input.read(&mut buffer[..max])?;
+        if count == 0 || !active.load(Ordering::Acquire) { break; }
+        output.write_all(&buffer[..count])?;
+        remaining -= count as u64;
+    }
+    Ok(())
+}
+
 fn serve(
     mut stream: TcpStream,
     port: u16,
@@ -175,7 +219,7 @@ fn serve(
     entries: &Mutex<HashMap<String, Entry>>,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut request = Vec::new();
     let mut chunk = [0u8; 1024];
     while request.len() < 16 * 1024 && !request.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -257,6 +301,7 @@ fn serve(
     let Some(entry) = entry else {
         return reply(&mut stream, "404 Not Found", "");
     };
+    if !entry.active.load(Ordering::Acquire) { return reply(&mut stream, "404 Not Found", ""); }
     if (entry.mime == "video/webm") != (ext == "webm") {
         return reply(&mut stream, "404 Not Found", "");
     }
@@ -298,7 +343,7 @@ fn serve(
     write!(stream, "HTTP/1.1 {code}\r\nContent-Type: {}\r\nContent-Length: {count}\r\nAccept-Ranges: bytes\r\n{content_range}Access-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: Content-Range, Accept-Ranges\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", entry.mime)?;
     if method == "GET" {
         file.seek(SeekFrom::Start(start))?;
-        std::io::copy(&mut file.take(count), &mut stream)?;
+        copy_while_active(file, &mut stream, count, &entry.active)?;
     }
     Ok(())
 }
@@ -318,6 +363,53 @@ mod tests {
         stream.read_to_end(&mut body).unwrap();
         body
     }
+    #[test]
+    fn revoking_workshop_stops_its_stream_without_touching_custom_video() {
+        let dir = std::env::temp_dir().join(format!("omnispec-video-slots-{}-{}", std::process::id(), random_hex().unwrap()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("movie.mp4");
+        std::fs::write(&file, b"\x00\x00\x00\x18ftypisom01234567890123456789").unwrap();
+        let server = VideoServer::new().unwrap();
+        let custom = server.expose("custom", &file).unwrap();
+        let workshop = server.expose("workshop", &file).unwrap();
+        let custom_path = reqwest::Url::parse(&custom).unwrap().path().to_string();
+        let workshop_path = reqwest::Url::parse(&workshop).unwrap().path().to_string();
+        let old = server.entries.lock().unwrap().values().find(|e| e.slot == "workshop").unwrap().clone();
+        server.revoke("workshop");
+        assert!(!old.active.load(Ordering::Acquire), "already-open transfers are cancelled");
+        assert!(String::from_utf8_lossy(&request(&server, &workshop_path, "")).starts_with("HTTP/1.1 404"));
+        assert!(String::from_utf8_lossy(&request(&server, &custom_path, "")).starts_with("HTTP/1.1 200"));
+        assert!(!server.is_empty());
+        server.revoke("custom");
+        assert!(server.is_empty());
+        let port = server.port;
+        drop(server);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while TcpStream::connect(("127.0.0.1", port)).is_ok() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(TcpStream::connect(("127.0.0.1", port)).is_err(), "unused listener must stop");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn copy_stops_as_soon_as_its_slot_is_revoked() {
+        struct RevokeOnWrite<'a> { active: &'a AtomicBool, bytes: usize }
+        impl Write for RevokeOnWrite<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.bytes += bytes.len();
+                self.active.store(false, Ordering::Release);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let active = AtomicBool::new(true);
+        let mut output = RevokeOnWrite { active: &active, bytes: 0 };
+        let data = vec![1u8; 1024 * 1024];
+        copy_while_active(&data[..], &mut output, data.len() as u64, &active).unwrap();
+        assert_eq!(output.bytes, 64 * 1024);
+    }
+
     #[test]
     fn range_and_secret_limit_access_to_selected_video() {
         let dir = std::env::temp_dir().join(format!(
