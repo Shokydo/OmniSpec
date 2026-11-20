@@ -7,6 +7,7 @@ permissions:
 jobs:
   windows:
     name: Temporary Windows icon build and native tests
+    if: ${{ !contains(github.event.head_commit.message, '[v04912-release-check]') }}
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -42,3 +43,60 @@ jobs:
           path: icon-test-artifact/
           if-no-files-found: error
           retention-days: 3
+  published-autoupdate:
+    name: Published Windows v0.49.11 → v0.49.12 (${{ matrix.auth_mode }})
+    if: ${{ contains(github.event.head_commit.message, '[v04912-release-check]') }}
+    runs-on: windows-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        auth_mode: [anonymous, token]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise the published updater on isolated old data
+        shell: pwsh
+        env:
+          UPDATE_TOKEN: ${{ github.token }}
+        run: |
+          if ('${{ matrix.auth_mode }}' -eq 'anonymous') {
+            ./tools/tests/windows-update-v04912.ps1 -Anonymous
+          } else {
+            ./tools/tests/windows-update-v04912.ps1
+          }
+  published-icons:
+    name: Published Windows v0.49.12 native icons and RPC
+    if: ${{ contains(github.event.head_commit.message, '[v04912-release-check]') }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tools/tests/package-lock.json
+      - name: Install WebView test tooling
+        working-directory: tools/tests
+        run: npm ci
+      - name: Download the public release and verify its digest
+        shell: pwsh
+        env:
+          UPDATE_TOKEN: ${{ github.token }}
+        run: |
+          $headers = @{Authorization=('Bearer ' + $env:UPDATE_TOKEN);Accept='application/vnd.github+json';'User-Agent'='OmniSpec-published-icon-check'}
+          $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/Shokydo/OmniSpec/releases/tags/v0.49.12' -Headers $headers
+          $latest = Invoke-RestMethod -Uri 'https://api.github.com/repos/Shokydo/OmniSpec/releases/latest' -Headers $headers
+          if ($latest.tag_name -ne 'v0.49.12' -or $release.draft -or $release.prerelease) { throw 'Release is not public latest' }
+          $asset = @($release.assets | Where-Object { $_.name -eq 'OmniSpec.exe' })
+          if ($asset.Count -ne 1 -or $asset[0].digest -notmatch '^sha256:[0-9a-fA-F]{64}$') { throw 'No unique Windows launcher digest' }
+          New-Item -ItemType Directory -Force -Path 'published-icon-check' | Out-Null
+          Invoke-WebRequest -Uri $asset[0].browser_download_url -OutFile 'published-icon-check/OmniSpec.exe'
+          $got = (Get-FileHash -Algorithm SHA256 -LiteralPath 'published-icon-check/OmniSpec.exe').Hash.ToLowerInvariant()
+          if ($got -ne $asset[0].digest.Substring(7).ToLowerInvariant()) { throw 'Public executable hash mismatch' }
+          Write-Host "PUBLISHED_WINDOWS_LAUNCHER_SHA256=$got"
+      - name: Exercise real WebView2, Win32 icons, fake IPC and restart
+        shell: pwsh
+        env:
+          EXPECTED_LAUNCHER_ICON_REF: main
+        run: ./tools/tests/windows-launcher-icon-cdp.ps1 -Launcher 'published-icon-check/OmniSpec.exe'
