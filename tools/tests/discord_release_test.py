@@ -129,6 +129,15 @@ class DiscordReleaseTests(unittest.TestCase):
         self.assertIn("звук обоев рабочего стола не меняется", body)
         self.assertNotIn("выровнены по центру", build("v0.49.10"))
 
+    def test_launcher_icon_notes_match_exact_release(self):
+        build = runpy.run_path(str(ROOT / "tools/release_body.py"))["build_release_body"]
+        body = build("v0.49.12")
+        for phrase in ("Оформление", "Россия", "Беларусь", "Казахстан", "Украина", "США",
+                       "панели задач Windows", "Discord Rich Presence", "сохраняется после перезапуска",
+                       "Маленькая иконка сборки", "звук обоев рабочего стола не меняется"):
+            self.assertIn(phrase, body)
+        self.assertNotIn("Россия, Беларусь, Казахстан", build("v0.49.11"))
+
     def test_release_assets_are_safe_for_legacy_linux_updaters(self):
         # Versions through v0.49.5 considered every omnispec* name without a dot
         # to be a launcher. The installer must not match, regardless of order.
