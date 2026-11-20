@@ -119,6 +119,36 @@ fn default_update_repo() -> Option<String> {
     Some("Shokydo/OmniSpec".to_string())
 }
 
+/// Встроенные иконки лаунчера. Неизвестный вариант из будущего settings.json
+/// безопасно возвращает исходную иконку, не сбрасывая остальные настройки.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LauncherIcon {
+    Ru,
+    By,
+    Kz,
+    Ua,
+    Us,
+    #[default]
+    #[serde(other)]
+    Default,
+}
+
+impl LauncherIcon {
+    /// Команда изменения принимает только известные идентификаторы.
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "ru" => Some(Self::Ru),
+            "by" => Some(Self::By),
+            "kz" => Some(Self::Kz),
+            "ua" => Some(Self::Ua),
+            "us" => Some(Self::Us),
+            "default" => Some(Self::Default),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -171,6 +201,9 @@ pub struct Settings {
     pub discord_upload_local_icon: bool,
 
     /* ---------- оформление ---------- */
+    /// Иконка окна, панели задач и большой картинки Discord Rich Presence.
+    #[serde(default)]
+    pub launcher_icon: LauncherIcon,
     /// Обои: имя встроенных (`grid`, `aurora`, …) или путь к своему файлу.
     pub wallpaper: Option<String>,
     /// Как показывать обои: cover | contain | fill | tile.
@@ -360,6 +393,7 @@ impl Default for Settings {
             discord_rpc: true,
             discord_instance_icon: true,
             discord_upload_local_icon: false,
+            launcher_icon: LauncherIcon::Default,
             wallpaper: None,
             wallpaper_fit: default_wallpaper_fit(),
             wallpaper_blur: 0,
@@ -447,11 +481,16 @@ impl Settings {
     }
 
     pub fn save_to(&self, file: &Path) -> Result<()> {
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let text = serde_json::to_string_pretty(self)?;
-        std::fs::write(file, text)?;
+        use std::io::Write;
+        let parent = file.parent().filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent)?;
+        // Ошибка записи или закрытие приложения не должны оставлять усечённый
+        // settings.json. Заменяем его только после полной записи соседа.
+        let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+        serde_json::to_writer_pretty(&mut temp, self)?;
+        temp.flush()?;
+        temp.persist(file).map_err(|error| error.error)?;
         Ok(())
     }
 
@@ -483,6 +522,42 @@ fn serenity_parse(text: &str) -> Result<Settings> {
 #[cfg(test)]
 mod discord_tests {
     use super::*;
+
+    #[test]
+    fn launcher_icon_preserves_legacy_and_roundtrips_all_variants() {
+        let old: Settings = serde_json::from_str(r#"{"username":"Alex","ui_scale":125}"#).unwrap();
+        assert_eq!(old.launcher_icon, LauncherIcon::Default);
+        for (id, icon) in [
+            ("default", LauncherIcon::Default), ("ru", LauncherIcon::Ru),
+            ("by", LauncherIcon::By), ("kz", LauncherIcon::Kz),
+            ("ua", LauncherIcon::Ua), ("us", LauncherIcon::Us),
+        ] {
+            assert_eq!(LauncherIcon::from_id(id), Some(icon));
+            let mut changed = old.clone();
+            changed.launcher_icon = icon;
+            let json = serde_json::to_string(&changed).unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&json).unwrap()["launcher_icon"], id);
+            let restored: Settings = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored.launcher_icon, icon);
+            assert_eq!(restored.username, "Alex");
+            assert_eq!(restored.ui_scale, 125);
+        }
+        assert_eq!(LauncherIcon::from_id("../../secret"), None);
+        let future: Settings = serde_json::from_str(r#"{"username":"Alex","launcher_icon":"future"}"#).unwrap();
+        assert_eq!(future.launcher_icon, LauncherIcon::Default);
+        assert_eq!(future.username, "Alex");
+    }
+
+    #[test]
+    fn failed_atomic_settings_replacement_preserves_existing_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("settings.json");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("keep"), "untouched").unwrap();
+        assert!(Settings::default().save_to(&target).is_err());
+        assert_eq!(std::fs::read_to_string(target.join("keep")).unwrap(), "untouched");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "temporary file is cleaned up");
+    }
 
     #[test]
     fn local_icon_upload_requires_explicit_consent_for_old_and_new_settings() {

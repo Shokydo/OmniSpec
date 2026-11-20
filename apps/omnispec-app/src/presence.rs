@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use omnispec_core::settings::LauncherIcon;
+
 /// Что показать в Discord. Обновляет фронт командой `set_presence`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PresenceInfo {
@@ -34,6 +36,7 @@ pub const DEFAULT_CLIENT_ID: &str = "1304864863830540439";
 struct Shared {
     info: PresenceInfo,
     enabled: bool,
+    launcher_icon: LauncherIcon,
 }
 
 /// Общее состояние присутствия: фронт пишет, воркер читает.
@@ -84,16 +87,21 @@ impl Presence {
         self.shared.lock().unwrap().info = info;
     }
 
-    fn snapshot(&self) -> (bool, PresenceInfo) {
+    /// Большая иконка хранится отдельно от присылаемой фронтом сборки.
+    pub fn set_launcher_icon(&self, icon: LauncherIcon) {
+        self.shared.lock().unwrap().launcher_icon = icon;
+    }
+
+    fn snapshot(&self) -> (bool, PresenceInfo, LauncherIcon) {
         let shared = self.shared.lock().unwrap();
-        (shared.enabled, shared.info.clone())
+        (shared.enabled, shared.info.clone(), shared.launcher_icon)
     }
 
     /// Цикл воркера: сессия → пауза → снова. Молча ждёт, пока не включат RPC.
     pub fn run(&self) {
         self.log("воркер запущен");
         loop {
-            let (enabled, _) = self.snapshot();
+            let (enabled, _, _) = self.snapshot();
             if !enabled {
                 std::thread::sleep(Duration::from_secs(2));
                 continue;
@@ -109,6 +117,12 @@ impl Presence {
     fn session(&self, client_id: &str) -> Result<(), String> {
         self.log("сессия: ищу Discord IPC…");
         let mut stream = connect_ipc().map_err(|error| format!("нет Discord IPC: {error}"))?;
+        self.connected_session(&mut stream, client_id)
+    }
+
+    /// Протокол выделен отдельно, чтобы проверять настоящие кадры на тестовом
+    /// сокете, не подключаясь к Discord и не меняя глобальные IPC-пути.
+    fn connected_session<S: Read + Write>(&self, mut stream: &mut S, client_id: &str) -> Result<(), String> {
         self.log("IPC подключён, шлём handshake");
         // client_id дублируется на верхний уровень: часть сборок Discord
         // ищет его там, а не в args, и отвечает «No Client ID Specified».
@@ -157,7 +171,7 @@ impl Presence {
         let mut last_sent: Option<serde_json::Value> = None;
         let mut last_send_at = std::time::Instant::now() - Duration::from_secs(60);
         loop {
-            let (enabled, info) = self.snapshot();
+            let (enabled, info, launcher_icon) = self.snapshot();
             if !enabled {
                 // Выключение RPC должно убрать уже показанный статус.
                 let clear = serde_json::json!({
@@ -168,7 +182,7 @@ impl Presence {
                 let _ = write_frame(&mut stream, 1, &clear);
                 return Ok(());
             }
-            let activity = activity_value(&info);
+            let activity = activity_value(&info, launcher_icon);
             let changed = last_sent.as_ref() != Some(&activity);
             let heartbeat = last_send_at.elapsed() >= Duration::from_secs(15);
             if changed || heartbeat {
@@ -194,7 +208,7 @@ impl Presence {
 }
 
 /// Тело активности для SET_ACTIVITY.
-fn activity_value(info: &PresenceInfo) -> serde_json::Value {
+fn activity_value(info: &PresenceInfo, launcher_icon: LauncherIcon) -> serde_json::Value {
     let details = if info.details.trim().is_empty() {
         "OmniSpec"
     } else {
@@ -208,7 +222,7 @@ fn activity_value(info: &PresenceInfo) -> serde_json::Value {
     // Discord принимает публичные URL в assets; заранее загружать логотип
     // в Developer Portal не нужно. Локальные пути и data: недопустимы.
     let mut assets = serde_json::json!({
-        "large_image": "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/icons/icon-512.png",
+        "large_image": crate::launcher_icon::presence_url(launcher_icon),
         "large_text": "OmniSpec",
     });
     if let Some(url) = info.small_image.as_deref().filter(|url| valid_image_url(url)) {
@@ -257,11 +271,79 @@ mod tests {
             state: "MC 1.21.1".into(), started_at: Some(123),
             small_image: Some("https://cdn.modrinth.com/data/test/icon.png".into()),
         };
-        let value = activity_value(&info);
+        let value = activity_value(&info, LauncherIcon::Default);
         assert!(value["assets"]["large_image"].as_str().unwrap().ends_with("/icons/icon-512.png"));
         assert_eq!(value["assets"]["small_image"], "https://cdn.modrinth.com/data/test/icon.png");
         assert_eq!(value["assets"]["small_text"], "Моя сборка");
         assert_eq!(value["timestamps"]["start"], 123);
+    }
+
+    #[test]
+    fn changing_launcher_icon_updates_large_without_touching_instance_or_timer() {
+        let presence = Presence::new();
+        presence.set(PresenceInfo {
+            mode: "playing".into(), details: "Сборка".into(), state: "MC 1.21".into(),
+            started_at: Some(123), small_image: Some("https://cdn.modrinth.com/data/test/icon.png".into()),
+        });
+        let (_, info, default) = presence.snapshot();
+        let mut previous = activity_value(&info, default);
+        for (icon, suffix) in [(LauncherIcon::Ru, "/ru.png"), (LauncherIcon::By, "/by.png"),
+                               (LauncherIcon::Kz, "/kz.png"), (LauncherIcon::Ua, "/ua.png"),
+                               (LauncherIcon::Us, "/us.png"), (LauncherIcon::Default, "/icon-512.png")] {
+            presence.set_launcher_icon(icon);
+            let (_, info, selected) = presence.snapshot();
+            let value = activity_value(&info, selected);
+            assert_ne!(value, previous, "worker must send a changed activity");
+            assert!(value["assets"]["large_image"].as_str().unwrap().ends_with(suffix));
+            assert_eq!(value["assets"]["small_image"], "https://cdn.modrinth.com/data/test/icon.png");
+            assert_eq!(value["timestamps"]["start"], 123);
+            previous = value;
+        }
+        // Поздний ответ фронта с данными сборки не отменяет выбор логотипа.
+        presence.set_launcher_icon(LauncherIcon::Ua);
+        presence.set(PresenceInfo::default());
+        assert_eq!(presence.snapshot().2, LauncherIcon::Ua);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ipc_sends_every_chosen_large_icon_and_preserves_small_image() {
+        use std::os::unix::net::UnixStream;
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        server.set_read_timeout(Some(Duration::from_secs(6))).unwrap();
+        let presence = Presence::new();
+        presence.configure(true);
+        presence.set(PresenceInfo {
+            mode: "playing".into(), details: "Сборка".into(), state: "Играет".into(),
+            started_at: Some(123), small_image: Some("https://cdn.modrinth.com/data/test/icon.png".into()),
+        });
+        let worker_presence = presence.clone();
+        let worker = std::thread::spawn(move || worker_presence.connected_session(&mut client, DEFAULT_CLIENT_ID));
+        let (op, handshake) = read_frame(&mut server).unwrap().unwrap();
+        assert_eq!(op, 0);
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&handshake).unwrap()["client_id"], DEFAULT_CLIENT_ID);
+        write_frame(&mut server, 3, "ping").unwrap();
+        assert_eq!(read_frame(&mut server).unwrap().unwrap(), (4, b"ping".to_vec()));
+        write_frame(&mut server, 1, r#"{"evt":"READY"}"#).unwrap();
+        let receive_activity = |server: &mut UnixStream| {
+            let (op, bytes) = read_frame(server).unwrap().unwrap();
+            assert_eq!(op, 1);
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value["cmd"], "SET_ACTIVITY");
+            value["args"]["activity"].clone()
+        };
+        assert_eq!(receive_activity(&mut server)["assets"]["large_image"], crate::launcher_icon::presence_url(LauncherIcon::Default));
+        for icon in [LauncherIcon::Ru, LauncherIcon::By, LauncherIcon::Kz,
+                     LauncherIcon::Ua, LauncherIcon::Us, LauncherIcon::Default] {
+            presence.set_launcher_icon(icon);
+            let activity = receive_activity(&mut server);
+            assert_eq!(activity["assets"]["large_image"], crate::launcher_icon::presence_url(icon));
+            assert_eq!(activity["assets"]["small_image"], "https://cdn.modrinth.com/data/test/icon.png");
+            assert_eq!(activity["timestamps"]["start"], 123);
+        }
+        presence.configure(false);
+        assert!(receive_activity(&mut server).is_null());
+        worker.join().unwrap().unwrap();
     }
 
     #[test]
@@ -270,7 +352,7 @@ mod tests {
                     "https://cdn.modrinth.com.evil.example/x", "https://user@cdn.modrinth.com/x"] {
             assert!(!valid_image_url(url));
             let info = PresenceInfo { small_image: Some(url.into()), ..PresenceInfo::default() };
-            assert!(activity_value(&info)["assets"].get("small_image").is_none());
+            assert!(activity_value(&info, LauncherIcon::Ru)["assets"].get("small_image").is_none());
         }
     }
 }

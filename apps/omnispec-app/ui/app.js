@@ -203,6 +203,16 @@
 
   const UI_SCALES = [80, 90, 100, 110, 125, 150];
 
+  // Только встроенные картинки: выбранный id нельзя превратить в путь к файлу.
+  const LAUNCHER_ICONS = [
+    ["default", "Оригинал", "assets/logo.png"],
+    ["ru", "Россия", "assets/launcher-icons/ru.png"],
+    ["by", "Беларусь", "assets/launcher-icons/by.png"],
+    ["kz", "Казахстан", "assets/launcher-icons/kz.png"],
+    ["ua", "Украина", "assets/launcher-icons/ua.png"],
+    ["us", "США", "assets/launcher-icons/us.png"]
+  ];
+
   const INITIAL_TABS = [
     ["console", "Консоль", "i-terminal"], ["errors", "Ошибки", "i-alert"],
     ["files", "Файлы", "i-folder"], ["mods", "Моды", "i-mod"],
@@ -2208,6 +2218,7 @@
     systemMemory: () => invoke("system_memory"),
     settings: () => invoke("get_settings"),
     saveSettings: saveSettingsInOrder,
+    setLauncherIcon: (icon) => invoke("set_launcher_icon", { icon }),
     instances: () => invoke("list_instances"),
     acknowledgeInstanceRenames: (acknowledgements) => invoke("acknowledge_instance_renames", { acknowledgements }),
     createInstance: (req) => invoke("create_instance", { req }),
@@ -2359,7 +2370,8 @@
     appInfo: async () => ({ home: "C:\\Users\\Player\\AppData\\Roaming\\OmniSpec", version: "0.1.0 (демо-режим)", demo: true }),
     systemMemory: async () => null, // браузер не раскрывает точный объём ОЗУ
     settings: async () => ({ ...DEMO.settings }),
-    saveSettings: async (s) => { DEMO.settings = s; return null; },
+    saveSettings: async (s) => { DEMO.settings = { ...s, launcher_icon: DEMO.settings.launcher_icon || "default" }; return null; },
+    setLauncherIcon: async (icon) => { DEMO.settings = { ...DEMO.settings, launcher_icon: icon }; return null; },
     instances: async () => DEMO.instances.map((i) => ({ ...i })),
     acknowledgeInstanceRenames: async () => null,
     createInstance: async (req) => {
@@ -2956,6 +2968,50 @@
     $("#toasts").appendChild(box);
     setTimeout(() => { box.style.opacity = "0"; box.style.transition = "opacity .3s"; }, 3600);
     setTimeout(() => box.remove(), 4000);
+  }
+
+  // Иконка сохраняется отдельной командой: общие снимки настроек не могут её
+  // откатить. Очередь и номер выбора защищают быстрые клики и ошибки записи.
+  let displayedLauncherIcon = "default";
+  let confirmedLauncherIcon = "default";
+  let launcherIconGeneration = 0;
+  let launcherIconQueue = Promise.resolve();
+
+  function launcherIconOption(id) {
+    return LAUNCHER_ICONS.find(([value]) => value === id) || LAUNCHER_ICONS[0];
+  }
+
+  function paintLauncherIcon(id) {
+    const [value, , src] = launcherIconOption(id);
+    const logo = $(".tb-logo img");
+    if (logo) { logo.setAttribute("src", src); logo.dataset.launcherIcon = value; }
+    $$("#launcher-icon-grid input[name='launcher-icon']").forEach((radio) => { radio.checked = radio.value === value; });
+  }
+
+  async function chooseLauncherIcon(id) {
+    if (!LAUNCHER_ICONS.some(([value]) => value === id)) return;
+    const generation = ++launcherIconGeneration;
+    displayedLauncherIcon = id;
+    state.settings = { ...(state.settings || {}), launcher_icon: id };
+    paintLauncherIcon(id);
+    const operation = launcherIconQueue.catch(() => {}).then(async () => {
+      await api.setLauncherIcon(id);
+      confirmedLauncherIcon = id;
+    });
+    launcherIconQueue = operation;
+    try {
+      await operation;
+      if (generation === launcherIconGeneration) {
+        state.settings = { ...(state.settings || {}), launcher_icon: displayedLauncherIcon };
+      }
+    } catch (error) {
+      if (generation === launcherIconGeneration) {
+        displayedLauncherIcon = confirmedLauncherIcon;
+        state.settings = { ...(state.settings || {}), launcher_icon: displayedLauncherIcon };
+        paintLauncherIcon(displayedLauncherIcon);
+      }
+      toast(`Не удалось сохранить иконку лаунчера: ${error}`, "err");
+    }
   }
 
   const selected = () => state.instances.find((item) => item.id === state.selectedId) || null;
@@ -9216,6 +9272,17 @@
     const selectedTab = INITIAL_TABS.find(([id]) => id === initialTab()) || INITIAL_TABS[0];
     return `
       <div class="prefs-section">
+        <div class="prefs-label" id="launcher-icon-label">Иконка лаунчера</div>
+        <div class="launcher-icon-grid" id="launcher-icon-grid" role="radiogroup" aria-labelledby="launcher-icon-label">
+          ${LAUNCHER_ICONS.map(([id, label, src]) => `
+            <label class="launcher-icon-option">
+              <input type="radio" name="launcher-icon" value="${id}" aria-label="${esc(label)}" ${displayedLauncherIcon === id ? "checked" : ""}>
+              <span class="launcher-icon-card"><img src="${src}" alt="" draggable="false"><span>${esc(label)}</span></span>
+            </label>`).join("")}
+        </div>
+        <div class="hint launcher-icon-hint">В шапке окна, на панели задач и в статусе Discord.</div>
+      </div>
+      <div class="prefs-section">
         <div class="prefs-label">Начальная вкладка</div>
         <div class="settings-row">
           <div class="label">При открытии сборки</div>
@@ -9656,7 +9723,8 @@
           if (confirmed) await api.openUrl(`https://steamcommunity.com/sharedfiles/filedetails/?id=${id}`);
         }
       } else {
-        state.settings = await api.downloadWallpaper(url);
+        const saved = await api.downloadWallpaper(url);
+        state.settings = { ...saved, launcher_icon: displayedLauncherIcon };
         await loadWallpaperSource("custom");
         state.wall.wallpaper = "custom";
         state.wall.recent = rememberWallpaper(state.wall.recent, "custom");
@@ -10022,6 +10090,9 @@
   function bindPrefs() {
     const settings = state.settings || {};
 
+    $$("#launcher-icon-grid input[name='launcher-icon']").forEach((radio) => radio.addEventListener("change", () => {
+      if (radio.checked) chooseLauncherIcon(radio.value);
+    }));
     $("#prefs-initial-tab")?.addEventListener("click", openInitialTabDialog);
     $$("#theme-grid .theme-chip").forEach((chip) => chip.addEventListener("click", () => {
       state.theme = applyTheme(chip.dataset.themeId);
@@ -10281,7 +10352,8 @@
       if (!path) return;
       wallPick.disabled = true;
       try {
-        state.settings = await api.setCustomWallpaper(path);
+        const saved = await api.setCustomWallpaper(path);
+        state.settings = { ...saved, launcher_icon: displayedLauncherIcon };
         await loadWallpaperSource("custom");
         state.wall.wallpaper = "custom";
         state.wall.recent = rememberWallpaper(state.wall.recent, "custom");
@@ -10542,6 +10614,7 @@
         ok: "Сбросить"
       });
       if (!okReset) return;
+      if (displayedLauncherIcon !== "default") await chooseLauncherIcon("default");
       state.theme = applyTheme("dark");
       applyShape("soft");
       state.fx = "wave";
@@ -10605,7 +10678,7 @@
     };
     try {
       await api.saveSettings(next);
-      state.settings = next;
+      state.settings = { ...next, launcher_icon: displayedLauncherIcon };
       toast("Настройки сохранены", "ok");
       $("#modal-prefs").hidden = true;
     } catch (err) { toast(String(err), "err"); }
@@ -12881,6 +12954,10 @@
     try {
       state.settings = await api.settings();
     } catch { state.settings = { ...DEMO.settings }; }
+    displayedLauncherIcon = launcherIconOption(state.settings?.launcher_icon)[0];
+    confirmedLauncherIcon = displayedLauncherIcon;
+    state.settings = { ...(state.settings || {}), launcher_icon: displayedLauncherIcon };
+    paintLauncherIcon(displayedLauncherIcon);
     // Значение физической ОЗУ нужно до открытия настроек или создания сборки.
     state.systemMemory = await api.systemMemory().catch(() => null);
     // Вид каталога один для Modrinth и CurseForge и не теряется при перезапуске.

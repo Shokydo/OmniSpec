@@ -28,9 +28,11 @@ use omnispec_core::modrinth::{install as modrinth_install, mrpack, Modrinth, Sea
 use omnispec_core::curseforge::{install as curseforge_install, modpack as curseforge_modpack, CurseForge};
 use omnispec_core::net::{Http, Reporter};
 use omnispec_core::paths::Paths;
-use omnispec_core::settings::Settings;
+use omnispec_core::settings::{LauncherIcon, Settings};
 use omnispec_core::update::{self, UpdateInfo};
 
+/// Встроенные иконки лаунчера и нативного окна.
+mod launcher_icon;
 /// Discord Rich Presence (локальный IPC Discord).
 mod presence;
 /// Безопасное разрешение публичных иконок для Rich Presence.
@@ -202,6 +204,8 @@ struct AppState {
     modrinth: Modrinth,
     curseforge: CurseForge,
     settings: Mutex<Settings>,
+    /// Владение нативным значком окна, в том числе ICON_BIG на Windows.
+    native_launcher_icon: launcher_icon::NativeIconState,
     /// Потоковый сервер запускается только при выборе видеообоев.
     video_server: StdMutex<Option<video_stream::VideoServer>>,
     /// Отмена обходов библиотеки и выбора при выключении/смене папки.
@@ -378,6 +382,10 @@ fn preserve_wallpaper_controls(current: &Settings, incoming: &mut Settings) {
     incoming.wallpaper_workshop_project = current.wallpaper_workshop_project.clone();
 }
 
+fn preserve_launcher_icon(current: &Settings, incoming: &mut Settings) {
+    incoming.launcher_icon = current.launcher_icon;
+}
+
 #[tauri::command]
 async fn save_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<(), String> {
     // Записи settings.json не должны обгонять друг друга или видеть частичный файл.
@@ -385,6 +393,9 @@ async fn save_settings(state: State<'_, AppState>, mut settings: Settings) -> Re
     // Снимок настроек мог попасть в очередь ещё до переноса id сборки.
     preserve_recovered_last_instance(&state.paths, &current, &mut settings);
     preserve_wallpaper_controls(&current, &mut settings);
+    // Иконка меняется отдельной транзакцией. Отставший общий снимок не
+    // должен вернуть старую иконку или расходиться с нативным окном / RPC.
+    preserve_launcher_icon(&current, &mut settings);
     // Запрет действует сразу, даже если сохранить файл не удалось: до перезапуска
     // не начнём новых отправок и попытаемся отменить уже начатую.
     if !settings.discord_rpc { current.discord_rpc = false; }
@@ -413,6 +424,43 @@ async fn save_settings(state: State<'_, AppState>, mut settings: Settings) -> Re
     state.rpc_upload_allowed.send_replace(
         current.discord_rpc && current.discord_instance_icon && current.discord_upload_local_icon
     );
+    Ok(())
+}
+
+/// Сначала меняем нативный значок, затем атомарно записываем настройки. Если
+/// запись не удалась, восстанавливаем предыдущий значок и не меняем RPC.
+fn commit_launcher_icon(
+    current: &mut Settings,
+    choice: LauncherIcon,
+    mut apply: impl FnMut(LauncherIcon) -> Result<(), String>,
+    save: impl FnOnce(&Settings) -> Result<(), String>,
+) -> Result<(), String> {
+    if current.launcher_icon == choice { return Ok(()); }
+    apply(choice)?;
+    let mut next = current.clone();
+    next.launcher_icon = choice;
+    if let Err(error) = save(&next) {
+        return match apply(current.launcher_icon) {
+            Ok(()) => Err(format!("не удалось сохранить иконку: {error}")),
+            Err(restore) => Err(format!("не удалось сохранить иконку: {error}; не удалось восстановить значок окна: {restore}")),
+        };
+    }
+    *current = next;
+    Ok(())
+}
+
+/// Только известные встроенные картинки; никакие пути от WebView не читаются.
+#[tauri::command]
+async fn set_launcher_icon(app: AppHandle, state: State<'_, AppState>, icon: String) -> Result<(), String> {
+    let choice = LauncherIcon::from_id(&icon).ok_or("неизвестная иконка лаунчера")?;
+    let mut current = state.settings.lock().await;
+    let window = app.get_webview_window("main").ok_or("окно лаунчера недоступно")?;
+    commit_launcher_icon(
+        &mut current, choice,
+        |value| launcher_icon::apply(&window, &state.native_launcher_icon, value),
+        |next| next.save(&state.paths).map_err(err),
+    )?;
+    state.presence.set_launcher_icon(current.launcher_icon);
     Ok(())
 }
 
@@ -3919,6 +3967,7 @@ fn main() {
         eprintln!("[omnispec] не удалось создать папки: {error}");
     }
     let settings = Settings::load(&paths).unwrap_or_default();
+    let initial_launcher_icon = settings.launcher_icon;
     // Чистим хвосты прошлых обновлений (скачанные копии, помощники).
     update::cleanup(&paths, None);
     let http = Http::with_proxy(settings.proxy.as_deref());
@@ -3931,6 +3980,7 @@ fn main() {
     let presence = presence::Presence::new()
         .with_log_path(paths.root.join("discord-rpc.log"));
     presence.configure(settings.discord_rpc);
+    presence.set_launcher_icon(initial_launcher_icon);
     let presence_worker = presence.clone();
     std::thread::spawn(move || presence_worker.run());
     let (rpc_upload_allowed, _) = tokio::sync::watch::channel(
@@ -3971,6 +4021,7 @@ fn main() {
         paths,
         http,
         settings: Mutex::new(settings),
+        native_launcher_icon: launcher_icon::NativeIconState::default(),
         video_server: StdMutex::new(None),
         wallpaper_revision: Arc::new(AtomicU64::new(0)),
         #[cfg(windows)]
@@ -3991,7 +4042,11 @@ fn main() {
     tauri::Builder::default()
         .manage(state)
         .setup(move |app| {
-            let _ = app.get_webview_window("main");
+            if let Some(window) = app.get_webview_window("main") {
+                if let Err(error) = launcher_icon::apply(&window, &app.state::<AppState>().native_launcher_icon, initial_launcher_icon) {
+                    eprintln!("[omnispec] не удалось восстановить иконку окна: {error}");
+                }
+            }
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
@@ -4036,6 +4091,7 @@ fn main() {
             system_memory,
             get_settings,
             save_settings,
+            set_launcher_icon,
             set_wallpaper_engine_enabled,
             set_wallpaper_workshop_audio,
             set_presence,
@@ -4190,6 +4246,42 @@ mod tests {
         preserve_recovered_last_instance(&paths, &current, &mut clear);
         assert_eq!(clear.last_instance, None);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn launcher_icon_transaction_rolls_back_native_on_save_failure() {
+        use super::{commit_launcher_icon, LauncherIcon, Settings};
+        use std::cell::RefCell;
+        let applied = RefCell::new(Vec::new());
+        let mut current = Settings { launcher_icon: LauncherIcon::Ru, ui_scale: 125, ..Settings::default() };
+        let failed = commit_launcher_icon(&mut current, LauncherIcon::Ua,
+            |icon| { applied.borrow_mut().push(icon); Ok(()) },
+            |_| Err("disk full".into()));
+        assert!(failed.unwrap_err().contains("disk full"));
+        assert_eq!(*applied.borrow(), [LauncherIcon::Ua, LauncherIcon::Ru]);
+        assert_eq!(current.launcher_icon, LauncherIcon::Ru);
+        assert_eq!(current.ui_scale, 125);
+
+        applied.borrow_mut().clear();
+        commit_launcher_icon(&mut current, LauncherIcon::Us,
+            |icon| { applied.borrow_mut().push(icon); Ok(()) },
+            |next| { assert_eq!(next.launcher_icon, LauncherIcon::Us); Ok(()) }).unwrap();
+        assert_eq!(*applied.borrow(), [LauncherIcon::Us]);
+        assert_eq!(current.launcher_icon, LauncherIcon::Us);
+        assert_eq!(current.ui_scale, 125);
+        let failed = commit_launcher_icon(&mut current, LauncherIcon::By,
+            |_| Err("native failed".into()), |_| panic!("should not save"));
+        assert!(failed.is_err());
+        assert_eq!(current.launcher_icon, LauncherIcon::Us);
+    }
+
+    #[test]
+    fn stale_general_settings_do_not_replace_addressed_launcher_icon() {
+        let current = super::Settings { launcher_icon: super::LauncherIcon::Kz, ..super::Settings::default() };
+        let mut stale = super::Settings { launcher_icon: super::LauncherIcon::Ru, ui_scale: 125, ..super::Settings::default() };
+        super::preserve_launcher_icon(&current, &mut stale);
+        assert_eq!(stale.launcher_icon, super::LauncherIcon::Kz);
+        assert_eq!(stale.ui_scale, 125);
     }
 
     #[test]

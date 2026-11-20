@@ -2,7 +2,7 @@
   "name": "omnispec-ui-tests",
   "private": true,
   "scripts": {
-    "test": "node diagnostics-unit.cjs && node diagnostics-ui.cjs && node feed-rpc-regression.cjs && node catalog-install-ui.cjs && node keyboard-catalog-ui.cjs && node catalog-live-search-ui.cjs && node home-catalog-ui.cjs && node home-header-stability-ui.cjs && node icon-centering-ui.cjs && node catalog-layout-ui.cjs && node rename-instance-ui.cjs && node instance-preferences-ui.cjs && node profile-wallpaper-ui.cjs && node wallpaper-controls-ui.cjs && node profile-account-races-ui.cjs && node cape-projection-ui.cjs && node session-recovery-ui.cjs"
+    "test": "node diagnostics-unit.cjs && node diagnostics-ui.cjs && node feed-rpc-regression.cjs && node catalog-install-ui.cjs && node keyboard-catalog-ui.cjs && node catalog-live-search-ui.cjs && node home-catalog-ui.cjs && node home-header-stability-ui.cjs && node icon-centering-ui.cjs && node catalog-layout-ui.cjs && node rename-instance-ui.cjs && node instance-preferences-ui.cjs && node launcher-icon-ui.cjs && node profile-wallpaper-ui.cjs && node wallpaper-controls-ui.cjs && node profile-account-races-ui.cjs && node cape-projection-ui.cjs && node session-recovery-ui.cjs"
   },
   "devDependencies": {
     "playwright": "1.49.1"

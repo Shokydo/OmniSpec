@@ -15,7 +15,7 @@ replaceOnce('    searchCurseforge: async (q) => {', '    searchCurseforge: async
 replaceOnce('    search: async (q) => {', '    search: async (q) => {\n      if (window.__mockDiscover) return window.__mockDiscover.fetch("modrinth", q);');
 replaceOnce('  function syncPresence(forceMode) {\n    if (!IS_APP) return;', '  function syncPresence(forceMode) {\n    if (!IS_APP && !window.__rpcTest) return;');
 replaceOnce('    setPresence: async () => null,', '    setPresence: async (...args) => { if (window.__rpcTest) await window.__rpcTest.send(args); return null; },');
-replaceOnce('    saveSettings: async (s) => { DEMO.settings = s; return null; },', '    saveSettings: async (s) => { if (window.__rpcTest?.failSaves > 0) { window.__rpcTest.failSaves--; throw new Error("диск недоступен"); } DEMO.settings = s; return null; },');
+replaceOnce('    saveSettings: async (s) => { DEMO.settings = { ...s, launcher_icon: DEMO.settings.launcher_icon || "default" }; return null; },', '    saveSettings: async (s) => { if (window.__rpcTest?.failSaves > 0) { window.__rpcTest.failSaves--; throw new Error("диск недоступен"); } DEMO.settings = { ...s, launcher_icon: DEMO.settings.launcher_icon || "default" }; return null; },');
 replaceOnce('    resolvePresenceIcon: async () => null,', '    resolvePresenceIcon: async (id) => window.__rpcTest ? window.__rpcTest.resolve(id) : null,');
 replaceOnce('icon: null, created: now - 86400 * 9', 'icon: window.__rpcTest ? "icon.png" : null, created: now - 86400 * 9');
 replaceOnce('icon: null, created: now - 86400 * 20', 'icon: window.__rpcTest ? "icon.png" : null, created: now - 86400 * 20');
