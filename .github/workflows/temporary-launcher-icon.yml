@@ -1,0 +1,44 @@
+name: Temporary launcher icon Windows test
+on:
+  push:
+    branches: [arena-launcher-icon-test-e41940f]
+permissions:
+  contents: read
+jobs:
+  windows:
+    name: Temporary Windows icon build and native tests
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tools/tests/package-lock.json
+      - name: Install WebView test tooling
+        working-directory: tools/tests
+        run: npm ci
+      - name: Build isolated test executable
+        run: cargo build --release -p omnispec-app --locked
+      - name: Check launcher icon Rust tests on Windows
+        run: cargo test --release -p omnispec-app --locked launcher_icon
+      - name: Check actual WebView2, Win32 icons, RPC and restart
+        shell: pwsh
+        run: ./tools/tests/windows-launcher-icon-cdp.ps1 -Launcher 'target/release/omnispec-app.exe'
+      - name: Prepare test artifact and checksum
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force icon-test-artifact | Out-Null
+          Copy-Item target/release/omnispec-app.exe icon-test-artifact/OmniSpec-IconTest.exe
+          $hash = (Get-FileHash icon-test-artifact/OmniSpec-IconTest.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  OmniSpec-IconTest.exe" | Out-File -Encoding ascii icon-test-artifact/OmniSpec-IconTest.exe.sha256
+          Write-Host "TEST_BINARY_SHA256 $hash"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-icon-windows-test
+          path: icon-test-artifact/
+          if-no-files-found: error
+          retention-days: 3

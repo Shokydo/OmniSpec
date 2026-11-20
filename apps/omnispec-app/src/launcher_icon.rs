@@ -10,11 +10,11 @@ const DEFAULT_RPC: &str = "https://raw.githubusercontent.com/Shokydo/OmniSpec/ma
 /// требуют согласия на загрузку пользовательских файлов и не меняют small_image.
 pub fn presence_url(icon: LauncherIcon) -> &'static str {
     match icon {
-        LauncherIcon::Ru => "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/launcher-icons/ru.png",
-        LauncherIcon::By => "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/launcher-icons/by.png",
-        LauncherIcon::Kz => "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/launcher-icons/kz.png",
-        LauncherIcon::Ua => "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/launcher-icons/ua.png",
-        LauncherIcon::Us => "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/launcher-icons/us.png",
+        LauncherIcon::Ru => "https://raw.githubusercontent.com/Shokydo/OmniSpec/arena-launcher-icon-test-e41940f/apps/omnispec-app/ui/assets/launcher-icons/ru.png",
+        LauncherIcon::By => "https://raw.githubusercontent.com/Shokydo/OmniSpec/arena-launcher-icon-test-e41940f/apps/omnispec-app/ui/assets/launcher-icons/by.png",
+        LauncherIcon::Kz => "https://raw.githubusercontent.com/Shokydo/OmniSpec/arena-launcher-icon-test-e41940f/apps/omnispec-app/ui/assets/launcher-icons/kz.png",
+        LauncherIcon::Ua => "https://raw.githubusercontent.com/Shokydo/OmniSpec/arena-launcher-icon-test-e41940f/apps/omnispec-app/ui/assets/launcher-icons/ua.png",
+        LauncherIcon::Us => "https://raw.githubusercontent.com/Shokydo/OmniSpec/arena-launcher-icon-test-e41940f/apps/omnispec-app/ui/assets/launcher-icons/us.png",
         LauncherIcon::Default => DEFAULT_RPC,
     }
 }
