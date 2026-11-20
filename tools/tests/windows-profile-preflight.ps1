@@ -102,24 +102,41 @@ function FocusFileName($dialog) {
   Start-Sleep -Milliseconds 250
   $edit=[System.Windows.Automation.AutomationElement]::FocusedElement
   Write-Host "PICKER_FOCUS name=[$($edit.Current.Name)] id=[$($edit.Current.AutomationId)] type=$($edit.Current.ControlType.ProgrammaticName) rect=$($edit.Current.BoundingRectangle)"
-  $editCond=[System.Windows.Automation.AndCondition]::new(
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Edit),
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1148'))
-  if($edit.Current.AutomationId -eq '1148' -and $edit.Current.ControlType -eq [System.Windows.Automation.ControlType]::ComboBox) {
-    $edit=$edit.FindFirst($scope,$editCond)
+  # Windows 11 can expose the focused inner HWND as Pane rather than Edit;
+  # both representations carry ID 1148. Do not infer identity from the type.
+  if($null -eq $edit -or $edit.Current.AutomationId -ne '1148' -or -not $edit.Current.HasKeyboardFocus) {
+    throw 'Native file name field 1148 is not focused; refusing to type elsewhere'
   }
-  if($null -eq $edit -or $edit.Current.AutomationId -ne '1148' -or $edit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit) {
-    $edit=$dialog.FindFirst($scope,$editCond)
+  $rect=$edit.Current.BoundingRectangle; $outer=$dialog.Current.BoundingRectangle
+  if($rect.Left -lt $outer.Left -or $rect.Right -gt $outer.Right -or $rect.Top -lt $outer.Top -or $rect.Bottom -gt $outer.Bottom) {
+    throw 'Focused file name field is outside the picker'
   }
-  if($null -eq $edit){throw 'Native file name edit 1148 not found; refusing to type elsewhere'}
-  Write-Host "FILE_PICKER_EDIT name=[$($edit.Current.Name)] id=[$($edit.Current.AutomationId)] rect=$($edit.Current.BoundingRectangle)"
   return $edit
 }
 function SetFileName($edit,[string]$text) {
   $pattern=$null
-  if(-not $edit.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) {throw 'Native file name edit does not support ValuePattern'}
-  $pattern.SetValue($text)
-  if($pattern.Current.Value -ne $text){throw 'Native file name edit did not retain requested value'}
+  if($edit.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) {
+    $pattern.SetValue($text)
+    if($pattern.Current.Value -ne $text){throw 'Native file name edit did not retain requested value'}
+    Write-Host 'PICKER_INPUT_VIA_VALUE_PATTERN'
+    return
+  }
+  # Some Windows 11 versions expose a raw Pane without ValuePattern. Keep the
+  # verified field focused and type through the keyboard, escaping SendKeys metacharacters.
+  if(-not $edit.Current.HasKeyboardFocus){throw 'File name field lost keyboard focus'}
+  $safe=[Text.StringBuilder]::new()
+  foreach($ch in $text.ToCharArray()) {
+    if('+^%~()[]{}'.Contains([string]$ch)){[void]$safe.Append('{').Append($ch).Append('}')}
+    else {[void]$safe.Append($ch)}
+  }
+  [System.Windows.Forms.SendKeys]::SendWait('^a')
+  [System.Windows.Forms.SendKeys]::SendWait($safe.ToString())
+  $legacy=$null
+  if($edit.TryGetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern,[ref]$legacy)) {
+    $actual=$legacy.Current.Value
+    if($null -ne $actual -and $actual -ne '' -and $actual -ne $text){throw 'Native file name value differs after typing'}
+  }
+  Write-Host 'PICKER_INPUT_VIA_KEYBOARD'
 }
 function SelectFilesInDialog($dialog,[string[]]$files) {
   if($files.Count -lt 2){throw 'Multi-file test needs at least two files'}
