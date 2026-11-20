@@ -93,27 +93,51 @@ function WaitDialog([int]$seconds=40) {
   }
   throw 'Windows multi-file picker did not appear'
 }
-function SelectFilesInDialog($dialog,[string[]]$files) {
-  $editCond=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Edit)
-  $edits=@($dialog.FindAll($scope,$editCond))
-  # The modern Explorer picker also has a search edit at the top. The file
-  # name edit is the lowest visible edit, nested inside combo box 1148.
-  $visible=@($edits | Where-Object {try {$_.Current.BoundingRectangle.Height -gt 0}catch{$false}} |
-    Sort-Object { $_.Current.BoundingRectangle.Top } -Descending)
-  if(-not $visible.Count){throw 'File name field missing in native dialog'}
-  $edit=$visible[0]
-  Write-Host "FILE_PICKER_FIELD name=[$($edit.Current.Name)] id=[$($edit.Current.AutomationId)] rect=$($edit.Current.BoundingRectangle)"
-  Screenshot 'windows-file-dialog.png'
-  $names=($files | ForEach-Object { '"'+$_+'"' }) -join ' '
+function FocusFileName($dialog) {
+  # The picker has several Edit controls, including search and item renaming.
+  # Alt+N is the Windows shortcut for the native "File name" field. Only write
+  # after verifying its exact automation ID, never a guessed list/search edit.
+  [void][OmniProfileProbe]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle)
+  [System.Windows.Forms.SendKeys]::SendWait('%n')
+  Start-Sleep -Milliseconds 250
+  $edit=[System.Windows.Automation.AutomationElement]::FocusedElement
+  Write-Host "PICKER_FOCUS name=[$($edit.Current.Name)] id=[$($edit.Current.AutomationId)] type=$($edit.Current.ControlType.ProgrammaticName) rect=$($edit.Current.BoundingRectangle)"
+  $editCond=[System.Windows.Automation.AndCondition]::new(
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Edit),
+    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1148'))
+  if($edit.Current.AutomationId -eq '1148' -and $edit.Current.ControlType -eq [System.Windows.Automation.ControlType]::ComboBox) {
+    $edit=$edit.FindFirst($scope,$editCond)
+  }
+  if($null -eq $edit -or $edit.Current.AutomationId -ne '1148' -or $edit.Current.ControlType -ne [System.Windows.Automation.ControlType]::Edit) {
+    $edit=$dialog.FindFirst($scope,$editCond)
+  }
+  if($null -eq $edit){throw 'Native file name edit 1148 not found; refusing to type elsewhere'}
+  Write-Host "FILE_PICKER_EDIT name=[$($edit.Current.Name)] id=[$($edit.Current.AutomationId)] rect=$($edit.Current.BoundingRectangle)"
+  return $edit
+}
+function SetFileName($edit,[string]$text) {
   $pattern=$null
-  if($edit.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) { $pattern.SetValue($names) }
-  else { $edit.SetFocus();[System.Windows.Forms.SendKeys]::SendWait('^a');[System.Windows.Forms.SendKeys]::SendWait($names) }
-  $buttonCond=[System.Windows.Automation.AndCondition]::new(
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button),
-    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'1'))
-  $button=$dialog.FindFirst($scope,$buttonCond)
-  if($null -eq $button) { $edit.SetFocus();[System.Windows.Forms.SendKeys]::SendWait('{ENTER}') }
-  else { Click $button }
+  if(-not $edit.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) {throw 'Native file name edit does not support ValuePattern'}
+  $pattern.SetValue($text)
+  if($pattern.Current.Value -ne $text){throw 'Native file name edit did not retain requested value'}
+}
+function SelectFilesInDialog($dialog,[string[]]$files) {
+  if($files.Count -lt 2){throw 'Multi-file test needs at least two files'}
+  $dir=Split-Path -Parent $files[0]
+  foreach($file in $files){if((Split-Path -Parent $file) -ne $dir){throw 'All test files must share one directory'}}
+  Screenshot 'windows-file-dialog.png'
+  $edit=FocusFileName $dialog
+  # Navigate to the fixture directory first; then enter multiple quoted base
+  # names just as in Explorer. This exercises the real IFileOpenDialog result.
+  SetFileName $edit $dir
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+  Start-Sleep -Seconds 2
+  $dialog=WaitDialog 8
+  $edit=FocusFileName $dialog
+  $names=($files | ForEach-Object { '"'+(Split-Path -Leaf $_)+'"' }) -join ' '
+  SetFileName $edit $names
+  Screenshot 'windows-file-dialog-filled.png'
+  [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
 }
 function WaitSettings($predicate,[string]$description,[int]$seconds=90) {
   $end=[DateTime]::UtcNow.AddSeconds($seconds)
@@ -268,16 +292,13 @@ try {
   Write-Host 'WINDOWS_DIRECT_HTTPS_GIF_OK'
   Write-Host 'WINDOWS_PROFILE_WALLPAPER_PREFLIGHT_PASSED'
 } catch {
+  # Querying every WebView2 node while a native modal dialog is open can block
+  # and mask the original failure. Preserve it before taking the screenshot.
+  $originalError=$_
+  Write-Host "PREFLIGHT_FAILURE $($originalError.Exception.Message)"
+  Write-Host $originalError.ScriptStackTrace
   Screenshot 'windows-profile-failure.png'
-  foreach($node in @($script:ui,$script:dialog)) {
-    if($node){
-      Write-Host 'ACCESSIBILITY_NODES:'
-      foreach($n in $node.FindAll($scope,$all)) {
-        try {if($n.Current.Name -or $n.Current.AutomationId){Write-Host ("type={0} name=[{1}] id=[{2}] enabled={3} rect={4}" -f $n.Current.ControlType.ProgrammaticName,$n.Current.Name,$n.Current.AutomationId,$n.Current.IsEnabled,$n.Current.BoundingRectangle)}}catch{}
-      }
-    }
-  }
-  throw
+  throw $originalError
 } finally {
   StopLauncher
   if($regCreated){Remove-Item -Path $reg -Recurse -Force -ErrorAction SilentlyContinue}
