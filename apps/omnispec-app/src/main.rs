@@ -3461,8 +3461,11 @@ async fn open_wallpaper_engine(state: State<'_, AppState>, directory: String) ->
             return Err("проект не найден в выбранной библиотеке Steam".into());
         }
         let exe = lib.engine.ok_or_else(|| "wallpaper64.exe не найден. Укажи папку Steam с установленным Wallpaper Engine".to_string())?;
+        // Canonicalize на Windows выдаёт \\?\-путь; обычная форма совместимее
+        // с внешними приложениями. Для длинных/особых путей префикс сохраняется.
+        let project_file = selected.join("project.json");
         std::process::Command::new(exe)
-            .args(["-control", "openWallpaper", "-file"]).arg(selected.join("project.json"))
+            .args(["-control", "openWallpaper", "-file"]).arg(dunce::simplified(&project_file))
             .args(["-playInWindow", "OmniSpec Wallpaper", "-width", "1280", "-height", "720"])
             .spawn().map(|_| ()).map_err(|e| format!("не удалось отправить команду Wallpaper Engine: {e}"))
     }

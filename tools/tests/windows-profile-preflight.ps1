@@ -96,12 +96,14 @@ function WaitDialog([int]$seconds=40) {
 function SelectFilesInDialog($dialog,[string[]]$files) {
   $editCond=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Edit)
   $edits=@($dialog.FindAll($scope,$editCond))
-  $edit=$null
-  foreach($candidate in $edits) {
-    try {if($candidate.Current.Name -match '(?i)file name|имя файла' -or $candidate.Current.AutomationId -eq '1148'){$edit=$candidate;break}}catch{}
-  }
-  if($null -eq $edit -and $edits.Count){$edit=$edits[$edits.Count-1]}
-  if($null -eq $edit){throw 'File name field missing in native dialog'}
+  # The modern Explorer picker also has a search edit at the top. The file
+  # name edit is the lowest visible edit, nested inside combo box 1148.
+  $visible=@($edits | Where-Object {try {$_.Current.BoundingRectangle.Height -gt 0}catch{$false}} |
+    Sort-Object { $_.Current.BoundingRectangle.Top } -Descending)
+  if(-not $visible.Count){throw 'File name field missing in native dialog'}
+  $edit=$visible[0]
+  Write-Host "FILE_PICKER_FIELD name=[$($edit.Current.Name)] id=[$($edit.Current.AutomationId)] rect=$($edit.Current.BoundingRectangle)"
+  Screenshot 'windows-file-dialog.png'
   $names=($files | ForEach-Object { '"'+$_+'"' }) -join ' '
   $pattern=$null
   if($edit.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) { $pattern.SetValue($names) }
@@ -178,8 +180,8 @@ function InvokeEngine([string]$title,[string]$dir) {
     Start-Sleep -Milliseconds 150
   }
   if($args.Count -lt 10){throw "Engine was not invoked for $title"}
-  # Rust canonicalize uses the extended-length path prefix on Windows.
-  if($args.Count -gt 3 -and $args[3].StartsWith('\\?\')){$args[3]=$args[3].Substring(4)}
+  # A short, ordinary path must be in the compatible DOS form for Wallpaper Engine.
+  if($args.Count -gt 3 -and $args[3].StartsWith('\\?\')){throw 'Engine received an unnecessary extended-length path prefix'}
   $expected=@('-control','openWallpaper','-file',(Join-Path $dir 'project.json'),'-playInWindow','OmniSpec Wallpaper','-width','1280','-height','720')
   if(($args -join '|') -ne ($expected -join '|')){throw "Wrong engine argument vector: $($args -join '|')"}
   Remove-Item $env:OMNISPEC_TEST_WE_LOG -Force
@@ -222,7 +224,9 @@ try {
   Click (WaitId 'skin-upload')
   $script:dialog=WaitDialog
   SelectFilesInDialog $script:dialog @((Join-Path $fixture 'one.png'),(Join-Path $fixture 'two.png'),(Join-Path $fixture 'bad.png'))
-  $script:dialog=$null
+  Start-Sleep -Seconds 2
+  try {$script:dialog=WaitDialog 3} catch {$script:dialog=$null}
+  if($script:dialog){throw 'File picker did not close after selecting the PNG files'}
   $saved=WaitSettings {param($s) @($s.skin_presets).Count -eq 3} 'batch of two valid PNGs' 100
   $items=@($saved.skin_presets)
   if($items[0].id -ne 'legacy' -or @($saved.skin_favorites)[0].futureField -ne 'preserved'){throw 'Legacy skin or favorite was lost'}
