@@ -140,6 +140,20 @@ def wait_checked(name, timeout=20):
         time.sleep(.1)
     raise AssertionError('radio not checked: '+name)
 
+def wait_visible_text(fragment, timeout=15):
+    # Ошибка может быть раскрыта как текст WebKit, а не имя элемента AT-SPI.
+    deadline=time.monotonic()+timeout
+    while time.monotonic()<deadline:
+        for node in walk(pyatspi.Registry.getDesktop(0)):
+            try:
+                if not node.getState().contains(pyatspi.STATE_SHOWING): continue
+                if fragment in (node.name or ''): return
+                text=node.queryText()
+                if fragment in text.getText(0,text.characterCount): return
+            except Exception: pass
+        time.sleep(.1)
+    raise AssertionError('accessible text not found: '+fragment)
+
 def action(name):
     node=wait_node(name)
     a=node.queryAction()
@@ -250,6 +264,9 @@ try:
     before=fake.count(); os.chmod(data,0o500)
     try:
         action('Россия')
+        # Не принимаем исходное состояние за результат операции: дожидаемся
+        # реальной ошибки записи, затем проверяем восстановленный выбор.
+        wait_visible_text('Не удалось сохранить иконку лаунчера', 15)
         wait_checked('США', 15)
         time.sleep(.6)  # worker IPC должен успеть обработать возможное изменение
         assert saved()['launcher_icon']=='us'
@@ -262,9 +279,10 @@ try:
     assert saved()['launcher_icon']=='us'
     print('LINUX_NATIVE_RESTART',wait_native('us'),flush=True)
     fake.wait_icon('/us.png',start)
-    action('Настройки');action('Оформление');action('Оригинал');wait_saved('default')
+    action('Настройки');action('Оформление')
+    start=fake.count(); action('Оригинал'); wait_saved('default')
     print('LINUX_NATIVE_DEFAULT_RESTORE',wait_native('default'),flush=True)
-    fake.wait_icon('/icon-512.png')
+    fake.wait_icon('/icon-512.png',start)
     print('LINUX_TAURI_ICON_RPC_AND_RESTART_OK',flush=True)
 except Exception:
     traceback.print_exc()

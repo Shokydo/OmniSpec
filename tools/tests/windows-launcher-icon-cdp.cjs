@@ -66,9 +66,13 @@ async function waitIpc(id,start=0) {
   return event.assets.large_image;
 }
 async function verifyPublicImage(url,id) {
+  const file=id==='default'?'apps/omnispec-app/icons/icon-512.png':`apps/omnispec-app/ui/assets/launcher-icons/${id}.png`;
+  if(process.env.EXPECTED_LAUNCHER_ICON_REF) {
+    assert.equal(url,`https://raw.githubusercontent.com/Shokydo/OmniSpec/${process.env.EXPECTED_LAUNCHER_ICON_REF}/${file}`,
+      `${id}: incorrect published image URL`);
+  }
   const response=await fetch(url);assert(response.ok,`${url} HTTP ${response.status}`);
   assert((response.headers.get('content-type')||'').startsWith('image/png'),url);
-  const file=id==='default'?'apps/omnispec-app/icons/icon-512.png':`apps/omnispec-app/ui/assets/launcher-icons/${id}.png`;
   const local=crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   const remote=crypto.createHash('sha256').update(Buffer.from(await response.arrayBuffer())).digest('hex');
   assert.equal(remote,local,`${id}: public PNG differs from embedded source`);
@@ -153,13 +157,16 @@ async function unlockSettings() {
     assert(!events.slice(before).some(x=>x?.assets?.large_image?.endsWith('/launcher-icons/ru.png')));
     console.log('WINDOWS_FAILED_SAVE_ROLLBACK_OK',JSON.stringify(inspect('us')));
 
+    // Украина встречается только в конце: ожидание не может ошибочно принять
+    // промежуточную запись или событие от предыдущего теста.
+    const burstStart=events.length;
     await page.evaluate(()=>{
-      for(const id of ['ru','ua','us','kz','by','ua']) {
+      for(const id of ['ru','us','kz','by','ua']) {
         const input=document.querySelector(`#launcher-icon-grid input[value="${id}"]`);
         input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));
       }
     });
-    await waitSaved('ua');await waitIpc('ua');
+    await waitSaved('ua');await waitIpc('ua',burstStart);
     console.log('WINDOWS_FAST_SWITCH_OK',JSON.stringify(inspect('ua')));
     await stop();const after=events.length;await launch();
     await waitSaved('ua');await waitIpc('ua',after);
