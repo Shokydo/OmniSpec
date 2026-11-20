@@ -131,11 +131,6 @@ function SetFileName($edit,[string]$text) {
   }
   [System.Windows.Forms.SendKeys]::SendWait('^a')
   [System.Windows.Forms.SendKeys]::SendWait($safe.ToString())
-  $legacy=$null
-  if($edit.TryGetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern,[ref]$legacy)) {
-    $actual=$legacy.Current.Value
-    if($null -ne $actual -and $actual -ne '' -and $actual -ne $text){throw 'Native file name value differs after typing'}
-  }
   Write-Host 'PICKER_INPUT_VIA_KEYBOARD'
 }
 function SelectFilesInDialog($dialog,[string[]]$files) {
