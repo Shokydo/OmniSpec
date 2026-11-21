@@ -1,6 +1,7 @@
 // Actual WebView2, Tauri commands, WAV decoder and on-disk settings; no Minecraft login.
 const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
+const { checkSettingsLayout } = require('./settings-layout-assert.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
@@ -97,6 +98,32 @@ async function restartLauncher(errors){
 
     await watchActualAudio();
     await openPrefs('sound');
+    for(const scale of [100,150]){
+      if(scale!==100){
+        await openPrefs('look');await page.locator(`[data-ui-scale="${scale}"]`).click();
+        await page.waitForFunction(scale=>document.documentElement.dataset.uiScale===String(scale),scale);
+        await waitSaved(s=>s.ui_scale===scale,`${scale}% scale`);await openPrefs('sound');
+      }
+      await page.waitForTimeout(300);
+      const styles=await checkSettingsLayout(page,`real WebView2 ${scale}%`);
+      for(const style of styles){
+        const button=page.locator(`[data-sound-style="${style}"]`);
+        await button.scrollIntoViewIfNeeded();
+        await button.click();
+        await waitSaved(s=>s.sound_style===style,`sound style ${style}`);
+        assert(await button.evaluate(el=>el.classList.contains('is-active')),`${style} was not selected`);
+      }
+      await checkSettingsLayout(page,`real WebView2 ${scale}% custom`);
+      assert(await page.locator('#prefs-body').evaluate(el=>el.scrollHeight>el.clientHeight),'custom sounds must overflow vertically');
+      await page.locator('#sound-test').click();
+      assert(await page.locator('#prefs-body').evaluate(el=>el.scrollTop)>0,'last control must be reachable vertically');
+    }
+    await openPrefs('look');await page.locator('[data-ui-scale="100"]').click();
+    await page.waitForFunction(()=>document.documentElement.dataset.uiScale==='100');
+    await waitSaved(s=>s.ui_scale===100,'restore 100% scale');
+    await openPrefs('sound');await page.waitForTimeout(300);
+    await checkSettingsLayout(page,'real WebView2 restored');
+    console.log('WINDOWS_WEBVIEW2_SETTINGS_SOUND_LAYOUT_AND_SCROLL_OK');
     assert.equal(await page.locator('#set-sound-volume').getAttribute('max'),'200');
     await page.locator('#set-sound-volume').evaluate(el=>{el.value='200';el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));});
     await waitSaved(s=>s.sound_volume===200,'master volume 200%');

@@ -138,6 +138,37 @@ def open_prefs(category):
     if get("document.querySelector('#modal-prefs').hidden"):click('#btn-quick-settings')
     click('[data-pref="'+category+'"]')
 
+def check_sound_layout(label):
+    # Measure the real WebKitGTK layout, not a mocked browser: there should be
+    # no horizontal overflow and every translated label must fit its button.
+    time.sleep(.35)
+    result=get("""(()=>{const nav=document.querySelector('#prefs-nav'),body=document.querySelector('#prefs-body'),row=document.querySelector('#sound-style-chips');
+      const size=e=>({client:e.clientWidth,scroll:e.scrollWidth,overflowX:getComputedStyle(e).overflowX,overflowY:getComputedStyle(e).overflowY});
+      const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom}};
+      const item=e=>{const r=document.createRange();r.selectNodeContents(e);const t=r.getBoundingClientRect();
+        return {...rect(e),textLeft:t.left,textRight:t.right}};
+      return {nav:{...size(nav),...rect(nav),indicatorBox:getComputedStyle(nav,'::before').boxSizing,
+        tabs:Array.from(nav.querySelectorAll('[data-pref]'),e=>({id:e.dataset.pref,...item(e)}))},
+        body:size(body),row:{...size(row),...rect(row)},chips:Array.from(row.querySelectorAll('[data-sound-style]'),e=>({id:e.dataset.soundStyle,...item(e)}))}})()""")
+    nav=result['nav']
+    # WebKit can round scrollWidth up by 1px even for an empty nav at zoom 150%.
+    assert nav['overflowX']=='hidden' and nav['scroll']<=nav['client']+1 and nav['indicatorBox']=='border-box',(label,nav)
+    for tab in nav['tabs']:
+        assert tab['left']>=nav['left']-1 and tab['right']<=nav['right']+1,(label,tab)
+        assert tab['textLeft']>=tab['left']-1 and tab['textRight']<=tab['right']+1,(label,tab)
+    for name in ('body','row'):
+        item=result[name]
+        assert item['scroll']==item['client'],(label,name,item)
+    assert result['nav']['overflowY']=='auto' and result['body']['overflowY']=='auto',(label,result)
+    chips=result['chips'];assert len(chips)==10,(label,chips)
+    for c in chips:
+        assert c['left']>=result['row']['left']-1 and c['right']<=result['row']['right']+1,(label,c)
+        assert c['textLeft']>=c['left']-1 and c['textRight']<=c['right']+1,(label,c)
+    for i,a in enumerate(chips):
+        for b in chips[i+1:]:
+            assert min(a['right'],b['right'])-max(a['left'],b['left'])<=1 or min(a['bottom'],b['bottom'])-max(a['top'],b['top'])<=1,(label,a,b)
+    return [c['id'] for c in chips]
+
 def audio_watch():
     evaluate("""(()=>{window.__realSoundPlays=[];if(window.__soundWatchInstalled)return true;
       window.__soundWatchInstalled=true;const C=window.AudioContext||window.webkitAudioContext;const old=C.prototype.createBufferSource;
@@ -188,6 +219,28 @@ try:
     print('LINUX_WEBKIT_V0500_ONBOARD_AND_STICKY_CATALOG_OK',flush=True)
 
     audio_watch();open_prefs('sound')
+    for scale in (100,150):
+        if scale!=100:
+            open_prefs('look');trusted_click('[data-ui-scale="150"]')
+            wait("document.documentElement.dataset.uiScale === '150'")
+            wait_saved(lambda s:s.get('ui_scale')==150,'150% scale')
+            open_prefs('sound')
+        styles=check_sound_layout(f'1080x640 {scale}%')
+        for style in styles:
+            selector='[data-sound-style="'+style+'"]'
+            trusted_click(selector)
+            wait_saved(lambda s:s.get('sound_style')==style,'sound style '+style)
+            assert get('document.querySelector('+json.dumps(selector)+').classList.contains("is-active")'),style
+        check_sound_layout(f'1080x640 {scale}% custom')
+        assert get("document.querySelector('#prefs-body').scrollHeight>document.querySelector('#prefs-body').clientHeight")
+        trusted_click('#sound-test')
+        assert get("document.querySelector('#prefs-body').scrollTop")>0,'long custom form must scroll vertically'
+    open_prefs('look');trusted_click('[data-ui-scale="100"]')
+    wait("document.documentElement.dataset.uiScale === '100'")
+    wait_saved(lambda s:s.get('ui_scale')==100,'100% scale restored')
+    open_prefs('sound');check_sound_layout('1080x640 restored')
+    print('LINUX_WEBKIT_SETTINGS_SOUND_LAYOUT_AND_SCROLL_OK',flush=True)
+
     assert get("document.querySelector('#set-sound-volume').max")=='200'
     value('#set-sound-volume','200','input');value('#set-sound-volume','200','change')
     wait_saved(lambda s:s.get('sound_volume')==200,'200% master')

@@ -2551,7 +2551,8 @@ body.has-wall .home-import { background: var(--bg-2a); }
 /* ── окно настроек крупнее, «Сбросить всё» в левом низу ── */
 .prefs-box { width: min(1080px, 97vw); height: min(760px, 92vh); }
 .prefs-side { justify-content: flex-start; }
-.prefs-nav { flex: 1; min-height: 0; overflow-y: auto; }
+/* Только вертикальная прокрутка: дробный zoom в WebKit может округлить ширину на 1px. */
+.prefs-nav { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
 .prefs-side-foot { padding-top: 8px; border-top: 1px solid var(--line); }
 .prefs-side-foot .btn { width: 100%; height: var(--h); justify-content: center; color: var(--red); }
 .prefs-side-foot .btn:hover { border-color: var(--line-2); color: var(--red); background: var(--bg-4); }
@@ -2928,8 +2929,11 @@ html[data-ui-scale] .app { height: 100%; width: 100%; }
 /* --- версия в шапке теперь просто текст --- */
 .tb-meta #tb-version { font-size: 11px; color: var(--dim-2); }
 
-/* --- чипы вариантов звука --- */
-#sound-style-chips .chip { min-width: 104px; }
+/* Варианты звука переносятся целыми кнопками вместо выхода за край настроек. */
+#sound-style-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 112px), 1fr));
+}
 
 /* ==================== ЭТАП 16 ==================== */
 
@@ -3600,7 +3604,8 @@ body.has-wall .home .home-feed-head { background: var(--bg-2); }
   transform: translateX(calc(var(--active-x) + 8px)); border: 0; background: var(--accent);
 }
 .mr-view.moving-indicator::before { background: var(--bg-5); border-color: transparent; border-radius: var(--r-xs); }
-.prefs-nav.moving-indicator::before { border-radius: var(--r-xs); }
+/* Размер активной вкладки уже включает рамку; иначе она добавляет 2px к ширине навигации. */
+.prefs-nav.moving-indicator::before { border-radius: var(--r-xs); box-sizing: border-box; max-width: 100%; }
 .moving-indicator.moving-animate::before { transition: transform .24s cubic-bezier(.2,.8,.2,1), width .24s ease, height .24s ease; }
 .home-catalog-tabs.moving-indicator > button,
 .mr-view.moving-indicator > button,

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
+const { checkSettingsLayout } = require('./settings-layout-assert.cjs');
 const root = path.resolve(__dirname, '../../apps/omnispec-app/ui');
 const server = http.createServer((req,res)=>{
   const pathname=decodeURIComponent(new URL(req.url,'http://localhost').pathname);
@@ -19,7 +20,7 @@ async function setup(page,options={}) {
     const clone=x=>JSON.parse(JSON.stringify(x));
     const defaults={theme:'dark',click_fx:'off',ambient:'off',trail:false,trail_style:'sparks',
       trail_size:50,trail_length:20,trail_opacity:15,discord_rpc:false,update_enabled:false,
-      ui_scale:100,language:'ru',sound_fx:true,sound_volume:60,sound_style:'soft',sound_custom:{},
+      ui_scale:opts.scale||100,language:opts.language||'ru',sound_fx:true,sound_volume:60,sound_style:'soft',sound_custom:{},
       wallpaper:null,custom_wallpaper:null,wallpaper_fit:'cover',wallpaper_blur:0,wallpaper_dim:40,wallpaper_recent:[],
       onboarded:!opts.fresh,onboarding_pending:Boolean(opts.fresh)};
     if(opts.legacy || opts.legacyEmpty) { delete defaults.onboarded; delete defaults.onboarding_pending; }
@@ -150,6 +151,82 @@ async function setRange(page,selector,value){
       await page.close();
     }
     console.log('V0500_UPGRADE: existing and empty legacy profiles skip onboarding — OK');
+
+    // Exercise the actual supported minimum window and all UI zooms/languages.
+    // Click each choice with a real pointer rather than DOM click(), so an
+    // offscreen or covered button cannot pass just by existing in the DOM.
+    for(const c of [
+      {width:1080,height:640,scale:100,language:'ru'},
+      {width:1080,height:640,scale:150,language:'kk',dpr:1.25},
+      {width:1080,height:640,scale:125,language:'uk',dpr:2},
+      {width:1400,height:880,scale:80,language:'be'},
+      {width:1400,height:880,scale:90,language:'ru'},
+      {width:1400,height:880,scale:110,language:'en'},
+      {width:1920,height:1080,scale:100,language:'ru'}
+    ]){
+      const label=`${c.width}x${c.height} ${c.scale}% ${c.language} dpr=${c.dpr||1}`;
+      const page=await browser.newPage({viewport:{width:c.width,height:c.height},deviceScaleFactor:c.dpr||1}),errors=[];
+      page.on('pageerror',e=>errors.push(String(e)));
+      await setup(page,{scale:c.scale,language:c.language});
+      await page.waitForFunction(c=>document.documentElement.dataset.uiScale===String(c.scale) && document.documentElement.lang===c.language,c);
+      await openPrefs(page,'sound'); await page.waitForTimeout(300);
+      await checkSettingsLayout(page,label);
+      if(c.width===1920){
+        await page.setViewportSize({width:1080,height:640}); await page.waitForTimeout(300);
+        await checkSettingsLayout(page,`${label} resized down`);
+        await page.setViewportSize({width:c.width,height:c.height}); await page.waitForTimeout(300);
+        await checkSettingsLayout(page,`${label} resized back`);
+      }
+      const styles=await page.locator('#sound-style-chips [data-sound-style]').evaluateAll(nodes=>nodes.map(n=>n.dataset.soundStyle));
+      for(const style of styles){
+        const button=page.locator(`[data-sound-style="${style}"]`);
+        await button.scrollIntoViewIfNeeded();
+        const hit=await button.evaluate(el=>{const r=el.getBoundingClientRect(),target=document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2);return target===el || el.contains(target);});
+        assert(hit,`${label}: ${style} is not reachable by pointer`);
+        await button.click();
+        await page.waitForFunction(style=>window.__v0500.settings.sound_style===style,style);
+        assert(await button.evaluate(el=>el.classList.contains('is-active')),`${label}: ${style} was not selected`);
+      }
+      assert.equal(styles.at(-1),'custom');
+      if(c.scale===150){
+        await page.locator('[data-sound-style="bubble"]').focus(); await page.keyboard.press('Enter');
+        await page.waitForFunction(()=>window.__v0500.settings.sound_style==='bubble');
+        await page.locator('[data-sound-style="custom"]').focus(); await page.keyboard.press('Space');
+        await page.waitForFunction(()=>window.__v0500.settings.sound_style==='custom');
+      }
+      await checkSettingsLayout(page,`${label} custom`);
+      // The long custom-sounds form must still scroll vertically, and its last
+      // event and test button must remain reachable after restoring the choice.
+      await page.reload(); await page.waitForFunction(()=>window.omnispecDebug?.state?.sound?.style==='custom');
+      await openPrefs(page,'sound'); await page.waitForTimeout(300);
+      await checkSettingsLayout(page,`${label} reloaded`);
+      await page.locator('[data-sound-volume="error"]').scrollIntoViewIfNeeded();
+      assert(await page.locator('#prefs-body').evaluate(el=>el.scrollTop)>0,`${label}: custom sounds must scroll vertically`);
+      assert(await page.locator('[data-sound-volume="error"]').isVisible());
+      await page.locator('#sound-test').click();
+      const prefs=c.width===1080 && c.scale===100 && c.language==='ru'
+        ? await page.locator('#prefs-nav [data-pref]').evaluateAll(nodes=>nodes.map(n=>n.dataset.pref))
+        : ['discord','sound'];
+      for(const pref of prefs){
+        await page.locator(`[data-pref="${pref}"]`).click();
+        assert.equal(await page.locator('#prefs-body').getAttribute('data-pref-category'),pref);
+        const nav=await page.locator('#prefs-nav').evaluate(el=>({client:el.clientWidth,scroll:el.scrollWidth}));
+        assert.equal(nav.scroll,nav.client,`${label}: nav overflows after choosing ${pref}: ${JSON.stringify(nav)}`);
+      }
+      if(c.width===1080 && c.scale===100 && c.language==='ru'){
+        // Simulate a constrained nav without hiding vertical overflow.
+        await page.locator('#prefs-nav').evaluate(el=>{el.style.maxHeight='80px';});
+        const before=await page.locator('#prefs-nav').evaluate(el=>({client:el.clientHeight,scroll:el.scrollHeight}));
+        assert(before.scroll>before.client,`${label}: constrained nav needs vertical scrolling`);
+        await page.locator('[data-pref="discord"]').scrollIntoViewIfNeeded();
+        await page.locator('[data-pref="discord"]').click();
+        const nav=await page.locator('#prefs-nav').evaluate(el=>({top:el.scrollTop,client:el.clientWidth,scroll:el.scrollWidth}));
+        assert(nav.top>0 && nav.scroll===nav.client,`${label}: final nav item is reachable vertically without horizontal overflow ${JSON.stringify(nav)}`);
+      }
+      assert.deepEqual(errors,[],`${label}: unexpected JavaScript errors`);
+      await page.close();
+    }
+    console.log('SETTINGS_LAYOUT: sound choices and labels accessible; no horizontal nav overflow at supported sizes, zooms and languages — OK');
     {
       const page=await browser.newPage({viewport:{width:1280,height:850}}),errors=[]; page.on('pageerror',e=>errors.push(String(e)));
       await setup(page);

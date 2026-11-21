@@ -82,6 +82,16 @@ jobs:
           $meta = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
           $version = ($meta.packages | Where-Object { $_.name -eq 'omnispec-setup' }).version
           ./tools/tests/windows-setup-smoke.ps1 -Setup 'target/debug/omnispec-setup.exe' -Launcher $env:OMNISPEC_SETUP_PAYLOAD -ExpectedVersion $version -VerifyRealIcon
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tools/tests/package-lock.json
+      - name: Установить Playwright для проверки WebView2
+        run: npm ci --prefix tools/tests
+      - name: Проверить настройки и звуки в настоящем Windows WebView2
+        shell: pwsh
+        run: ./tools/tests/windows-v0500-cdp.ps1 -Launcher 'target/debug/omnispec-app.exe'
 
   ui-test:
     name: Интерфейс, диагностика и сетевые сбои
