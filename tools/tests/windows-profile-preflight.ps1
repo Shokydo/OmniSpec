@@ -310,7 +310,25 @@ try {
   if(-not (Test-Path $old)){throw 'Legacy skin was deleted'}
   Screenshot 'windows-profile.png'
   Write-Host 'WINDOWS_REAL_MULTIFILE_IMPORT_AND_LEGACY_OK'
-  if($AvatarOnly) { Write-Host 'WINDOWS_AVATAR_PREFLIGHT_PASSED'; return }
+  if($AvatarOnly) {
+    # Delete one library entry through the real UI, retaining its file and the
+    # previously saved favorite. Then restart the actual launcher.
+    $removed=@($items | Where-Object { $_.name -eq 'one' })
+    if($removed.Count -ne 1){throw 'Expected imported one.png entry'}
+    Click (WaitButton 'Убрать one из библиотеки')
+    Click (WaitId 'confirm-ok')
+    $saved=WaitSettings {param($s) @($s.skin_presets).Count -eq 2} 'skin removal'
+    if(-not (Test-Path -LiteralPath ($removed[0].path))){throw 'Removing a library entry deleted its PNG'}
+    if(@($saved.skin_favorites)[0].futureField -ne 'preserved'){throw 'Removing a skin deleted the old favorite'}
+    Click (WaitId 'prefs-save')
+    StopLauncher; StartLauncher
+    OpenPrefs 'Аватар'
+    [void](WaitButton 'two')
+    $saved=ReadSettings
+    if(@($saved.skin_presets).Count -ne 2 -or @($saved.skin_favorites)[0].futureField -ne 'preserved'){throw 'Library or favorites did not survive a restart'}
+    Write-Host 'WINDOWS_AVATAR_DELETE_AND_RESTART_OK'
+    Write-Host 'WINDOWS_AVATAR_PREFLIGHT_PASSED'; return
+  }
   [void][OmniProfileProbe]::MoveWindow($script:proc.MainWindowHandle,0,0,1080,720,$true)
 
   Click (WaitButton 'Фон')
