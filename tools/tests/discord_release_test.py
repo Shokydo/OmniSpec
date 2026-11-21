@@ -147,6 +147,15 @@ class DiscordReleaseTests(unittest.TestCase):
             self.assertIn(phrase, body)
         self.assertNotIn("Wallpaper Engine удалена", build("v0.49.12"))
 
+    def test_star_icon_and_language_hint_notes_match_exact_release(self):
+        build = runpy.run_path(str(ROOT / "tools/release_body.py"))["build_release_body"]
+        body = build("v0.49.14")
+        for phrase in ("Звездный взрыв", "Звезда", "сохраняется после перезапуска", "панели задач",
+                       "Discord Rich Presence", "стала серой", "полная сборка для Windows и Linux",
+                       "часть переводов машинная", "Wallpaper Engine", "Исходные файлы и старые настройки не удаляются"):
+            self.assertIn(phrase, body)
+        self.assertNotIn("Звездный взрыв", build("v0.49.13"))
+
     def test_release_assets_are_safe_for_legacy_linux_updaters(self):
         # Versions through v0.49.5 considered every omnispec* name without a dot
         # to be a launcher. The installer must not match, regardless of order.
