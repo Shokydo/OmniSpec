@@ -1,6 +1,7 @@
-// The release executable in real Windows WebView2, with ONLY Minecraft
-// account/skin/cape responses stubbed via Tauri's test bridge. The on-disk
-// profile is offline and disposable; no real Minecraft account is contacted.
+// Test the release executable's unmodified UI in real Windows WebView2.
+// The on-disk account is disposable/offline. Synthetic capes exist only in
+// frontend memory; the real Rust backend must reject the fake profile UUID,
+// without sending a request to Minecraft or changing any real account.
 const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -47,36 +48,31 @@ async function waitFor(fn,label,timeout=30000) {
     const context=browser.contexts()[0];
     page=context.pages()[0] || await context.waitForEvent('page',{timeout:30000});
     page.on('pageerror',error=>errors.push(String(error)));
-    await page.waitForFunction(()=>window.omnispecDebug?.state?.accounts && window.__TAURI_INTERNALS__?.invoke,null,{timeout:60000});
+    await page.waitForFunction(()=>window.omnispecDebug?.state?.accounts,null,{timeout:60000});
+    await page.locator('#btn-quick-settings').click();
+    await page.locator('[data-pref="avatar"]').click();
+    await page.waitForFunction(()=>window.omnispecDebug.state.capes && !window.omnispecDebug.state.capes.loading && window.omnispecDebug.state.skin && !window.omnispecDebug.state.skin.loading);
+    assert(await page.locator('#cape-next').isDisabled(),'real offline account must not navigate official capes');
+
+    // Inject only visual fixtures after the real offline startup has completed;
+    // Tauri and the native backend remain completely untouched.
     await page.evaluate(()=>{
-      const internal=window.__TAURI_INTERNALS__, native=internal.invoke;
       const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;
       const ctx=canvas.getContext('2d');ctx.fillStyle='#d78c62';ctx.fillRect(0,0,64,64);
-      const skin=canvas.toDataURL('image/png');
       const capes=Array.from({length:12},(_,i)=>{
         const c=document.createElement('canvas');c.width=64;c.height=32;
         const x=c.getContext('2d');x.fillStyle=i%2?'#cc4444':'#3388bb';x.fillRect(1,1,10,16);
         x.fillStyle='#22ee77';x.fillRect(0,1,1,16);x.fillRect(11,1,1,16);
         return {id:'fixture-'+i,alias:'Fixture '+i,active:i===0,data_url:c.toDataURL('image/png')};
       });
-      const mock=window.__avatarNativeMock={calls:[],fail:false,capes,native};
-      internal.invoke=async function(command,args={},options) {
-        if(command==='account_skin')return {account_uuid:'fixture-license',licensed:true,variant:'classic',data_url:skin};
-        if(command==='account_capes')return {account_uuid:'fixture-license',licensed:true,capes:mock.capes.map(c=>({...c}))};
-        if(command==='set_cape') {
-          mock.calls.push({...args});
-          if(mock.fail)throw 'TEST_ONLY_CAPE_FAILURE';
-          mock.capes.forEach(c=>{c.active=c.id===args.capeId;});
-          return {ok:true,account_uuid:'fixture-license'};
-        }
-        return native.call(internal,command,args,options);
-      };
-      if(internal.invoke===native)throw new Error('Tauri test bridge was not installed');
       const state=window.omnispecDebug.state;
       state.accounts={active:'fixture-license',accounts:[{uuid:'fixture-license',username:'Synthetic',kind:'microsoft'}]};
-      state.profileAccountId='fixture-license';state.skin=null;state.capes=null;
+      state.profileAccountId='fixture-license';
+      state.capes={licensed:true,list:capes,loading:false,error:'',busy:false,requestSerial:0,
+        textureRevision:0,selectedId:'fixture-0',selectionTimer:null,selectionDueAt:0,mutationKind:''};
+      state.skin.texture=canvas;state.skin.dataUrl=canvas.toDataURL('image/png');
     });
-    await page.locator('#btn-quick-settings').click();
+    await page.locator('[data-pref="look"]').click();
     await page.locator('[data-pref="avatar"]').click();
     await page.waitForSelector('#skin-capes [data-cape-id="fixture-11"]');
     await page.waitForSelector('#skin-capes [data-cape-id="fixture-0"] canvas[data-cape-rendered="3d"]');
@@ -84,34 +80,26 @@ async function waitFor(fn,label,timeout=30000) {
     const settled=()=>page.waitForFunction(()=>document.querySelector('#skin-capes')?.getAttribute('aria-busy')==='false');
     assert.equal(await selected(),'fixture-0');
     await page.locator('#cape-next').click();
-    assert.equal(await selected(),'fixture-1');
+    assert.equal(await selected(),'fixture-1','arrow selects the next cape before the backend reply');
+    assert.equal(await page.locator('#skin-capes').getAttribute('aria-busy'),'true');
+    await page.waitForFunction(()=>document.querySelector('#toasts')?.textContent.includes('аккаунт переключён'));
     await settled();
-    assert.equal(await page.evaluate(()=>window.__avatarNativeMock.calls.at(-1).capeId),'fixture-1');
-    const count=await page.evaluate(()=>window.__avatarNativeMock.calls.length);
+    assert.equal(await selected(),'fixture-0','real backend rejection must restore the confirmed cape');
+
     const box=await page.locator('#skin-capes').boundingBox();
     await page.mouse.move(box.x+box.width/2,box.y+box.height/2);
     await page.mouse.wheel(0,250);
-    await page.waitForFunction(()=>document.querySelector('#skin-capes [data-cape-id="fixture-6"]')?.getAttribute('aria-pressed')==='true');
+    await page.waitForFunction(()=>document.querySelector('#skin-capes [data-cape-id="fixture-5"]')?.getAttribute('aria-pressed')==='true');
+    assert.equal(await page.locator('#skin-capes').getAttribute('aria-busy'),'true');
     await settled();
-    assert.equal(await page.evaluate(()=>window.__avatarNativeMock.calls.length),count+1);
-    assert.equal(await page.evaluate(()=>window.__avatarNativeMock.calls.at(-1).capeId),'fixture-6');
+    assert.equal(await selected(),'fixture-0','wheel selection also rolls back on rejection');
     assert.equal(await page.locator('#prefs-body').evaluate(el=>el.scrollTop),0);
-    console.log('WINDOWS_WEBVIEW2_ARROW_WHEEL_3D_AND_COALESCING_OK');
-
-    await page.evaluate(()=>window.__avatarNativeMock.fail=true);
-    await page.locator('#skin-capes [data-cape-id="fixture-7"]').click();
-    await page.waitForFunction(()=>document.querySelector('#toasts')?.textContent.includes('TEST_ONLY_CAPE_FAILURE'));
-    await settled();
-    assert.equal(await selected(),'fixture-6','failed network mutation must restore the confirmed cape');
+    const accountFile=JSON.parse(fs.readFileSync(path.join(data,'accounts.json'),'utf8'));
+    assert.equal(accountFile.active,uuid);assert.equal(accountFile.accounts[0].kind,'offline');
     assert.deepEqual(errors,[]);
-    console.log('WINDOWS_WEBVIEW2_CAPE_FAILURE_ROLLBACK_OK');
+    console.log('WINDOWS_WEBVIEW2_ARROW_WHEEL_3D_AND_REAL_BACKEND_ROLLBACK_OK');
   } finally {
-    if(page && !page.isClosed()) {
-      await page.evaluate(()=>{
-        if(window.__avatarNativeMock)window.__TAURI_INTERNALS__.invoke=window.__avatarNativeMock.native;
-        return window.__TAURI__.core.invoke('window_action',{action:'close'});
-      }).catch(()=>{});
-    }
+    if(page && !page.isClosed())await page.evaluate(()=>window.__TAURI__.core.invoke('window_action',{action:'close'})).catch(()=>{});
     if(child && child.exitCode===null){
       const done=new Promise(resolve=>child.once('exit',resolve));
       await Promise.race([done,delay(8000)]);

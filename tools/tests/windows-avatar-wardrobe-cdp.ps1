@@ -1,4 +1,4 @@
-# Real WebView2 with synthetic Minecraft responses on a disposable hosted runner.
+# Real WebView2 and offline backend with synthetic UI capes on a disposable hosted runner.
 # The temporary per-executable debugging policy is always removed afterwards.
 param([Parameter(Mandatory=$true)][string]$Launcher)
 $ErrorActionPreference='Stop'
