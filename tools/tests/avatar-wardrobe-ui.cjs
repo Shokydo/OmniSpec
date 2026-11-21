@@ -40,7 +40,7 @@ async function setup(page) {
     const settings = {theme:'dark', click_fx:'off', ambient:'off', trail:false, onboarded:true, discord_rpc:false,
       update_enabled:false, ui_scale:100, wallpaper:null, wallpaper_fit:'cover', wallpaper_blur:0, wallpaper_dim:40, wallpaper_recent:[],
       skin_presets:Array.from({length:72},(_,i)=>({id:`skin-${i}`,name:`Skin ${String(i).padStart(2,'0')}`,path:`/skins/${i}.png`,variant:'classic',angle:0})),
-      skin_favorites:[{id:'favorite',name:'Сохранённый образ',skinPath:'/skins/0.png',skinDataUrl:skin,skinName:'Skin 00',variant:'classic',capeId:'cape-0',capeAlias:'Cape 00',capeDataUrl:capes[0].data_url}]};
+      skin_favorites:[{id:'favorite',name:'Сохранённый образ',skinPath:'/skins/0.png',skinDataUrl:skin,skinName:'Skin 00',variant:'classic',capeId:'cape-0',capeAlias:'Cape 00',capeDataUrl:capes[0].data_url}],cape_view:'list'};
     const mock = window.__avatarTest = {
       skin, capes, settings, calls:[], active:'licensed',
       accounts:[{uuid:'licensed',username:'Alex',kind:'microsoft'},{uuid:'offline',username:'Offline',kind:'offline'}],
@@ -117,6 +117,29 @@ async function layout(page, width, height) {
     await layout(page,1080,640);
     if (process.env.OMNISPEC_UI_SHOTS) await page.screenshot({path:path.join(process.env.OMNISPEC_UI_SHOTS,'avatar-1080x640.png')});
     console.log('AVATAR_LAYOUT_AT_100_PERCENT_OK');
+
+    // The wardrobe opens as the reference carousel: the chosen variant is
+    // centered, while the neighboring capes remain visible. The explicit
+    // list/grid switch must survive a rerender and be saved with settings.
+    assert(await page.locator('#cape-view-list').evaluate(el=>el.classList.contains('is-active')));
+    const centeredCape=await page.locator('#skin-capes .cape-card.is-active').boundingBox();
+    const capeViewport=await page.locator('#skin-capes').boundingBox();
+    assert(Math.abs((centeredCape.x+centeredCape.width/2)-(capeViewport.x+capeViewport.width/2))<8,
+      `active cape is not centered: ${JSON.stringify({centeredCape,capeViewport})}`);
+    await page.locator('#cape-view-grid').click();
+    await page.waitForFunction(()=>document.querySelector('#skin-capes')?.classList.contains('is-grid'));
+    assert(await page.locator('#cape-view-grid').evaluate(el=>el.classList.contains('is-active')));
+    assert.equal(await page.evaluate(()=>window.omnispecDebug.state.capeView),'grid');
+    assert.equal(await page.evaluate(()=>window.__avatarTest.settings.cape_view),'grid');
+    assert.equal(await page.locator('#cape-view-grid').getAttribute('aria-pressed'),'true');
+    await page.locator('#cape-view-list').click();
+    await page.waitForFunction(()=>document.querySelector('#skin-capes')?.classList.contains('is-list'));
+    assert.equal(await page.evaluate(()=>window.omnispecDebug.state.capeView),'list');
+    const centeredAgain=await page.locator('#skin-capes .cape-card.is-active').boundingBox();
+    const viewportAgain=await page.locator('#skin-capes').boundingBox();
+    assert(Math.abs((centeredAgain.x+centeredAgain.width/2)-(viewportAgain.x+viewportAgain.width/2))<8,
+      `active cape is not centered after grid switch: ${JSON.stringify({centeredAgain,viewportAgain})}`);
+    console.log('CAPE_CAROUSEL_CENTER_AND_LIST_GRID_SWITCH_OK');
 
     // The resized canvas must still receive drag events and reset on double-click.
     const modelBox=await page.locator('#skin-canvas').boundingBox();

@@ -2221,7 +2221,7 @@
       { username: "Vanya_2012", uuid: "5627dd98-1f5e-3f4e-9c1a-2b3c4d5e6f70", kind: "offline", access_token: "" }
     ],
     active: "069a79f4-44e9-4726-a5be-fca90e38aaf5",
-    settings: { categories: [{ id: "cat-mods", name: "Моды", collapsed: false }, { id: "cat-perf", name: "Производительность", collapsed: false }], username: "Player", java_path: null, memory_mb: 4096, jvm_args: "-XX:+UseG1GC", game_args: "", auto_java: true, show_snapshots: false, verify_hashes: false, language: "ru", keep_console_open: false, enable_modrinth: true, hide_on_launch: false, last_instance: null, update_repo: "Shokydo/OmniSpec", update_enabled: true, update_token: null, update_prerelease: false, theme: "dark", click_fx: "wave", discord_rpc: true },
+    settings: { categories: [{ id: "cat-mods", name: "Моды", collapsed: false }, { id: "cat-perf", name: "Производительность", collapsed: false }], username: "Player", java_path: null, memory_mb: 4096, jvm_args: "-XX:+UseG1GC", game_args: "", auto_java: true, show_snapshots: false, verify_hashes: false, language: "ru", keep_console_open: false, enable_modrinth: true, hide_on_launch: false, last_instance: null, update_repo: "Shokydo/OmniSpec", update_enabled: true, update_token: null, update_prerelease: false, theme: "dark", click_fx: "wave", discord_rpc: true, cape_view: "list" },
     versions: ["1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21", "1.20.6", "1.20.4", "1.20.1", "1.19.4", "1.18.2", "1.16.5", "1.12.2", "1.8.9"].map((id) => ({ id, type: "release", url: "", release_time: null })),
     demoLogs: [
       "[12:01:14] [main/INFO]: OmniSpec 0.1.0 — лаунчер готов к работе",
@@ -2836,6 +2836,7 @@
     iconCache: {},
     modsSource: "modrinth",
     modsView: "list",
+    capeView: "list",
     modsQuery: "",
     dlRoot: null,
     modrinth: {
@@ -9292,7 +9293,7 @@
   ];
   let prefsCategory = "look";
   // Списки аватара переживают перерисовку и переход в другие категории.
-  const avatarScroll = { skins: 0, capes: 0, accountId: "" };
+  const avatarScroll = { skins: 0, capes: 0, capeTop: 0, accountId: "" };
 
   function accountPrefsVisible() {
     const modal = $("#modal-prefs");
@@ -9352,11 +9353,13 @@
     if (previousCategory === "avatar") {
       avatarScroll.skins = $("#skin-library", body)?.scrollTop || 0;
       avatarScroll.capes = $("#skin-capes", body)?.scrollLeft || 0;
+      avatarScroll.capeTop = $("#skin-capes", body)?.scrollTop || 0;
       avatarScroll.accountId = body.dataset.avatarAccount || "";
     }
     const accountId = currentProfileId();
     if (avatarScroll.accountId !== accountId) {
       avatarScroll.capes = 0;
+      avatarScroll.capeTop = 0;
       avatarScroll.accountId = accountId;
     }
     body.classList.toggle("is-avatar", prefsCategory === "avatar");
@@ -9381,7 +9384,15 @@
       const library = $("#skin-library", body);
       const capes = $("#skin-capes", body);
       if (library) library.scrollTop = avatarScroll.skins;
-      if (capes) capes.scrollLeft = avatarScroll.capes;
+      if (capes) {
+        capes.scrollLeft = avatarScroll.capes;
+        capes.scrollTop = avatarScroll.capeTop;
+        // При первом открытии ставим активный вариант в центр; при повторном
+        // входе сохраняем ровно ту позицию, которую оставил пользователь.
+        if (capeView() === "list" && avatarScroll.capes === 0) {
+          centerCapeCard($(".cape-card.is-active", capes), capes);
+        }
+      }
       updateCapeScrollControls();
       if (capes && focusedCapeId !== undefined) {
         $$(".cape-card", capes).find((card) => card.dataset.capeId === focusedCapeId)?.focus({ preventScroll: true });
@@ -10891,41 +10902,68 @@
         const normal = rotate(part.cape ? tiltCapeNormal(SKIN_FACE_NORMALS[dir]) : SKIN_FACE_NORMALS[dir]);
         if (normal[2] >= -0.001) return; // грань смотрит от камеры
         const pts = corners[dir].map((point) => rotate(part.cape ? tiltCape(point) : point)).map(project);
-        faces.push({ uv: part.uv[dir], pts, cape: part.cape, tex: part.tex || texture, depth: (pts[0][2] + pts[1][2] + pts[2][2] + pts[3][2]) / 4 });
+        faces.push({ uv: part.uv[dir], pts, cape: part.cape, part: part.n, tex: part.tex || texture, depth: (pts[0][2] + pts[1][2] + pts[2][2] + pts[3][2]) / 4 });
       });
     });
 
-    // дальние (больший z) — раньше, ближние — поверх
-    faces.sort((a, b) => b.depth - a.depth);
-    ctx.imageSmoothingEnabled = false;
-    faces.forEach((face) => {
-      const [p0, p1, , p3] = face.pts;
-      const u1 = Math.min(face.uv[0], face.uv[2]);
-      const u2 = Math.max(face.uv[0], face.uv[2]);
-      const v1 = Math.min(face.uv[1], face.uv[3]);
-      const v2 = Math.max(face.uv[1], face.uv[3]);
-      const uw = u2 - u1;
-      const vh = v2 - v1;
-      if (uw <= 0 || vh <= 0) return;
-      ctx.save();
-      ctx.beginPath();
-      face.pts.forEach((point, index) => (index ? ctx.lineTo(point[0], point[1]) : ctx.moveTo(point[0], point[1])));
-      ctx.closePath();
-      ctx.clip();
-      // аффинное преобразование: прямоугольник текстуры → четырёхугольник на экране
-      // У плаща UV могут идти в обратном направлении; игнорирование знака
-      // зеркалило рисунок. Поведение старой модели скина не меняем.
-      const flipU = face.cape && face.uv[0] > face.uv[2];
-      const flipV = face.cape && face.uv[1] > face.uv[3];
-      const a = (p1[0] - p0[0]) / (flipU ? -uw : uw), b = (p1[1] - p0[1]) / (flipU ? -uw : uw);
-      const c = (p3[0] - p0[0]) / (flipV ? -vh : vh), d = (p3[1] - p0[1]) / (flipV ? -vh : vh);
-      const startU = flipU ? u2 : u1, startV = flipV ? v2 : v1;
-      const e = p0[0] - a * startU - c * startV, f = p0[1] - b * startU - d * startV;
-      ctx.setTransform(a, b, c, d, e, f);
-      ctx.drawImage(face.tex, 0, 0);
-      ctx.restore();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-    });
+    // дальние (больший z) — раньше, ближние — поверх. Одной общей сортировки
+    // недостаточно: на виде со спины средняя глубина корпуса может оказаться
+    // после плаща и нарисовать скин поверх его непрозрачной части. Сначала
+    // рисуем модель и наружную сторону плаща отдельными слоями. На виде со
+    // спины весь непрозрачный плащ должен быть последним: ни торс, ни часть
+    // конечности не может случайно проступить сквозь его текстуру.
+    const drawFaces = (items) => {
+      items.slice().sort((a, b) => b.depth - a.depth).forEach((face) => {
+        const [p0, p1, , p3] = face.pts;
+        const u1 = Math.min(face.uv[0], face.uv[2]);
+        const u2 = Math.max(face.uv[0], face.uv[2]);
+        const v1 = Math.min(face.uv[1], face.uv[3]);
+        const v2 = Math.max(face.uv[1], face.uv[3]);
+        const uw = u2 - u1;
+        const vh = v2 - v1;
+        if (uw <= 0 || vh <= 0) return;
+        ctx.save();
+        ctx.beginPath();
+        face.pts.forEach((point, index) => (index ? ctx.lineTo(point[0], point[1]) : ctx.moveTo(point[0], point[1])));
+        ctx.closePath();
+        ctx.clip();
+        // аффинное преобразование: прямоугольник текстуры → четырёхугольник на экране
+        // У плаща UV могут идти в обратном направлении; игнорирование знака
+        // зеркалило рисунок. Поведение старой модели скина не меняем.
+        const flipU = face.cape && face.uv[0] > face.uv[2];
+        const flipV = face.cape && face.uv[1] > face.uv[3];
+        const a = (p1[0] - p0[0]) / (flipU ? -uw : uw), b = (p1[1] - p0[1]) / (flipU ? -uw : uw);
+        const c = (p3[0] - p0[0]) / (flipV ? -vh : vh), d = (p3[1] - p0[1]) / (flipV ? -vh : vh);
+        const startU = flipU ? u2 : u1, startV = flipV ? v2 : v1;
+        const e = p0[0] - a * startU - c * startV, f = p0[1] - b * startU - d * startV;
+        ctx.setTransform(a, b, c, d, e, f);
+        // Явно сбрасываем состояние композиции: canvas мог использоваться
+        // предыдущим кадром с прозрачной текстурой миниатюры.
+        ctx.globalCompositeOperation = "source-over";
+        ctx.globalAlpha = 1;
+        ctx.drawImage(face.tex, 0, 0);
+        ctx.restore();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+      });
+    };
+    const capeFaces = faces.filter((face) => face.cape);
+    const skinFaces = faces.filter((face) => !face.cape);
+    if (!capeFaces.length || capeOnly) {
+      drawFaces(faces);
+    } else {
+      const outerNormal = rotate(tiltCapeNormal(SKIN_FACE_NORMALS.south));
+      const outerSideVisible = outerNormal[2] < -0.001;
+      if (outerSideVisible) {
+        // Наружная сторона смотрит на пользователя: плащ — непроницаемый
+        // верхний слой, поэтому скин под ним больше не просвечивает.
+        drawFaces(skinFaces);
+        drawFaces(capeFaces);
+      } else {
+        // Спереди плащ находится за корпусом и должен оставаться под моделью.
+        drawFaces(capeFaces);
+        drawFaces(skinFaces);
+      }
+    }
   }
 
   /** Размер канваса под реальный размер блока: без мыла при любом зуме интерфейса. */
@@ -11214,6 +11252,10 @@
         </div>
         <section class="prefs-section profile-capes">
           <div class="prefs-label-row"><span class="prefs-label">Плащи</span><span class="avatar-cape-hint" id="cape-status" role="status" aria-live="polite">${capeStatusText(capeState())}</span><div class="spacer"></div>
+            <div class="cape-view-switch" role="group" aria-label="Вид плащей">
+              <button type="button" class="btn btn-small cape-view-btn ${capeView() === "list" ? "is-active" : ""}" id="cape-view-list" aria-label="Список плащей" title="Список плащей" aria-pressed="${capeView() === "list"}"><svg class="ic"><use href="#i-list"/></svg><span>Список</span></button>
+              <button type="button" class="btn btn-small cape-view-btn ${capeView() === "grid" ? "is-active" : ""}" id="cape-view-grid" aria-label="Плитка плащей" title="Плитка плащей" aria-pressed="${capeView() === "grid"}"><svg class="ic"><use href="#i-grid"/></svg><span>Плитка</span></button>
+            </div>
             <button class="icon-btn" id="cape-refresh" title="Обновить плащи аккаунта"><svg class="ic"><use href="#i-refresh"/></svg></button>
           </div>
           ${capeColumnHtml()}
@@ -11227,15 +11269,16 @@
     const licensed = Boolean(capes.licensed);
     const list = capes.list || [];
     const selectedId = selectedCapeId(capes);
+    const view = capeView();
     const cards = list.map((cape) => `
       <button type="button" class="cape-card ${cape.id === selectedId ? "is-active" : ""}" data-cape-id="${esc(cape.id)}" title="${esc(cape.alias)}" aria-pressed="${cape.id === selectedId}">
         <canvas class="cape-thumb" width="108" height="128" data-cape-src="${esc(cape.data_url || "")}" aria-hidden="true"></canvas>
         <span class="cape-name" translate="no">${esc(cape.alias)}</span>
       </button>`).join("");
     return `
-      <div class="cape-carousel">
+      <div class="cape-carousel ${view === "grid" ? "is-grid-view" : "is-list-view"}">
         <button type="button" class="icon-btn cape-scroll cape-scroll-prev" id="cape-prev" aria-controls="skin-capes" title="Выбрать предыдущий плащ" aria-label="Выбрать предыдущий плащ" disabled><svg class="ic"><use href="#i-chev"/></svg></button>
-        <div class="cape-list" id="skin-capes" tabindex="0" role="region" aria-label="Гардероб плащей" aria-busy="${Boolean(capes.selectionTimer || (capes.busy && capes.mutationKind === "wardrobe"))}">
+        <div class="cape-list ${view === "grid" ? "is-grid" : "is-list"}" id="skin-capes" data-cape-view="${view}" tabindex="0" role="region" aria-label="Гардероб плащей" aria-busy="${Boolean(capes.selectionTimer || (capes.busy && capes.mutationKind === "wardrobe"))}">
           <button type="button" class="cape-card cape-off ${selectedId ? "" : "is-active"}" data-cape-id="" title="Снять плащ" aria-pressed="${!selectedId}">
             <span class="cape-thumb cape-thumb-off"><svg class="ic"><use href="#i-minus"/></svg></span>
             <span class="cape-name">Без плаща</span>
@@ -11263,6 +11306,20 @@
     if (!state.capes) state.capes = { licensed: false, list: [], loading: false, error: "", busy: false,
       requestSerial: 0, textureRevision: 0, selectedId: null, selectionTimer: null, selectionDueAt: 0, mutationKind: "" };
     return state.capes;
+  }
+
+  function capeView() {
+    return state.capeView === "grid" ? "grid" : "list";
+  }
+
+  function setCapeView(view) {
+    const next = view === "grid" ? "grid" : "list";
+    if (state.capeView === next) return;
+    state.capeView = next;
+    state.settings = { ...(state.settings || {}), cape_view: next };
+    // Рендерим сразу: переключатель не должен ждать записи settings.json.
+    renderPrefs();
+    api.saveSettings(state.settings).catch(() => {});
   }
 
   function capeStatusText(capes) {
@@ -11366,6 +11423,20 @@
     next.disabled = blocked || index < 0 || index >= cards.length - 1;
   }
 
+  function centerCapeCard(card, list = $("#skin-capes")) {
+    if (!card || !list) return;
+    if (capeView() !== "list") {
+      card.scrollIntoView({ block: "nearest", inline: "nearest" });
+      return;
+    }
+    const max = Math.max(0, list.scrollWidth - list.clientWidth);
+    const listRect = list.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    const contentLeft = list.scrollLeft + cardRect.left - listRect.left;
+    const left = Math.max(0, Math.min(max, contentLeft + cardRect.width / 2 - list.clientWidth / 2));
+    list.scrollLeft = left;
+  }
+
   function updateCapeSelectionUI(capes) {
     if (state.capes !== capes) return;
     const list = $("#skin-capes");
@@ -11461,6 +11532,11 @@
     if (capes.busy || id !== activeCapeId(capes)) scheduleCapeSelection(capes, accountId);
     previewCapeSelection(capes, id, accountId);
     updateCapeSelectionUI(capes);
+    requestAnimationFrame(() => {
+      if (state.capes === capes && currentProfileId() === accountId && selectedCapeId(capes) === id) {
+        centerCapeCard($$("#skin-capes .cape-card").find((card) => card.dataset.capeId === id));
+      }
+    });
     return true;
   }
 
@@ -11474,7 +11550,7 @@
       if (next < 0 || next >= all.length || !chooseCape(all[next].dataset.capeId)) return false;
       const card = all[next];
       if (focus) card.focus({ preventScroll: true });
-      card.scrollIntoView({ block: "nearest", inline: "nearest" });
+      centerCapeCard(card);
       return true;
     };
     $("#cape-prev")?.addEventListener("click", () => select(index() - 1));
@@ -11523,6 +11599,8 @@
   function bindCapes() {
     const thumbs = $$(".cape-thumb[data-cape-src]");
     thumbs.forEach((canvas) => paintCapeThumb(canvas, canvas.dataset.capeSrc));
+    $("#cape-view-list")?.addEventListener("click", () => setCapeView("list"));
+    $("#cape-view-grid")?.addEventListener("click", () => setCapeView("grid"));
     bindCapeCarousel();
     const refresh = $("#cape-refresh");
     if (refresh) refresh.addEventListener("click", async () => {
@@ -13264,6 +13342,9 @@
     state.systemMemory = await api.systemMemory().catch(() => null);
     // Вид каталога один для Modrinth и CurseForge и не теряется при перезапуске.
     state.modsView = state.settings?.mods_view === "grid" ? "grid" : "list";
+    // Гардероб плащей по умолчанию открывается центральной каруселью;
+    // настройка сохраняется, чтобы переключатель не приходилось нажимать снова.
+    state.capeView = state.settings?.cape_view === "grid" ? "grid" : "list";
     // Оформление из settings.json (как prefs в OmniPanel): тема и эффект клика.
     state.customTheme = {
       bg: (state.settings && state.settings.theme_bg) || CUSTOM_THEME_DEFAULT.bg,

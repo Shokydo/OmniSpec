@@ -98,6 +98,11 @@ fn default_sound_style() -> String {
     "soft".to_string()
 }
 
+/// Вид гардероба плащей: центральный список или сетка плиток.
+fn default_cape_view() -> String {
+    "list".to_string()
+}
+
 fn default_click_fx() -> String {
     "wave".to_string()
 }
@@ -273,6 +278,9 @@ pub struct Settings {
     /// Избранные образы. Храним произвольные поля старых записей без потерь.
     #[serde(default)]
     pub skin_favorites: Vec<serde_json::Value>,
+    /// Вид гардероба плащей: list — центральный карусельный список, grid — плитки.
+    #[serde(default = "default_cape_view")]
+    pub cape_view: String,
 
     /// Тема интерфейса (id пресета из OmniPanel: dark, navy, light, … + custom).
     #[serde(default = "default_theme")]
@@ -441,6 +449,7 @@ impl Default for Settings {
             categories: Vec::new(),
             skin_presets: Vec::new(),
             skin_favorites: Vec::new(),
+            cape_view: default_cape_view(),
             theme: default_theme(),
             theme_bg: None,
             theme_accent: None,

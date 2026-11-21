@@ -7,7 +7,7 @@ const { chromium } = require('playwright');
 const root = path.resolve(__dirname, '../../apps/omnispec-app/ui');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8').replace(
   'window.omnispecDebug = { state, paletteFromImage',
-  'window.__capeTest = { drawSkinModel, skinFaceCorners, SKIN_CAPE };\n  window.omnispecDebug = { state, paletteFromImage'
+  'window.__capeTest = { drawSkinModel, paintSkinMini, skinFaceCorners, SKIN_CAPE };\n  window.omnispecDebug = { state, paletteFromImage'
 );
 assert(app.includes('window.__capeTest ='), 'test hook must match source exactly');
 const server = http.createServer((req, res) => {
@@ -43,10 +43,32 @@ const server = http.createServer((req, res) => {
       const outside=[pixel(85,145),pixel(155,145),pixel(85,225),pixel(155,225)];
       window.__capeTest.drawSkinModel(canvas,skin,'classic',0,0,cape);
       const inside=[pixel(85,145),pixel(155,145)];
-      return {outside,inside,uv:window.__capeTest.SKIN_CAPE.uv, bounds:window.__capeTest.SKIN_CAPE.b};
+
+      // An opaque skin must never be visible through the opaque part of the
+      // cape, both in the large preview and in the favorite/skin miniature.
+      const solidSkin=document.createElement('canvas'); solidSkin.width=solidSkin.height=64;
+      const solidSkinCtx=solidSkin.getContext('2d'); solidSkinCtx.fillStyle='#ffffff'; solidSkinCtx.fillRect(0,0,64,64);
+      const solidCape=document.createElement('canvas'); solidCape.width=64; solidCape.height=32;
+      const solidCapeCtx=solidCape.getContext('2d'); solidCapeCtx.fillStyle='#ff0000'; solidCapeCtx.fillRect(1,1,10,16);
+      const opaqueCanvas=document.createElement('canvas'); opaqueCanvas.width=240; opaqueCanvas.height=380;
+      const opaqueCtx=opaqueCanvas.getContext('2d');
+      const opaquePixel=(x,y)=>Array.from(opaqueCtx.getImageData(x,y,1,1).data);
+      window.__capeTest.drawSkinModel(opaqueCanvas,solidSkin,'classic',180,0,solidCape);
+      const opaquePreview=[[120,145],[120,190],[120,235]].map(([x,y])=>opaquePixel(x,y));
+      const slot=document.createElement('span');
+      window.__capeTest.paintSkinMini(slot,solidSkin,solidCape);
+      const mini=slot.querySelector('canvas');
+      const miniCtx=mini.getContext('2d');
+      const miniPixel=(x,y)=>Array.from(miniCtx.getImageData(x,y,1,1).data);
+      const opaqueMini=[[58,50],[60,65],[62,80],[66,92]].map(([x,y])=>miniPixel(x,y));
+      return {outside,inside,opaquePreview,opaqueMini,uv:window.__capeTest.SKIN_CAPE.uv, bounds:window.__capeTest.SKIN_CAPE.b};
     });
     assert.deepEqual(result.outside, [[255,0,0,255],[0,255,0,255],[0,0,255,255],[255,255,0,255]], 'outer cape is upright and not mirrored');
     assert.deepEqual(result.inside, [[255,0,255,255],[0,255,255,255]], 'inside uses the other face in correct direction');
+    for (const pixel of [...result.opaquePreview, ...result.opaqueMini]) {
+      assert(pixel[0] > 220 && pixel[1] < 50 && pixel[2] < 50 && pixel[3] === 255,
+        `skin is visible through an opaque cape pixel: ${JSON.stringify(pixel)}`);
+    }
     assert.deepEqual(result.uv.down, [21,0,11,1], 'bottom samples all 10 pixels of the cape texture');
     assert(result.bounds[2] > 2, 'cape is behind the torso');
     console.log('CAPE PROJECTION: outside/inside orientation and bottom UV passed');
