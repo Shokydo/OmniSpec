@@ -10725,7 +10725,7 @@
     const capes = capeState();
     const wanted = fav.capeId || "";
     let capeError = "";
-    if (capes.licensed && (capes.busy || capes.selectionTimer)) {
+    if (capes.licensed && (capes.loading || capes.busy || capes.selectionTimer)) {
       capeError = "дождись завершения предыдущего изменения плаща";
     } else if (capes.licensed && wanted !== activeCapeId(capes)) {
       capes.busy = true;
@@ -10753,7 +10753,7 @@
     const favorites = skinFavorites();
     if (favorites.length >= FAV_SLOTS) return toast(`Образов не больше ${FAV_SLOTS} — удали один`, "err");
     const capes = capeState();
-    if (capes.busy || capes.selectionTimer) return toast("Дождись завершения изменения плаща", "err");
+    if (capes.loading || capes.busy || capes.selectionTimer) return toast("Дождись завершения изменения плаща", "err");
     const capeId = activeCapeId(capes);
     const capeAlias = capeId ? capeAliasOf(capeId) : "";
     const capeEntry = (capes.list || []).find((cape) => cape.id === capeId);

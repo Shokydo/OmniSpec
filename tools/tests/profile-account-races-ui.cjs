@@ -209,12 +209,26 @@ async function setup(page) {
     // wait for that write before fetching the profile, rather than fetch stale data.
     const beforeBackFetch=await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='account_capes' && c.args.accountUuid==='B').length);
     await page.locator('[data-uuid="B"] [data-acc="pick"]').click();
-    await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='B' && window.omnispecDebug.state.capes?.loading);
+    await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='B' && window.omnispecDebug.state.capes?.loading && window.omnispecDebug.state.skin?.currentName==='B');
     await page.waitForTimeout(250);
     assert.equal(await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='account_capes' && c.args.accountUuid==='B').length),beforeBackFetch);
+    // Favorites must not silently treat an unpopulated list as "no cape" or
+    // save it while the real active cape is still being resolved.
+    await page.evaluate(()=>{
+      window.omnispecDebug.state.settings.skin_favorites=[{id:'loading-fav',name:'Loading favorite',skinDataUrl:window.__raceTest.images.B,variant:'classic',capeId:''}];
+    });
+    await page.locator('[data-pref="avatar"]').click();
+    const beforeLoadingFavorite=await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').length);
+    await page.evaluate(()=>{document.querySelector('#toasts').textContent='';});
+    await page.locator('[data-fav="loading-fav"]').click();
+    await page.waitForFunction(()=>[...document.querySelectorAll('#toasts .toast.err')].some(t=>t.textContent.includes('плащ не применён')));
+    await page.locator('#fav-add').click();
+    await page.waitForFunction(()=>[...document.querySelectorAll('#toasts .toast.err')].some(t=>t.textContent.includes('Дождись завершения изменения плаща')));
+    assert.equal(await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').length),beforeLoadingFavorite);
     await page.evaluate(()=>window.__raceTest.release('set-cape'));
     await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='B' && !window.omnispecDebug.state.capes?.loading && window.omnispecDebug.state.capes.list.find(c=>c.active)?.id==='cape-B2');
     assert.equal(await page.evaluate(()=>window.__raceTest.serverCape.B),'cape-B2');
+    await page.locator('[data-pref="profile"]').click();
 
     // Applying A while switching to B targets A; a late response never edits B.
     await page.evaluate(()=>{window.__raceTest.skinMode.A='ok';window.__raceTest.capeMode.A='ok';window.__raceTest.applyMode='defer';});
