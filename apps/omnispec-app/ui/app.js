@@ -8870,6 +8870,8 @@
     if (state.profileAccountId !== accountId) {
       state.profileAccountId = accountId;
       // Нельзя оставлять плащи или разрешение смены скина от другого аккаунта.
+      // Отложенный выбор не должен отправиться после переключения аккаунта.
+      if (state.capes?.selectionTimer) clearTimeout(state.capes.selectionTimer);
       state.skin = null;
       state.capes = null;
       state.capeTexture = null;
@@ -10639,9 +10641,16 @@
     }
   }
 
-  function activeCapeId() {
-    const list = capeState().list || [];
-    return (list.find((cape) => cape.active) || {}).id || "";
+  function activeCapeId(capes = capeState()) {
+    return ((capes.list || []).find((cape) => cape.active) || {}).id || "";
+  }
+
+  // Выделенный вариант может ещё применяться к аккаунту. Пустая строка —
+  // сознательный выбор «Без плаща», null — выбор пока не инициализирован.
+  function selectedCapeId(capes = capeState()) {
+    const selected = capes.selectedId;
+    if (typeof selected === "string" && (!selected || (capes.list || []).some((cape) => cape.id === selected))) return selected;
+    return activeCapeId(capes);
   }
 
   function capeAliasOf(id) {
@@ -10716,21 +10725,21 @@
     const capes = capeState();
     const wanted = fav.capeId || "";
     let capeError = "";
-    if (capes.licensed && wanted !== activeCapeId()) {
-      if (capes.busy) capeError = "дождись завершения предыдущего изменения плаща";
-      else {
-        capes.busy = true;
-        try {
-          ++capes.requestSerial; capes.loading = false;
-          await api.setCape(wanted || null, accountId);
-          if (state.capes !== capes || state.skin !== skin || currentProfileId() !== accountId) return;
-          capes.list.forEach((cape) => { cape.active = wanted ? cape.id === wanted : false; });
-        } catch (error) { capeError = String(error); }
-        finally { capes.busy = false; }
-      }
+    if (capes.licensed && (capes.busy || capes.selectionTimer)) {
+      capeError = "дождись завершения предыдущего изменения плаща";
+    } else if (capes.licensed && wanted !== activeCapeId(capes)) {
+      capes.busy = true;
+      try {
+        ++capes.requestSerial; capes.loading = false;
+        const result = await setCapeSerialized(capes, wanted, accountId);
+        if (result === CAPE_CANCELLED || state.capes !== capes || state.skin !== skin || currentProfileId() !== accountId) return;
+        capes.list.forEach((cape) => { cape.active = wanted ? cape.id === wanted : false; });
+        capes.selectedId = activeCapeId(capes);
+      } catch (error) { capeError = String(error); }
+      finally { capes.busy = false; }
     }
     if (state.capes !== capes || state.skin !== skin || currentProfileId() !== accountId) return;
-    await loadCapeTexture();
+    await loadCapeTexture(capeError ? selectedCapeId(capes) : activeCapeId(capes));
     if (state.skin !== skin || currentProfileId() !== accountId) return;
     skin.selectedSkin = null;
     renderPrefs();
@@ -10743,9 +10752,11 @@
     if (!skin.texture) return toast("Сначала выбери скин", "err");
     const favorites = skinFavorites();
     if (favorites.length >= FAV_SLOTS) return toast(`Образов не больше ${FAV_SLOTS} — удали один`, "err");
-    const capeId = activeCapeId();
+    const capes = capeState();
+    if (capes.busy || capes.selectionTimer) return toast("Дождись завершения изменения плаща", "err");
+    const capeId = activeCapeId(capes);
     const capeAlias = capeId ? capeAliasOf(capeId) : "";
-    const capeEntry = (capeState().list || []).find((cape) => cape.id === capeId);
+    const capeEntry = (capes.list || []).find((cape) => cape.id === capeId);
     const capeDataUrl = (capeEntry && capeEntry.data_url) || "";
     const name = await promptModal({
       title: "Сохранить образ",
@@ -10863,7 +10874,7 @@
           </section>
         </div>
         <section class="prefs-section profile-capes">
-          <div class="prefs-label-row"><span class="prefs-label">Плащи</span><span class="avatar-cape-hint">Колесо — прокрутка · нажми, чтобы выбрать</span><div class="spacer"></div>
+          <div class="prefs-label-row"><span class="prefs-label">Плащи</span><span class="avatar-cape-hint" id="cape-status" role="status" aria-live="polite">${capeStatusText(capeState())}</span><div class="spacer"></div>
             <button class="icon-btn" id="cape-refresh" title="Обновить плащи аккаунта"><svg class="ic"><use href="#i-refresh"/></svg></button>
           </div>
           ${capeColumnHtml()}
@@ -10876,17 +10887,17 @@
     const capes = capeState();
     const licensed = Boolean(capes.licensed);
     const list = capes.list || [];
-    const activeId = (list.find((cape) => cape.active) || {}).id || "";
+    const selectedId = selectedCapeId(capes);
     const cards = list.map((cape) => `
-      <button type="button" class="cape-card ${cape.id === activeId ? "is-active" : ""}" data-cape-id="${esc(cape.id)}" title="${esc(cape.alias)}" aria-pressed="${cape.id === activeId}">
+      <button type="button" class="cape-card ${cape.id === selectedId ? "is-active" : ""}" data-cape-id="${esc(cape.id)}" title="${esc(cape.alias)}" aria-pressed="${cape.id === selectedId}">
         <canvas class="cape-thumb" width="108" height="128" data-cape-src="${esc(cape.data_url || "")}" aria-hidden="true"></canvas>
         <span class="cape-name" translate="no">${esc(cape.alias)}</span>
       </button>`).join("");
     return `
       <div class="cape-carousel">
-        <button type="button" class="icon-btn cape-scroll cape-scroll-prev" id="cape-prev" aria-controls="skin-capes" title="Прокрутить плащи влево" aria-label="Прокрутить плащи влево" disabled><svg class="ic"><use href="#i-chev"/></svg></button>
-        <div class="cape-list" id="skin-capes" tabindex="0" role="region" aria-label="Гардероб плащей">
-          <button type="button" class="cape-card cape-off ${activeId ? "" : "is-active"}" data-cape-id="" title="Снять плащ" aria-pressed="${!activeId}">
+        <button type="button" class="icon-btn cape-scroll cape-scroll-prev" id="cape-prev" aria-controls="skin-capes" title="Выбрать предыдущий плащ" aria-label="Выбрать предыдущий плащ" disabled><svg class="ic"><use href="#i-chev"/></svg></button>
+        <div class="cape-list" id="skin-capes" tabindex="0" role="region" aria-label="Гардероб плащей" aria-busy="${Boolean(capes.selectionTimer || (capes.busy && capes.mutationKind === "wardrobe"))}">
+          <button type="button" class="cape-card cape-off ${selectedId ? "" : "is-active"}" data-cape-id="" title="Снять плащ" aria-pressed="${!selectedId}">
             <span class="cape-thumb cape-thumb-off"><svg class="ic"><use href="#i-minus"/></svg></span>
             <span class="cape-name">Без плаща</span>
           </button>
@@ -10896,14 +10907,43 @@
               : (!list.length && !capes.loading ? `<div class="cape-note">У аккаунта нет плащей.</div>` : ""))}
           ${capes.loading ? `<div class="cape-note">Загружаем плащи…</div>` : ""}
         </div>
-        <button type="button" class="icon-btn cape-scroll cape-scroll-next" id="cape-next" aria-controls="skin-capes" title="Прокрутить плащи вправо" aria-label="Прокрутить плащи вправо" disabled><svg class="ic"><use href="#i-chev"/></svg></button>
+        <button type="button" class="icon-btn cape-scroll cape-scroll-next" id="cape-next" aria-controls="skin-capes" title="Выбрать следующий плащ" aria-label="Выбрать следующий плащ" disabled><svg class="ic"><use href="#i-chev"/></svg></button>
       </div>`;
   }
 
   /* ==================== ПЛАЩИ АККАУНТА ==================== */
+  // Не допускаем одновременных записей одного аккаунта даже при быстром
+  // переключении на другой аккаунт и обратно. Разные аккаунты независимы.
+  const capeMutations = new Map();
+  const CAPE_CANCELLED = Symbol("cape-cancelled");
+  const CAPE_SELECTION_DELAY = 650;
+
+  function capeAccountKey(accountId) { return String(accountId || "").toLowerCase().replace(/-/g, ""); }
+
   function capeState() {
-    if (!state.capes) state.capes = { licensed: false, list: [], loading: false, error: "", busy: false, requestSerial: 0, textureRevision: 0 };
+    if (!state.capes) state.capes = { licensed: false, list: [], loading: false, error: "", busy: false,
+      requestSerial: 0, textureRevision: 0, selectedId: null, selectionTimer: null, selectionDueAt: 0, mutationKind: "" };
     return state.capes;
+  }
+
+  function capeStatusText(capes) {
+    return capes.selectionTimer || (capes.busy && capes.mutationKind === "wardrobe")
+      ? "Применяем плащ…" : "Стрелки и колесо — выбор плаща";
+  }
+
+  function setCapeSerialized(capes, id, accountId) {
+    const key = capeAccountKey(accountId);
+    const previous = capeMutations.get(key) || Promise.resolve();
+    const next = previous.catch(() => {}).then(() => {
+      // Ожидание предыдущего запроса не должно применить плащ к другому
+      // профилю, если пользователь успел сменить аккаунт.
+      if (state.capes !== capes || currentProfileId() !== accountId || !capes.licensed) return CAPE_CANCELLED;
+      return api.setCape(id || null, accountId);
+    });
+    capeMutations.set(key, next);
+    const cleanup = () => { if (capeMutations.get(key) === next) capeMutations.delete(key); };
+    next.then(cleanup, cleanup);
+    return next;
   }
 
   /** Та же объёмная деталь, что и на модели, повернута спиной в три четверти. */
@@ -10918,14 +10958,13 @@
     image.src = src;
   }
 
-  /** Плащи подгружаем при открытии профиля. */
-  /** Текстура активного плаща — её и рисуем на модели за спиной. */
-  async function loadCapeTexture() {
+  /** Предпросмотр выделенного или уже применённого плаща на модели. */
+  async function loadCapeTexture(id = activeCapeId()) {
     const capes = capeState();
     const accountId = currentProfileId();
     const revision = ++capes.textureRevision;
-    const active = (capes.list || []).find((cape) => cape.active);
-    const src = (active && active.data_url) || "";
+    const cape = (capes.list || []).find((item) => item.id === id);
+    const src = (cape && cape.data_url) || "";
     if (!src) {
       state.capeTexture = null;
       state.capeTextureSrc = "";
@@ -10941,7 +10980,7 @@
 
   async function refreshAccountCapes() {
     const capes = capeState();
-    if (capes.busy) return false;
+    if (capes.busy || capes.selectionTimer) return false;
     const active = activeAccount();
     const accountId = active?.uuid || "";
     const request = ++capes.requestSerial;
@@ -10949,8 +10988,13 @@
     capes.licensed = Boolean(active && active.kind === "microsoft");
     capes.loading = capes.licensed;
     capes.error = "";
-    if (!capes.licensed) { capes.list = []; await loadCapeTexture(); return false; }
+    if (!capes.licensed) { capes.list = []; capes.selectedId = ""; await loadCapeTexture(); return false; }
     try {
+      // После возврата на аккаунт дождаться его предыдущей записи, иначе
+      // запоздавший PUT/DELETE может сделать только что загруженный список устаревшим.
+      const mutation = capeMutations.get(capeAccountKey(accountId));
+      if (mutation) await mutation.catch(() => {});
+      if (!current()) return false;
       const info = await api.accountCapes(accountId);
       if (!current()) return false;
       if (!info || !info.licensed) throw new Error("сервер не подтвердил профиль Minecraft");
@@ -10958,6 +11002,7 @@
         throw new Error("сервер вернул профиль другого аккаунта");
       }
       capes.list = Array.isArray(info.capes) ? info.capes : [];
+      capes.selectedId = activeCapeId(capes);
       capes.error = info.warning || "";
       await loadCapeTexture();
       return current();
@@ -10974,46 +11019,164 @@
     const prev = $("#cape-prev");
     const next = $("#cape-next");
     if (!list || !prev || !next) return;
-    const max = Math.max(0, list.scrollWidth - list.clientWidth);
-    prev.disabled = list.scrollLeft <= 1;
-    next.disabled = list.scrollLeft >= max - 1;
+    const capes = capeState();
+    const cards = $$(".cape-card", list);
+    const index = cards.findIndex((card) => card.dataset.capeId === selectedCapeId(capes));
+    const blocked = !capes.licensed || capes.loading || (capes.busy && capes.mutationKind !== "wardrobe");
+    prev.disabled = blocked || index <= 0;
+    next.disabled = blocked || index < 0 || index >= cards.length - 1;
+  }
+
+  function updateCapeSelectionUI(capes) {
+    if (state.capes !== capes) return;
+    const list = $("#skin-capes");
+    if (!list) return;
+    const id = selectedCapeId(capes);
+    $$(".cape-card", list).forEach((card) => {
+      const selected = card.dataset.capeId === id;
+      card.classList.toggle("is-active", selected);
+      card.setAttribute("aria-pressed", String(selected));
+    });
+    const busy = Boolean(capes.selectionTimer || (capes.busy && capes.mutationKind === "wardrobe"));
+    list.setAttribute("aria-busy", String(busy));
+    const status = $("#cape-status");
+    if (status) status.textContent = capeStatusText(capes);
+    updateCapeScrollControls();
+  }
+
+  function previewCapeSelection(capes, id, accountId) {
+    loadCapeTexture(id).then(() => {
+      if (state.capes === capes && currentProfileId() === accountId && selectedCapeId(capes) === id) redrawSkinPreview();
+    });
+  }
+
+  function clearCapeSelectionTimer(capes) {
+    if (capes.selectionTimer) clearTimeout(capes.selectionTimer);
+    capes.selectionTimer = null;
+  }
+
+  function scheduleCapeSelection(capes, accountId) {
+    clearCapeSelectionTimer(capes);
+    capes.selectionTimer = setTimeout(() => {
+      capes.selectionTimer = null;
+      void commitCapeSelection(capes, accountId);
+    }, Math.max(0, capes.selectionDueAt - Date.now()));
+  }
+
+  async function commitCapeSelection(capes, accountId) {
+    if (state.capes !== capes || currentProfileId() !== accountId || !capes.licensed) return;
+    // Пока один запрос в пути, запоминаем только последний выбор; следующий
+    // запрос запустится после первого, никогда параллельно с ним.
+    if (capes.busy) { updateCapeSelectionUI(capes); return; }
+    const id = selectedCapeId(capes);
+    if (id === activeCapeId(capes)) { updateCapeSelectionUI(capes); return; }
+    capes.busy = true;
+    capes.mutationKind = "wardrobe";
+    updateCapeSelectionUI(capes);
+    let success = false;
+    try {
+      const result = await setCapeSerialized(capes, id, accountId);
+      if (result === CAPE_CANCELLED || state.capes !== capes || currentProfileId() !== accountId) return;
+      if (result?.account_uuid && capeAccountKey(result.account_uuid) !== capeAccountKey(accountId)) throw new Error("сервер вернул профиль другого аккаунта");
+      capes.list.forEach((cape) => { cape.active = id ? cape.id === id : false; });
+      success = true;
+    } catch (error) {
+      if (state.capes !== capes || currentProfileId() !== accountId) return;
+      // Не показываем неудачный выбор как надетый. Если за время запроса уже
+      // выбран другой вариант, дадим ему завершиться отдельно.
+      if (selectedCapeId(capes) === id) {
+        clearCapeSelectionTimer(capes);
+        capes.selectedId = activeCapeId(capes);
+        previewCapeSelection(capes, capes.selectedId, accountId);
+        toast(String(error), "err");
+      }
+    } finally {
+      capes.busy = false;
+      capes.mutationKind = "";
+    }
+    if (state.capes !== capes || currentProfileId() !== accountId) return;
+    if (selectedCapeId(capes) !== activeCapeId(capes)) {
+      if (!capes.selectionTimer) scheduleCapeSelection(capes, accountId);
+    } else {
+      clearCapeSelectionTimer(capes);
+      if (success) toast(id ? "Плащ включён" : "Плащ выключен", "ok");
+    }
+    updateCapeSelectionUI(capes);
+  }
+
+  function chooseCape(id, immediate = false) {
+    const capes = capeState();
+    const accountId = currentProfileId();
+    id = id || "";
+    if (!capes.licensed) { toast("Плащи есть только у лицензионного аккаунта", "err"); return false; }
+    if (capes.loading || (capes.busy && capes.mutationKind !== "wardrobe")) {
+      toast("Дождись завершения изменения плаща", "err"); return false;
+    }
+    if (id && !(capes.list || []).some((cape) => cape.id === id)) return false;
+    clearCapeSelectionTimer(capes);
+    // Старая загрузка списка не должна перезаписать только что выбранный плащ.
+    ++capes.requestSerial;
+    capes.loading = false;
+    capes.selectedId = id;
+    capes.selectionDueAt = Date.now() + (immediate ? 0 : CAPE_SELECTION_DELAY);
+    if (capes.busy || id !== activeCapeId(capes)) scheduleCapeSelection(capes, accountId);
+    previewCapeSelection(capes, id, accountId);
+    updateCapeSelectionUI(capes);
+    return true;
   }
 
   function bindCapeCarousel() {
     const list = $("#skin-capes");
     if (!list) return;
-    const move = (direction) => {
-      const card = $(".cape-card", list);
-      const step = card ? card.getBoundingClientRect().width / uiZoom() + 8 : 100;
-      const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-      list.scrollBy({ left: direction * step, behavior: reduced ? "auto" : "smooth" });
+    const cards = () => $$(".cape-card", list);
+    const index = () => cards().findIndex((card) => card.dataset.capeId === selectedCapeId());
+    const select = (next, focus = false) => {
+      const all = cards();
+      if (next < 0 || next >= all.length || !chooseCape(all[next].dataset.capeId)) return false;
+      const card = all[next];
+      if (focus) card.focus({ preventScroll: true });
+      card.scrollIntoView({ block: "nearest", inline: "nearest" });
+      return true;
     };
-    $("#cape-prev")?.addEventListener("click", () => move(-1));
-    $("#cape-next")?.addEventListener("click", () => move(1));
+    $("#cape-prev")?.addEventListener("click", () => select(index() - 1));
+    $("#cape-next")?.addEventListener("click", () => select(index() + 1));
     list.addEventListener("scroll", updateCapeScrollControls, { passive: true });
+    // Накопление позволяет одинаково пользоваться колесом и плавным тачпадом;
+    // шквал событий выбирает конечную карточку, а не шлёт запрос на каждую.
+    let wheelRemainder = 0;
+    let wheelDirection = 0;
     list.addEventListener("wheel", (event) => {
+      const capes = capeState();
+      if (event.ctrlKey || event.altKey || event.metaKey || !capes.licensed || capes.loading
+        || (capes.busy && capes.mutationKind !== "wardrobe")) return;
       const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
       if (!delta) return;
-      const pixels = delta * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? list.clientWidth : 1);
-      const before = list.scrollLeft;
-      list.scrollLeft += pixels;
-      // Колесо над гардеробом листает плащи, но не запирает страницу на краю.
-      if (Math.abs(list.scrollLeft - before) > 0.01) event.preventDefault();
+      const direction = Math.sign(delta);
+      const current = index();
+      if (current < 0 || (direction < 0 && current === 0) || (direction > 0 && current === cards().length - 1)) {
+        wheelRemainder = 0; return;
+      }
+      event.preventDefault();
+      if (direction !== wheelDirection) wheelRemainder = 0;
+      wheelDirection = direction;
+      wheelRemainder += Math.abs(delta) * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? list.clientWidth : 1);
+      const steps = Math.min(8, Math.floor(wheelRemainder / 50));
+      if (!steps) return;
+      wheelRemainder = Math.min(49, Math.max(0, wheelRemainder - steps * 50));
+      select(Math.max(0, Math.min(cards().length - 1, current + direction * steps)));
     }, { passive: false });
     list.addEventListener("keydown", (event) => {
       if (event.altKey || event.ctrlKey || event.metaKey || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-      const cards = $$(".cape-card", list);
-      if (!cards.length) return;
-      const focused = event.target.closest?.(".cape-card");
-      let index = cards.indexOf(focused);
-      if (index < 0) index = Math.max(0, cards.findIndex((card) => card.classList.contains("is-active")));
-      if (event.key === "ArrowLeft") index = Math.max(0, index - 1);
-      if (event.key === "ArrowRight") index = Math.min(cards.length - 1, index + 1);
-      if (event.key === "Home") index = 0;
-      if (event.key === "End") index = cards.length - 1;
+      const all = cards();
+      const current = index();
+      if (!all.length || current < 0) return;
+      let next = current;
+      if (event.key === "ArrowLeft") next = Math.max(0, current - 1);
+      if (event.key === "ArrowRight") next = Math.min(all.length - 1, current + 1);
+      if (event.key === "Home") next = 0;
+      if (event.key === "End") next = all.length - 1;
       event.preventDefault();
-      cards[index].focus({ preventScroll: true });
-      cards[index].scrollIntoView({ block: "nearest", inline: "nearest" });
+      select(next, true);
     });
     requestAnimationFrame(updateCapeScrollControls);
   }
@@ -11025,7 +11188,7 @@
     const refresh = $("#cape-refresh");
     if (refresh) refresh.addEventListener("click", async () => {
       const capes = capeState();
-      if (capes.busy) return toast("Дождись завершения изменения плаща", "err");
+      if (capes.busy || capes.selectionTimer) return toast("Дождись завершения изменения плаща", "err");
       const accountId = currentProfileId();
       const pending = refreshAccountCapes();
       const request = capes.requestSerial;
@@ -11034,27 +11197,8 @@
       renderPrefs();
       toast(fresh && !capes.error ? "Список плащей обновлён" : (capes.error || "Выбери лицензионный аккаунт"), fresh && !capes.error ? "ok" : "err");
     });
-    $$("#skin-capes .cape-card").forEach((card) => card.addEventListener("click", async () => {
-      const id = card.dataset.capeId || null;
-      const capes = capeState();
-      const accountId = currentProfileId();
-      if (!capes.licensed) return toast("Плащи есть только у лицензионного аккаунта", "err");
-      if (capes.busy) return toast("Дождись завершения изменения плаща", "err");
-      const current = (capes.list.find((cape) => cape.active) || {}).id || "";
-      if ((id || "") === current) return;
-      capes.busy = true;
-      try {
-        ++capes.requestSerial; capes.loading = false;
-        await api.setCape(id, accountId);
-        if (state.capes !== capes || currentProfileId() !== accountId) return;
-        capes.list.forEach((cape) => { cape.active = id ? cape.id === id : false; });
-        await loadCapeTexture();
-        if (state.capes !== capes || currentProfileId() !== accountId) return;
-        renderPrefs();
-        toast(id ? "Плащ включён" : "Плащ выключен", "ok");
-      } catch (error) {
-        toast(String(error), "err");
-      } finally { capes.busy = false; }
+    $$("#skin-capes .cape-card").forEach((card) => card.addEventListener("click", () => {
+      chooseCape(card.dataset.capeId || "", true);
     }));
   }
 

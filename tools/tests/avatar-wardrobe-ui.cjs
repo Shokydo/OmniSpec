@@ -148,40 +148,62 @@ async function layout(page, width, height) {
     console.log('CAPE_3D_FRONT_AND_EDGE_OK',JSON.stringify(pixels));
 
     const countCalls=()=>page.evaluate(()=>window.__avatarTest.calls.filter(c=>c.command==='set_cape').length);
-    assert(await page.locator('#cape-prev').isDisabled());
+    const chosen=()=>page.locator('#skin-capes .cape-card[aria-pressed="true"]').getAttribute('data-cape-id');
+    const settled=()=>page.waitForFunction(()=>document.querySelector('#skin-capes')?.getAttribute('aria-busy')==='false');
+    assert(await page.locator('#cape-prev').isEnabled(),'previous selects the no-cape card even without overflow');
     assert(await page.locator('#cape-next').isEnabled());
     const beforeBrowse=await countCalls();
     await page.locator('#cape-next').click();
-    await page.waitForFunction(()=>document.querySelector('#skin-capes').scrollLeft>20 && !document.querySelector('#cape-prev').disabled);
-    assert.equal(await countCalls(),beforeBrowse,'scroll arrows must not change account cape');
-    await page.locator('#cape-prev').click();
-    await page.waitForFunction(()=>document.querySelector('#skin-capes').scrollLeft<=1);
+    assert.equal(await chosen(),'cape-1','arrow immediately selects the next cape');
+    assert.equal(await page.locator('#cape-status').innerText(),'Применяем плащ…');
+    await page.waitForFunction(()=>window.omnispecDebug.state.capeTextureSrc===window.__avatarTest.capes[1].data_url);
+    await settled();
+    assert.equal(await countCalls(),beforeBrowse+1);
+    assert.equal(await page.evaluate(()=>window.__avatarTest.calls.filter(c=>c.command==='set_cape').at(-1).args.capeId),'cape-1');
+
+    // A continuous wheel gesture selects the final card and makes just one
+    // request once the gesture stops, rather than one request per intermediate cape.
+    const beforeWheel=await countCalls();
     const box=await page.locator('#skin-capes').boundingBox();
     await page.mouse.move(box.x+box.width/2,box.y+box.height/2);
     await page.mouse.wheel(0,380);
-    await page.waitForFunction(()=>document.querySelector('#skin-capes').scrollLeft>100);
-    const afterWheel=await page.locator('#skin-capes').evaluate(el=>el.scrollLeft);
+    await page.waitForFunction(()=>document.querySelector('#skin-capes [data-cape-id="cape-8"]')?.getAttribute('aria-pressed')==='true');
+    await page.waitForFunction(()=>document.querySelector('#skin-capes').scrollLeft>20);
     await page.mouse.wheel(0,-200);
-    await page.waitForFunction(v=>document.querySelector('#skin-capes').scrollLeft<v,afterWheel);
-    assert.equal(await countCalls(),beforeBrowse,'wheel browsing must not change account cape');
+    await page.waitForFunction(()=>document.querySelector('#skin-capes [data-cape-id="cape-4"]')?.getAttribute('aria-pressed')==='true');
+    await settled();
+    assert.equal(await countCalls(),beforeWheel+1,'one gesture coalesces to one account change');
+    assert.equal(await page.evaluate(()=>window.__avatarTest.calls.filter(c=>c.command==='set_cape').at(-1).args.capeId),'cape-4');
     assert.equal(await page.locator('#prefs-body').evaluate(el=>el.scrollTop),0,'wheel does not scroll the whole page');
-    console.log('CAPE_ARROW_AND_WHEEL_SCROLL_OK');
 
-    await page.locator('#skin-capes [data-cape-id="cape-1"]').focus();
+    // Choosing back the already active cape before the debounce expires is a no-op.
+    const beforeCancel=await countCalls();
+    await page.locator('#cape-prev').click();
+    assert.equal(await chosen(),'cape-3');
+    await page.locator('#cape-next').click();
+    assert.equal(await chosen(),'cape-4');
+    await page.waitForTimeout(800);
+    assert.equal(await countCalls(),beforeCancel,'returning to the active cape must not send a request');
+    console.log('CAPE_ARROW_WHEEL_SELECTION_AND_COALESCING_OK');
+
+    await page.locator('#skin-capes [data-cape-id="cape-4"]').focus();
+    const beforeKeyboard=await countCalls();
     await page.keyboard.press('End');
-    await page.waitForFunction(()=>document.activeElement?.dataset.capeId==='cape-19');
-    assert.equal(await countCalls(),beforeBrowse,'keyboard browsing must not change account cape');
+    assert.equal(await chosen(),'cape-19','End selects, not merely focuses, the last cape');
+    assert.equal(await page.evaluate(()=>document.activeElement?.dataset.capeId),'cape-19');
     await page.keyboard.press('Enter');
-    await page.waitForFunction(()=>document.querySelector('#skin-capes [data-cape-id="cape-19"]')?.getAttribute('aria-pressed')==='true');
-    assert.equal(await countCalls(),beforeBrowse+1);
+    await settled();
+    assert.equal(await countCalls(),beforeKeyboard+1);
     assert.equal(await page.evaluate(()=>window.__avatarTest.calls.filter(c=>c.command==='set_cape').at(-1).args.capeId),'cape-19');
     assert(await page.locator('#skin-capes [data-cape-id="cape-19"]').evaluate(el=>el.classList.contains('is-active')));
     const chosenScroll=await page.locator('#skin-capes').evaluate(el=>el.scrollLeft);
     assert(chosenScroll>100,'selected cape remains in the visible, scrolled section');
-    assert.equal(await page.evaluate(()=>document.activeElement?.dataset.capeId),'cape-19','selection keeps keyboard focus after rerender');
+    assert.equal(await page.evaluate(()=>document.activeElement?.dataset.capeId),'cape-19','selection keeps keyboard focus');
     await page.keyboard.press('ArrowLeft');
+    assert.equal(await chosen(),'cape-18','keyboard arrows directly select');
     assert.equal(await page.evaluate(()=>document.activeElement?.dataset.capeId),'cape-18');
-    assert.equal(await countCalls(),beforeBrowse+1);
+    await settled();
+    assert.equal(await countCalls(),beforeKeyboard+2);
     console.log('CAPE_KEYBOARD_AND_ACTUAL_SELECTION_OK');
 
     // Selection rerenders all panels; the independently scrolling skin and cape
@@ -200,12 +222,20 @@ async function layout(page, width, height) {
     console.log('BOTH_AVATAR_SCROLL_POSITIONS_PERSIST_OK');
 
     // All newly introduced labels and ARIA descriptions are localized.
-    const labels={ru:['Аватар','Избранные образы','Гардероб плащей'],en:['Avatar','Favorite outfits','Cape wardrobe'],be:['Аватар','Выбраныя вобразы','Гардэроб плашчоў'],kk:['Аватар','Таңдаулы бейнелер','Плащтар гардеробы'],uk:['Аватар','Улюблені образи','Гардероб плащів']};
+    const labels={
+      ru:['Аватар','Избранные образы','Гардероб плащей','Выбрать предыдущий плащ','Стрелки и колесо — выбор плаща','Применяем плащ…'],
+      en:['Avatar','Favorite outfits','Cape wardrobe','Select previous cape','Arrows and wheel select a cape','Applying cape…'],
+      be:['Аватар','Выбраныя вобразы','Гардэроб плашчоў','Выбраць папярэдні плашч','Стрэлкі і колца — выбар плашча','Ужываем плашч…'],
+      kk:['Аватар','Таңдаулы бейнелер','Плащтар гардеробы','Алдыңғы плащты таңдау','Көрсеткілер мен дөңгелек — плащ таңдау','Плащ қолданылуда…'],
+      uk:['Аватар','Улюблені образи','Гардероб плащів','Вибрати попередній плащ','Стрілки й коліщатко — вибір плаща','Застосовуємо плащ…']};
     for (const lang of ['en','be','kk','uk','ru']) {
       await page.evaluate(lang=>window.OmniI18n.setLanguage(lang),lang);
       assert.equal(await page.locator('[data-pref="avatar"]').innerText(),labels[lang][0]);
       assert.equal((await page.locator('.profile-favorites .prefs-label').textContent()).trim(),labels[lang][1]);
       assert.equal(await page.locator('#skin-capes').getAttribute('aria-label'),labels[lang][2]);
+      assert.equal(await page.locator('#cape-prev').getAttribute('aria-label'),labels[lang][3]);
+      assert.equal(await page.locator('#cape-status').innerText(),labels[lang][4]);
+      assert.equal(await page.evaluate(text=>window.OmniI18n.translate(text),'Применяем плащ…'),labels[lang][5]);
     }
     console.log('AVATAR_FIVE_LANGUAGES_OK');
 
@@ -220,6 +250,14 @@ async function layout(page, width, height) {
     assert.match(warning.text,/только лицензионному аккаунту/);
     assert(warning.scroll<=warning.height+1,`ordinary offline message is clipped: ${JSON.stringify(warning)}`);
     assert(await page.locator('#skin-apply').isDisabled());
+    assert(await page.locator('#cape-prev').isDisabled() && await page.locator('#cape-next').isDisabled());
+    const offlineCapeCalls=await countCalls();
+    await page.locator('#skin-capes [data-cape-id=""]').click();
+    const offlineBox=await page.locator('#skin-capes').boundingBox();
+    await page.mouse.move(offlineBox.x+offlineBox.width/2,offlineBox.y+offlineBox.height/2);
+    await page.mouse.wheel(0,250);
+    await page.waitForTimeout(750);
+    assert.equal(await countCalls(),offlineCapeCalls,'offline accounts must never send cape mutations');
     assert.equal(await page.locator('#prefs-body').evaluate(el=>el.scrollTop),0);
     assert.deepEqual(errors,[]);
     console.log('AVATAR_OFFLINE_WARNING_VISIBLE_OK');

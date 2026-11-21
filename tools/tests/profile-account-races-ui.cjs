@@ -29,6 +29,7 @@ async function setup(page) {
       images, calls: [], pending: [], active: 'A',
       accounts: [{uuid:'A', username:'Alpha', kind:'microsoft'}, {uuid:'B', username:'Beta', kind:'microsoft'}, {uuid:'O', username:'Offline', kind:'offline'}],
       skinMode: {A:'ok', B:'ok'}, capeMode: {A:'defer', B:'ok'}, capeSetMode: 'ok', saveMode: 'ok', applyMode: 'ok',
+      serverCape: {A:'cape-A', B:'cape-B'},
       settings: {theme:'dark', click_fx:'off', ambient:'off', trail:false, onboarded:true, discord_rpc:false,
         update_enabled:false, ui_scale:100, wallpaper:null, wallpaper_fit:'cover', wallpaper_blur:0, wallpaper_dim:40,
         wallpaper_recent:[], skin_presets:[{id:'local',name:'Локальный',path:'/skins/local.png',variant:'classic',angle:0}], skin_favorites:[]},
@@ -52,8 +53,8 @@ async function setup(page) {
           }
           case 'account_capes': {
             const id=args.accountUuid || this.active;
-            const value={account_uuid:id,licensed:true,capes:[{id:'cape-'+id,alias:'Cape '+id,active:true,data_url:this.images[id]},
-              {id:'cape-'+id+'2',alias:'Second '+id,active:false,data_url:this.images[id]}]};
+            const value={account_uuid:id,licensed:true,capes:[{id:'cape-'+id,alias:'Cape '+id,active:this.serverCape[id]==='cape-'+id,data_url:this.images[id]},
+              {id:'cape-'+id+'2',alias:'Second '+id,active:this.serverCape[id]==='cape-'+id+'2',data_url:this.images[id]}]};
             const mode=this.capeMode[id];
             if(mode==='defer') return this.defer('capes-'+id,value);
             if(mode==='fail') throw 'Плащи: HTTP 429';
@@ -61,8 +62,9 @@ async function setup(page) {
             return value;
           }
           case 'set_cape':
-            if(this.capeSetMode==='defer') return this.defer('set-cape', {ok:true,account_uuid:args.accountUuid});
+            if(this.capeSetMode==='defer') await this.defer('set-cape', null);
             if(this.capeSetMode==='fail') throw 'Плащ не разрешён: HTTP 403';
+            this.serverCape[args.accountUuid]=args.capeId || '';
             return {ok:true,account_uuid:args.accountUuid};
           case 'image_data_url': return this.images.local;
           case 'save_skin_png':
@@ -150,8 +152,8 @@ async function setup(page) {
     assert.equal(await page.locator('#skin-capes [data-cape-id="cape-B"]').count(),1);
     assert(await page.locator('#toasts .toast.err').filter({hasText:'Не удалось загрузить некоторые изображения плащей'}).count());
 
-    // Two clicks and a refresh while the first cape mutation is pending must
-    // result in just one network mutation. Afterwards the desired cape wins.
+    // While one change is pending, the newest choice is remembered but never
+    // sent in parallel. Refresh also cannot clobber the pending selection.
     await page.evaluate(()=>{window.__raceTest.capeMode.B='ok';window.__raceTest.capeSetMode='defer';});
     await page.locator('#skin-capes [data-cape-id="cape-B2"]').click();
     await page.waitForFunction(()=>window.__raceTest.pending.some(p=>p.key==='set-cape'));
@@ -161,31 +163,58 @@ async function setup(page) {
     await page.locator('#cape-refresh').click();
     assert.equal(await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').length),capeCalls);
     assert.equal(await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='account_capes').length),refreshCalls);
-    const capeCall=await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').at(-1));
+    let capeCall=await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').at(-1));
     assert.equal(capeCall.args.accountUuid,'B'); assert.equal(capeCall.args.capeId,'cape-B2');
     await page.evaluate(()=>window.__raceTest.release('set-cape'));
-    await page.waitForFunction(()=>document.querySelector('#skin-capes [data-cape-id="cape-B2"]')?.classList.contains('is-active'));
+    await page.waitForFunction(n=>window.__raceTest.calls.filter(c=>c.command==='set_cape').length===n+1 && window.__raceTest.pending.some(p=>p.key==='set-cape'),capeCalls);
+    capeCall=await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').at(-1));
+    assert.equal(capeCall.args.accountUuid,'B'); assert.equal(capeCall.args.capeId,null);
+    await page.evaluate(()=>window.__raceTest.release('set-cape'));
+    await page.waitForFunction(()=>document.querySelector('#skin-capes')?.getAttribute('aria-busy')==='false' && document.querySelector('#skin-capes [data-cape-id=""]')?.classList.contains('is-active'));
+    assert.equal(await page.evaluate(()=>window.omnispecDebug.state.capes.list.some(c=>c.active)),false);
 
-    // A rejected mutation does not mark the requested cape as active.
+    // A rejected mutation rolls the preview and pressed state back to the
+    // confirmed server cape, rather than falsely claiming it was applied.
     await page.evaluate(()=>window.__raceTest.capeSetMode='fail');
-    await page.locator('#skin-capes [data-cape-id=""]').click();
+    await page.locator('#skin-capes [data-cape-id="cape-B2"]').click();
     await page.waitForFunction(()=>[...document.querySelectorAll('#toasts .toast.err')].some(t=>t.textContent.includes('HTTP 403')));
-    assert(await page.locator('#skin-capes [data-cape-id="cape-B2"]').evaluate(el=>el.classList.contains('is-active')));
+    assert(await page.locator('#skin-capes [data-cape-id=""]').evaluate(el=>el.classList.contains('is-active')));
+
+    // A not-yet-sent wheel/arrow selection is cancelled when switching account;
+    // it must never accidentally mutate either the old or the new profile.
+    await page.evaluate(()=>{window.__raceTest.skinMode.A='ok';window.__raceTest.capeMode.A='ok';window.__raceTest.capeSetMode='ok';});
+    const beforeSwitch=await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').length);
+    await page.locator('#cape-next').click();
+    assert.equal(await page.locator('#skin-capes [aria-pressed="true"]').getAttribute('data-cape-id'),'cape-B');
+    await page.locator('[data-pref="profile"]').click();
+    await page.locator('[data-uuid="A"] [data-acc="pick"]').click();
+    await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='A' && window.omnispecDebug.state.capes?.list[0]?.id==='cape-A');
+    await page.waitForTimeout(800);
+    assert.equal(await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').length),beforeSwitch);
+    await page.locator('[data-uuid="B"] [data-acc="pick"]').click();
+    await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='B' && window.omnispecDebug.state.capes?.list[0]?.id==='cape-B' && !window.omnispecDebug.state.capes.loading);
+    await page.locator('[data-pref="avatar"]').click();
 
     // A delayed mutation still targets B and cannot change A's cape after an
     // account switch. The two service responses are only synthetic mocks.
     await page.evaluate(()=>{window.__raceTest.skinMode.A='ok';window.__raceTest.capeMode.A='ok';window.__raceTest.capeSetMode='defer';});
-    await page.locator('#skin-capes [data-cape-id=""]').click();
+    await page.locator('#skin-capes [data-cape-id="cape-B2"]').click();
     await page.waitForFunction(()=>window.__raceTest.pending.some(p=>p.key==='set-cape'));
     assert.equal(await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').at(-1).args.accountUuid),'B');
     await page.locator('[data-pref="profile"]').click();
     await page.locator('[data-uuid="A"] [data-acc="pick"]').click();
     await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='A' && window.omnispecDebug.state.capes?.list[0]?.id==='cape-A');
-    await page.evaluate(()=>window.__raceTest.release('set-cape'));
-    await page.waitForTimeout(200);
     assert.equal(await page.evaluate(()=>window.omnispecDebug.state.capes.list.find(c=>c.active)?.id),'cape-A');
+    // Switching straight back to B while its old write is still pending must
+    // wait for that write before fetching the profile, rather than fetch stale data.
+    const beforeBackFetch=await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='account_capes' && c.args.accountUuid==='B').length);
     await page.locator('[data-uuid="B"] [data-acc="pick"]').click();
-    await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='B' && window.omnispecDebug.state.skin?.currentName==='B');
+    await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='B' && window.omnispecDebug.state.capes?.loading);
+    await page.waitForTimeout(250);
+    assert.equal(await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='account_capes' && c.args.accountUuid==='B').length),beforeBackFetch);
+    await page.evaluate(()=>window.__raceTest.release('set-cape'));
+    await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='B' && !window.omnispecDebug.state.capes?.loading && window.omnispecDebug.state.capes.list.find(c=>c.active)?.id==='cape-B2');
+    assert.equal(await page.evaluate(()=>window.__raceTest.serverCape.B),'cape-B2');
 
     // Applying A while switching to B targets A; a late response never edits B.
     await page.evaluate(()=>{window.__raceTest.skinMode.A='ok';window.__raceTest.capeMode.A='ok';window.__raceTest.applyMode='defer';});
