@@ -177,9 +177,14 @@ try:
     click('#home-filters-toggle');time.sleep(.3)
     narrow=get("document.querySelector('#dv-results').getBoundingClientRect().width")
     assert wide>narrow+70,(wide,narrow)
-    evaluate("document.querySelector('#dv-results').style.minHeight='2000px';document.querySelector('#home-scroll').scrollTop=99999;true")
-    pinned=get("Math.abs(document.querySelector('.home-feed-head').getBoundingClientRect().top-document.querySelector('#home-scroll').getBoundingClientRect().top)")
-    assert pinned<8,pinned
+    evaluate("document.querySelector('#dv-results').style.minHeight='2000px';let s=document.querySelector('#home-scroll');s.scrollTop=(s.scrollHeight-s.clientHeight)*.55;true")
+    geometry="""(()=>{const s=document.querySelector('#home-scroll'),h=document.querySelector('.home-feed-head');
+      const z=Number(getComputedStyle(document.body).zoom)||1;return {head:h.getBoundingClientRect().top,
+      edge:s.getBoundingClientRect().top+(s.clientTop+parseFloat(getComputedStyle(s).paddingTop))*z,scroll:s.scrollTop}})()"""
+    middle=get(geometry)
+    evaluate("document.querySelector('#home-scroll').scrollTop=99999;true")
+    pinned=get(geometry)
+    assert pinned['scroll']>middle['scroll'] and abs(pinned['head']-pinned['edge'])<1.5 and abs(middle['head']-pinned['head'])<1.5,(middle,pinned)
     print('LINUX_WEBKIT_V0500_ONBOARD_AND_STICKY_CATALOG_OK',flush=True)
 
     audio_watch();open_prefs('sound')

@@ -171,10 +171,22 @@ async function setRange(page,selector,value){
       await page.locator('#home-filters-toggle').click();
       assert(await page.locator('#home-catalog-filters').isHidden());
       assert.equal(await page.evaluate(()=>window.omnispecDebug.state.discover.loader),'fabric');
-      await page.locator('#home-scroll').evaluate(el=>{el.scrollTop=el.scrollHeight;});
-      await page.waitForTimeout(100);
-      const sticky=await page.evaluate(()=>{const a=document.querySelector('.home-feed-head').getBoundingClientRect(),b=document.querySelector('#home-scroll').getBoundingClientRect();return {a:a.top,b:b.top,search:document.querySelector('#dv-query').getBoundingClientRect().top};});
-      assert(Math.abs(sticky.a-sticky.b)<6 && sticky.search>=sticky.b,`whole header stays pinned: ${JSON.stringify(sticky)}`);
+      // The scroll container intentionally has 4px of top padding; compare
+      // with its padded edge instead of allowing unexplained header movement.
+      const stickyAt = async fraction => {
+        await page.locator('#home-scroll').evaluate((el,f)=>{el.scrollTop=(el.scrollHeight-el.clientHeight)*f;},fraction);
+        await page.waitForTimeout(80);
+        return page.evaluate(()=>{
+          const scroller=document.querySelector('#home-scroll'),head=document.querySelector('.home-feed-head');
+          const rect=scroller.getBoundingClientRect(),zoom=Number(getComputedStyle(document.body).zoom)||1;
+          return {head:head.getBoundingClientRect().top,edge:rect.top+(scroller.clientTop+parseFloat(getComputedStyle(scroller).paddingTop))*zoom,
+                  search:document.querySelector('#dv-query').getBoundingClientRect().top,scroll:scroller.scrollTop};
+        });
+      };
+      const middle=await stickyAt(.55),sticky=await stickyAt(1);
+      assert(sticky.scroll>middle.scroll && Math.abs(sticky.head-sticky.edge)<1.5 &&
+             Math.abs(middle.head-sticky.head)<1.5 && sticky.search>=sticky.edge,
+             `whole header stays pinned at the padded edge: ${JSON.stringify({middle,sticky})}`);
       await page.locator('#home-scroll').evaluate(el=>{el.scrollTop=0;});
       const box=await page.locator('#home-scroll').boundingBox();
       await page.mouse.move(box.x+box.width-50,box.y+box.height-40);
