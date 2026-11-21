@@ -1461,9 +1461,12 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
 }
 .prefs-rows { display: grid; gap: 12px; }
 .prefs-inline { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
-.prefs-body .settings-row { grid-template-columns: minmax(0, 170px) minmax(0, 1fr); }
+.prefs-body .settings-row { grid-template-columns: minmax(0, min(170px, 50%)) minmax(0, 1fr); }
 .prefs-body .range,
-.prefs-body .range input[type="range"] { min-width: 0; }
+.prefs-body .range input[type="range"],
+.prefs-body .switch-row,
+.prefs-body .switch-row .muted { min-width: 0; }
+.prefs-body .switch-row .muted { overflow-wrap: anywhere; }
 .wall-group { margin-top: 10px; }
 .wall-group:first-of-type { margin-top: 0; }
 .wall-group-name {
