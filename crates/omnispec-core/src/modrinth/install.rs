@@ -544,6 +544,9 @@ mod compatibility_tests {
                     }
                     Err(error) => panic!("local server: {error}"),
                 };
+                // На Windows accepted socket наследует nonblocking listener;
+                // иначе read может случайно вернуть WSAEWOULDBLOCK до прихода запроса.
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
                 let mut request = [0u8; 4096];
                 let _ = stream.read(&mut request).unwrap();

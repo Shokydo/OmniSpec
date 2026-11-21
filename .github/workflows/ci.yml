@@ -28,7 +28,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev librsvg2-dev patchelf \
-            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libwayland-dev
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libwayland-dev \
+            xvfb xauth dbus-x11 at-spi2-core python3-websocket xdotool
 
       - name: Тесты ядра
         run: cargo test -p omnispec-core
@@ -38,6 +39,12 @@ jobs:
 
       - name: Проверка всего workspace
         run: cargo check --workspace
+
+      - name: Собрать debug-версию для настоящего WebKitGTK
+        run: cargo build --locked -p omnispec-app
+
+      - name: Проверить новые функции и воспроизведение WAV в Linux WebKitGTK
+        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1440x900x24' /usr/bin/python3 tools/tests/v0500-linux-native.py
 
   windows-setup:
     name: Windows — ярлыки и установщик

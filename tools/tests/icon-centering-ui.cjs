@@ -108,7 +108,7 @@ async function makePage(browser, options) {
 async function audit(page, label, scale, seen) {
   const result = await page.evaluate(() => {
     const paired = [
-      '.icon-btn > .ic', '.catalog-source > .ic', '.home-filters-toggle > .ic',
+      '.icon-btn > .ic', '.catalog-source > .ic',
       '.icon-chip > .ic', '.icon-chip.img > img', '.tb-icon > .ic', '.tb-icon > img', '.tb-icon > .tb-letter',
       '.home-card-icon > .ic', '.home-card-icon > img', '.home-card-icon > .card-letter',
       '.instance-icon > .ic', '.instance-icon > img', '.tb-logo > img',
@@ -123,7 +123,7 @@ async function audit(page, label, scale, seen) {
     const text = ['.icon-chip.letter', '.skin-library-remove', '.instance-icon',
       '.build-tile-icon.is-letter', '.fav-slot .preset-del'];
     const inline = ['.btn > .ic', '.ctx-item > .ic', '.pop-item > .ic', '.home-category > .ic',
-      '.search > .ic', '.mr-view button > .ic', '.initial-tab-option > .ic'];
+      '.search > .ic', '.mr-view button > .ic', '.initial-tab-option > .ic', '.home-filters-toggle > .ic'];
     const items = [];
     function add(selector, parent, rect, kind, child) {
       const box=parent.getBoundingClientRect();
@@ -327,7 +327,7 @@ async function checkSmallCells(page, scale, seen) {
           assert.deepEqual(empty.errors,[]);
         } finally { await empty.page.close(); }
         for (const required of [
-          '.icon-btn > .ic','.catalog-source > .ic','.home-filters-toggle > .ic','.icon-chip > .ic',
+          '.icon-btn > .ic','.catalog-source > .ic','.home-filters-toggle > .ic [inline]','.icon-chip > .ic',
           '.icon-chip.img > img','.tb-icon > .ic','.tb-icon > img','.tb-icon > .tb-letter',
           '.home-card-icon > .ic','.home-card-icon > img','.home-card-icon > .card-letter',
           '.instance-icon > .ic','.instance-icon > img','.tb-logo > img','.card-icon > .card-letter',

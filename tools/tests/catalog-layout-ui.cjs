@@ -177,6 +177,8 @@ async function geometry(page, selector, label, scale) {
       }
       // Исходный выбор фильтра и поиск остаются неизменны при скрытии панели.
       await page.setViewportSize({width:1280,height:850});
+      assert.equal(await page.locator('#home-filters-toggle').getAttribute('aria-expanded'),'false');
+      await page.locator('#home-filters-toggle').click();
       await page.locator('#dv-loader').click(); await page.locator('[data-dv-loader="fabric"]').click();
       await page.locator('#dv-query').fill('stable-query'); await page.waitForTimeout(450);
       let before=await page.locator('#dv-results').boundingBox();

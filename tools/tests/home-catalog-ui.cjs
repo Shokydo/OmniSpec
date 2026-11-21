@@ -141,6 +141,9 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
     // Фильтры передаются серверу, сохраняются между страницами, типами и источниками.
     {
       const {page,errors} = await newPage(browser);
+      assert.equal(await page.locator('#home-filters-toggle').getAttribute('aria-expanded'),'false');
+      assert(await page.locator('#home-catalog-filters').isHidden());
+      await page.locator('#home-filters-toggle').click();
       assert.equal(await page.locator('[data-dv-category]').count(),11);
       for (const category of ['adventure','challenging','combat','kitchen-sink','lightweight','magic','multiplayer','optimization','quests','technology']) {
         assert.equal(await page.locator(`[data-dv-category="${category}"]`).count(),1,category);
@@ -194,6 +197,7 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
     // Клавиатура и фокус работают как у доступного выпадающего списка.
     {
       const {page,errors} = await newPage(browser);
+      await page.locator('#home-filters-toggle').click();
       const trigger = page.locator('#dv-loader'), menu = page.locator('#dv-loader-options');
       await trigger.focus(); await page.keyboard.press('ArrowDown');
       assert(await menu.isVisible()); assert.equal(await trigger.getAttribute('aria-expanded'),'true');

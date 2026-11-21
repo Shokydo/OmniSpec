@@ -41,6 +41,8 @@ mod rpc_icons;
 mod system_memory;
 /// Безопасный импорт собственных медиафонов.
 mod wallpapers;
+/// Ограниченные копии пользовательских звуков интерфейса.
+mod sounds;
 /// Потоковая выдача только выбранных видео на защищённом loopback-адресе.
 mod video_stream;
 /// Восстановление только своих живых процессов после перезапуска.
@@ -318,8 +320,27 @@ fn preserve_launcher_icon(current: &Settings, incoming: &mut Settings) {
 fn preserve_custom_wallpaper(current: &Settings, incoming: &mut Settings) {
     if incoming.custom_wallpaper != current.custom_wallpaper {
         incoming.wallpaper = current.wallpaper.clone();
+        incoming.wallpaper_recent = current.wallpaper_recent.clone();
     }
     incoming.custom_wallpaper = current.custom_wallpaper.clone();
+}
+
+/// Пути звуков меняются только адресным импортом; громкость можно сохранять обычным снимком.
+fn preserve_custom_sounds(current: &Settings, incoming: &mut Settings) {
+    incoming.sound_volume = incoming.sound_volume.min(200);
+    for (event, sound) in &mut incoming.sound_custom {
+        sound.volume = sound.volume.min(200);
+        if let Some(confirmed) = current.sound_custom.get(event) {
+            sound.file = confirmed.file.clone();
+            sound.path = confirmed.path.clone();
+        } else {
+            sound.file = None;
+            sound.path.clear();
+        }
+    }
+    for (event, sound) in &current.sound_custom {
+        incoming.sound_custom.entry(event.clone()).or_insert_with(|| sound.clone());
+    }
 }
 
 /// Язык меняется отдельной командой, поэтому старые снимки общих настроек
@@ -359,6 +380,7 @@ async fn save_settings(state: State<'_, AppState>, mut settings: Settings) -> Re
     // должен вернуть старую иконку или расходиться с нативным окном / RPC.
     preserve_launcher_icon(&current, &mut settings);
     preserve_custom_wallpaper(&current, &mut settings);
+    preserve_custom_sounds(&current, &mut settings);
     preserve_language(&current, &mut settings);
     // Запрет действует сразу, даже если сохранить файл не удалось: до перезапуска
     // не начнём новых отправок и попытаемся отменить уже начатую.
@@ -3031,6 +3053,44 @@ fn save_skin_png(state: State<'_, AppState>, data_url: String, name: String) -> 
     Ok(target.to_string_lossy().into_owned())
 }
 
+/// Копирование и сохранение имени — одна адресная операция для конкретного события.
+#[tauri::command]
+async fn set_custom_sound(state: State<'_, AppState>, event: String, path: String) -> Result<Settings, String> {
+    if !sounds::valid_event(&event) { return Err("неизвестное звуковое событие".into()); }
+    let path = path.trim().to_string();
+    let dir = state.paths.root.join("sounds");
+    let imported = if path.is_empty() { None } else {
+        let source = path.clone();
+        let target = dir.clone();
+        Some(tauri::async_runtime::spawn_blocking(move || sounds::copy_sound(Path::new(&source), &target))
+            .await.map_err(|e| e.to_string())??)
+    };
+    let mut current = state.settings.lock().await;
+    let mut next = current.clone();
+    let sound = next.sound_custom.entry(event).or_default();
+    sound.path = path;
+    sound.file = imported.clone();
+    if let Err(error) = next.save(&state.paths) {
+        if let Some(name) = imported { let _ = std::fs::remove_file(dir.join(name)); }
+        return Err(format!("не удалось сохранить звук: {error}"));
+    }
+    *current = next.clone();
+    Ok(next)
+}
+
+/// WebView получает только назначенный конкретному событию проверенный аудиофайл.
+#[tauri::command]
+async fn custom_sound_data(state: State<'_, AppState>, event: String) -> Result<Option<String>, String> {
+    if !sounds::valid_event(&event) { return Err("неизвестное звуковое событие".into()); }
+    let name = state.settings.lock().await.sound_custom.get(&event).and_then(|sound| sound.file.clone());
+    let Some(name) = name else { return Ok(None); };
+    let dir = state.paths.root.join("sounds");
+    tauri::async_runtime::spawn_blocking(move || {
+        let (mime, bytes) = sounds::read_copy(&dir, &name)?;
+        Ok(Some(format!("data:{mime};base64,{}", base64_encode(&bytes))))
+    }).await.map_err(|e| e.to_string())?
+}
+
 /// Каждому PNG выдаём уникальное имя, поэтому пакетный импорт не перезапишет
 /// одноимённые изображения и старые сохранённые записи.
 #[tauri::command]
@@ -3528,11 +3588,26 @@ fn open_in_file_manager(target: &Path) -> Result<(), String> {
     }
 }
 
+fn remember_custom_wallpaper(settings: &mut Settings, name: &str) {
+    // Старый id `custom` относился к последнему файлу; мигрируем его до смены имени.
+    if let Some(previous) = settings.custom_wallpaper.as_deref() {
+        for id in &mut settings.wallpaper_recent {
+            if id == "custom" { *id = format!("custom:{previous}"); }
+        }
+    } else {
+        settings.wallpaper_recent.retain(|id| id != "custom");
+    }
+    let id = format!("custom:{name}");
+    settings.wallpaper_recent.retain(|item| item != &id);
+    settings.wallpaper_recent.insert(0, id);
+}
+
 /// Успешная запись нового имени происходит под тем же mutex, что и прочие
 /// настройки. Предыдущий фон до этого момента не удаляется и остаётся рабочим.
 async fn select_custom_wallpaper(state: &AppState, name: String) -> Result<Settings, String> {
     let mut current = state.settings.lock().await;
     let mut next = current.clone();
+    remember_custom_wallpaper(&mut next, &name);
     next.custom_wallpaper = Some(name.clone());
     next.wallpaper = Some("custom".into());
     if let Err(error) = next.save(&state.paths) {
@@ -3558,6 +3633,37 @@ async fn download_custom_wallpaper(state: State<'_, AppState>, url: String) -> R
     let dir = state.paths.root.join("wallpapers");
     let name = wallpapers::download_media(&url, &dir).await?;
     select_custom_wallpaper(&state, name).await
+}
+
+/// Переключаемся только на файл, действительно присутствующий в истории.
+#[tauri::command]
+async fn select_wallpaper_history(state: State<'_, AppState>, name: String) -> Result<Settings, String> {
+    let mut current = state.settings.lock().await;
+    let in_history = current.wallpaper_recent.iter().any(|id| id == &format!("custom:{name}")
+        || (id == "custom" && current.custom_wallpaper.as_deref() == Some(name.as_str())));
+    if !in_history { return Err("фона нет в истории".into()); }
+    wallpapers::custom_media(&state.paths.root.join("wallpapers"), &name)?;
+    let mut next = current.clone();
+    remember_custom_wallpaper(&mut next, &name);
+    next.custom_wallpaper = Some(name);
+    next.wallpaper = Some("custom".into());
+    next.save(&state.paths).map_err(err)?;
+    *current = next.clone();
+    Ok(next)
+}
+
+/// Превью исторического изображения выдаётся только из списка; видео не копируется в память.
+#[tauri::command]
+async fn wallpaper_history_preview(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<wallpapers::Media, String> {
+    let settings = state.settings.lock().await;
+    let in_history = settings.wallpaper_recent.iter().any(|id| id == &format!("custom:{name}")
+        || (id == "custom" && settings.custom_wallpaper.as_deref() == Some(name.as_str())));
+    if !in_history { return Err("фона нет в истории".into()); }
+    let media = wallpapers::custom_media(&state.paths.root.join("wallpapers"), &name)?;
+    if media.kind != "video" {
+        app.asset_protocol_scope().allow_file(&media.path).map_err(|e| format!("не удалось открыть медиа: {e}"))?;
+    }
+    Ok(media)
 }
 
 fn revoke_video_slot(state: &AppState, slot: &str) {
@@ -3750,6 +3856,8 @@ fn main() {
             save_settings,
             set_launcher_icon,
             set_language,
+            set_custom_sound,
+            custom_sound_data,
             set_presence,
             resolve_presence_icon,
             list_instances,
@@ -3814,6 +3922,8 @@ fn main() {
             pick_save_path,
             set_custom_wallpaper,
             download_custom_wallpaper,
+            select_wallpaper_history,
+            wallpaper_history_preview,
             wallpaper_source,
             instance_path,
             version_info,
@@ -3946,12 +4056,13 @@ mod tests {
 
     #[test]
     fn stale_general_settings_cannot_replace_imported_wallpaper_file_or_source() {
-        let current = super::Settings { wallpaper: Some("custom".into()), custom_wallpaper: Some("new.gif".into()), ..super::Settings::default() };
+        let current = super::Settings { wallpaper: Some("custom".into()), custom_wallpaper: Some("new.gif".into()), wallpaper_recent: vec!["custom:new.gif".into(), "aurora".into()], ..super::Settings::default() };
         for old_file in [None, Some("old.gif".into())] {
             let mut stale = super::Settings { wallpaper: Some("aurora".into()), custom_wallpaper: old_file, ui_scale: 125, ..super::Settings::default() };
             super::preserve_custom_wallpaper(&current, &mut stale);
             assert_eq!(stale.custom_wallpaper.as_deref(), Some("new.gif"));
             assert_eq!(stale.wallpaper.as_deref(), Some("custom"));
+            assert_eq!(stale.wallpaper_recent, current.wallpaper_recent);
             assert_eq!(stale.ui_scale, 125);
         }
         // Current snapshots can still explicitly choose a built-in background or none.
@@ -3961,6 +4072,44 @@ mod tests {
             super::preserve_custom_wallpaper(&current, &mut next);
             assert_eq!(next.wallpaper, selected);
         }
+    }
+
+    #[test]
+    fn wallpaper_history_migrates_legacy_custom_and_keeps_each_file() {
+        let mut settings = super::Settings { custom_wallpaper: Some("old.gif".into()),
+            wallpaper_recent: vec!["aurora".into(), "custom".into()], ..super::Settings::default() };
+        super::remember_custom_wallpaper(&mut settings, "new.webm");
+        assert_eq!(settings.wallpaper_recent, vec!["custom:new.webm", "aurora", "custom:old.gif"]);
+        settings.custom_wallpaper = Some("new.webm".into());
+        super::remember_custom_wallpaper(&mut settings, "old.gif");
+        assert_eq!(settings.wallpaper_recent, vec!["custom:old.gif", "custom:new.webm", "aurora"]);
+        // Удаление из истории не удаляет ни активный фон, ни файл.
+        settings.wallpaper = Some("custom".into());
+        settings.wallpaper_recent.retain(|id| id != "custom:new.webm");
+        assert_eq!(settings.custom_wallpaper.as_deref(), Some("new.webm"));
+        assert_eq!(settings.wallpaper.as_deref(), Some("custom"));
+    }
+
+    #[test]
+    fn stale_settings_cannot_inject_or_restore_custom_sound_files() {
+        use omnispec_core::settings::CustomSound;
+        let mut current = super::Settings::default();
+        current.sound_custom.insert("click".into(), CustomSound { path: "new.wav".into(), file: Some("copy.wav".into()), volume: 80 });
+        let mut incoming = super::Settings::default();
+        incoming.sound_volume = 250;
+        incoming.sound_custom.insert("click".into(), CustomSound { path: "old.wav".into(), file: Some("old-copy.wav".into()), volume: 170 });
+        incoming.sound_custom.insert("error".into(), CustomSound { path: "../../secret".into(), file: Some("../../secret".into()), volume: 250 });
+        super::preserve_custom_sounds(&current, &mut incoming);
+        assert_eq!(incoming.sound_volume, 200);
+        assert_eq!(incoming.sound_custom["click"].file.as_deref(), Some("copy.wav"));
+        assert_eq!(incoming.sound_custom["click"].path, "new.wav");
+        assert_eq!(incoming.sound_custom["click"].volume, 170);
+        assert_eq!(incoming.sound_custom["error"].file, None);
+        assert!(incoming.sound_custom["error"].path.is_empty());
+        assert_eq!(incoming.sound_custom["error"].volume, 200);
+        incoming.sound_custom.clear();
+        super::preserve_custom_sounds(&current, &mut incoming);
+        assert_eq!(incoming.sound_custom["click"].file.as_deref(), Some("copy.wav"));
     }
 
     #[test]

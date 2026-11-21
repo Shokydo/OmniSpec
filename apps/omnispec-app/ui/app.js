@@ -263,13 +263,23 @@
     return state.shape;
   }
 
-  /** Варианты звука интерфейса: от совсем мягких до стеклянных и низких. */
+  /** Звуки привязаны к реальным действиям интерфейса, в том числе к клавиатуре. */
+  const SOUND_EVENTS = [
+    ["click", "Нажатие кнопки"], ["toggle", "Переключатель"], ["tab", "Смена вкладки"],
+    ["open", "Открытие окна"], ["close", "Закрытие окна"],
+    ["success", "Успешное действие"], ["error", "Ошибка"]
+  ];
   const SOUND_STYLES = {
     soft: "Мягкий",
     classic: "Классический",
     glass: "Стекло",
     wood: "Дерево",
-    deep: "Глубокий"
+    deep: "Глубокий",
+    pixel: "Пиксель",
+    bell: "Колокольчик",
+    bubble: "Пузырёк",
+    pluck: "Щипок",
+    custom: "Кастом"
   };
 
   /* Короткие звуки интерфейса на WebAudio — без файлов и зависимостей. */
@@ -312,15 +322,48 @@
         open: { freq: 220, to: 180, dur: 0.16, gain: 0.04, type: "sine" },
         success: { freq: 200, to: 300, dur: 0.2, gain: 0.045, type: "sine" },
         error: { freq: 110, to: 80, dur: 0.22, gain: 0.05, type: "triangle" }
+      },
+      pixel: {
+        click: { freq: 640, to: 430, dur: .045, gain: .018, type: "square" },
+        toggle: { freq: 760, to: 880, dur: .065, gain: .016, type: "square" },
+        open: { freq: 420, to: 760, dur: .1, gain: .016, type: "square" },
+        success: { freq: 620, to: 1100, dur: .14, gain: .017, type: "square" },
+        error: { freq: 300, to: 140, dur: .16, gain: .018, type: "square" }
+      },
+      bell: {
+        click: { freq: 890, to: 880, dur: .18, gain: .018, type: "sine" },
+        toggle: { freq: 1100, to: 1060, dur: .2, gain: .016, type: "sine" },
+        open: { freq: 780, to: 1100, dur: .2, gain: .016, type: "sine" },
+        success: { freq: 950, to: 1420, dur: .24, gain: .018, type: "sine" },
+        error: { freq: 460, to: 320, dur: .22, gain: .02, type: "triangle" }
+      },
+      bubble: {
+        click: { freq: 400, to: 680, dur: .075, gain: .028, type: "sine" },
+        toggle: { freq: 560, to: 820, dur: .085, gain: .025, type: "sine" },
+        open: { freq: 360, to: 720, dur: .13, gain: .024, type: "sine" },
+        success: { freq: 500, to: 1000, dur: .16, gain: .026, type: "sine" },
+        error: { freq: 380, to: 180, dur: .16, gain: .03, type: "sine" }
+      },
+      pluck: {
+        click: { freq: 330, to: 300, dur: .07, gain: .03, type: "triangle" },
+        toggle: { freq: 440, to: 410, dur: .08, gain: .028, type: "triangle" },
+        open: { freq: 410, to: 520, dur: .12, gain: .026, type: "triangle" },
+        success: { freq: 520, to: 780, dur: .16, gain: .028, type: "triangle" },
+        error: { freq: 220, to: 170, dur: .16, gain: .03, type: "triangle" }
       }
     };
+    for (const preset of Object.values(TONES)) {
+      preset.tab = { ...preset.toggle, freq: Math.round(preset.toggle.freq * .92) };
+      preset.close = { ...preset.open, freq: preset.open.to, to: preset.open.freq };
+    }
+    const buffers = new Map();
 
     function ensure() {
       if (!state.sound || !state.sound.on) return null;
       if (!ctx) {
         const Ctor = window.AudioContext || window.webkitAudioContext;
         if (!Ctor) return null;
-        ctx = new Ctor();
+        try { ctx = new Ctor(); } catch (_) { return null; }
       }
       if (ctx.state === "suspended") ctx.resume().catch(() => {});
       return ctx;
@@ -328,15 +371,46 @@
 
     function style() {
       const id = (state.sound && state.sound.style) || "soft";
-      return TONES[id] ? id : "soft";
+      return id === "custom" || TONES[id] ? id : "soft";
+    }
+    const percent = (value, fallback) => Math.max(0, Math.min(200, Number.isFinite(Number(value)) ? Number(value) : fallback)) / 100;
+
+    function customBuffer(audio, name, file) {
+      const key = `${name}:${file}`;
+      if (!buffers.has(key)) {
+        // Старые копии звуков не держим в памяти после замены для этого события.
+        for (const cached of buffers.keys()) if (cached.startsWith(`${name}:`) && cached !== key) buffers.delete(cached);
+        const loading = api.customSoundData(name).then(async (url) => {
+          if (!url || !url.startsWith("data:audio/") || !url.includes(",")) throw new Error("звуковой файл недоступен");
+          const raw = atob(url.slice(url.indexOf(",") + 1));
+          const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
+          return audio.decodeAudioData(bytes.buffer);
+        }).catch((error) => { buffers.delete(key); throw error; });
+        buffers.set(key, loading);
+      }
+      return buffers.get(key);
     }
 
-    /** Мягкий тон с плавной атакой и спадом — без щелчков и «пилы» на слух. */
+    /** Мягкий тон либо копия назначенного файла с общей и индивидуальной громкостью. */
     function play(name) {
       const audio = ensure();
       if (!audio) return;
-      const volume = Math.max(0, Math.min(100, Number(state.sound.volume ?? 60))) / 100;
+      const volume = percent(state.sound.volume, 60);
       if (volume <= 0) return;
+      if (style() === "custom") {
+        const file = state.sound.custom?.[name]?.file;
+        if (!file) return;
+        customBuffer(audio, name, file).then((buffer) => {
+          if (!state.sound.on || style() !== "custom" || state.sound.custom?.[name]?.file !== file) return;
+          const source = audio.createBufferSource();
+          const amp = audio.createGain();
+          source.buffer = buffer;
+          amp.gain.value = percent(state.sound.volume, 60) * percent(state.sound.custom?.[name]?.volume ?? 100, 100);
+          source.connect(amp).connect(audio.destination);
+          source.start();
+        }).catch((error) => console.warn("Custom sound:", error));
+        return;
+      }
       const preset = TONES[style()][name] || TONES[style()].click;
       const now = audio.currentTime;
       const osc = audio.createOscillator();
@@ -344,7 +418,6 @@
       osc.type = preset.type;
       osc.frequency.setValueAtTime(preset.freq, now);
       osc.frequency.exponentialRampToValueAtTime(Math.max(40, preset.to), now + preset.dur);
-      // атака 12 мс и плавный спад: так звук выходит мягким, а не резким
       amp.gain.setValueAtTime(0.0001, now);
       amp.gain.exponentialRampToValueAtTime(Math.max(0.0002, preset.gain * volume), now + 0.012);
       amp.gain.exponentialRampToValueAtTime(0.0001, now + preset.dur);
@@ -354,21 +427,52 @@
     }
 
     return {
+      play,
       click: () => play("click"),
       toggle: () => play("toggle"),
+      tab: () => play("tab"),
       open: () => play("open"),
+      close: () => play("close"),
       success: () => play("success"),
       error: () => play("error"),
-      /** Прослушать все события выбранного стиля. */
+      prepare: (name) => {
+        const audio = ensure(), file = state.sound.custom?.[name]?.file;
+        return audio && file ? customBuffer(audio, name, file) : Promise.resolve(null);
+      },
       demo: async () => {
-        const events = ["click", "toggle", "open", "success", "error"];
-        for (const name of events) {
+        for (const [name] of SOUND_EVENTS) {
           play(name);
           await new Promise((resolve) => setTimeout(resolve, 260));
         }
       }
     };
   })();
+
+  let pendingClickSound = 0;
+  function semanticSound(name) {
+    if (pendingClickSound) { clearTimeout(pendingClickSound); pendingClickSound = 0; }
+    sfx.play(name);
+  }
+  function initSoundEvents() {
+    document.addEventListener("click", (event) => {
+      const control = event.target.closest?.("button, input[type=checkbox], .instance, .theme-chip, .wall-chip");
+      if (!control || control.disabled || control.getAttribute("aria-disabled") === "true") return;
+      if (control.matches("#set-sound, #sound-test, [data-sound-preview]")) return;
+      if (control.matches(".switch, input[type=checkbox]")) { semanticSound("toggle"); return; }
+      if (control.matches(".tab, .prefs-tab, .mtab, [data-dv-type], [data-dv-view], [data-dl-view]")) { semanticSound("tab"); return; }
+      // Открытие/закрытие модального окна и мгновенное уведомление заменяют обычный клик.
+      if (pendingClickSound) clearTimeout(pendingClickSound);
+      pendingClickSound = setTimeout(() => { pendingClickSound = 0; sfx.click(); }, 35);
+    }, true);
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        const modal = record.target;
+        if (!modal.matches?.(".modal-backdrop") || (record.oldValue !== null) === modal.hidden) continue;
+        semanticSound(modal.hidden ? "close" : "open");
+      }
+    });
+    observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["hidden"], attributeOldValue: true });
+  }
 
   /** Фоновые частицы на канвасе: без картинок и без градиентов. */
   const ambient = (() => {
@@ -1863,7 +1967,6 @@
     const layer = $("#fx-layer");
     if (!layer) return;
     window.addEventListener("pointerdown", (event) => {
-      if (event.target.closest("button, .instance, .tab, .theme-chip, .chip, .wall-chip")) sfx.click();
       const style = document.body.dataset.fx || "wave";
       if (style === "off" || document.body.classList.contains("no-fx")) return;
       const effect = document.createElement("span");
@@ -2149,6 +2252,8 @@
     saveSettings: saveSettingsInOrder,
     setLauncherIcon: (icon) => invoke("set_launcher_icon", { icon }),
     setLanguage: (language) => invoke("set_language", { language }),
+    setCustomSound: (event, path) => invoke("set_custom_sound", { event, path }),
+    customSoundData: (event) => invoke("custom_sound_data", { event }),
     instances: () => invoke("list_instances"),
     acknowledgeInstanceRenames: (acknowledgements) => invoke("acknowledge_instance_renames", { acknowledgements }),
     createInstance: (req) => invoke("create_instance", { req }),
@@ -2229,6 +2334,8 @@
     startupFile: () => invoke("startup_file"),
     setCustomWallpaper: (path) => invoke("set_custom_wallpaper", { path }),
     downloadWallpaper: (url) => invoke("download_custom_wallpaper", { url }),
+    selectWallpaperHistory: (name) => invoke("select_wallpaper_history", { name }),
+    wallpaperHistoryPreview: (name) => invoke("wallpaper_history_preview", { name }),
     wallpaperSource: (source) => invoke("wallpaper_source", { source }),
     modrinthProject: (projectId) => invoke("modrinth_project", { projectId }),
     searchCurseforge: (q) => invoke("search_curseforge", q),
@@ -2295,6 +2402,13 @@
     settings: async () => ({ ...DEMO.settings }),
     saveSettings: async (s) => { DEMO.settings = { ...s, launcher_icon: DEMO.settings.launcher_icon || "default", language: DEMO.settings.language || "ru" }; return null; },
     setLanguage: async (language) => { DEMO.settings = { ...DEMO.settings, language }; return null; },
+    setCustomSound: async (event, path) => {
+      const sound_custom = { ...(DEMO.settings.sound_custom || {}) };
+      sound_custom[event] = { volume: 100, ...(sound_custom[event] || {}), path, file: path || null };
+      DEMO.settings = { ...DEMO.settings, sound_custom };
+      return { ...DEMO.settings };
+    },
+    customSoundData: async () => null,
     setLauncherIcon: async (icon) => { DEMO.settings = { ...DEMO.settings, launcher_icon: icon }; return null; },
     instances: async () => DEMO.instances.map((i) => ({ ...i })),
     acknowledgeInstanceRenames: async () => null,
@@ -2683,6 +2797,8 @@
     startupFile: async () => null,
     setCustomWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
     downloadWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
+    selectWallpaperHistory: async (name) => { DEMO.settings = { ...DEMO.settings, wallpaper: "custom", custom_wallpaper: name }; return { ...DEMO.settings }; },
+    wallpaperHistoryPreview: async () => null,
     wallpaperSource: async () => null,
     instancePath: async (id) => `demo/instances/${id}`,
     openUrl: async (url) => { window.open(url, "_blank"); return null; },
@@ -2735,7 +2851,7 @@
     discover: {
       query: "", type: "modpack", loader: "", categories: { modrinth: "", curseforge: "" },
       results: [], total: 0, loading: false, loadingMore: false, error: null, moreError: null,
-      retrySeconds: 0, tried: false, view: "grid", source: "modrinth", filtersCollapsed: false
+      retrySeconds: 0, tried: false, view: "grid", source: "modrinth", filtersCollapsed: true
     },
     wall: { wallpaper: null, fit: "cover", blur: 0, dim: 40 },
     downloads: { active: false, title: "", done: 0, total: 0, files: new Map(), state: "active", op: "", collapsed: false, timer: null },
@@ -2761,6 +2877,66 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  /** Небольшой вход только при смене страницы, а не при обновлении её данных. */
+  function animateView(element) {
+    if (!element) return;
+    element.classList.remove("view-enter");
+    void element.offsetWidth;
+    element.classList.add("view-enter");
+  }
+
+  /** Общая подложка движется к активной вкладке, не меняя доступный фокус. */
+  function refreshActiveIndicators() {
+    $$(".tabs, .home-catalog-tabs, .mr-view, .modal-tabs, .prefs-nav").forEach((group) => {
+      const active = group.matches(".home-catalog-tabs") ? $("[data-dv-type].is-active", group) : $(".is-active", group);
+      if (!active || !active.offsetWidth || !active.offsetHeight) return;
+      group.style.setProperty("--active-x", `${active.offsetLeft}px`);
+      group.style.setProperty("--active-y", `${active.offsetTop}px`);
+      group.style.setProperty("--active-w", `${active.offsetWidth}px`);
+      group.style.setProperty("--active-h", `${active.offsetHeight}px`);
+      if (!group.classList.contains("moving-indicator")) {
+        group.classList.add("moving-indicator");
+        requestAnimationFrame(() => { if (group.isConnected) group.classList.add("moving-animate"); });
+      }
+    });
+  }
+
+  /** Плавное колесо для ближайшей прокручиваемой области, с передачей на родителя у края. */
+  function initSmoothScroll() {
+    const animations = new WeakMap();
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    window.addEventListener("wheel", (event) => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || reduced?.matches || !event.deltaY || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+      let element = event.target instanceof Element ? event.target : event.target?.parentElement;
+      while (element && element !== document.documentElement) {
+        const css = getComputedStyle(element);
+        const max = element.scrollHeight - element.clientHeight;
+        const running = animations.get(element);
+        const from = running ? running.target : element.scrollTop;
+        if (max > 1 && /^(auto|scroll|overlay)$/.test(css.overflowY) && ((event.deltaY > 0 && from < max - 0.5) || (event.deltaY < 0 && from > 0.5))) {
+          const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1);
+          const target = Math.max(0, Math.min(max, from + delta));
+          event.preventDefault();
+          if (running) { running.target = target; return; }
+          const motion = { target, last: 0 };
+          animations.set(element, motion);
+          const step = (time) => {
+            if (!element.isConnected || reduced?.matches) { animations.delete(element); return; }
+            const elapsed = motion.last ? Math.min(40, time - motion.last) : 16;
+            motion.last = time;
+            const remaining = motion.target - element.scrollTop;
+            if (Math.abs(remaining) < 4) { element.scrollTop = motion.target; animations.delete(element); return; }
+            element.scrollTop += remaining * (1 - Math.exp(-elapsed / 65));
+            requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+          return;
+        }
+        element = element.parentElement;
+      }
+    }, { passive: false });
+  }
 
   // Все ползунки памяти учитывают одну и ту же физическую ОЗУ и ограничение
   // ядра. При сбое определения честно показываем, что максимум приблизительный.
@@ -2864,6 +3040,8 @@
   }
 
   function toast(message, kind = "") {
+    if (kind === "ok") semanticSound("success");
+    else if (kind === "err") semanticSound("error");
     const box = document.createElement("div");
     box.className = `toast ${kind}`;
     box.textContent = message;
@@ -4308,6 +4486,9 @@
     if (!meta) state.tab = "discover";
     else if (state.tab === "discover") state.tab = "console";
     $$(".tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.tab));
+    const viewKey = `${state.selectedId || "home"}:${state.tab}`;
+    if (body.dataset.activeView !== viewKey) { body.dataset.activeView = viewKey; animateView(body); }
+    refreshActiveIndicators();
 
     if (!meta) {
       // Сборка не выбрана — в главном окне лента готовых сборок, ничего не
@@ -6634,14 +6815,8 @@
     const categories = PACK_CATEGORIES[source] || PACK_CATEGORIES.modrinth;
     const active = cfg.categories[source] || "";
     const collapsed = Boolean(cfg.filtersCollapsed);
-    const selectedLoader = LOADER_NAMES[cfg.loader] || "Любой загрузчик";
-    const toggleLabel = collapsed ? `Развернуть фильтры; загрузчик: ${selectedLoader}` : "Свернуть фильтры";
-    return `<aside class="home-catalog-sidebar${collapsed ? " is-collapsed" : ""}" aria-label="Фильтры каталога">
-      <div class="home-filter-head">
-        <button type="button" class="home-filters-toggle" id="home-filters-toggle" aria-expanded="${!collapsed}" aria-controls="home-catalog-filters" aria-label="${esc(toggleLabel)}" title="${esc(toggleLabel)}"><svg class="ic" aria-hidden="true"><use href="#i-chev"/></svg></button>
-        <label class="home-filter-label" for="dv-loader">Загрузчик</label>
-      </div>
-      <div id="home-catalog-filters"${collapsed ? " hidden" : ""}>
+    return `<aside class="home-catalog-sidebar" id="home-catalog-filters" aria-label="Фильтры каталога"${collapsed ? " hidden" : ""}>
+      <div class="home-filter-head"><label class="home-filter-label" for="dv-loader">Загрузчик</label></div>
       <div class="home-filter-group">
         <div class="home-loader" id="home-loader">
           <button type="button" class="home-loader-trigger" id="dv-loader" aria-haspopup="listbox" aria-expanded="false" aria-controls="dv-loader-options">
@@ -6663,24 +6838,33 @@
           ${categories.map(([id, label, icon]) => `<button type="button" data-dv-category="${id}" class="home-category ${active === id ? "is-active" : ""}" aria-pressed="${active === id}"><svg class="ic"><use href="#${icon}"/></svg>${esc(label)}</button>`).join("")}
         </div>
       </details>` : `<div class="home-filter-note">Выбирай загрузчик, чтобы найти подходящие моды.</div>`}
-      </div>
     </aside>`;
   }
 
+  let homeHeaderObserver = null;
   function bindHomeFilterToggle(cfg) {
     const toggle = $("#home-filters-toggle");
-    const sidebar = $(".home-catalog-sidebar");
-    const panel = $("#home-catalog-filters");
+    if (!toggle) return;
+    const head = $(".home-feed-head"), scroll = $("#home-scroll");
+    const measureHead = () => { if (head && scroll) scroll.style.setProperty("--home-header-height", `${head.offsetHeight}px`); };
+    if (homeHeaderObserver) homeHeaderObserver.disconnect();
+    if (head && typeof ResizeObserver !== "undefined") {
+      homeHeaderObserver = new ResizeObserver(measureHead);
+      homeHeaderObserver.observe(head);
+    }
+    measureHead();
     toggle.addEventListener("click", () => {
       const collapsed = !cfg.filtersCollapsed;
       if (collapsed) closeHomeLoader();
       cfg.filtersCollapsed = collapsed;
-      sidebar.classList.toggle("is-collapsed", collapsed);
-      panel.hidden = collapsed;
+      // Панель заменяется при смене типа/источника, а кнопка в шапке остаётся.
+      const panel = $("#home-catalog-filters");
+      if (panel) {
+        panel.hidden = collapsed;
+        if (!collapsed) { panel.classList.remove("is-opening"); void panel.offsetWidth; panel.classList.add("is-opening"); }
+      }
       toggle.setAttribute("aria-expanded", String(!collapsed));
-      const label = collapsed ? `Развернуть фильтры; загрузчик: ${LOADER_NAMES[cfg.loader] || "Любой загрузчик"}` : "Свернуть фильтры";
-      toggle.setAttribute("aria-label", label);
-      toggle.title = label;
+      toggle.classList.toggle("is-open", !collapsed);
       syncFeedColumns();
     });
   }
@@ -6761,7 +6945,6 @@
 
   function bindHomeCatalogFilters(cfg) {
     bindHomeLoaderFilter(cfg);
-    bindHomeFilterToggle(cfg);
     $$("#home-catalog-filters [data-dv-category]").forEach((button) => button.addEventListener("click", () => {
       const source = cfg.source || "modrinth";
       const category = button.dataset.dvCategory || "";
@@ -6800,6 +6983,7 @@
           ${homeImportHtml()}
           <div class="home-feed-head">
             <div class="home-catalog-tabs" role="group" aria-label="Что искать">
+              <button type="button" class="home-filters-toggle${cfg.filtersCollapsed ? "" : " is-open"}" id="home-filters-toggle" aria-expanded="${!cfg.filtersCollapsed}" aria-controls="home-catalog-filters">Фильтры<svg class="ic" aria-hidden="true"><use href="#i-chev"/></svg></button>
               <button type="button" data-dv-type="modpack" class="${cfg.type === "modpack" ? "is-active" : ""}" aria-pressed="${cfg.type === "modpack"}">Готовые сборки</button>
               <button type="button" data-dv-type="mod" class="${cfg.type === "mod" ? "is-active" : ""}" aria-pressed="${cfg.type === "mod"}">Моды</button>
             </div>
@@ -6843,6 +7027,7 @@
     }));
     syncRecentRow();
     bindLiveSearch($("#dv-query"), scheduleDiscoverSearch, dvReset);
+    bindHomeFilterToggle(cfg);
     $$("#tab-body [data-dv-type]").forEach((button) => button.addEventListener("click", () => {
       if (cfg.type === button.dataset.dvType) return;
       cfg.type = button.dataset.dvType;
@@ -9124,8 +9309,8 @@
       fit: settings.wallpaper_fit || "cover",
       blur: Number(settings.wallpaper_blur ?? 0),
       dim: Number(settings.wallpaper_dim ?? 40),
-      // история: сохранённая + то, что выбрали в этом сеансе
-      recent: Array.isArray(settings.wallpaper_recent) ? settings.wallpaper_recent.slice(0, 6) : []
+      // Старая запись custom указывает на единственный прежний файл.
+      recent: normalizeWallpaperHistory(settings.wallpaper_recent, settings.custom_wallpaper)
     };
     skinState();
     // скин аккаунта тянем при каждом открытии настроек: лицензия могла появиться только что
@@ -9144,15 +9329,19 @@
     const nav = $("#prefs-nav");
     const body = $("#prefs-body");
     if (!nav || !body) return;
-    nav.innerHTML = PREFS.map((item) => `
-      <button class="prefs-tab ${item.id === prefsCategory ? "is-active" : ""}" data-pref="${item.id}">${item.label}</button>`).join("");
-    $$(".prefs-tab", nav).forEach((tab) => tab.addEventListener("click", () => {
-      prefsCategory = tab.dataset.pref;
-      renderPrefs();
-    }));
-
+    if (!nav.children.length) {
+      nav.innerHTML = PREFS.map((item) => `
+        <button class="prefs-tab" data-pref="${item.id}">${item.label}</button>`).join("");
+      $$(".prefs-tab", nav).forEach((tab) => tab.addEventListener("click", () => {
+        prefsCategory = tab.dataset.pref;
+        renderPrefs();
+      }));
+    }
+    $$(".prefs-tab", nav).forEach((tab) => tab.classList.toggle("is-active", tab.dataset.pref === prefsCategory));
     const settings = state.settings || {};
     const previousCategory = body.dataset.prefCategory || "";
+    if (previousCategory !== prefsCategory) animateView(body);
+    refreshActiveIndicators();
     const keepScroll = previousCategory === prefsCategory ? body.scrollTop : 0;
     // Выбор плаща перерисовывает гардероб. Сохраняем фокус карточки, чтобы
     // после Enter/пробела можно было продолжить пользоваться стрелками.
@@ -9396,9 +9585,34 @@
     }).join("");
   }
 
+  function wallpaperHistoryName(id) {
+    return typeof id === "string" && id.startsWith("custom:") ? id.slice(7) : "";
+  }
+  function normalizeWallpaperHistory(recent, custom) {
+    const result = [];
+    for (const raw of Array.isArray(recent) ? recent : []) {
+      const id = raw === "custom" && custom ? `custom:${custom}` : raw;
+      const name = wallpaperHistoryName(id);
+      if ((WALLS.some(([wall]) => wall === id) || (name && !/[\\/\\\\]/.test(name))) && !result.includes(id)) result.push(id);
+    }
+    return result;
+  }
+  function wallHistoryHtml(ids) {
+    return ids.map((id) => {
+      const name = wallpaperHistoryName(id);
+      const builtin = WALLS.find(([wall]) => wall === id);
+      const label = builtin ? builtin[1] : name.replace(/-[0-9a-f]+-[0-9a-f]+(?=\.[^.]+$)/i, "");
+      const active = builtin ? state.wall.wallpaper === id : state.wall.wallpaper === "custom" && state.settings?.custom_wallpaper === name;
+      const background = builtin ? ` style="background-image:url('${wallUrl(id)}')"` : "";
+      return `<div class="wall-history-entry">
+        <button type="button" class="wall-chip ${active ? "is-active" : ""}" data-wall-history-select="${esc(id)}"${name ? ` data-wall-history-preview="${esc(name)}"` : ""}${background} title="${esc(label)}"><span${name ? ' translate="no"' : ""}>${esc(label)}</span></button>
+        <button type="button" class="wall-history-remove icon-btn" data-wall-history-remove="${esc(id)}" aria-label="Удалить из истории" title="Удалить из истории"><svg class="ic"><use href="#i-close"/></svg></button>
+      </div>`;
+    }).join("");
+  }
+
   function prefsWall(settings) {
-    const recent = ((state.wall.recent && state.wall.recent.length) ? state.wall.recent : (settings.wallpaper_recent || []))
-      .filter((id) => WALLS.some(([wall]) => wall === id)).slice(0, 6);
+    const recent = normalizeWallpaperHistory(state.wall.recent ?? settings.wallpaper_recent, settings.custom_wallpaper);
     const groups = [
       { label: "Градиенты", ids: ["aurora", "waves", "blobs"] },
       { label: "Текстуры", ids: ["grid", "dots", "noise", "stripes"] },
@@ -9421,8 +9635,11 @@
           <button class="btn" id="wall-link-add" ${state.wallLink.busy ? "disabled" : ""}>${state.wallLink.busy ? "Загрузка…" : "Добавить"}</button>
         </div>
         <div class="skin-note">Прямая HTTP(S)-ссылка на медиа или ссылка Imgur. Другие страницы и альбомы могут не поддерживаться.</div>
+        <div class="wall-group"><div class="wall-group-name">История фонов</div>
+          <div class="skin-note">Удаление из истории не меняет текущий фон и не удаляет файл.</div>
+          ${recent.length ? `<div class="wall-grid wall-history" id="wall-history">${wallHistoryHtml(recent)}</div>` : '<div class="skin-note">История пока пуста.</div>'}
+        </div>
         ${groups.map((group) => `<div class="wall-group"><div class="wall-group-name">${esc(group.label)}</div><div class="wall-grid">${wallGridHtml(group.ids)}</div></div>`).join("")}
-        ${recent.length ? `<div class="wall-group"><div class="wall-group-name">Недавние</div><div class="wall-grid">${wallGridHtml(recent)}</div></div>` : ""}
       </div>
       <div class="prefs-section">
         <div class="prefs-label">Как показывать</div>
@@ -9437,9 +9654,54 @@
       </div>`;
   }
 
+  const wallpaperPreviewCache = new Map();
   function bindWallpaperLinks() {
     const customChip = $("#wall-custom-chip");
     if (customChip && state.customWall && state.customWall.kind !== "video") customChip.style.backgroundImage = `url("${state.customWall.src}")`;
+    $$("[data-wall-history-preview]").forEach((button) => {
+      const name = button.dataset.wallHistoryPreview;
+      if (!wallpaperPreviewCache.has(name)) {
+        const pending = api.wallpaperHistoryPreview(name).then((media) => {
+          if (!media || media.kind === "video") return { video: media?.kind === "video" };
+          return { src: media.src || (TAURI?.core?.convertFileSrc ? TAURI.core.convertFileSrc(media.path) : media.path) };
+        }).catch(() => { wallpaperPreviewCache.delete(name); return {}; });
+        wallpaperPreviewCache.set(name, pending);
+      }
+      wallpaperPreviewCache.get(name).then((media) => {
+        if (!button.isConnected) return;
+        if (media.src) button.style.backgroundImage = `url(${JSON.stringify(media.src)})`;
+        if (media.video) button.classList.add("is-video");
+      });
+    });
+    $$("[data-wall-history-select]").forEach((button) => button.addEventListener("click", async () => {
+      const id = button.dataset.wallHistorySelect;
+      const name = wallpaperHistoryName(id);
+      button.disabled = true;
+      try {
+        if (name) {
+          // Сначала сохраняем историю: адресная команда не выбирает неизвестный файл.
+          await settingsSaveQueue.catch(() => {});
+          const saved = await api.selectWallpaperHistory(name);
+          state.settings = { ...(state.settings || {}), custom_wallpaper: saved.custom_wallpaper, wallpaper: "custom" };
+          state.wall.wallpaper = "custom";
+          state.wall.recent = rememberWallpaper(state.wall.recent, id);
+          state.customWall = null;
+          await loadWallpaperSource("custom");
+        } else {
+          state.wall.wallpaper = id;
+          state.wall.recent = rememberWallpaper(state.wall.recent, id);
+        }
+        await persistWallpaper();
+        applyWallpaper(state.wall);
+        if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
+      } catch (error) { toast(String(error), "err"); if (button.isConnected) button.disabled = false; }
+    }));
+    $$("[data-wall-history-remove]").forEach((button) => button.addEventListener("click", async () => {
+      const id = button.dataset.wallHistoryRemove;
+      state.wall.recent = state.wall.recent.filter((item) => item !== id);
+      if (!await persistWallpaper()) toast("Не удалось сохранить историю фонов", "err");
+      if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
+    }));
     const link = $("#wall-link");
     link?.addEventListener("input", () => { state.wallLink.value = link.value; });
     link?.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); void addWallpaperLink(); } });
@@ -9625,6 +9887,34 @@
     return clean;
   }
 
+  const soundImports = new Set();
+  async function updateCustomSound(event, path) {
+    if (!SOUND_EVENTS.some(([id]) => id === event) || soundImports.has(event)) return;
+    const trimmed = String(path || "").trim();
+    const before = state.sound.custom?.[event] || {};
+    if (trimmed === (before.path || "") && Boolean(trimmed) === Boolean(before.file)) return;
+    soundImports.add(event);
+    const row = $(`[data-sound-event="${event}"]`);
+    if (row) $$("input, button", row).forEach((control) => { control.disabled = true; });
+    try {
+      const saved = await api.setCustomSound(event, trimmed);
+      const sound = saved?.sound_custom?.[event];
+      if (!sound) throw new Error("звук не сохранён");
+      const latest = state.sound.custom?.[event] || before;
+      state.sound.custom = { ...(state.sound.custom || {}), [event]: { ...sound, volume: latest.volume ?? sound.volume ?? 100 } };
+      state.settings = { ...(state.settings || {}), sound_custom: state.sound.custom };
+      await api.saveSettings(state.settings);
+      if (trimmed && state.sound.on && state.sound.style === "custom") {
+        try { await sfx.prepare(event); }
+        catch (_) { toast("Не удалось воспроизвести звук: проверь формат и кодек системы", "err"); }
+      }
+    } catch (error) { toast(String(error), "err"); }
+    finally {
+      soundImports.delete(event);
+      if (prefsCategory === "sound" && !$("#modal-prefs").hidden) renderPrefs();
+    }
+  }
+
   function prefsSound(settings) {
     return `
       <div class="prefs-section">
@@ -9637,7 +9927,7 @@
           <div class="settings-row">
             <div class="label">Громкость</div>
             <div class="range">
-              <input type="range" id="set-sound-volume" min="0" max="100" step="5" value="${state.sound.volume}">
+              <input type="range" id="set-sound-volume" min="0" max="200" step="5" value="${state.sound.volume}" aria-label="Общая громкость звуков">
               <span class="tag" id="set-sound-volume-value">${state.sound.volume}%</span>
             </div>
           </div>
@@ -9649,6 +9939,27 @@
           ${Object.entries(SOUND_STYLES).map(([id, label]) => `<button class="chip ${(state.sound.style || "soft") === id ? "is-active" : ""}" data-sound-style="${id}">${label}</button>`).join("")}
         </div>
       </div>
+      ${state.sound.style === "custom" ? `<div class="prefs-section sound-custom-section">
+        <div class="prefs-label">Звуки для событий</div>
+        <div class="skin-note">WAV, MP3, OGG или FLAC · до 5 МБ. Пустые события беззвучны; файлы копируются в папку лаунчера.</div>
+        <div class="sound-event-list">${SOUND_EVENTS.map(([id, label]) => {
+          const sound = state.sound.custom?.[id] || {};
+          const volume = Math.max(0, Math.min(200, Number(sound.volume ?? 100) || 0));
+          return `<div class="sound-event" data-sound-event="${id}">
+            <div class="sound-event-title">${esc(label)}</div>
+            <div class="sound-path-row">
+              <input class="input" data-sound-path="${id}" value="${esc(sound.path || "")}" placeholder="Файл не выбран" aria-label="Путь к звуку: ${esc(label)}" spellcheck="false">
+              <button type="button" class="btn" data-sound-pick="${id}"><svg class="ic"><use href="#i-folder"/></svg>Выбрать</button>
+              <button type="button" class="icon-btn" data-sound-clear="${id}" aria-label="Убрать звук" title="Убрать звук" ${sound.file ? "" : "disabled"}><svg class="ic"><use href="#i-close"/></svg></button>
+            </div>
+            <div class="sound-event-volume"><label for="sound-volume-${id}">Громкость</label>
+              <input id="sound-volume-${id}" data-sound-volume="${id}" type="range" min="0" max="200" step="5" value="${volume}" aria-label="Громкость: ${esc(label)}">
+              <span class="tag" data-sound-volume-value="${id}">${volume}%</span>
+              <button type="button" class="btn btn-small" data-sound-preview="${id}" ${sound.file ? "" : "disabled"}>Прослушать</button>
+            </div>
+          </div>`;
+        }).join("")}</div>
+      </div>` : ""}
       <div class="prefs-section">
         <div class="prefs-label">Проверка</div>
         <div class="settings-actions">
@@ -10113,11 +10424,37 @@
     if (soundTest) soundTest.addEventListener("click", () => { sfx.demo(); });
     $$("#sound-style-chips .chip").forEach((chip) => chip.addEventListener("click", () => {
       state.sound.style = chip.dataset.soundStyle;
-      $$("#sound-style-chips .chip").forEach((el) => el.classList.toggle("is-active", el === chip));
-      sfx.click();
       state.settings = { ...(state.settings || {}), sound_style: state.sound.style };
       api.saveSettings(state.settings).catch(() => {});
+      renderPrefs();
     }));
+    $$("[data-sound-pick]").forEach((button) => button.addEventListener("click", async () => {
+      const event = button.dataset.soundPick;
+      button.disabled = true;
+      try {
+        const path = await api.pickFile(I18N.translate("Выбери звук для события"), ["wav", "mp3", "ogg", "oga", "flac"]);
+        if (path) await updateCustomSound(event, path);
+      } catch (error) { toast(String(error), "err"); }
+      finally { if (button.isConnected) button.disabled = false; }
+    }));
+    $$("[data-sound-path]").forEach((input) => {
+      input.addEventListener("change", () => { void updateCustomSound(input.dataset.soundPath, input.value); });
+      input.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); input.blur(); } });
+    });
+    $$("[data-sound-clear]").forEach((button) => button.addEventListener("click", () => { void updateCustomSound(button.dataset.soundClear, ""); }));
+    $$("[data-sound-volume]").forEach((input) => {
+      input.addEventListener("input", () => {
+        const name = input.dataset.soundVolume;
+        const previous = state.sound.custom?.[name] || { path: "", file: null };
+        state.sound.custom = { ...(state.sound.custom || {}), [name]: { ...previous, volume: Number(input.value) } };
+        $(`[data-sound-volume-value="${name}"]`).textContent = `${input.value}%`;
+      });
+      input.addEventListener("change", () => {
+        commit({ sound_custom: state.sound.custom });
+        sfx.play(input.dataset.soundVolume);
+      });
+    });
+    $$("[data-sound-preview]").forEach((button) => button.addEventListener("click", () => sfx.play(button.dataset.soundPreview)));
 
     $$("#prefs-body [data-wall]").forEach((chip) => chip.addEventListener("click", async () => {
       const picked = chip.dataset.wall || null;
@@ -10390,7 +10727,8 @@
         wallpaper: state.wall.wallpaper, wallpaper_fit: state.wall.fit,
         wallpaper_blur: state.wall.blur, wallpaper_dim: state.wall.dim,
         wallpaper_recent: state.wall.recent || [],
-        custom_wallpaper: state.settings?.custom_wallpaper ?? next.custom_wallpaper };
+        custom_wallpaper: state.settings?.custom_wallpaper ?? next.custom_wallpaper,
+        sound_custom: state.sound.custom || {}, sound_style: state.sound.style, sound_volume: state.sound.volume, sound_fx: state.sound.on };
       toast("Настройки сохранены", "ok");
       $("#modal-prefs").hidden = true;
     } catch (err) { toast(String(err), "err"); }
@@ -10408,14 +10746,15 @@
       wallpaper_recent: state.wall.recent || []
     };
     state.settings = next;
-    try { await api.saveSettings(next); } catch (error) { /* не критично */ }
+    try { await api.saveSettings(next); return true; } catch (error) { return false; }
   }
 
-  /** История обоев: свежие впереди, без повторов, не длиннее шести. */
+  /** Свежие впереди; собственные файлы различаются, а удаление не трогает сами файлы. */
   function rememberWallpaper(recent, current) {
-    const list = Array.isArray(recent) ? recent.slice() : [];
-    if (!current) return list.filter((id) => id !== current);
-    return [current, ...list.filter((id) => id !== current)].slice(0, 6);
+    const list = normalizeWallpaperHistory(recent, state.settings?.custom_wallpaper);
+    const id = current === "custom" && state.settings?.custom_wallpaper ? `custom:${state.settings.custom_wallpaper}` : current;
+    if (!id || id === "custom") return list;
+    return [id, ...list.filter((item) => item !== id)];
   }
 
   /* ==================== СКИН: МОДЕЛЬ, ПРЕСЕТЫ, ПЛАЩИ ==================== */
@@ -12442,6 +12781,10 @@
   }
 
   function bindEvents() {
+    initSmoothScroll();
+    initSoundEvents();
+    document.addEventListener("click", () => requestAnimationFrame(refreshActiveIndicators), true);
+    window.addEventListener("resize", refreshActiveIndicators);
     $$(".tab").forEach((tab) => tab.addEventListener("click", () => {
       state.tab = tab.dataset.tab;
       if (state.tab === "download") refreshInstalledProjects();
@@ -12683,12 +13026,13 @@
    * Пять коротких шагов: тема, эффекты, трейсер, масштаб и импорт сборок.
    * Показываем один раз — отметка onboarded живёт в настройках.
    */
-  const ONBOARD_STEPS = ["theme", "effects", "trail", "scale", "import"];
+  const ONBOARD_STEPS = ["language", "theme", "effects", "trail", "scale", "import"];
   let onboardStep = 0;
 
   /** Окно первого запуска — только при самом первом входе, не при обновлении. */
   function onboardNeeded() {
-    return !(state.settings && state.settings.onboarded === true);
+    // Поле создаётся только у нового профиля; в старых настройках его нет/false.
+    return state.settings?.onboarded !== true && state.settings?.onboarding_pending === true;
   }
 
   /**
@@ -12699,6 +13043,8 @@
   function onboardLooksUsed() {
     const settings = state.settings || {};
     return Boolean(settings.last_instance)
+      || (Array.isArray(state.instances) && state.instances.length > 0)
+      || (Array.isArray(state.accounts?.accounts) && state.accounts.accounts.length > 0)
       || Boolean(settings.wallpaper)
       || Boolean(settings.mc_version)
       || (Array.isArray(settings.categories) && settings.categories.length > 0)
@@ -12718,6 +13064,15 @@
 
   function onboardStepHtml() {
     const step = ONBOARD_STEPS[onboardStep];
+    if (step === "language") {
+      return `<div class="onboard-lead">
+          <span class="onboard-title">Выберите язык</span>
+          <span class="muted">Его можно изменить позже в настройках.</span>
+        </div>
+        <div class="onboard-languages" role="group" aria-label="Язык интерфейса">
+          ${LANGUAGES.map(([code, label]) => `<button type="button" class="onboard-language ${displayedLanguage === code ? "is-active" : ""}" data-onboard-language="${code}" aria-pressed="${displayedLanguage === code}" translate="no">${esc(label)}</button>`).join("")}
+        </div>`;
+    }
     if (step === "theme") {
       return `<div class="onboard-lead">
           <span class="onboard-title">Тема оформления</span>
@@ -12800,6 +13155,17 @@
     body.innerHTML = onboardStepHtml();
     const step = ONBOARD_STEPS[onboardStep];
 
+    if (step === "language") {
+      $$("[data-onboard-language]", body).forEach((button) => button.addEventListener("click", async () => {
+        const buttons = $$("[data-onboard-language]", body);
+        buttons.forEach((item) => { item.disabled = true; item.classList.toggle("is-active", item === button); item.setAttribute("aria-pressed", String(item === button)); });
+        const next = $("#onboard-next");
+        next.disabled = true;
+        await chooseLanguage(button.dataset.onboardLanguage);
+        next.disabled = false;
+        if (!$("#modal-onboard").hidden && ONBOARD_STEPS[onboardStep] === "language") renderOnboard();
+      }));
+    }
     if (step === "theme") {
       $$("#onboard-themes .theme-chip").forEach((chip) => chip.addEventListener("click", () => {
         const id = chip.dataset.themeId;
@@ -12872,7 +13238,7 @@
   async function finishOnboard() {
     const modal = $("#modal-onboard");
     if (modal) modal.hidden = true;
-    state.settings = { ...(state.settings || {}), onboarded: true };
+    state.settings = { ...(state.settings || {}), onboarded: true, onboarding_pending: false };
     try { await api.saveSettings(state.settings); } catch (error) { /* не критично */ }
   }
 
@@ -12943,8 +13309,9 @@
     applyUiScale((state.settings && state.settings.ui_scale) || 100);
     state.sound = {
       on: state.settings && state.settings.sound_fx !== false,
-      volume: Number((state.settings && state.settings.sound_volume) ?? 60),
-      style: (state.settings && SOUND_STYLES[state.settings.sound_style] && state.settings.sound_style) || "soft"
+      volume: Math.max(0, Math.min(200, Number((state.settings && state.settings.sound_volume) ?? 60) || 0)),
+      style: (state.settings && SOUND_STYLES[state.settings.sound_style] && state.settings.sound_style) || "soft",
+      custom: { ...((state.settings && state.settings.sound_custom) || {}) }
     };
     // обои: тот же выбор, что был в прошлый раз (иначе каждый старт — «свой фон»)
     state.wall = {
@@ -12952,9 +13319,7 @@
       fit: (state.settings && state.settings.wallpaper_fit) || "cover",
       blur: Number((state.settings && state.settings.wallpaper_blur) ?? 0),
       dim: Number((state.settings && state.settings.wallpaper_dim) ?? 40),
-      recent: (state.settings && Array.isArray(state.settings.wallpaper_recent))
-        ? state.settings.wallpaper_recent.slice(0, 6)
-        : []
+      recent: normalizeWallpaperHistory(state.settings?.wallpaper_recent, state.settings?.custom_wallpaper)
     };
     loadWallpaperSource("custom").then(() => applyWallpaper(state.wall)).catch(() => null);
     applyWallpaper();
@@ -12991,10 +13356,14 @@
     // Показывается только при самом первом входе. Если лаунчером уже
     // пользовались (есть следы работы в настройках), просто ставим отметку.
     if (onboardNeeded() && onboardLooksUsed()) {
-      state.settings = { ...(state.settings || {}), onboarded: true };
+      state.settings = { ...(state.settings || {}), onboarded: true, onboarding_pending: false };
       api.saveSettings(state.settings).catch(() => {});
     } else if (onboardNeeded()) {
       openOnboard();
+    } else if (state.settings?.onboarded !== true && state.settings?.onboarding_pending !== true) {
+      // Старые установки даже без сборок и аккаунтов не считаем новыми.
+      state.settings = { ...(state.settings || {}), onboarded: true, onboarding_pending: false };
+      api.saveSettings(state.settings).catch(() => {});
     }
     if (!IS_APP) {
       /* демо-режим без бэкенда — тихо */

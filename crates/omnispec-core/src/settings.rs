@@ -256,9 +256,12 @@ pub struct Settings {
     /// Звуковые эффекты интерфейса.
     #[serde(default = "default_true")]
     pub sound_fx: bool,
-    /// Громкость этих звуков, 0–100.
+    /// Общая громкость этих звуков, 0–200 %.
     #[serde(default = "default_sound_volume")]
     pub sound_volume: u8,
+    /// Копии пользовательских звуков и отдельная громкость для каждого события.
+    #[serde(default)]
+    pub sound_custom: std::collections::BTreeMap<String, CustomSound>,
 
     /// Категории (папки) сборок в списке слева.
     #[serde(default)]
@@ -318,6 +321,10 @@ pub struct Settings {
     /// Первый запуск пройден: окно быстрой настройки больше не показываем.
     #[serde(default)]
     pub onboarded: bool,
+    /// Только новый профиль ожидает мастер. В старых settings.json отсутствует
+    /// и по serde умолчанию false — обновление не запускает мастер повторно.
+    #[serde(default)]
+    pub onboarding_pending: bool,
     /// Размер эффектов в процентах: 60–220.
     #[serde(default = "default_effect_size")]
     pub effect_size: u8,
@@ -348,6 +355,19 @@ pub struct Settings {
     /// Свой цвет частиц (`#rrggbb`), `None` — как в теме.
     #[serde(default)]
     pub ambient_color: Option<String>,
+}
+
+/// Импортированный звук: исходный путь для интерфейса и безопасная копия в data/sounds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CustomSound {
+    pub path: String,
+    pub file: Option<String>,
+    pub volume: u8,
+}
+
+impl Default for CustomSound {
+    fn default() -> Self { Self { path: String::new(), file: None, volume: 100 } }
 }
 
 /// Категория сборок: обычная «папка» в списке слева.
@@ -417,6 +437,7 @@ impl Default for Settings {
             wallpaper_steam_path: None,
             sound_fx: true,
             sound_volume: default_sound_volume(),
+            sound_custom: std::collections::BTreeMap::new(),
             categories: Vec::new(),
             skin_presets: Vec::new(),
             skin_favorites: Vec::new(),
@@ -436,6 +457,7 @@ impl Default for Settings {
             theme_tint: None,
             loose_collapsed: false,
             onboarded: false,
+            onboarding_pending: true,
             effect_size: default_effect_size(),
             trail: default_true_trail(),
             trail_size: default_trail_size(),
@@ -552,6 +574,18 @@ mod discord_tests {
         let future: Settings = serde_json::from_str(r#"{"username":"Alex","launcher_icon":"future"}"#).unwrap();
         assert_eq!(future.launcher_icon, LauncherIcon::Default);
         assert_eq!(future.username, "Alex");
+    }
+
+    #[test]
+    fn only_new_profiles_start_onboarding_without_reprompting_old_settings() {
+        let old: Settings = serde_json::from_str(r#"{"username":"Player","onboarded":false}"#).unwrap();
+        assert!(!old.onboarded && !old.onboarding_pending);
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let fresh = Settings::load_from(&file).unwrap();
+        assert!(!fresh.onboarded && fresh.onboarding_pending);
+        let restarted = Settings::load_from(&file).unwrap();
+        assert!(restarted.onboarding_pending);
     }
 
     #[test]

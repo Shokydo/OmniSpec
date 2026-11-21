@@ -124,7 +124,8 @@ pub fn copy_media(source: &Path, dir: &Path) -> Result<String, String> {
         .and_then(|e| e.to_str())
         .unwrap_or("png")
         .to_ascii_lowercase();
-    let (target, mut output) = create_unique(dir, "custom", &ext)?;
+    let stem = original.file_stem().and_then(|s| s.to_str()).unwrap_or("custom");
+    let (target, mut output) = create_unique(dir, stem, &ext)?;
     let result = (|| -> Result<(), String> {
         let input =
             std::fs::File::open(original).map_err(|e| format!("не удалось открыть обои: {e}"))?;

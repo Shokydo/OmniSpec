@@ -64,6 +64,9 @@ jobs:
       - name: Проверить выбор 3D-плащей в настоящем Windows WebView2
         shell: pwsh
         run: ./tools/tests/windows-avatar-wardrobe-cdp.ps1 -Launcher 'target/release/omnispec-app.exe'
+      - name: Проверить первый запуск, фильтры, звуки и историю фонов в Windows WebView2
+        shell: pwsh
+        run: ./tools/tests/windows-v0500-cdp.ps1 -Launcher 'target/release/omnispec-app.exe'
       - name: Проверить нативные иконки и Discord IPC в Windows
         shell: pwsh
         run: ./tools/tests/windows-launcher-icon-cdp.ps1 -Launcher 'target/release/omnispec-app.exe'

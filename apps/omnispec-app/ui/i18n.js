@@ -76,7 +76,9 @@
       const localCaptures = {
         "Выбран скин «{0}» · {1}.{2}": ["1", "2"],
         "Выбран скин аккаунта · {0}.{1}": ["0", "1"],
-        "{0} · последний запуск {1}": ["0", "1"]
+        "{0} · последний запуск {1}": ["0", "1"],
+        "Путь к звуку: {0}": ["0"],
+        "Громкость: {0}": ["0"]
       };
       const result = translation.replace(placeholder, (whole, index) => {
         const group = entry.positions.get(index);

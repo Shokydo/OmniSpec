@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/omnispec-core", "apps/omnispec-app", "apps/omnispec-setup"]
 
 [workspace.package]
-version = "0.49.15"
+version = "0.50.0"
 edition = "2021"
 license = "MIT"
 
