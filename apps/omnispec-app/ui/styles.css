@@ -3633,13 +3633,13 @@ body.has-wall .home .home-feed-head { background: var(--bg-2); }
 .sound-event-list { display: flex; flex-direction: column; gap: 8px; width: 100%; margin-top: 10px; }
 .sound-event { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg-3); }
 .sound-event-title { font-size: 12px; font-weight: 600; color: var(--text); }
-.sound-path-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sound-path-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .sound-path-row .input { flex: 1 1 80px; min-width: 0; }
 .sound-path-row .btn { flex: none; }
-.sound-event-volume { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--dim); font-size: 11px; }
-.sound-event-volume input { flex: 1 1 auto; min-width: 35px; }
+.sound-event-volume { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; max-width: 100%; color: var(--dim); font-size: 11px; }
+.sound-event-volume input { flex: 1 1 80px; min-width: 35px; }
 .sound-event-volume .tag { min-width: 42px; text-align: center; }
-@media (max-width: 480px) { .sound-path-row .btn { padding: 0 6px; } .sound-event-volume { flex-wrap: wrap; } }
+@media (max-width: 480px) { .sound-path-row .btn { padding: 0 6px; } }
 .wall-history { margin-top: 8px; }
 .wall-history-entry { position: relative; min-width: 0; }
 .wall-history-entry .wall-chip { width: 100%; }
