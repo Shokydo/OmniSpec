@@ -118,6 +118,18 @@ async function layout(page, width, height) {
     if (process.env.OMNISPEC_UI_SHOTS) await page.screenshot({path:path.join(process.env.OMNISPEC_UI_SHOTS,'avatar-1080x640.png')});
     console.log('AVATAR_LAYOUT_AT_100_PERCENT_OK');
 
+    // The resized canvas must still receive drag events and reset on double-click.
+    const modelBox=await page.locator('#skin-canvas').boundingBox();
+    const initialYaw=await page.evaluate(()=>window.omnispecDebug.state.skin.yaw);
+    await page.mouse.move(modelBox.x+modelBox.width/2,modelBox.y+modelBox.height/2);
+    await page.mouse.down();
+    await page.mouse.move(modelBox.x+modelBox.width/2+45,modelBox.y+modelBox.height/2+12,{steps:4});
+    await page.mouse.up();
+    assert(Math.abs((await page.evaluate(()=>window.omnispecDebug.state.skin.yaw))-initialYaw)>5,'3D player does not rotate after resizing');
+    await page.locator('#skin-canvas').dblclick();
+    assert.equal(await page.evaluate(()=>window.omnispecDebug.state.skin.yaw),-18);
+    console.log('AVATAR_MODEL_DRAG_AND_RESET_OK');
+
     // The mini is an actual angled cuboid rendered from the official texture's
     // different faces: both the outer face and an edge must produce pixels.
     const pixels=await page.locator('#skin-capes [data-cape-id="cape-0"] canvas').evaluate(canvas=>{
