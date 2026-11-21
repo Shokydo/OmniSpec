@@ -58,6 +58,10 @@ async function setup(page) {
             if(!['ru','be','kk','uk','en'].includes(args.language)) throw Error('unknown language');
             this.settings={...this.settings,language:args.language}; this.store(); return null;
           }
+          case 'set_launcher_icon': {
+            if(!['default','ru','by','kz','ua','us','icon_star_boom','icon_star_eye'].includes(args.icon)) throw Error('unknown icon');
+            this.settings={...this.settings,launcher_icon:args.icon}; this.store(); return null;
+          }
           case 'save_settings': {
             if(this.holdNextSave) {this.holdNextSave=false;await new Promise(resolve=>this.saveHeld.push(resolve));}
             // Match the backend lock: generic snapshots cannot overwrite these addressable settings.
@@ -120,17 +124,45 @@ async function choose(page,lang,save=true) {
     await openLook(page);
 
     const navLabels={be:'Афармленне',kk:'Сыртқы көрініс',uk:'Оформлення',en:'Appearance',ru:'Оформление'};
+    const starLabels={be:['Зорны выбух','Зорка'],kk:['Жұлдыз жарылысы','Жұлдыз'],
+      uk:['Зоряний вибух','Зірка'],en:['Starburst','Star'],ru:['Звездный взрыв','Звезда']};
+    await page.evaluate(()=>{
+      document.body.style.zoom='1.5';document.body.style.width='calc(100vw / 1.5)';document.body.style.height='calc(100vh / 1.5)';
+      document.documentElement.dataset.uiScale='150';document.documentElement.style.setProperty('--ui-zoom','1.5');
+      window.dispatchEvent(new Event('resize'));
+    });
     for(const lang of ['be','kk','uk','en','ru']) {
       await choose(page,lang);
       assert.equal(await page.locator('[data-pref="look"]').innerText(),navLabels[lang]);
       assert.deepEqual(await page.locator('#prefs-language option').allTextContents(),['Русский','Беларуская','Қазақша','Українська','English']);
-      assert.deepEqual((await page.locator('#launcher-icon-grid label').allTextContents()).map(x=>x.trim()).slice(1),['Россия','Беларусь','Қазақстан','Україна','USA']);
+      const iconLabels=(await page.locator('#launcher-icon-grid label').allTextContents()).map(x=>x.trim());
+      assert.deepEqual(iconLabels.slice(1,6),['Россия','Беларусь','Қазақстан','Україна','USA']);
+      assert.deepEqual(iconLabels.slice(6),starLabels[lang]);
+      for(const [id,index] of [['icon_star_boom',0],['icon_star_eye',1]]) {
+        const label=page.locator(`#launcher-icon-grid label:has(input[value="${id}"])`);
+        assert.equal(await label.locator('input').getAttribute('aria-label'),starLabels[lang][index]);
+        assert(await label.locator('.launcher-icon-card > span').evaluate(el=>{
+          const text=el.getBoundingClientRect(), card=el.parentElement.getBoundingClientRect();
+          return el.scrollWidth<=el.clientWidth+1 && text.left>=card.left-1 && text.right<=card.right+1 && text.bottom<=card.bottom+1;
+        }),`${lang}/${id}: text fits at 150%`);
+        await label.click();
+        await page.waitForFunction(id=>window.__languageTest.settings.launcher_icon===id,id);
+        assert(await page.getByRole('radio',{name:starLabels[lang][index],exact:true}).isChecked());
+        assert.equal(await page.locator('.tb-logo img').getAttribute('src'),`assets/launcher-icons/${id}.png`);
+      }
+      assert.equal(await page.locator('.language-hint').evaluate(el=>getComputedStyle(el).color),
+        await page.locator('.launcher-icon-hint').evaluate(el=>getComputedStyle(el).color));
       assert.equal(await page.locator('#instance-search').inputValue(),'пользовательский текст');
       assert.equal(await page.locator('#build-path span').innerText(),'Моды','actual path is not translated');
       assert.equal(await page.locator('#tb-name').innerText(),'Настройки','instance name is not translated');
       assert.equal(await page.locator('#account-chip-name').innerText(),'Моды','account name is not translated');
       assert.equal(await page.locator('.fm-item .nm').last().innerText(),'Настройки','filename is not translated');
     }
+    await page.evaluate(()=>{
+      document.body.style.zoom='';document.body.style.width='';document.body.style.height='';
+      document.documentElement.dataset.uiScale='100';document.documentElement.style.setProperty('--ui-zoom','1');
+      window.dispatchEvent(new Event('resize'));
+    });
     assert.equal(await page.locator('.fdate[data-fm-modified]').first().innerText(),originalDate,'locale dates return to original Russian');
     console.log('FIVE_LANGUAGES_AND_USER_DATA_OK');
 

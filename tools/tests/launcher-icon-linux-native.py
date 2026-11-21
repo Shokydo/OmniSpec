@@ -254,7 +254,8 @@ try:
     print('STARTUP_NATIVE', wait_native('default'), flush=True)
     fake.wait_icon('/icon-512.png')
     action('Настройки'); action('Оформление')
-    for icon,name in [('ru','Россия'),('by','Беларусь'),('kz','Қазақстан'),('ua','Україна'),('us','USA')]:
+    for icon,name in [('ru','Россия'),('by','Беларусь'),('kz','Қазақстан'),('ua','Україна'),('us','USA'),
+                      ('icon_star_boom','Звездный взрыв'),('icon_star_eye','Звезда')]:
         start=fake.count(); action(name); wait_saved(icon)
         result=wait_native(icon); fake.wait_icon('/'+icon+'.png',start)
         assert saved()['username']=='IconFixture' and saved()['discord_instance_icon'] is False
@@ -267,18 +268,26 @@ try:
         # Не принимаем исходное состояние за результат операции: дожидаемся
         # реальной ошибки записи, затем проверяем восстановленный выбор.
         wait_visible_text('Не удалось сохранить иконку лаунчера', 15)
-        wait_checked('USA', 15)
+        wait_checked('Звезда', 15)
         time.sleep(.6)  # worker IPC должен успеть обработать возможное изменение
-        assert saved()['launcher_icon']=='us'
-        print('LINUX_NATIVE_SAVE_FAILURE_ROLLBACK',wait_native('us'),flush=True)
+        assert saved()['launcher_icon']=='icon_star_eye'
+        print('LINUX_NATIVE_SAVE_FAILURE_ROLLBACK',wait_native('icon_star_eye'),flush=True)
         with fake.lock:
             assert not any(a and a.get('assets',{}).get('large_image','').endswith('/ru.png') for a in fake.events[before:])
     finally: os.chmod(data,0o700)
 
+    # Обе новые картинки восстанавливаются в окне и Discord после перезапуска.
     stop(); start=fake.count(); launch()
-    assert saved()['launcher_icon']=='us'
-    print('LINUX_NATIVE_RESTART',wait_native('us'),flush=True)
-    fake.wait_icon('/us.png',start)
+    assert saved()['launcher_icon']=='icon_star_eye'
+    print('LINUX_NATIVE_RESTART_EYE',wait_native('icon_star_eye'),flush=True)
+    fake.wait_icon('/icon_star_eye.png',start)
+    action('Настройки');action('Оформление')
+    start=fake.count(); action('Звездный взрыв'); wait_saved('icon_star_boom')
+    fake.wait_icon('/icon_star_boom.png',start)
+    stop(); start=fake.count(); launch()
+    assert saved()['launcher_icon']=='icon_star_boom'
+    print('LINUX_NATIVE_RESTART_BOOM',wait_native('icon_star_boom'),flush=True)
+    fake.wait_icon('/icon_star_boom.png',start)
     action('Настройки');action('Оформление')
     start=fake.count(); action('Оригинал'); wait_saved('default')
     print('LINUX_NATIVE_DEFAULT_RESTORE',wait_native('default'),flush=True)

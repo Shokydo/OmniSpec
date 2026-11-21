@@ -107,13 +107,27 @@ async function visibleVideo() {
     assert.equal(saved().wallpaper,'workshop','legacy selection remains in settings');
     await prefs('look');
     const labels={be:'Афармленне',kk:'Сыртқы көрініс',uk:'Оформлення',en:'Appearance',ru:'Оформление'};
+    const stars={be:['Зорны выбух','Зорка'],kk:['Жұлдыз жарылысы','Жұлдыз'],
+      uk:['Зоряний вибух','Зірка'],en:['Starburst','Star'],ru:['Звездный взрыв','Звезда']};
     for(const lang of ['be','kk','uk','en','ru']) {
       await chooseLanguage(lang);
       assert.equal(await page.locator('[data-pref="look"]').innerText(),labels[lang]);
-      assert.deepEqual((await page.locator('#launcher-icon-grid label').allTextContents()).map(x=>x.trim()).slice(1),
-        ['Россия','Беларусь','Қазақстан','Україна','USA']);
+      const iconLabels=(await page.locator('#launcher-icon-grid label').allTextContents()).map(x=>x.trim());
+      assert.deepEqual(iconLabels.slice(1,6),['Россия','Беларусь','Қазақстан','Україна','USA']);
+      assert.deepEqual(iconLabels.slice(6),stars[lang]);
+      for(const [id,index] of [['icon_star_boom',0],['icon_star_eye',1]]) {
+        const label=page.locator(`#launcher-icon-grid label:has(input[value="${id}"])`);
+        assert.equal(await label.locator('input').getAttribute('aria-label'),stars[lang][index]);
+        await label.click();await waitSaved(s=>s.launcher_icon===id,`icon ${lang}/${id}`);
+        assert(await page.getByRole('radio',{name:stars[lang][index],exact:true}).isChecked());
+        assert.equal(await page.locator('.tb-logo img').getAttribute('src'),`assets/launcher-icons/${id}.png`);
+      }
+      assert.equal(await page.locator('.language-hint').evaluate(el=>getComputedStyle(el).color),
+        await page.locator('.launcher-icon-hint').evaluate(el=>getComputedStyle(el).color));
       console.log('WINDOWS_WEBVIEW2_LANGUAGE_OK',lang);
     }
+    await page.locator('#launcher-icon-grid label:has(input[value="kz"])').click();
+    await waitSaved(s=>s.launcher_icon==='kz','original icon restored');
     await lockSettings();
     await page.selectOption('#prefs-language','en');
     await page.waitForFunction(()=>document.documentElement.lang==='ru' &&

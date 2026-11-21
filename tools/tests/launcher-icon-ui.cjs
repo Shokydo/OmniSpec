@@ -1,4 +1,4 @@
-// Настройки иконки: шесть вариантов, клавиатура, очередь, откат и рестарт.
+// Настройки иконки: восемь вариантов, клавиатура, очередь, откат и рестарт.
 // Native Windows/Discord IPC проверяются отдельными тестами, здесь только WebView.
 const http = require('node:http');
 const fs = require('node:fs');
@@ -54,7 +54,7 @@ async function openPage(browser) {
               await new Promise(resolve=>this.pendingIcons.push(resolve));
             }
             if(this.failNextIcon) { this.failNextIcon=false; throw new Error('тестовый сбой записи'); }
-            if(!['default','ru','by','kz','ua','us'].includes(args.icon)) throw new Error('неизвестная иконка');
+            if(!['default','ru','by','kz','ua','us','icon_star_boom','icon_star_eye'].includes(args.icon)) throw new Error('неизвестная иконка');
             this.settings={...this.settings,launcher_icon:args.icon}; this.store(); return null;
           }
           case 'system_memory': return {total_mb:16384};
@@ -96,9 +96,21 @@ async function saved(page,id) {
     assert.equal(await page.locator('.tb-logo img').getAttribute('src'),'assets/logo.png');
     await prefs(page);
     const options=[['default','Оригинал'],['ru','Россия'],['by','Беларусь'],
-      ['kz','Қазақстан'],['ua','Україна'],['us','USA']];
+      ['kz','Қазақстан'],['ua','Україна'],['us','USA'],
+      ['icon_star_boom','Звездный взрыв'],['icon_star_eye','Звезда']];
     assert.equal(await page.getByRole('radiogroup',{name:'Иконка лаунчера'}).count(),1);
-    assert.equal(await page.getByRole('radio').count(),6);
+    assert.equal(await page.getByRole('radio').count(),8);
+    assert.equal(await page.locator('.language-hint').innerText(),'Язык сохраняется автоматически и применяется сразу.');
+    assert.equal(await page.locator('.language-hint').evaluate(el=>getComputedStyle(el).color),
+      await page.locator('.launcher-icon-hint').evaluate(el=>getComputedStyle(el).color),'both helper texts use the same grey');
+    assert.notEqual(await page.locator('.language-hint').evaluate(el=>getComputedStyle(el).color),
+      await page.locator('#prefs-language').evaluate(el=>getComputedStyle(el).color),'helper text is not the bright control text');
+    await page.locator('[data-theme-id="light"]').click();
+    assert.equal(await page.locator('.language-hint').evaluate(el=>getComputedStyle(el).color),
+      await page.locator('.launcher-icon-hint').evaluate(el=>getComputedStyle(el).color),'grey follows the light theme');
+    assert.notEqual(await page.locator('.language-hint').evaluate(el=>getComputedStyle(el).color),
+      await page.locator('#prefs-language').evaluate(el=>getComputedStyle(el).color));
+    await page.locator('[data-theme-id="dark"]').click();
     assert(await page.getByRole('radio',{name:'Оригинал'}).isChecked());
     for(const [id,name] of options.slice(1)) {
       const image=page.locator(`#launcher-icon-grid label:has(input[value="${id}"]) img`);
@@ -112,22 +124,22 @@ async function saved(page,id) {
 
     // Поздняя первая операция, более новый выбор и общий снимок темы.
     await page.evaluate(()=>{window.__launcherIconTest.holdNextIcon=true;});
-    await choose(page,'ua');
+    await choose(page,'icon_star_boom');
     await page.waitForFunction(()=>window.__launcherIconTest.pendingIcons.length===1);
     await choose(page,'kz');
     assert.equal(await page.locator('.tb-logo img').getAttribute('data-launcher-icon'),'kz');
     await page.locator('[data-theme-id="navy"]').click();
     await page.waitForFunction(()=>window.__launcherIconTest.settings.theme==='navy');
-    assert.equal(await page.evaluate(()=>window.__launcherIconTest.settings.launcher_icon),'us');
+    assert.equal(await page.evaluate(()=>window.__launcherIconTest.settings.launcher_icon),'icon_star_eye');
     await page.evaluate(()=>window.__launcherIconTest.releaseIcon());
     await saved(page,'kz');
-    assert.deepEqual((await page.evaluate(()=>window.__launcherIconTest.iconCalls)).slice(-2),['ua','kz']);
+    assert.deepEqual((await page.evaluate(()=>window.__launcherIconTest.iconCalls)).slice(-2),['icon_star_boom','kz']);
     assert.equal(await page.evaluate(()=>window.__launcherIconTest.settings.theme),'navy');
     console.log('FAST_CHOICES_AND_STALE_GENERAL_SAVE_OK');
 
     // Сбой последней операции возвращает последнее подтверждённое значение.
     await page.evaluate(()=>{window.__launcherIconTest.failNextIcon=true;});
-    await choose(page,'by');
+    await choose(page,'icon_star_eye');
     await page.waitForFunction(()=>document.querySelector('#toasts')?.textContent.includes('тестовый сбой записи'));
     assert.equal(await page.locator('.tb-logo img').getAttribute('data-launcher-icon'),'kz');
     assert(await page.getByRole('radio',{name:'Қазақстан'}).isChecked());
@@ -138,31 +150,46 @@ async function saved(page,id) {
     await page.evaluate(()=>{window.__launcherIconTest.holdNextSave=true;});
     await page.locator('#prefs-save').click();
     await page.waitForFunction(()=>window.__launcherIconTest.pendingSaves.length===1);
-    await choose(page,'ua'); await saved(page,'ua');
+    await choose(page,'icon_star_boom'); await saved(page,'icon_star_boom');
     await page.evaluate(()=>window.__launcherIconTest.releaseSave());
     await page.waitForFunction(()=>document.querySelector('#modal-prefs').hidden);
-    assert.equal(await page.evaluate(()=>window.omnispecDebug.state.settings.launcher_icon),'ua');
-    assert.equal(await page.evaluate(()=>window.__launcherIconTest.settings.launcher_icon),'ua');
+    assert.equal(await page.evaluate(()=>window.omnispecDebug.state.settings.launcher_icon),'icon_star_boom');
+    assert.equal(await page.evaluate(()=>window.__launcherIconTest.settings.launcher_icon),'icon_star_boom');
     console.log('LATE_SAVE_RESPONSE_CANNOT_REVERT_ICON_OK');
 
     await page.reload();
     await page.waitForFunction(()=>window.omnispecDebug?.state?.settings);
-    assert.equal(await page.locator('.tb-logo img').getAttribute('data-launcher-icon'),'ua');
+    assert.equal(await page.locator('.tb-logo img').getAttribute('data-launcher-icon'),'icon_star_boom');
     await prefs(page);
-    assert(await page.getByRole('radio',{name:'Україна'}).isChecked());
+    assert(await page.getByRole('radio',{name:'Звездный взрыв'}).isChecked());
     assert.equal(await page.evaluate(()=>window.__launcherIconTest.settings.theme),'navy');
-    const ua=page.getByRole('radio',{name:'Україна'});
-    await ua.focus(); await page.keyboard.press('ArrowRight'); await saved(page,'us');
-    assert(await page.getByRole('radio',{name:'USA'}).isChecked());
+    const burst=page.getByRole('radio',{name:'Звездный взрыв'});
+    await burst.focus(); await page.keyboard.press('ArrowRight'); await saved(page,'icon_star_eye');
+    assert(await page.getByRole('radio',{name:'Звезда'}).isChecked());
+    await page.reload();
+    await page.waitForFunction(()=>window.omnispecDebug?.state?.settings);
+    assert.equal(await page.locator('.tb-logo img').getAttribute('data-launcher-icon'),'icon_star_eye');
+    await prefs(page);
+    assert(await page.getByRole('radio',{name:'Звезда'}).isChecked());
     console.log('RESTART_AND_KEYBOARD_OK');
 
     // На 150% все варианты остаются в контейнере и доступны после прокрутки.
-    await page.evaluate(()=>{document.body.style.zoom='1.5';document.body.style.width='calc(100vw / 1.5)';document.body.style.height='calc(100vh / 1.5)';});
+    await page.evaluate(()=>{
+      document.body.style.zoom='1.5';document.body.style.width='calc(100vw / 1.5)';document.body.style.height='calc(100vh / 1.5)';
+      document.documentElement.dataset.uiScale='150';document.documentElement.style.setProperty('--ui-zoom','1.5');
+      window.dispatchEvent(new Event('resize'));
+    });
     for(const [id] of options) {
       const label=page.locator(`#launcher-icon-grid label:has(input[value="${id}"])`);
       await label.scrollIntoViewIfNeeded();
       const size=await label.boundingBox(); assert(size && size.width>30 && size.height>30,id);
+      assert(await label.locator('.launcher-icon-card > span').evaluate(el=>{
+        const text=el.getBoundingClientRect(), card=el.parentElement.getBoundingClientRect();
+        return el.scrollWidth<=el.clientWidth+1 && text.left>=card.left-1 && text.right<=card.right+1 && text.bottom<=card.bottom+1;
+      }),`${id}: text stays inside card`);
     }
+    await choose(page,'icon_star_boom'); await saved(page,'icon_star_boom');
+    await choose(page,'icon_star_eye'); await saved(page,'icon_star_eye');
     assert.deepEqual(errors,[]);
     console.log('SCALE_150_OK');
     await page.close();

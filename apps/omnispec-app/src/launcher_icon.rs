@@ -15,6 +15,8 @@ pub fn presence_url(icon: LauncherIcon) -> &'static str {
         LauncherIcon::Kz => "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/launcher-icons/kz.png",
         LauncherIcon::Ua => "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/launcher-icons/ua.png",
         LauncherIcon::Us => "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/launcher-icons/us.png",
+        LauncherIcon::StarBoom => "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/launcher-icons/icon_star_boom.png",
+        LauncherIcon::StarEye => "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/launcher-icons/icon_star_eye.png",
         LauncherIcon::Default => DEFAULT_RPC,
     }
 }
@@ -26,6 +28,8 @@ fn png(icon: LauncherIcon) -> &'static [u8] {
         LauncherIcon::Kz => include_bytes!("../ui/assets/launcher-icons/kz.png"),
         LauncherIcon::Ua => include_bytes!("../ui/assets/launcher-icons/ua.png"),
         LauncherIcon::Us => include_bytes!("../ui/assets/launcher-icons/us.png"),
+        LauncherIcon::StarBoom => include_bytes!("../ui/assets/launcher-icons/icon_star_boom.png"),
+        LauncherIcon::StarEye => include_bytes!("../ui/assets/launcher-icons/icon_star_eye.png"),
         LauncherIcon::Default => include_bytes!("../icons/icon-512.png"),
     }
 }
@@ -74,7 +78,8 @@ mod tests {
         let mut hashes = HashSet::new();
         let mut urls = HashSet::new();
         for icon in [LauncherIcon::Default, LauncherIcon::Ru, LauncherIcon::By,
-                     LauncherIcon::Kz, LauncherIcon::Ua, LauncherIcon::Us] {
+                     LauncherIcon::Kz, LauncherIcon::Ua, LauncherIcon::Us,
+                     LauncherIcon::StarBoom, LauncherIcon::StarEye] {
             assert!(hashes.insert(png(icon)));
             assert!(urls.insert(presence_url(icon)));
             assert!(super::super::presence::valid_image_url(presence_url(icon)));

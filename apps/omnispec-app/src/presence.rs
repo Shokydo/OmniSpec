@@ -289,7 +289,10 @@ mod tests {
         let mut previous = activity_value(&info, default);
         for (icon, suffix) in [(LauncherIcon::Ru, "/ru.png"), (LauncherIcon::By, "/by.png"),
                                (LauncherIcon::Kz, "/kz.png"), (LauncherIcon::Ua, "/ua.png"),
-                               (LauncherIcon::Us, "/us.png"), (LauncherIcon::Default, "/icon-512.png")] {
+                               (LauncherIcon::Us, "/us.png"),
+                               (LauncherIcon::StarBoom, "/icon_star_boom.png"),
+                               (LauncherIcon::StarEye, "/icon_star_eye.png"),
+                               (LauncherIcon::Default, "/icon-512.png")] {
             presence.set_launcher_icon(icon);
             let (_, info, selected) = presence.snapshot();
             let value = activity_value(&info, selected);
@@ -334,7 +337,8 @@ mod tests {
         };
         assert_eq!(receive_activity(&mut server)["assets"]["large_image"], crate::launcher_icon::presence_url(LauncherIcon::Default));
         for icon in [LauncherIcon::Ru, LauncherIcon::By, LauncherIcon::Kz,
-                     LauncherIcon::Ua, LauncherIcon::Us, LauncherIcon::Default] {
+                     LauncherIcon::Ua, LauncherIcon::Us, LauncherIcon::StarBoom,
+                     LauncherIcon::StarEye, LauncherIcon::Default] {
             presence.set_launcher_icon(icon);
             let activity = receive_activity(&mut server);
             assert_eq!(activity["assets"]["large_image"], crate::launcher_icon::presence_url(icon));

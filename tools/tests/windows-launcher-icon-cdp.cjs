@@ -67,15 +67,20 @@ async function waitIpc(id,start=0) {
 }
 async function verifyPublicImage(url,id) {
   const file=id==='default'?'apps/omnispec-app/icons/icon-512.png':`apps/omnispec-app/ui/assets/launcher-icons/${id}.png`;
-  if(process.env.EXPECTED_LAUNCHER_ICON_REF) {
-    assert.equal(url,`https://raw.githubusercontent.com/Shokydo/OmniSpec/${process.env.EXPECTED_LAUNCHER_ICON_REF}/${file}`,
-      `${id}: incorrect published image URL`);
-  }
-  const response=await fetch(url);assert(response.ok,`${url} HTTP ${response.status}`);
-  assert((response.headers.get('content-type')||'').startsWith('image/png'),url);
+  const expectedRef=process.env.EXPECTED_LAUNCHER_ICON_REF || 'main';
+  assert.equal(url,`https://raw.githubusercontent.com/Shokydo/OmniSpec/${expectedRef}/${file}`,
+    `${id}: incorrect Discord image URL`);
+  // Pre-merge only: main cannot serve newly added files yet. Verify the exact
+  // candidate commit's bytes while still asserting the URL the app emits.
+  // Release tests leave this unset and fetch the actual Discord URL above.
+  const candidate=process.env.PREFLIGHT_LAUNCHER_ICON_COMMIT;
+  if(candidate) assert.match(candidate,/^[0-9a-f]{40}$/i,'preflight requires an immutable commit SHA');
+  const checkedUrl=candidate?`https://raw.githubusercontent.com/Shokydo/OmniSpec/${candidate}/${file}`:url;
+  const response=await fetch(checkedUrl);assert(response.ok,`${checkedUrl} HTTP ${response.status}`);
+  assert((response.headers.get('content-type')||'').startsWith('image/png'),checkedUrl);
   const local=crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   const remote=crypto.createHash('sha256').update(Buffer.from(await response.arrayBuffer())).digest('hex');
-  assert.equal(remote,local,`${id}: public PNG differs from embedded source`);
+  assert.equal(remote,local,`${id}: checked PNG differs from embedded source`);
 }
 function inspect(id) {
   const file=id==='default'?'apps/omnispec-app/icons/icon-512.png':`apps/omnispec-app/ui/assets/launcher-icons/${id}.png`;
@@ -141,7 +146,7 @@ async function unlockSettings() {
     let url=await waitIpc('default');await verifyPublicImage(url,'default');
     console.log('WINDOWS_STARTUP_NATIVE',JSON.stringify(inspect('default')));
     await prefs();
-    for(const id of ['ru','by','kz','ua','us']) {
+    for(const id of ['ru','by','kz','ua','us','icon_star_boom','icon_star_eye']) {
       const start=events.length;await choose(id);await waitSaved(id);
       url=await waitIpc(id,start);await verifyPublicImage(url,id);
       console.log('WINDOWS_ICON_SMALL_BIG_AND_IPC_OK',id,JSON.stringify(inspect(id)));
@@ -152,26 +157,30 @@ async function unlockSettings() {
     // завершиться ошибкой и вернуть иконки в окно и настройки.
     const before=events.length;await lockSettings();await choose('ru');
     await page.waitForFunction(()=>document.querySelector('#toasts')?.textContent.includes('Не удалось сохранить иконку лаунчера'),null,{timeout:20000});
-    await page.waitForFunction(()=>document.querySelector('.tb-logo img')?.dataset.launcherIcon==='us');
-    await unlockSettings();await waitSaved('us');await delay(700);
+    await page.waitForFunction(()=>document.querySelector('.tb-logo img')?.dataset.launcherIcon==='icon_star_eye');
+    await unlockSettings();await waitSaved('icon_star_eye');await delay(700);
     assert(!events.slice(before).some(x=>x?.assets?.large_image?.endsWith('/launcher-icons/ru.png')));
-    console.log('WINDOWS_FAILED_SAVE_ROLLBACK_OK',JSON.stringify(inspect('us')));
+    console.log('WINDOWS_FAILED_SAVE_ROLLBACK_OK',JSON.stringify(inspect('icon_star_eye')));
 
-    // Украина встречается только в конце: ожидание не может ошибочно принять
-    // промежуточную запись или событие от предыдущего теста.
+    // Целевой вариант встречается только в конце: ожидание не может ошибочно
+    // принять промежуточную запись или событие от предыдущего теста.
     const burstStart=events.length;
     await page.evaluate(()=>{
-      for(const id of ['ru','us','kz','by','ua']) {
+      for(const id of ['ru','us','kz','by','icon_star_boom']) {
         const input=document.querySelector(`#launcher-icon-grid input[value="${id}"]`);
         input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));
       }
     });
-    await waitSaved('ua');await waitIpc('ua',burstStart);
-    console.log('WINDOWS_FAST_SWITCH_OK',JSON.stringify(inspect('ua')));
-    await stop();const after=events.length;await launch();
-    await waitSaved('ua');await waitIpc('ua',after);
-    console.log('WINDOWS_RESTART_RESTORE_OK',JSON.stringify(inspect('ua')));
-    await prefs();const from=events.length;await choose('default');await waitSaved('default');await waitIpc('default',from);
+    await waitSaved('icon_star_boom');await waitIpc('icon_star_boom',burstStart);
+    console.log('WINDOWS_FAST_SWITCH_OK',JSON.stringify(inspect('icon_star_boom')));
+    await stop();let after=events.length;await launch();
+    await waitSaved('icon_star_boom');await waitIpc('icon_star_boom',after);
+    console.log('WINDOWS_RESTART_BOOM_OK',JSON.stringify(inspect('icon_star_boom')));
+    await prefs();let from=events.length;await choose('icon_star_eye');await waitSaved('icon_star_eye');await waitIpc('icon_star_eye',from);
+    await stop();after=events.length;await launch();
+    await waitSaved('icon_star_eye');await waitIpc('icon_star_eye',after);
+    console.log('WINDOWS_RESTART_EYE_OK',JSON.stringify(inspect('icon_star_eye')));
+    await prefs();from=events.length;await choose('default');await waitSaved('default');await waitIpc('default',from);
     console.log('WINDOWS_DEFAULT_RESTORE_OK',JSON.stringify(inspect('default')));
     console.log('WINDOWS_LAUNCHER_ICON_NATIVE_IPC_TEST_OK');
   } finally {

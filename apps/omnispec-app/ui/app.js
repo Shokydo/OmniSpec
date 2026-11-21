@@ -211,7 +211,9 @@
     ["by", "Беларусь", "assets/launcher-icons/by.png"],
     ["kz", "Қазақстан", "assets/launcher-icons/kz.png"],
     ["ua", "Україна", "assets/launcher-icons/ua.png"],
-    ["us", "USA", "assets/launcher-icons/us.png"]
+    ["us", "USA", "assets/launcher-icons/us.png"],
+    ["icon_star_boom", "Звездный взрыв", "assets/launcher-icons/icon_star_boom.png"],
+    ["icon_star_eye", "Звезда", "assets/launcher-icons/icon_star_eye.png"]
   ];
 
   const INITIAL_TABS = [
@@ -9262,13 +9264,13 @@
           <label class="label" for="prefs-language">Язык</label>
           <select class="select" id="prefs-language">${LANGUAGES.map(([code, label]) => `<option value="${code}" translate="no" ${displayedLanguage === code ? "selected" : ""}>${label}</option>`).join("")}</select>
         </div>
-        <div class="hint">Язык сохраняется автоматически и применяется сразу.</div>
+        <div class="hint language-hint">Язык сохраняется автоматически и применяется сразу.</div>
       </div>
       <div class="prefs-section">
         <div class="prefs-label" id="launcher-icon-label">Иконка лаунчера</div>
         <div class="launcher-icon-grid" id="launcher-icon-grid" role="radiogroup" aria-labelledby="launcher-icon-label">
           ${LAUNCHER_ICONS.map(([id, label, src]) => `
-            <label class="launcher-icon-option" ${id === "default" ? "" : 'translate="no"'}>
+            <label class="launcher-icon-option" ${["ru", "by", "kz", "ua", "us"].includes(id) ? 'translate="no"' : ""}>
               <input type="radio" name="launcher-icon" value="${id}" aria-label="${esc(label)}" ${displayedLauncherIcon === id ? "checked" : ""}>
               <span class="launcher-icon-card"><img src="${src}" alt="" draggable="false"><span>${esc(label)}</span></span>
             </label>`).join("")}

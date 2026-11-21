@@ -129,6 +129,10 @@ pub enum LauncherIcon {
     Kz,
     Ua,
     Us,
+    #[serde(rename = "icon_star_boom")]
+    StarBoom,
+    #[serde(rename = "icon_star_eye")]
+    StarEye,
     #[default]
     #[serde(other)]
     Default,
@@ -143,6 +147,8 @@ impl LauncherIcon {
             "kz" => Some(Self::Kz),
             "ua" => Some(Self::Ua),
             "us" => Some(Self::Us),
+            "icon_star_boom" => Some(Self::StarBoom),
+            "icon_star_eye" => Some(Self::StarEye),
             "default" => Some(Self::Default),
             _ => None,
         }
@@ -530,6 +536,7 @@ mod discord_tests {
             ("default", LauncherIcon::Default), ("ru", LauncherIcon::Ru),
             ("by", LauncherIcon::By), ("kz", LauncherIcon::Kz),
             ("ua", LauncherIcon::Ua), ("us", LauncherIcon::Us),
+            ("icon_star_boom", LauncherIcon::StarBoom), ("icon_star_eye", LauncherIcon::StarEye),
         ] {
             assert_eq!(LauncherIcon::from_id(id), Some(icon));
             let mut changed = old.clone();
