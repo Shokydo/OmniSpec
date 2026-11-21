@@ -1,5 +1,5 @@
 {
- "version": "0.49.14",
+ "version": "0.49.15",
  "published_at": "2026-11-21",
  "downloads": 666,
  "setup": {
@@ -8,10 +8,10 @@
  },
  "portable": {
   "name": "OmniSpec.exe",
-  "size": 13187072
+  "size": 13188096
  },
  "linux": {
   "name": "OmniSpec",
-  "size": 15372248
+  "size": 15377240
  }
 }
