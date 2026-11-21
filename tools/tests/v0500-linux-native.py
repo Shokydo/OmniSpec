@@ -10,15 +10,18 @@ import json, math, os, pathlib, re, shutil, socket, struct, subprocess, sys, tem
 import websocket
 
 repo = pathlib.Path(__file__).resolve().parents[2]
-binary = pathlib.Path(os.environ.get('V0500_BINARY', repo / 'target/debug/omnispec-app')).resolve(strict=True)
+source_binary = pathlib.Path(os.environ.get('V0500_BINARY', repo / 'target/debug/omnispec-app')).resolve(strict=True)
 root = pathlib.Path(tempfile.mkdtemp(prefix='omnispec-v0500-linux-'))
+# A fresh profile enables auto-updates. Run a disposable copy so even an
+# unexpected future update can never replace the developer's build output.
+binary = root / 'OmniSpec-debug'
+shutil.copy2(source_binary, binary)
+binary.chmod(0o755)
 data, home, runtime = (root / x for x in ('data','home','runtime'))
 for directory in (data,home,runtime): directory.mkdir()
 runtime.chmod(0o700)
 settings_file = data/'settings.json'
-settings_file.write_text(json.dumps({'onboarded':False,'onboarding_pending':True,'update_enabled':False,'discord_rpc':False,
-    'click_fx':'off','ambient':'off','trail':False,'trail_style':'sparks','trail_size':50,'trail_length':20,'trail_opacity':15,
-    'sound_fx':True,'sound_volume':60,'sound_style':'soft','ui_scale':100,'language':'ru'}),encoding='utf8')
+# Intentionally absent at first launch: exercise real creation of a new profile.
 original=root/'event tone.wav'
 with wave.open(str(original),'wb') as f:
     f.setnchannels(1);f.setsampwidth(2);f.setframerate(44100)
@@ -46,7 +49,11 @@ def launch():
     with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
     env={**os.environ,'HOME':str(home),'XDG_CONFIG_HOME':str(home/'.config'),'XDG_CACHE_HOME':str(home/'.cache'),
          'XDG_DATA_HOME':str(home/'.local/share'),'XDG_RUNTIME_DIR':str(runtime),'OMNISPEC_HOME':str(data),
-         'WEBKIT_INSPECTOR_HTTP_SERVER':f'127.0.0.1:{port}','WEBKIT_DISABLE_COMPOSITING_MODE':'1','WEBKIT_DISABLE_DMABUF_RENDERER':'1'}
+         'WEBKIT_INSPECTOR_HTTP_SERVER':f'127.0.0.1:{port}','WEBKIT_DISABLE_COMPOSITING_MODE':'1','WEBKIT_DISABLE_DMABUF_RENDERER':'1',
+         # Suppress live update/catalog traffic while allowing the local inspector.
+         'HTTP_PROXY':'http://127.0.0.1:9','HTTPS_PROXY':'http://127.0.0.1:9','ALL_PROXY':'http://127.0.0.1:9',
+         'http_proxy':'http://127.0.0.1:9','https_proxy':'http://127.0.0.1:9','all_proxy':'http://127.0.0.1:9',
+         'NO_PROXY':'localhost,127.0.0.1,::1','no_proxy':'localhost,127.0.0.1,::1'}
     log=(root/'launcher.log').open('a')
     proc=subprocess.Popen([str(binary)],stdout=log,stderr=log,env=env)
     deadline=time.monotonic()+90; match=None
@@ -146,10 +153,20 @@ def invoke_async(command,args):
     return get('window.__invokeResult')
 
 try:
+    assert not settings_file.exists()
     launch();wait("!document.querySelector('#modal-onboard').hidden",90)
+    wait_saved(lambda s:s.get('onboarding_pending') is True and s.get('onboarded') is False,'new profile marker')
     assert get("document.querySelectorAll('[data-onboard-language]').length")==5
     click('[data-onboard-language="en"]');wait_saved(lambda s:s.get('language')=='en','English')
     wait("document.documentElement.lang==='en' && !document.querySelector('#onboard-next').disabled")
+    stop()
+    # Keep the real fresh profile and unfinished wizard but turn off unrelated
+    # network/visual services before resuming the rest of this isolated test.
+    first = saved()
+    first.update({'update_enabled':False,'discord_rpc':False,'click_fx':'off','ambient':'off','trail':False})
+    settings_file.write_text(json.dumps(first),encoding='utf8')
+    launch();wait("!document.querySelector('#modal-onboard').hidden",90)
+    assert get("document.documentElement.lang")=="en"
     click('[data-onboard-language="ru"]');wait_saved(lambda s:s.get('language')=='ru','Russian')
     wait("!document.querySelector('#onboard-next').disabled")
     for _ in range(6):click('#onboard-next')
@@ -207,6 +224,14 @@ try:
     assert get('Boolean(document.querySelector('+json.dumps('[data-wall-history-select='+json.dumps('custom:'+b)+']')+'))')
     assert saved()['custom_wallpaper']==a
     print('LINUX_WEBKIT_REAL_WALLPAPER_HISTORY_AND_RESTART_OK',flush=True)
+    stop()
+    # Even an old installation with no instances/accounts must not be mistaken
+    # for a fresh profile merely because it predates onboarding_pending.
+    settings_file.write_text(json.dumps({'onboarded':False,'update_enabled':False,'discord_rpc':False,
+        'username':'Existing','language':'ru'}),encoding='utf8')
+    launch();wait("window.omnispecDebug.state.settings.onboarded === true",90)
+    assert get("document.querySelector('#modal-onboard').hidden") and saved().get('username')=='Existing'
+    print('LINUX_WEBKIT_EMPTY_LEGACY_PROFILE_SKIPS_WIZARD_AND_PRESERVES_SETTINGS_OK',flush=True)
 except Exception:
     traceback.print_exc()
     if log:log.flush()
