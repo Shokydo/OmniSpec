@@ -53,7 +53,12 @@ async function launch() {
   browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
   const context=browser.contexts()[0];
   page=context.pages()[0] || await context.waitForEvent('page',{timeout:30000});
-  await page.waitForFunction(()=>window.omnispecDebug?.state?.settings,null,{timeout:60000});
+  // Settings are loaded before the initial wallpaper state is constructed.
+  // Wait for both so a slow runner cannot open the old-Workshop page early.
+  await page.waitForFunction(()=>{
+    const state=window.omnispecDebug?.state;
+    return state?.settings && state.wall.wallpaper===(state.settings.wallpaper || null);
+  },null,{timeout:60000});
 }
 async function stop() {
   if(page && !page.isClosed())await page.evaluate(()=>window.__TAURI__.core.invoke('window_action',{action:'close'})).catch(()=>{});
