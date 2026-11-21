@@ -156,6 +156,15 @@ class DiscordReleaseTests(unittest.TestCase):
             self.assertIn(phrase, body)
         self.assertNotIn("Звездный взрыв", build("v0.49.13"))
 
+    def test_avatar_notes_match_exact_release(self):
+        build = runpy.run_path(str(ROOT / "tools/release_body.py"))["build_release_body"]
+        body = build("v0.49.15")
+        for phrase in ("Настройки → Аватар", "избранные образы", "1080×640", "100%", "3D-миниатюры",
+                       "горизонтально", "лицензионного аккаунта", "Применить к аккаунту", "PNG 64×64",
+                       "сохраняются при обновлении", "часть переводов машинная", "omnispec-setup.bin"):
+            self.assertIn(phrase, body)
+        self.assertNotIn("3D-миниатюры", build("v0.49.14"))
+
     def test_release_assets_are_safe_for_legacy_linux_updaters(self):
         # Versions through v0.49.5 considered every omnispec* name without a dot
         # to be a launcher. The installer must not match, regardless of order.
