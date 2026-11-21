@@ -165,6 +165,14 @@ class DiscordReleaseTests(unittest.TestCase):
             self.assertIn(phrase, body)
         self.assertNotIn("3D-миниатюры", build("v0.49.14"))
 
+    def test_sound_layout_patch_notes_match_exact_release(self):
+        build = runpy.run_path(str(ROOT / "tools/release_body.py"))["build_release_body"]
+        body = build("v0.50.1")
+        for phrase in ("вариантов звука", "кнопки переносятся", "горизонтальная полоса",
+                       "вертикальная прокрутка", "пользовательские данные"):
+            self.assertIn(phrase, body)
+        self.assertNotIn("кнопки переносятся", build("v0.50.0"))
+
     def test_release_assets_are_safe_for_legacy_linux_updaters(self):
         # Versions through v0.49.5 considered every omnispec* name without a dot
         # to be a launcher. The installer must not match, regardless of order.

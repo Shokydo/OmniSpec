@@ -106,6 +106,7 @@ async function waitFor(fn,label,timeout=30000) {
       if(child.exitCode===null){child.kill();await Promise.race([done,delay(5000)]);}
     }
     if(browser)await browser.close().catch(()=>{});
-    fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:300});
+    // WebView2 may still flush its disposable profile after the launcher exits.
+    fs.rmSync(root,{recursive:true,force:true,maxRetries:12,retryDelay:500});
   }
 })().catch(error=>{console.error(error);process.exitCode=1;});

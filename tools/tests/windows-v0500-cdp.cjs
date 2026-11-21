@@ -181,6 +181,7 @@ async function restartLauncher(errors){
     console.log('WINDOWS_V0500_REAL_WALLPAPER_HISTORY_AND_ACTIVE_FILE_OK');
   } finally {
     await stopLauncher();
-    fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:300});
+    // WebView2 may still flush its disposable profile after the launcher exits.
+    fs.rmSync(root,{recursive:true,force:true,maxRetries:12,retryDelay:500});
   }
 })().catch(error=>{console.error(error);process.exitCode=1;});
