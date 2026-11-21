@@ -47,15 +47,31 @@ async function watchActualAudio(){await page.evaluate(()=>{
     return source;
   };
 });}
+async function startLauncher(errors){
+  child=spawn(launcher,[],{stdio:'ignore',env:{...process.env,OMNISPEC_HOME:data,WEBVIEW2_USER_DATA_FOLDER:path.join(root,'webview')}});
+  let spawnError=null;child.on('error',error=>{spawnError=error;});
+  await waitFor(async()=>{if(spawnError)throw spawnError;try{return(await fetch(`http://127.0.0.1:${port}/json/version`)).ok;}catch{return false;}},'WebView2 debugger',90000);
+  browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+  const context=browser.contexts()[0];page=context.pages()[0]||await context.waitForEvent('page',{timeout:30000});
+  page.on('pageerror',e=>errors.push(String(e)));
+}
+async function stopLauncher(){
+  if(page && !page.isClosed())await page.evaluate(()=>window.__TAURI__.core.invoke('window_action',{action:'close'})).catch(()=>{});
+  if(child && child.exitCode===null){const done=new Promise(resolve=>child.once('exit',resolve));await Promise.race([done,delay(8000)]);if(child.exitCode===null){child.kill();await Promise.race([done,delay(5000)]);}}
+  if(browser)await browser.close().catch(()=>{});
+  page=browser=child=null;
+}
+async function restartLauncher(errors){
+  const previous=child.pid;
+  await stopLauncher();
+  await waitFor(async()=>{try{await fetch(`http://127.0.0.1:${port}/json/version`);return false;}catch{return true;}},'old WebView2 debugger to exit',30000);
+  await startLauncher(errors);
+  assert.notEqual(child.pid,previous,'test must restart the actual launcher process');
+}
 (async()=>{
   const errors=[];
   try{
-    child=spawn(launcher,[],{stdio:'ignore',env:{...process.env,OMNISPEC_HOME:data,WEBVIEW2_USER_DATA_FOLDER:path.join(root,'webview')}});
-    let spawnError=null;child.on('error',error=>{spawnError=error;});
-    await waitFor(async()=>{if(spawnError)throw spawnError;try{return(await fetch(`http://127.0.0.1:${port}/json/version`)).ok;}catch{return false;}},'WebView2 debugger',90000);
-    browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-    const context=browser.contexts()[0];page=context.pages()[0]||await context.waitForEvent('page',{timeout:30000});
-    page.on('pageerror',e=>errors.push(String(e)));
+    await startLauncher(errors);
     await page.waitForSelector('#modal-onboard:not([hidden])',{timeout:60000});
     assert.equal(await page.locator('[data-onboard-language]').count(),5);
     await page.locator('[data-onboard-language="en"]').click();
@@ -101,7 +117,7 @@ async function watchActualAudio(){await page.evaluate(()=>{
     await page.locator('[data-sound-preview="click"]').click();
     await page.waitForFunction(()=>window.__realSoundPlays?.some(p=>p.duration>0 && Math.abs(p.gain-3)<.01),null,{timeout:15000});
     fs.unlinkSync(original);
-    await page.reload();await page.waitForFunction(()=>window.omnispecDebug?.state?.sound?.style==='custom');
+    await restartLauncher(errors);await page.waitForFunction(()=>window.omnispecDebug?.state?.sound?.style==='custom');
     assert(await page.locator('#modal-onboard').isHidden());
     await watchActualAudio();await openPrefs('sound');
     assert.equal(await page.locator('[data-sound-path="click"]').inputValue(),original);
@@ -129,7 +145,7 @@ async function watchActualAudio(){await page.evaluate(()=>{
     await waitSaved(s=>!s.wallpaper_recent.includes(firstId),'remove history entry');
     assert.equal(saved().wallpaper,'custom');assert.equal(saved().custom_wallpaper,first.custom_wallpaper);
     assert(fs.existsSync(path.join(data,'wallpapers',first.custom_wallpaper)),'removing history never deletes the active file');
-    await page.reload();await page.waitForFunction(()=>window.omnispecDebug?.state?.settings?.custom_wallpaper);
+    await restartLauncher(errors);await page.waitForFunction(()=>window.omnispecDebug?.state?.settings?.custom_wallpaper);
     await openPrefs('wall');
     assert.equal(await page.locator(`[data-wall-history-select="${firstId}"]`).count(),0);
     assert.equal(await page.locator(`[data-wall-history-select="${secondId}"]`).count(),1);
@@ -137,9 +153,7 @@ async function watchActualAudio(){await page.evaluate(()=>{
     assert.deepEqual(errors,[]);
     console.log('WINDOWS_V0500_REAL_WALLPAPER_HISTORY_AND_ACTIVE_FILE_OK');
   } finally {
-    if(page && !page.isClosed())await page.evaluate(()=>window.__TAURI__.core.invoke('window_action',{action:'close'})).catch(()=>{});
-    if(child && child.exitCode===null){const done=new Promise(resolve=>child.once('exit',resolve));await Promise.race([done,delay(8000)]);if(child.exitCode===null){child.kill();await Promise.race([done,delay(5000)]);}}
-    if(browser)await browser.close().catch(()=>{});
+    await stopLauncher();
     fs.rmSync(root,{recursive:true,force:true,maxRetries:5,retryDelay:300});
   }
 })().catch(error=>{console.error(error);process.exitCode=1;});
