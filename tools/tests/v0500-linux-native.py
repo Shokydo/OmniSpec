@@ -158,7 +158,10 @@ def check_sound_layout(label):
         assert tab['textLeft']>=tab['left']-1 and tab['textRight']<=tab['right']+1,(label,tab)
     for name in ('body','row'):
         item=result[name]
-        assert item['scroll']==item['client'],(label,name,item)
+        # WebKitGTK can round a fractional high-DPI width up by one CSS pixel,
+        # as it does for the navigation column above; that is not usable
+        # horizontal content and must not make this regression flaky.
+        assert item['scroll']<=item['client']+1,(label,name,item)
     assert result['nav']['overflowY']=='auto' and result['body']['overflowY']=='auto',(label,result)
     chips=result['chips'];assert len(chips)==10,(label,chips)
     for c in chips:

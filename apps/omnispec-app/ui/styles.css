@@ -1444,7 +1444,7 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
 }
 .prefs-body { overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
 /* флекс-колонка: секции всегда во всю высоту содержимого и не режутся */
-.prefs-body > * { flex: 0 0 auto; min-height: max-content; }
+.prefs-body > * { flex: 0 0 auto; min-height: max-content; max-width: 100%; }
 .prefs-section {
   border: 1px solid var(--line-1);
   border-radius: var(--r);
