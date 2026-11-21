@@ -1,5 +1,5 @@
 {
- "version": "0.50.0",
+ "version": "0.50.1",
  "published_at": "2026-11-21",
  "downloads": 699,
  "setup": {
@@ -12,6 +12,6 @@
  },
  "linux": {
   "name": "OmniSpec",
-  "size": 15462232
+  "size": 15452504
  }
 }
