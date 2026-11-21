@@ -138,6 +138,15 @@ class DiscordReleaseTests(unittest.TestCase):
             self.assertIn(phrase, body)
         self.assertNotIn("Россия, Беларусь, Казахстан", build("v0.49.11"))
 
+    def test_language_and_wallpaper_notes_match_exact_release(self):
+        build = runpy.run_path(str(ROOT / "tools/release_body.py"))["build_release_body"]
+        body = build("v0.49.13")
+        for phrase in ("русский", "беларуская", "қазақша", "українська", "English", "переводов машинная",
+                       "Wallpaper Engine удалена", "исходные файлы Steam", "Imgur",
+                       "GIF", "MP4", "512 МБ", "без звука", "omnispec-setup.bin", "chmod +x OmniSpec", "WebKitGTK 4.1"):
+            self.assertIn(phrase, body)
+        self.assertNotIn("Wallpaper Engine удалена", build("v0.49.12"))
+
     def test_release_assets_are_safe_for_legacy_linux_updaters(self):
         # Versions through v0.49.5 considered every omnispec* name without a dot
         # to be a launcher. The installer must not match, regardless of order.

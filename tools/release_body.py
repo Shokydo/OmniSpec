@@ -17,13 +17,16 @@ def build_release_body(tag: str, notes_dir: Path = ROOT / "release-notes") -> st
 * `OmniSpec-Setup.exe` — установщик с кнопками: покажет, что и куда
   поставит, даст поменять папку установки, сделает ярлыки на рабочем
   столе и в «Пуск» и запустит лаунчер;
-* `OmniSpec.exe` — портативная версия: скачал и запустил, ничего не ставится.
+* `OmniSpec.exe` — портативная версия Windows: скачал и запустил, ничего не ставится;
+* `OmniSpec` — портативная версия Linux, `omnispec-setup.bin` — установщик Linux.
+  После скачивания выдай файлу право запуска: `chmod +x OmniSpec` или `chmod +x omnispec-setup.bin`.
 
 Java и файлы Minecraft лаунчер скачает сам при первом запуске.
 
 **Обновления:** лаунчер сам проверяет этот репозиторий и предлагает обновиться.
 
-Требования: Windows 10/11 (на «десятке» нужен WebView2 — обычно уже установлен).
+Требования: Windows 10/11 (на «десятке» нужен WebView2 — обычно уже установлен);
+Linux x86-64 с GTK 3 и WebKitGTK 4.1, glibc не старше Ubuntu 22.04 (2.35).
 """
     # Only simple version tags may name a notes file; branch/manual runs still
     # get the original generic body and cannot select paths outside this folder.

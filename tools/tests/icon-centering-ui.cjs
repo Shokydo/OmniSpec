@@ -317,9 +317,8 @@ async function checkSmallCells(page, scale, seen) {
         await audit(page,'выбор начальной вкладки',scale,seen);
         await page.locator('#modal-initial-tab [data-close-initial-tab]').click();
         await page.locator('[data-pref="wall"]').click();
-        await page.waitForSelector('#we-grid .we-thumb img');
-        await page.waitForSelector('#we-grid .we-thumb > span:not(.we-type)');
-        await audit(page,'превью Wallpaper Engine',scale,seen);
+        await page.waitForSelector('#wall-link');
+        await audit(page,'настройки фона',scale,seen);
         await page.locator('[data-close-prefs]').click();
         const empty=await makePage(browser,{...options,noAccounts:true});
         try {
@@ -336,7 +335,6 @@ async function checkSmallCells(page, scale, seen) {
           '.ext-icon > .ic','.acc-avatar > .ic','.acc-avatar > .acc-letter','.fm-row .ico > .ic',
           '.fm-item .fname .ico > .ic','.errors-status-icon > .ic','.cape-thumb-off > .ic',
           '.build-tile-icon.is-symbol > .ic','.build-tile-shot > .build-tile-icon','.shot-img > .ic',
-          '.we-thumb > img','.we-thumb > span:not(.we-type)',
           '.icon-chip.letter [text]','.skin-library-remove [text]','.instance-icon [text]',
           '.build-tile-icon.is-letter [text]','.fav-slot .preset-del [text]',
           '.ctx-item > .ic [inline]','.initial-tab-option > .ic [inline]'

@@ -235,17 +235,16 @@ pub struct Settings {
     /// Свой фон: имя файла в <данные>/wallpapers.
     #[serde(default)]
     pub custom_wallpaper: Option<String>,
-    /// Папка проекта выбранных видеообоев Wallpaper Engine (без копирования видео).
+    /// Поля прежней интеграции сохранены для совместимости; приложение их не запускает.
     #[serde(default)]
     pub wallpaper_workshop_project: Option<String>,
-    /// Загружать библиотеку и воспроизводить выбранные обои WE в OmniSpec.
-    /// Выключение не меняет выбор и не останавливает обои рабочего стола.
+    /// Сохранённый флаг старой версии.
     #[serde(default = "default_true")]
     pub wallpaper_engine_enabled: bool,
-    /// Звук только видео Workshop в WebView; сцены воспроизводит сам WE.
+    /// Сохранённая настройка звука старой версии.
     #[serde(default)]
     pub wallpaper_workshop_audio: bool,
-    /// Дополнительная папка Steam / Wallpaper Engine, выбранная пользователем.
+    /// Сохранённый путь старой версии; содержимое не изменяется.
     #[serde(default)]
     pub wallpaper_steam_path: Option<String>,
     /// Звуковые эффекты интерфейса.
@@ -546,6 +545,32 @@ mod discord_tests {
         let future: Settings = serde_json::from_str(r#"{"username":"Alex","launcher_icon":"future"}"#).unwrap();
         assert_eq!(future.launcher_icon, LauncherIcon::Default);
         assert_eq!(future.username, "Alex");
+    }
+
+    #[test]
+    fn language_defaults_and_persists_without_losing_legacy_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        std::fs::write(&file, r#"{
+          "username":"LegacyPlayer", "ui_scale":125,
+          "custom_wallpaper":"custom.gif", "wallpaper_workshop_project":"/steam/keep",
+          "skin_presets":[{"id":"old","name":"Скин","path":"/skins/old.png"}]
+        }"#).unwrap();
+        let mut settings = Settings::load_from(&file).unwrap();
+        assert_eq!(settings.language, "ru");
+        for language in ["ru", "be", "kk", "uk", "en"] {
+            settings.language = language.into();
+            settings.save_to(&file).unwrap();
+            let restored = Settings::load_from(&file).unwrap();
+            assert_eq!(restored.language, language);
+            assert_eq!(restored.username, "LegacyPlayer");
+            assert_eq!(restored.ui_scale, 125);
+            assert_eq!(restored.custom_wallpaper.as_deref(), Some("custom.gif"));
+            assert_eq!(restored.wallpaper_workshop_project.as_deref(), Some("/steam/keep"));
+            assert_eq!(restored.skin_presets[0].name, "Скин");
+            assert_eq!(restored.skin_presets[0].path, "/skins/old.png");
+            settings = restored;
+        }
     }
 
     #[test]

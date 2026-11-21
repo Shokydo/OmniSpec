@@ -9,6 +9,7 @@
   const TAURI = window.__TAURI__;
   const IS_APP = Boolean(TAURI);
   const invoke = IS_APP ? TAURI.core.invoke : null;
+  const I18N = window.OmniI18n;
 
 
   /* ==================== ОФОРМЛЕНИЕ (движок тем из OmniPanel) ====================
@@ -208,9 +209,9 @@
     ["default", "Оригинал", "assets/logo.png"],
     ["ru", "Россия", "assets/launcher-icons/ru.png"],
     ["by", "Беларусь", "assets/launcher-icons/by.png"],
-    ["kz", "Казахстан", "assets/launcher-icons/kz.png"],
-    ["ua", "Украина", "assets/launcher-icons/ua.png"],
-    ["us", "США", "assets/launcher-icons/us.png"]
+    ["kz", "Қазақстан", "assets/launcher-icons/kz.png"],
+    ["ua", "Україна", "assets/launcher-icons/ua.png"],
+    ["us", "USA", "assets/launcher-icons/us.png"]
   ];
 
   const INITIAL_TABS = [
@@ -1075,97 +1076,41 @@
   }
 
   /** Доступ к локальному медиа даётся только Rust-командой для конкретного файла. */
-  const wallSourceRevision = { custom: 0, workshop: 0 };
-  function wallpaperEngineEnabled() { return state.settings?.wallpaper_engine_enabled !== false; }
-  function wallpaperWorkshopAudioEnabled() { return state.settings?.wallpaper_workshop_audio === true; }
+  const wallSourceRevision = { custom: 0 };
   async function loadWallpaperSource(source) {
-    const revision = ++wallSourceRevision[source];
-    const key = source === "workshop" ? "workshopWall" : "customWall";
-    if (source === "workshop" && !wallpaperEngineEnabled()) { state[key] = null; return null; }
+    if (source !== "custom") return null;
+    const revision = ++wallSourceRevision.custom;
     const media = await api.wallpaperSource(source);
-    if (revision !== wallSourceRevision[source] || (source === "workshop" && !wallpaperEngineEnabled())) return null;
-    if (!media) { state[key] = null; return null; }
+    if (revision !== wallSourceRevision.custom) return null;
+    if (!media) { state.customWall = null; return null; }
     const src = media.src || (TAURI?.core?.convertFileSrc ? TAURI.core.convertFileSrc(media.path) : media.path);
-    state[key] = { ...media, src };
-    return state[key];
+    state.customWall = { ...media, src };
+    return state.customWall;
   }
 
   let wallApplyRevision = 0;
-  let wallVideoPlayRevision = 0;
-  let wallAudioNeedsGesture = false;
-
-  // Некоторые WebView/браузеры запрещают автозапуск со звуком даже для
-  // сохранённого пользователем выбора. Не оставляем видео чёрным: играем
-  // без звука и пробуем восстановить его после следующего жеста пользователя.
-  function playWallpaperVideo(video, fromGesture = false) {
+  function playWallpaperVideo(video) {
     if (!video || video.hidden || document.hidden || !video.dataset.wallSrc) return;
-    const revision = ++wallVideoPlayRevision;
-    const src = video.dataset.wallSrc;
-    const wantsAudio = video.dataset.wallAudio === "1";
-    if (!wantsAudio) wallAudioNeedsGesture = false;
-    video.muted = !wantsAudio || (wallAudioNeedsGesture && !fromGesture);
-    const tryingAudio = wantsAudio && !video.muted;
-    video.play().then(() => {
-      if (revision === wallVideoPlayRevision && tryingAudio) wallAudioNeedsGesture = false;
-    }).catch((error) => {
-      if (revision !== wallVideoPlayRevision || video.hidden || video.dataset.wallSrc !== src
-          || video.dataset.wallAudio !== "1" || !tryingAudio || error?.name !== "NotAllowedError") return;
-      const first = !wallAudioNeedsGesture;
-      wallAudioNeedsGesture = true;
-      video.muted = true;
-      video.play().catch(() => {});
-      if (first) toast("Чтобы включить звук видео, нажми в окне OmniSpec", "");
-    });
+    video.muted = true;
+    video.loop = true;
+    video.play().catch(() => {});
   }
-
-  ["pointerdown", "keydown"].forEach((type) => document.addEventListener(type, (event) => {
-    if (!wallAudioNeedsGesture) return;
-    // Не включаем звук непосредственно перед нажатием на выключатель.
-    const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest("#we-audio, #we-enabled")) return;
-    playWallpaperVideo($("#wall-video"), true);
-  }, { capture: true }));
-
-  function reportSceneFailure(src) {
-    if (!wallpaperEngineEnabled() || state.wall?.wallpaper !== "workshop" || state.workshopWall?.src !== src || state.workshopWall?.kind !== "scene") return;
-    const message = "Поток сцены остановлен. Запусти Wallpaper Engine и нажми «Восстановить обои» в настройках фона.";
-    if (state.wallpaperLibrary.sceneError === message) return;
-    state.wallpaperLibrary.sceneError = message;
-    toast(message, "err");
-    if (prefsCategory === "wall" && $("#modal-prefs") && !$("#modal-prefs").hidden) renderPrefs();
-  }
-  let sceneHealthBusy = false;
-  setInterval(async () => {
-    const media = state.workshopWall;
-    if (sceneHealthBusy || !wallpaperEngineEnabled() || state.wall?.wallpaper !== "workshop" || media?.kind !== "scene") return;
-    sceneHealthBusy = true;
-    try {
-      const alive = await api.wallpaperSceneStatus();
-      if (alive === false) reportSceneFailure(media.src);
-    } catch (_) { /* состояние неизвестно — не сообщаем о ложной остановке */ }
-    finally { sceneHealthBusy = false; }
-  }, 5000);
 
   /** GIF и видео не проходят через canvas: иначе анимация превратилась бы в один кадр. */
   async function applyWallpaper(overrides = {}) {
     const revision = ++wallApplyRevision;
-    ++wallVideoPlayRevision;
     const settings = state.settings || {};
     const layer = $("#wall");
     const video = $("#wall-video");
-    const scene = $("#wall-scene");
     if (!layer) return;
     const name = overrides.wallpaper !== undefined ? overrides.wallpaper : settings.wallpaper;
     const fit = overrides.fit || settings.wallpaper_fit || "cover";
     const blur = Math.max(0, Math.min(20, Number(overrides.blur ?? settings.wallpaper_blur ?? 0) || 0));
     const dim = Number(overrides.dim ?? settings.wallpaper_dim ?? 40);
-    // URL сцены отзывается при уходе с неё; повторно выбираем её в библиотеке.
-    if (name !== "workshop" && state.workshopWall?.kind === "scene") state.workshopWall = null;
-    const media = name === "custom" ? state.customWall : name === "workshop" && wallpaperEngineEnabled() ? state.workshopWall
+    const media = name === "custom" ? state.customWall
       : name && WALLS.some(([id]) => id === name) ? { src: wallUrl(name), kind: "image" } : null;
     if (!media || !media.src) {
       if (video && !video.hidden) { video.pause(); video.removeAttribute("src"); video.dataset.wallSrc = ""; video.load(); video.hidden = true; }
-      if (scene && !scene.hidden) { scene.removeAttribute("src"); scene.dataset.wallSrc = ""; scene.hidden = true; }
       layer.hidden = true;
       layer.style.backgroundImage = "";
       document.body.classList.remove("has-wall");
@@ -1175,32 +1120,14 @@
     layer.hidden = false;
     document.body.classList.add("has-wall");
     layer.style.setProperty("--wall-dim", String(Math.min(100, Math.max(0, dim)) / 100));
-    if (kind === "scene" && scene) {
-      if (video && !video.hidden) { video.pause(); video.removeAttribute("src"); video.dataset.wallSrc = ""; video.load(); video.hidden = true; }
-      layer.style.backgroundImage = ""; layer.style.filter = ""; layer.style.transform = "";
-      scene.hidden = false;
-      scene.style.objectFit = fit === "fill" ? "fill" : fit === "contain" ? "contain" : "cover";
-      scene.style.filter = blur ? `blur(${blur}px)` : "";
-      scene.style.transform = blur ? "scale(1.05)" : "";
-      if (scene.dataset.wallSrc !== src) {
-        scene.dataset.wallSrc = src;
-        scene.onerror = () => reportSceneFailure(src);
-        scene.src = src;
-      }
-      layer.dataset.prepared = "";
-      return;
-    }
-    if (scene && !scene.hidden) { scene.removeAttribute("src"); scene.dataset.wallSrc = ""; scene.hidden = true; }
     if (kind === "video" && video) {
       layer.style.backgroundImage = "";
       layer.style.filter = "";
       layer.style.transform = "";
       video.hidden = false;
-      // Только видео Workshop управляется этим переключателем; свои файлы
-      // по-прежнему без звука, сцены звучат в отдельном процессе WE.
-      const wantsAudio = name === "workshop" && wallpaperWorkshopAudioEnabled();
-      video.dataset.wallAudio = wantsAudio ? "1" : "0";
-      video.muted = !wantsAudio || wallAudioNeedsGesture;
+      // Локальные видеообои всегда зациклены и беззвучны.
+      video.muted = true;
+      video.loop = true;
       video.style.objectFit = fit === "fill" ? "fill" : fit === "contain" ? "contain" : "cover";
       video.style.filter = blur ? `blur(${blur}px)` : "";
       video.style.transform = blur ? "scale(1.05)" : "";
@@ -1241,7 +1168,7 @@
   document.addEventListener("visibilitychange", () => {
     const video = $("#wall-video");
     if (!video || video.hidden) return;
-    if (document.hidden) { ++wallVideoPlayRevision; video.pause(); }
+    if (document.hidden) video.pause();
     else playWallpaperVideo(video);
   });
 
@@ -1313,7 +1240,7 @@
   /** Картинка текущих обоев (свой фон — data-URL, штатный — файл из assets). */
   function wallpaperSrc() {
     const wallpaper = state.wall && state.wall.wallpaper;
-    const media = wallpaper === "custom" ? state.customWall : wallpaper === "workshop" ? state.workshopWall : null;
+    const media = wallpaper === "custom" ? state.customWall : null;
     if (media) return ["video", "scene"].includes(media.kind) ? null : media.src;
     if (wallpaper && WALLS.some(([id]) => id === wallpaper)) return wallUrl(wallpaper);
     return null;
@@ -1438,7 +1365,7 @@
     const html = instanceIconHtml(meta);
     const letter = !isImageIcon(meta.icon) && !(meta.icon && INSTANCE_ICONS.includes(meta.icon));
     box.classList.toggle("is-letter", letter);
-    box.innerHTML = letter ? `<span class="tb-letter">${esc(html)}</span>` : html;
+    box.innerHTML = letter ? `<span class="tb-letter" translate="no">${esc(html)}</span>` : html;
   }
 
   /** Подтянуть картинки-иконки сборок (webview не читает локальные пути). */
@@ -1506,7 +1433,7 @@
     if (!el) return;
     const running = state.running.has(meta.id);
     el.innerHTML = `
-      <div class="ctx-caption">${esc(meta.name)} · MC ${esc(meta.mc_version)}</div>
+      <div class="ctx-caption" translate="no">${esc(meta.name)} · MC ${esc(meta.mc_version)}</div>
       <button class="ctx-item${running ? " danger" : ""}" data-act="play"><svg class="ic"><use href="#${running ? "i-stop" : "i-play"}"/></svg>${running ? "Остановить сборку" : "Играть"}</button>
       <button class="ctx-item" data-act="dup"><svg class="ic"><use href="#i-copy"/></svg>Запустить дубликат…</button>
       <button class="ctx-item" data-act="duplicate"><svg class="ic"><use href="#i-copy"/></svg>Дублировать сборку</button>
@@ -1518,7 +1445,7 @@
       ${categoriesOf().length ? `<div class="ctx-sep"></div>
       <div class="ctx-caption">Переместить в</div>
       ${categoriesOf().map((category) => `<button class="ctx-item" data-act="move:${esc(category.id)}">
-        <svg class="ic"><use href="#${meta.category === category.id ? "i-check" : "i-folder"}"/></svg>${esc(category.name)}</button>`).join("")}
+        <svg class="ic"><use href="#${meta.category === category.id ? "i-check" : "i-folder"}"/></svg><span translate="no">${esc(category.name)}</span></button>`).join("")}
       <button class="ctx-item" data-act="move:" ${meta.category ? "" : "disabled"}><svg class="ic"><use href="#i-close"/></svg>Без категории</button>` : ""}
       <div class="ctx-sep"></div>
       <button class="ctx-item" data-act="folder"><svg class="ic"><use href="#i-folder"/></svg>Открыть папку сборки</button>
@@ -1636,7 +1563,7 @@
         <button class="dup-row ${account.uuid === activeId ? "is-active" : ""}" data-uuid="${esc(account.uuid)}">
           ${avatarHtml(account)}
           <span class="acc-main">
-            <span class="acc-name">${esc(account.username)}</span>
+            <span class="acc-name" translate="no">${esc(account.username)}</span>
             <span class="acc-kind">${account.kind === "microsoft" ? "лицензия" : account.kind === "elyby" ? "Ely.by" : "пиратка"}${account.uuid === activeId ? " · выбран сейчас" : ""}</span>
           </span>
           <svg class="ic"><use href="#i-play"/></svg>
@@ -1713,7 +1640,7 @@
       groups.push(`
         <section class="builds-group">
           <div class="builds-group-head">
-            <span class="builds-group-name">${esc(group.name)}</span>
+            <span class="builds-group-name" translate="no">${esc(group.name)}</span>
             <span class="builds-group-count mono">${group.items.length}</span>
           </div>
           <div class="builds-grid">
@@ -1740,7 +1667,7 @@
     return `
       <button class="build-tile ${running ? "is-running" : ""}" data-build-tile="${esc(item.id)}" title="${esc(item.name)}">
         <span class="build-tile-shot">${icon}</span>
-        <span class="build-tile-name">${esc(item.name)}</span>
+        <span class="build-tile-name" translate="no">${esc(item.name)}</span>
         <span class="build-tile-sub mono">${esc(version || "—")}</span>
         ${running ? `<span class="build-tile-flag">${sessions > 1 ? `${sessions} окна` : "запущена"}</span>` : ""}
       </button>`;
@@ -2219,6 +2146,7 @@
     settings: () => invoke("get_settings"),
     saveSettings: saveSettingsInOrder,
     setLauncherIcon: (icon) => invoke("set_launcher_icon", { icon }),
+    setLanguage: (language) => invoke("set_language", { language }),
     instances: () => invoke("list_instances"),
     acknowledgeInstanceRenames: (acknowledgements) => invoke("acknowledge_instance_renames", { acknowledgements }),
     createInstance: (req) => invoke("create_instance", { req }),
@@ -2289,10 +2217,10 @@
     accountRemove: (uuid) => invoke("account_remove", { uuid }),
     msStart: () => invoke("ms_login_start"),
     msPoll: (deviceCode) => invoke("ms_login_poll", { deviceCode }),
-    pickFile: (title, extensions) => invoke("pick_file", { title, extensions }),
-    pickFiles: (title, extensions) => invoke("pick_files", { title, extensions }),
-    pickDir: (title) => invoke("pick_dir", { title }),
-    pickSave: (title, fileName, extensions) => invoke("pick_save_path", { title, fileName, extensions }),
+    pickFile: (title, extensions) => invoke("pick_file", { title: I18N.translate(title), extensions }),
+    pickFiles: (title, extensions) => invoke("pick_files", { title: I18N.translate(title), extensions }),
+    pickDir: (title) => invoke("pick_dir", { title: I18N.translate(title) }),
+    pickSave: (title, fileName, extensions) => invoke("pick_save_path", { title: I18N.translate(title), fileName, extensions }),
     setInstanceIconFile: (instanceId, path) => invoke("set_instance_icon_file", { instanceId, path }),
     instanceIcon: (instanceId) => invoke("instance_icon", { instanceId }),
     copyInstanceFile: (instanceId, path, sub) => invoke("copy_instance_file", { instanceId, path, sub }),
@@ -2300,13 +2228,6 @@
     setCustomWallpaper: (path) => invoke("set_custom_wallpaper", { path }),
     downloadWallpaper: (url) => invoke("download_custom_wallpaper", { url }),
     wallpaperSource: (source) => invoke("wallpaper_source", { source }),
-    setWallpaperEngineEnabled: (enabled) => invoke("set_wallpaper_engine_enabled", { enabled }),
-    setWallpaperWorkshopAudio: (enabled) => invoke("set_wallpaper_workshop_audio", { enabled }),
-    wallpaperSceneStatus: () => invoke("wallpaper_scene_status"),
-    scanWallpaperLibrary: () => invoke("scan_wallpaper_library"),
-    parseWorkshopLink: (url) => invoke("parse_wallpaper_workshop_link", { url }),
-    setWorkshopWallpaper: (directory) => invoke("set_workshop_wallpaper", { directory }),
-    openWallpaperEngine: (directory) => invoke("open_wallpaper_engine", { directory }),
     modrinthProject: (projectId) => invoke("modrinth_project", { projectId }),
     searchCurseforge: (q) => invoke("search_curseforge", q),
     installCurseforgeModpack: (projectId, fileId, opId = null) => invoke("install_curseforge_modpack", { projectId, fileId: fileId || null, opId }),
@@ -2370,7 +2291,8 @@
     appInfo: async () => ({ home: "C:\\Users\\Player\\AppData\\Roaming\\OmniSpec", version: "0.1.0 (демо-режим)", demo: true }),
     systemMemory: async () => null, // браузер не раскрывает точный объём ОЗУ
     settings: async () => ({ ...DEMO.settings }),
-    saveSettings: async (s) => { DEMO.settings = { ...s, launcher_icon: DEMO.settings.launcher_icon || "default" }; return null; },
+    saveSettings: async (s) => { DEMO.settings = { ...s, launcher_icon: DEMO.settings.launcher_icon || "default", language: DEMO.settings.language || "ru" }; return null; },
+    setLanguage: async (language) => { DEMO.settings = { ...DEMO.settings, language }; return null; },
     setLauncherIcon: async (icon) => { DEMO.settings = { ...DEMO.settings, launcher_icon: icon }; return null; },
     instances: async () => DEMO.instances.map((i) => ({ ...i })),
     acknowledgeInstanceRenames: async () => null,
@@ -2760,27 +2682,6 @@
     setCustomWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
     downloadWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
     wallpaperSource: async () => null,
-    setWallpaperEngineEnabled: async (enabled) => {
-      DEMO.settings = { ...DEMO.settings, wallpaper_engine_enabled: enabled };
-      return { ...DEMO.settings };
-    },
-    setWallpaperWorkshopAudio: async (enabled) => {
-      DEMO.settings = { ...DEMO.settings, wallpaper_workshop_audio: enabled };
-      return { ...DEMO.settings };
-    },
-    wallpaperSceneStatus: async () => null,
-    scanWallpaperLibrary: async () => ({ projects: [], searched: [], engine: null, truncated: false }),
-    parseWorkshopLink: async (url) => {
-      try {
-        const u = new URL(url);
-        const ids = u.searchParams.getAll("id");
-        return ["http:", "https:"].includes(u.protocol) && ["steamcommunity.com", "www.steamcommunity.com"].includes(u.hostname)
-          && ["/sharedfiles/filedetails", "/workshop/filedetails"].includes(u.pathname.replace(/\/$/, ""))
-          && ids.length === 1 && /^\d{1,20}$/.test(ids[0]) ? ids[0] : null;
-      } catch { return null; }
-    },
-    setWorkshopWallpaper: async () => ({ ...DEMO.settings, wallpaper: "workshop" }),
-    openWallpaperEngine: async () => null,
     instancePath: async (id) => `demo/instances/${id}`,
     openUrl: async (url) => { window.open(url, "_blank"); return null; },
     onProgress: (cb) => { demoProgressCb = cb; return Promise.resolve(); },
@@ -2845,8 +2746,7 @@
     fx: "wave",
     shape: "soft",
     customWall: null,
-    workshopWall: null,
-    wallpaperLibrary: { projects: [], searched: [], engine: null, sceneCapture: false, loading: false, loaded: false, error: "", sceneError: "", truncated: false, query: "" },
+    wallLink: { value: "", busy: false },
     sound: { on: true, volume: 60 },
     home: {
       extOpen: false, external: null, extLoading: false, extSelected: new Set(),
@@ -2968,6 +2868,70 @@
     $("#toasts").appendChild(box);
     setTimeout(() => { box.style.opacity = "0"; box.style.transition = "opacity .3s"; }, 3600);
     setTimeout(() => box.remove(), 4000);
+  }
+
+  // Адресная транзакция языка не перезаписывает другие пользовательские данные.
+  // Последовательная очередь и ревизия защищают быстрые переключения/ошибки.
+  const LANGUAGES = [["ru", "Русский"], ["be", "Беларуская"], ["kk", "Қазақша"], ["uk", "Українська"], ["en", "English"]];
+  let displayedLanguage = "ru";
+  let confirmedLanguage = "ru";
+  let languageGeneration = 0;
+  let languageQueue = Promise.resolve();
+  async function chooseLanguage(language) {
+    if (!LANGUAGES.some(([code]) => code === language)) return;
+    const generation = ++languageGeneration;
+    displayedLanguage = language;
+    state.settings = { ...(state.settings || {}), language };
+    I18N.setLanguage(language);
+    refreshLocalizedDerivedLabels();
+    syncPresence();
+    const operation = languageQueue.catch(() => {}).then(async () => {
+      await api.setLanguage(language);
+      confirmedLanguage = language;
+    });
+    languageQueue = operation;
+    try { await operation; }
+    catch (error) {
+      if (generation !== languageGeneration) return;
+      displayedLanguage = confirmedLanguage;
+      state.settings = { ...(state.settings || {}), language: confirmedLanguage };
+      I18N.setLanguage(confirmedLanguage);
+      refreshLocalizedDerivedLabels();
+      const select = $("#prefs-language");
+      if (select) select.value = confirmedLanguage;
+      syncPresence();
+      toast(`Не удалось сохранить язык: ${error}`, "err");
+    }
+  }
+
+  function localizedReleaseDate(value) {
+    return new Date(value).toLocaleDateString(I18N.locale(), { day: "numeric", month: "long", year: "numeric" });
+  }
+
+  function refreshLocalizedDerivedLabels() {
+    $$("[data-locale-date]").forEach((element) => {
+      element.textContent = localizedReleaseDate(element.dataset.localeDate);
+    });
+    $$("[data-fm-modified]").forEach((element) => {
+      element.textContent = fmDate(Number(element.dataset.fmModified));
+    });
+    $$("[data-empty-update-notes]").forEach((element) => {
+      element.textContent = I18N.translate("Описание изменений не указано.");
+    });
+    const runSelect = $("#errors-run");
+    if (runSelect && state.selectedId) {
+      const runs = diagnostics.list(state.selectedId);
+      for (const option of runSelect.options) {
+        const run = runs.find((item) => item.id === option.value);
+        if (run) option.textContent = errorsRunLabel(run);
+      }
+    }
+    const image = projectImages[projectImageIndex];
+    if (image && !image.title) {
+      const caption = I18N.translate(`Изображение ${projectImageIndex + 1}`);
+      $("#project-image-title").textContent = caption;
+      $("#project-image-full").alt = caption;
+    }
   }
 
   // Иконка сохраняется отдельной командой: общие снимки настроек не могут её
@@ -3248,14 +3212,14 @@
           <div class="instance-dup" data-dup-of="${esc(item.id)}" data-run-id="${esc(session.runId || "")}" title="Дубликат сборки${session.account ? ` · ${esc(session.account)}` : ""} — ПКМ, чтобы выключить">
             <span class="dup-branch"></span>
             <span class="dup-name">дубликат</span>
-            ${session.account ? `<span class="dup-sep">·</span><span class="dup-account">${esc(session.account)}</span>` : ""}
+            ${session.account ? `<span class="dup-sep">·</span><span class="dup-account" translate="no">${esc(session.account)}</span>` : ""}
           </div>`).join("")}</div>`
       : "";
     return `<div class="instance-wrap">
       <div class="instance ${item.id === state.selectedId ? "is-active" : ""}" data-id="${esc(item.id)}">
-        <div class="instance-icon">${instanceIconHtml(item)}</div>
+        <div class="instance-icon" translate="no">${instanceIconHtml(item)}</div>
         <div class="instance-body">
-          <div class="instance-name">${esc(item.name)}</div>
+          <div class="instance-name" translate="no">${esc(item.name)}</div>
           <div class="instance-sub">MC ${esc(item.mc_version)} · ${esc(loaderLabel(item.loader))}${sessions.length > 1 ? ` · <span class="dup-count">${sessions.length} окна</span>` : ""}</div>
         </div>
         <span class="instance-time" title="Время игры">${esc(playtimeLabel(item.playtime_secs))}</span>
@@ -3270,7 +3234,7 @@
     return `<div class="cat ${open ? "is-open" : ""}" data-cat="${esc(id || "")}">
       <div class="cat-head ${running ? "cat-run" : ""}" data-cat-head="${esc(id || "")}">
         <svg class="ic cat-chev"><use href="#i-chev"/></svg>
-        <span class="cat-name">${esc(name)}</span>
+        <span class="cat-name" ${id && id !== "__running" ? 'translate="no"' : ""}>${esc(name)}</span>
         <span class="cat-count">${items.length}</span>
         ${!id || id === "__running" ? "" : `<div class="spacer"></div>
         <button class="icon-btn cat-act" data-cat-new="${esc(id || "")}" title="Создать сборку в этой категории"><svg class="ic"><use href="#i-plus"/></svg></button>
@@ -3457,7 +3421,7 @@
       const meta = state.instances.find((item) => item.id === dragState.id);
       const ghost = document.createElement("div");
       ghost.className = "drag-ghost";
-      ghost.innerHTML = `<span class="drag-ghost-name">${esc(meta ? meta.name : "сборка")}</span>`;
+      ghost.innerHTML = `<span class="drag-ghost-name" translate="no">${esc(meta ? meta.name : "сборка")}</span>`;
       document.body.appendChild(ghost);
       dragState.ghost = ghost;
       dragState.row.classList.add("is-drag");
@@ -3535,7 +3499,7 @@
       const category = categoriesOf().find((item) => item.id === drag.id);
       const ghost = document.createElement("div");
       ghost.className = "drag-ghost";
-      ghost.innerHTML = `<span class="drag-ghost-name">${esc(category ? category.name : "категория")}</span>`;
+      ghost.innerHTML = `<span class="drag-ghost-name" translate="no">${esc(category ? category.name : "категория")}</span>`;
       document.body.appendChild(ghost);
       drag.ghost = ghost;
       drag.group.classList.add("is-drag");
@@ -3664,7 +3628,7 @@
     const category = categoriesOf().find((item) => item.id === id);
     if (!category) return openListMenu(x, y);
     fillCtxMenu(x, y, `
-      <div class="ctx-caption">${esc(category.name)}</div>
+      <div class="ctx-caption" translate="no">${esc(category.name)}</div>
       <button class="ctx-item" data-act="rename"><svg class="ic"><use href="#i-pencil"/></svg>Переименовать</button>
       <button class="ctx-item" data-act="collapse"><svg class="ic"><use href="#i-chev"/></svg>${category.collapsed ? "Раскрыть" : "Свернуть"}</button>
       <div class="ctx-sep"></div>
@@ -3757,7 +3721,7 @@
     } else if (!presenceStartedAt) presenceStartedAt = Math.floor(Date.now() / 1000);
     const details = meta ? meta.name : "OmniSpec";
     const variant = meta ? `MC ${meta.mc_version} · ${loaderLabel(meta.loader)}` : "";
-    const stateText = mode === "playing" ? variant : mode === "launching" ? "Запускает" : "В ожидании";
+    const stateText = mode === "playing" ? variant : I18N.translate(mode === "launching" ? "Запускает" : "В ожидании");
     const startedAt = mode === "idle" ? APP_STARTED_AT : presenceStartedAt;
     const settings = state.settings || {};
     const showIcon = settings.discord_rpc !== false && settings.discord_instance_icon !== false && Boolean(meta);
@@ -3834,8 +3798,18 @@
       pathbar.hidden = !meta;
       if (meta) {
         api.instancePath(meta.id)
-          .then((path) => { if (state.selectedId === meta.id) pathbar.querySelector("span").textContent = path; })
-          .catch(() => { if (state.selectedId === meta.id) pathbar.querySelector("span").textContent = "папка сборки"; });
+          .then((path) => {
+            if (state.selectedId !== meta.id) return;
+            const span = pathbar.querySelector("span");
+            span.setAttribute("translate", "no");
+            span.textContent = path;
+          })
+          .catch(() => {
+            if (state.selectedId !== meta.id) return;
+            const span = pathbar.querySelector("span");
+            span.removeAttribute("translate");
+            span.textContent = "папка сборки";
+          });
       }
     }
     updateStatus();
@@ -4140,7 +4114,7 @@
         const size = info.total > 0 ? `${fmtBytes(info.done)} / ${fmtBytes(info.total)}` : (info.complete ? "готово" : "…");
         return `<div class="dl-file${info.complete ? " is-done" : ""}">
           <div class="dl-file-top">
-            <span class="dl-file-name" title="${esc(name)}">${esc(name)}</span>
+            <span class="dl-file-name" translate="no" title="${esc(name)}">${esc(name)}</span>
             <span class="dl-file-size">${size}</span>
           </div>
           <div class="progress-bar"><div class="progress-fill" style="width:${p}%"></div></div>
@@ -4380,14 +4354,14 @@
   }
 
   function errorsRunLabel(run) {
-    const time = new Date(run.startedAt).toLocaleString("ru-RU", {
+    const time = new Date(run.startedAt).toLocaleString(I18N.locale(), {
       day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit"
     });
     const kind = run.status === "preparing" ? "подготовка" : run.status === "running" ? "работает"
       : run.status === "stopped" ? "остановлен" : run.status === "cancelled" ? "отменён"
       : run.status === "failed" ? "ошибка подготовки" : run.code == null ? "код неизвестен" : `код ${run.code}`;
     const number = run.runId && run.runId.includes("#") ? ` #${run.runId.slice(run.runId.lastIndexOf("#") + 1)}` : "";
-    return `${time}${number}${run.account ? ` · ${run.account}` : ""} · ${kind}`;
+    return `${time}${number}${run.account ? ` · ${run.account}` : ""} · ${I18N.translate(kind)}`;
   }
 
   function errorsStatus(run) {
@@ -4643,7 +4617,7 @@
     const runs = diagnostics.list(meta.id);
     const choices = runs.length > 1 ? `
       <div class="errors-run-row"><label for="errors-run">Попытка запуска</label>
-        <select class="select" id="errors-run">${runs.map((item) => `<option value="${esc(item.id)}" ${item.id === run.id ? "selected" : ""}>${esc(errorsRunLabel(item))}</option>`).join("")}</select>
+        <select class="select" id="errors-run">${runs.map((item) => `<option value="${esc(item.id)}" translate="no" ${item.id === run.id ? "selected" : ""}>${esc(errorsRunLabel(item))}</option>`).join("")}</select>
       </div>` : "";
     const list = run ? Array.from(run.findings.values()).sort((a, b) => b.priority - a.priority)
       .map((item) => contextualErrorFinding(item, meta, run)) : [];
@@ -4734,7 +4708,7 @@
           <button class="btn btn-small" id="log-copy">Скопировать</button>
           <div class="spacer"></div>
           <span class="muted" id="log-count" style="font-size:11px"></span>
-          <span class="muted" style="font-size:11px">${meta ? esc(meta.name) : ""}</span>
+          <span class="muted" style="font-size:11px" translate="no">${meta ? esc(meta.name) : ""}</span>
         </div>
         <div class="console" id="console-out"></div>
       </div>`;
@@ -4815,6 +4789,9 @@
   function fmDate(seconds) {
     if (!seconds) return "—";
     const date = new Date(seconds * 1000);
+    if (I18N.language() !== "ru") {
+      return date.toLocaleString(I18N.locale(), { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+    }
     const pad = (value) => String(value).padStart(2, "0");
     return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
@@ -4912,10 +4889,10 @@
     const chips = [];
     if (fm.archive) {
       const parts = String(fm.archive.dir || "").split("/").filter(Boolean);
-      chips.push(`<span class="c archive" title="Выйти из архива">${esc(String(fm.archive.path).split("/").pop())}</span>`);
+      chips.push(`<span class="c archive" title="Выйти из архива"><span translate="no">${esc(String(fm.archive.path).split("/").pop())}</span></span>`);
       parts.forEach((part, index) => {
         const path = parts.slice(0, index + 1).join("/");
-        chips.push(`<span class="s">/</span><span class="c${index === parts.length - 1 ? " last" : ""}" data-arc="${esc(path)}">${esc(part)}</span>`);
+        chips.push(`<span class="s">/</span><span class="c${index === parts.length - 1 ? " last" : ""}" data-arc="${esc(path)}" translate="no">${esc(part)}</span>`);
       });
       box.innerHTML = chips.join("");
       const up = $(".c.archive", box);
@@ -4929,10 +4906,10 @@
       return;
     }
     const parts = fm.path ? fm.path.split("/").filter(Boolean) : [];
-    chips.push(`<span class="c" data-crumb="">${esc(meta ? meta.name : "сборка")}</span>`);
+    chips.push(`<span class="c" data-crumb="" ${meta ? 'translate="no"' : ""}>${esc(meta ? meta.name : "сборка")}</span>`);
     parts.forEach((part, index) => {
       const path = parts.slice(0, index + 1).join("/");
-      chips.push(`<span class="s">/</span><span class="c${index === parts.length - 1 ? " last" : ""}" data-crumb="${esc(path)}">${esc(part)}</span>`);
+      chips.push(`<span class="s">/</span><span class="c${index === parts.length - 1 ? " last" : ""}" data-crumb="${esc(path)}" translate="no">${esc(part)}</span>`);
     });
     box.innerHTML = chips.join("");
     $$(".c", box).forEach((chip) => {
@@ -4980,7 +4957,9 @@
     if (term) rows = rows.filter((entry) => entry.name.toLowerCase().includes(term));
     const items = rows.map((entry) => {
       const sel = fm.selected === entry.path ? " active" : "";
-      const extra = fm.archive ? "" : `<span class="fdate">${entry.is_dir ? "—" : fmDate(entry.modified)}</span>`;
+      const extra = fm.archive ? "" : entry.is_dir
+        ? `<span class="fdate">—</span>`
+        : `<span class="fdate" translate="no" data-fm-modified="${Number(entry.modified) || 0}">${fmDate(entry.modified)}</span>`;
       const size = entry.is_dir ? "—" : humanSize(entry.size);
       return `<div class="fm-item${sel}" data-path="${esc(entry.path)}" data-dir="${entry.is_dir ? "true" : "false"}"${entry.is_dir && !fm.archive ? ' data-drop="1"' : ""}>
         <span class="fname">
@@ -5039,7 +5018,7 @@
       view.innerHTML = `
         <div class="fm-viewer">
           <div class="fm-viewer-bar">
-            <span class="fm-viewer-name" title="${esc(preview.name || "")}">${esc(preview.name || "картинка")}</span>
+            <span class="fm-viewer-name" translate="no" title="${esc(preview.name || "")}">${esc(preview.name || "картинка")}</span>
             <span class="spacer"></span>
             <button class="btn-mini" id="fm-zoom-out" title="Уменьшить">−</button>
             <span class="fm-zoom-val mono" id="fm-zoom-val">100%</span>
@@ -5298,7 +5277,7 @@
     const dirOf = (path) => String(path).split("/").slice(0, -1).join("/");
     if (fm.archive) {
       fillCtxMenu(x, y, `
-        <div class="ctx-caption">${esc(name)}</div>
+        <div class="ctx-caption" translate="no">${esc(name)}</div>
         ${isDir ? `<button class="ctx-item" data-act="open"><svg class="ic"><use href="#i-folder"/></svg>Открыть папку</button>` : `<button class="ctx-item" data-act="open"><svg class="ic"><use href="#i-base"/></svg>Открыть в просмотре</button>`}
         <div class="ctx-sep"></div>
         <button class="ctx-item" data-act="up"><svg class="ic"><use href="#i-chev"/></svg>Выйти из архива</button>`, (act) => {
@@ -5315,7 +5294,7 @@
       return;
     }
     fillCtxMenu(x, y, `
-      <div class="ctx-caption" title="${esc(entry.path)}">${esc(name)}</div>
+      <div class="ctx-caption" translate="no" title="${esc(entry.path)}">${esc(name)}</div>
       ${isDir
         ? `<button class="ctx-item" data-act="open"><svg class="ic"><use href="#i-folder"/></svg>Открыть</button>`
         : archive
@@ -5403,7 +5382,7 @@
       drag.active = true;
       const ghost = document.createElement("div");
       ghost.className = "drag-ghost";
-      ghost.innerHTML = `<span class="drag-ghost-name">${esc(String(drag.path).split("/").pop())}</span>`;
+      ghost.innerHTML = `<span class="drag-ghost-name" translate="no">${esc(String(drag.path).split("/").pop())}</span>`;
       document.body.appendChild(ghost);
       drag.ghost = ghost;
       document.body.classList.add("is-dragging");
@@ -5490,7 +5469,7 @@
           <div class="fm-list" id="fm-list"></div>
           <div class="fm-view" id="fm-view" hidden></div>
           <div class="fm-status">
-            <span id="fm-path">—</span>
+            <span id="fm-path" translate="no">—</span>
             <span class="spacer"></span>
             <span id="fm-lines"></span>
             <span class="fm-badge" id="fm-kind" hidden>—</span>
@@ -5522,7 +5501,7 @@
       if (event.target.closest(".fm-item")) return;
       event.preventDefault();
       fillCtxMenu(event.clientX, event.clientY, `
-        <div class="ctx-caption">${esc(fm.archive ? "Архив" : fm.path || "сборка")}</div>
+        <div class="ctx-caption" ${!fm.archive && fm.path ? 'translate="no"' : ""}>${esc(fm.archive ? "Архив" : fm.path || "сборка")}</div>
         ${fm.archive
           ? `<button class="ctx-item" data-act="up"><svg class="ic"><use href="#i-chev"/></svg>Выйти из архива</button>`
           : `<button class="ctx-item" data-act="mkdir"><svg class="ic"><use href="#i-plus"/></svg>Новая папка</button>
@@ -5654,7 +5633,7 @@
         <div class="item-row content-row ${entry.enabled ? "" : "is-off"}" data-content="${esc(entry.filename)}">
           ${contentIconHtml(kind, entry)}
           <div class="item-main">
-            <div class="item-title">${esc(contentTitle(entry))}${entry.enabled ? "" : ' <span class="tag">выключен</span>'}</div>
+            <div class="item-title"><span translate="no">${esc(contentTitle(entry))}</span>${entry.enabled ? "" : ' <span class="tag">выключен</span>'}</div>
             <div class="item-sub">${entry.version_number ? `v${esc(entry.version_number)} · ` : ""}${humanSize(entry.size)}${update ? ` · <span class="content-update">есть ${esc(update.latest)}</span>` : ""}</div>
           </div>
           ${update ? `<button class="btn btn-small btn-primary" data-update-one="${esc(entry.filename)}">Обновить</button>` : ""}
@@ -5750,7 +5729,7 @@
     // смену версии умеем только для проектов Modrinth (у CurseForge id — чисто цифры)
     const canReplace = Boolean(entry.project_id) && !/^\d+$/.test(entry.project_id);
     const html = `
-      <div class="ctx-caption">${esc(contentTitle(entry))}${entry.version_number ? ` · v${esc(entry.version_number)}` : ""}</div>
+      <div class="ctx-caption" translate="no">${esc(contentTitle(entry))}${entry.version_number ? ` · v${esc(entry.version_number)}` : ""}</div>
       <button class="ctx-item" data-act="check"><svg class="ic"><use href="#i-refresh"/></svg>Проверить обновления под мою версию</button>
       ${update ? `<button class="ctx-item" data-act="update"><svg class="ic"><use href="#i-download"/></svg>Обновить до ${esc(update.latest)}</button>` : ""}
       ${canReplace ? `<button class="ctx-item" data-act="replace"><svg class="ic"><use href="#i-list"/></svg>Поменять версию…</button>` : ""}
@@ -5819,7 +5798,7 @@
     $("#upd-list-body").innerHTML = updates.map((item) => `
       <div class="item-row upd-row" data-upd="${esc(item.filename)}">
         <div class="item-main">
-          <div class="item-title">${esc(item.title)}</div>
+          <div class="item-title" translate="no">${esc(item.title)}</div>
           <div class="item-sub">${esc(item.current)} → ${esc(item.latest)} · ${esc(item.new_filename)}</div>
         </div>
         <button class="btn btn-small btn-primary" data-upd-one="${esc(item.filename)}">Обновить</button>
@@ -5907,7 +5886,7 @@
               ${icon
                 ? `<span class="mod-icon"><img src="${esc(icon)}" alt="" loading="lazy"></span>`
                 : `<span class="mod-icon"><svg class="ic"><use href="#i-cube"/></svg></span>`}
-              <div class="item-main"><div class="item-title">${esc(entry.name)}</div><div class="item-sub">${humanSize(entry.size)}</div></div>
+              <div class="item-main"><div class="item-title" translate="no">${esc(entry.name)}</div><div class="item-sub">${humanSize(entry.size)}</div></div>
             </div>`;
           }).join("") : `<div class="item-row"><div class="item-main muted">Миров пока нет — создай их в игре</div></div>`}
         </div>
@@ -5959,7 +5938,7 @@
     grid.insertAdjacentHTML("beforeend", slice.map((entry) => `
       <button class="shot-tile" data-shot-name="${esc(entry.name)}" title="${esc(entry.name)}">
         <span class="shot-img"><svg class="ic shot-placeholder"><use href="#i-image"/></svg></span>
-        <span class="shot-name">${esc(entry.name)}</span>
+        <span class="shot-name" translate="no">${esc(entry.name)}</span>
         <span class="shot-sub">${humanSize(entry.size)}${entry.modified ? ` · ${relativeWhen(entry.modified)}` : ""}</span>
       </button>`).join(""));
     const tiles = grid.querySelectorAll(".shot-tile:not([data-thumb])");
@@ -6060,7 +6039,7 @@
   /** Контекстное меню скриншота (ПКМ по плитке и по картинке в просмотре). */
   function openShotMenu(x, y, entry) {
     fillCtxMenu(x, y, `
-      <div class="ctx-caption">${esc(entry.name)}</div>
+      <div class="ctx-caption" translate="no">${esc(entry.name)}</div>
       <button class="ctx-item" data-act="copy"><svg class="ic"><use href="#i-copy"/></svg>Копировать изображение</button>
       <button class="ctx-item" data-act="open"><svg class="ic"><use href="#i-image"/></svg>Открыть</button>
       <div class="ctx-sep"></div>
@@ -6446,10 +6425,10 @@
     const letter = !isImageIcon(meta.icon) && !(meta.icon && INSTANCE_ICONS.includes(meta.icon));
     const detail = `MC ${meta.mc_version} · ${loaderLabel(meta.loader)}`;
     return `<button class="home-card ${meta.id === state.selectedId ? "is-active" : ""}" data-home-id="${esc(meta.id)}">
-      <span class="home-card-icon ${letter ? "is-letter" : ""}">${letter ? `<span class="card-letter">${esc(icon)}</span>` : icon}</span>
+      <span class="home-card-icon ${letter ? "is-letter" : ""}">${letter ? `<span class="card-letter" translate="no">${esc(icon)}</span>` : icon}</span>
       <span class="home-card-body">
         <span class="home-card-top">
-          <span class="home-card-name" title="${esc(meta.name)}">${esc(meta.name)}</span>
+          <span class="home-card-name" translate="no" title="${esc(meta.name)}">${esc(meta.name)}</span>
           <span class="home-card-time" title="Время игры">${esc(playtimeLabel(meta.playtime_secs))}</span>
           ${running ? '<span class="home-card-dot" title="Запущена"></span>' : ""}
         </span>
@@ -6560,7 +6539,7 @@
                   <input type="checkbox" class="imp-check" data-ext="${esc(item.path)}" ${picked.has(item.path) ? "checked" : ""}>
                   <span class="ext-icon">${item.icon ? `<img src="file://${esc(item.icon)}" alt="">` : `<svg class="ic"><use href="#i-grid"/></svg>`}</span>
                   <span class="ext-main">
-                    <span class="ext-name">${esc(item.name)}</span>
+                    <span class="ext-name" translate="no">${esc(item.name)}</span>
                     <span class="ext-sub">${esc(launchers[item.launcher] || item.launcher)} · MC ${esc(item.mc_version)} · ${esc(item.loader)}</span>
                   </span>
                 </label>`).join("")}</div>`
@@ -7514,7 +7493,7 @@
         const type = card.dataset.projectType || (kind === "pack" ? "modpack" : "mod");
         const url = `https://modrinth.com/${type}/${card.dataset.slug}`;
         fillCtxMenu(event.clientX, event.clientY, `
-          <div class="ctx-caption">${esc(title)}</div>
+          <div class="ctx-caption" translate="no">${esc(title)}</div>
           <button class="ctx-item" data-act="install"><svg class="ic"><use href="#i-download"/></svg>Установить</button>
           <button class="ctx-item" data-act="versions"><svg class="ic"><use href="#i-list"/></svg>Версии</button>
           <div class="ctx-sep"></div>
@@ -7553,14 +7532,14 @@
     const isPack = kind === "pack" || (!kind && state.modrinth.type === "modpack");
     const openType = isPack ? "modpack" : (kind === "mod" ? "mod" : (state.modrinth.type || "mod"));
     return `<div class="card${projectInstalled(hit.project_id, "modrinth", openType) ? " is-installed" : ""}${projectStatus(hit.project_id, "modrinth", openType) === "downloading" ? " is-downloading" : ""}" role="group" aria-label="${esc(projectLabel(hit.title, hit.project_id, "modrinth", openType))}" data-project="${esc(hit.project_id)}" data-project-type="${esc(openType)}" data-kind="${isPack ? "pack" : "mod"}" data-slug="${esc(hit.slug || hit.project_id)}" data-title="${esc(hit.title)}">
-      <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
+      <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter" translate="no">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
       <div class="card-body">
-        <div class="card-title">${esc(hit.title)}</div>
-        <div class="card-desc">${esc(hit.description)}</div>
+        <div class="card-title" translate="no">${esc(hit.title)}</div>
+        <div class="card-desc" translate="no">${esc(hit.description)}</div>
         <div class="card-meta">
           ${projectBadge(hit.project_id, "modrinth", openType)}
-          ${(hit.categories || []).slice(0, 3).map((cat) => `<span class="tag">${esc(cat)}</span>`).join("")}
-          <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
+          ${(hit.categories || []).slice(0, 3).map((cat) => `<span class="tag" translate="no">${esc(cat)}</span>`).join("")}
+          <span class="tag">${(hit.downloads || 0).toLocaleString(I18N.locale())} ⬇</span>
         </div>
         <div class="card-actions">
           <button class="icon-btn card-icon-btn is-primary" data-install="${esc(hit.project_id)}" data-kind="${isPack ? "pack" : "mod"}" data-title="${esc(hit.title)}" title="Скачать и установить" aria-label="Скачать">
@@ -7624,7 +7603,7 @@
     if (activeModTarget !== cfg) return;
     const body = $("#mod-target-body");
     $("#mod-target-title").textContent = `Установить: ${cfg.title || "мод"}`;
-    const versionText = cfg.specific ? `<div class="mod-target-note">Выбрана версия: <strong>${esc(cfg.specific.name || cfg.specific.version_number || cfg.specific.id)}</strong></div>` : "";
+    const versionText = cfg.specific ? `<div class="mod-target-note">Выбрана версия: <strong translate="no">${esc(cfg.specific.name || cfg.specific.version_number || cfg.specific.id)}</strong></div>` : "";
     if (cfg.mode === "existing") {
       const rows = cfg.instances.map((instance) => {
         const status = cfg.statuses.get(instance.id) || { state: "checking" };
@@ -7633,7 +7612,7 @@
           : status.state === "error" ? "Не удалось проверить" : "Проверяем…";
         return `<label class="mod-target-instance ${ok ? "is-compatible" : "is-unavailable"}">
           <input type="radio" name="mod-target-instance" value="${esc(instance.id)}" ${cfg.selectedId === instance.id ? "checked" : ""} ${ok ? "" : "disabled"}>
-          <span class="mod-target-instance-main"><strong>${esc(instance.name)}</strong><span>MC ${esc(instance.mc_version)} · ${esc(loaderLabel(instance.loader))}</span></span>
+          <span class="mod-target-instance-main"><strong translate="no">${esc(instance.name)}</strong><span>MC ${esc(instance.mc_version)} · ${esc(loaderLabel(instance.loader))}</span></span>
           <span class="mod-target-status ${ok ? "is-ok" : ""}" title="${esc(status.error || message)}">${esc(message)}</span>
         </label>`;
       }).join("");
@@ -7924,9 +7903,10 @@
   function updateProjectImage() {
     const image = projectImages[projectImageIndex];
     if (!image) return;
-    $("#project-image-title").textContent = image.title || `Изображение ${projectImageIndex + 1}`;
+    const caption = image.title || I18N.translate(`Изображение ${projectImageIndex + 1}`);
+    $("#project-image-title").textContent = caption;
     $("#project-image-full").src = image.url;
-    $("#project-image-full").alt = image.title || `Изображение ${projectImageIndex + 1}`;
+    $("#project-image-full").alt = caption;
     $("#project-image-count").textContent = `${projectImageIndex + 1} / ${projectImages.length}`;
     $("#project-image-prev").disabled = projectImages.length < 2;
     $("#project-image-next").disabled = projectImages.length < 2;
@@ -7955,7 +7935,7 @@
       .map((shot) => typeof shot === "string" ? { url: shot, title: "" } : { url: shot?.url, title: shot?.title || "" })
       .filter((shot) => typeof shot.url === "string" && /^(?:https?:\/\/|data:image\/)/i.test(shot.url));
     const tags = (project.categories || []).slice(0, 8);
-    const downloads = (project.downloads || 0).toLocaleString("ru-RU");
+    const downloads = (project.downloads || 0).toLocaleString(I18N.locale());
     const desc = plainDescription(project.body) || project.description || "";
     const subtitle = source === "modrinth"
       ? (project.license?.name ? ` · ${esc(project.license.name)}` : "")
@@ -7970,17 +7950,17 @@
         <div class="proj-top">
           <div class="proj-icon">${project.icon_url
             ? `<img src="${esc(project.icon_url)}" alt="">`
-            : `<span class="card-letter">${esc(String(project.title || title || "?").charAt(0).toUpperCase())}</span>`}</div>
+            : `<span class="card-letter" translate="no">${esc(String(project.title || title || "?").charAt(0).toUpperCase())}</span>`}</div>
           <div class="proj-head">
-            <div class="proj-title">${esc(project.title || title || "")}</div>
-            <div class="proj-sub">${esc(project.description || "")}</div>
+            <div class="proj-title" translate="no">${esc(project.title || title || "")}</div>
+            <div class="proj-sub" translate="no">${esc(project.description || "")}</div>
             <div class="proj-sub">${downloads} загрузок${subtitle}</div>
           </div>
         </div>
-        ${tags.length ? `<div class="proj-tags">${tags.map((tag) => `<span class="tag">${esc(tag)}</span>`).join("")}</div>` : ""}
+        ${tags.length ? `<div class="proj-tags">${tags.map((tag) => `<span class="tag" translate="no">${esc(tag)}</span>`).join("")}</div>` : ""}
         ${projectImages.length ? `<div class="proj-gallery">${gallery(projectImages.slice(0, 6))}</div>` : ""}
         ${projectImages.length > 6 ? `<button type="button" class="btn proj-show-all" id="proj-show-all">Все изображения (${projectImages.length})</button>` : ""}
-        ${desc ? `<div class="proj-desc">${esc(desc)}</div>` : `<div class="proj-empty">Описание пустое — смотри страницу проекта.</div>`}
+        ${desc ? `<div class="proj-desc" translate="no">${esc(desc)}</div>` : `<div class="proj-empty">Описание пустое — смотри страницу проекта.</div>`}
       </section>
       <section id="proj-panel-gallery" class="proj-panel" role="tabpanel" aria-labelledby="proj-tab-gallery" hidden>
         ${projectImages.length ? `<div class="proj-gallery">${gallery(projectImages)}</div>` : `<div class="proj-empty">Изображений пока нет.</div>`}
@@ -8056,7 +8036,7 @@
           return `
           <div class="ver-row">
             <div class="ver-main">
-              <div class="ver-name">${esc(version.name || version.version_number)}</div>
+              <div class="ver-name" translate="no">${esc(version.name || version.version_number)}</div>
               <div class="ver-meta">
                 <span class="tag">${esc(version.version_number)}</span>
                 ${(version.game_versions || []).slice(0, 3).map((gv) => `<span class="tag">${esc(gv)}</span>`).join("")}
@@ -8345,15 +8325,15 @@
     // Array.map передаёт вторым аргументом индекс; явный тип нужен ленте.
     const openType = typeof forcedType === "string" ? forcedType : (state.curseforge.type || "mod");
     return `<div class="card${projectInstalled(hit.project_id, "curseforge", openType) ? " is-installed" : ""}${projectStatus(hit.project_id, "curseforge", openType) === "downloading" ? " is-downloading" : ""}" role="group" aria-label="${esc(projectLabel(hit.title, hit.project_id, "curseforge", openType))}" data-cf-project="${esc(hit.project_id)}" data-project-type="${esc(openType)}" data-cf-slug="${esc(hit.slug || hit.project_id)}" data-cf-title="${esc(hit.title)}">
-      <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
+      <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter" translate="no">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
       <div class="card-body">
-        <div class="card-title">${esc(hit.title)}</div>
-        <div class="card-desc">${esc(hit.description)}</div>
+        <div class="card-title" translate="no">${esc(hit.title)}</div>
+        <div class="card-desc" translate="no">${esc(hit.description)}</div>
         <div class="card-meta">
           ${projectBadge(hit.project_id, "curseforge", openType)}
           <span class="tag">curseforge</span>
-          ${(hit.categories || []).slice(0, 2).map((cat) => `<span class="tag">${esc(cat)}</span>`).join("")}
-          <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
+          ${(hit.categories || []).slice(0, 2).map((cat) => `<span class="tag" translate="no">${esc(cat)}</span>`).join("")}
+          <span class="tag">${(hit.downloads || 0).toLocaleString(I18N.locale())} ⬇</span>
         </div>
         <div class="card-actions">
           ${openType === "modpack"
@@ -8373,15 +8353,15 @@
   /** Карточка модпака CurseForge: ставится отдельной сборкой, а не в текущую. */
   function cfPackCardHtml(hit) {
     return `<div class="card" role="group" aria-label="${esc(hit.title)}" data-project-type="modpack" data-cf-project="${esc(hit.project_id)}" data-cf-slug="${esc(hit.slug || hit.project_id)}" data-cf-title="${esc(hit.title)}">
-      <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
+      <div class="card-icon">${hit.icon_url ? `<img src="${esc(hit.icon_url)}" alt="" loading="lazy">` : `<span class="card-letter" translate="no">${esc(String(hit.title || "?").trim().charAt(0).toUpperCase())}</span>`}</div>
       <div class="card-body">
-        <div class="card-title">${esc(hit.title)}</div>
-        <div class="card-desc">${esc(hit.description)}</div>
+        <div class="card-title" translate="no">${esc(hit.title)}</div>
+        <div class="card-desc" translate="no">${esc(hit.description)}</div>
         <div class="card-meta">
           ${projectBadge(hit.project_id, "curseforge", "modpack")}
           <span class="tag">curseforge</span>
-          ${(hit.categories || []).slice(0, 2).map((cat) => `<span class="tag">${esc(cat)}</span>`).join("")}
-          <span class="tag">${(hit.downloads || 0).toLocaleString("ru-RU")} ⬇</span>
+          ${(hit.categories || []).slice(0, 2).map((cat) => `<span class="tag" translate="no">${esc(cat)}</span>`).join("")}
+          <span class="tag">${(hit.downloads || 0).toLocaleString(I18N.locale())} ⬇</span>
         </div>
         <div class="card-actions">
           <button class="icon-btn card-icon-btn is-primary" data-cf-pack-install="${esc(hit.project_id)}" data-cf-title="${esc(hit.title)}" title="Установить как сборку" aria-label="Установить">
@@ -8436,7 +8416,7 @@
         const pack = type === "modpack";
         const url = `https://www.curseforge.com/minecraft/${cfPath(type)}/${card.dataset.cfSlug}`;
         fillCtxMenu(event.clientX, event.clientY, `
-          <div class="ctx-caption">${esc(title)}</div>
+          <div class="ctx-caption" translate="no">${esc(title)}</div>
           <button class="ctx-item" data-act="install"><svg class="ic"><use href="#i-download"/></svg>${pack ? "Установить как сборку" : "Установить"}</button>
           <button class="ctx-item" data-act="versions"><svg class="ic"><use href="#i-list"/></svg>Версии</button>
           <div class="ctx-sep"></div>
@@ -8589,7 +8569,7 @@
         ${versions.slice(0, 60).map((version) => `
           <div class="ver-row">
             <div class="ver-main">
-              <div class="ver-name">${esc(version.name || version.version_number)}</div>
+              <div class="ver-name" translate="no">${esc(version.name || version.version_number)}</div>
               <div class="ver-meta">
                 <span class="tag">${esc(version.version_number)}</span>
                 ${(version.game_versions || []).slice(0, 3).map((gv) => `<span class="tag">${esc(gv)}</span>`).join("")}
@@ -8689,7 +8669,7 @@
     const letter = String((account && account.username) || "?").charAt(0).toUpperCase();
     const url = skinUrl(account);
     return `<span class="acc-avatar ${extra}">` +
-      `<span class="acc-letter">${esc(letter)}</span>` +
+      `<span class="acc-letter" translate="no">${esc(letter)}</span>` +
       (url ? `<img src="${esc(url)}" alt="" loading="lazy" onerror="this.remove()">` : "") +
       `</span>`;
   }
@@ -8700,7 +8680,7 @@
       <div class="acc-row ${active ? "is-active" : ""}" data-uuid="${esc(account.uuid)}">
         ${avatarHtml(account)}
         <span class="acc-main">
-          <span class="acc-name">${esc(account.username)}</span>
+          <span class="acc-name" translate="no">${esc(account.username)}</span>
           <span class="acc-sub">${esc(kindLabel(account.kind))}</span>
         </span>
         ${active ? '<span class="acc-dot" title="Активный"></span>' : ""}
@@ -8717,11 +8697,13 @@
     if (!account) {
       avatar.innerHTML = '<svg class="ic"><use href="#i-user"/></svg>';
       avatar.classList.remove("has-skin");
+      name.removeAttribute("translate");
       name.textContent = "Нет аккаунта";
       kind.textContent = "добавить";
       return;
     }
     avatar.outerHTML = avatarHtml(account).replace('class="acc-avatar', 'id="account-chip-avatar" class="acc-avatar has-skin');
+    name.setAttribute("translate", "no");
     name.textContent = account.username;
     kind.textContent = kindLabel(account.kind);
   }
@@ -8739,7 +8721,7 @@
         <div class="pop-active">
           ${avatarHtml(active, "lg")}
           <div class="pop-active-main">
-            <div class="pop-active-name">${esc(active.username)}</div>
+            <div class="pop-active-name" translate="no">${esc(active.username)}</div>
             <div class="pop-active-sub">${esc(kindLabel(active.kind))}</div>
           </div>
         </div>` : `<div class="pop-empty">Аккаунта нет</div>`}
@@ -8819,7 +8801,7 @@
     const isActive = account.uuid === activeId;
     const offline = account.kind !== "microsoft";
     el.innerHTML = `
-      <div class="ctx-caption">${esc(account.username)} · ${esc(kindLabel(account.kind))}</div>
+      <div class="ctx-caption"><span translate="no">${esc(account.username)}</span> · ${esc(kindLabel(account.kind))}</div>
       ${isActive ? "" : `<button class="ctx-item" data-act="pick"><svg class="ic"><use href="#i-play"/></svg>Выбрать аккаунт</button>`}
       <button class="ctx-item" data-act="rename" ${offline ? "" : "disabled"}><svg class="ic"><use href="#i-pencil"/></svg>Изменить ник${offline ? "" : " (нельзя)"}</button>
       <button class="ctx-item" data-act="copy"><svg class="ic"><use href="#i-copy"/></svg>Скопировать ник</button>
@@ -8918,7 +8900,7 @@
     }
     button.innerHTML = `${avatarHtml(account, "sm")}
       <span class="acc-main">
-        <span class="acc-name">${esc(account.username)}</span>
+        <span class="acc-name" translate="no">${esc(account.username)}</span>
         <span class="acc-sub">${esc(kindLabel(account.kind))}</span>
       </span>`;
   }
@@ -8951,7 +8933,7 @@
           <div class="acc-row ${account.uuid === activeId ? "is-active" : ""}" data-pick="${esc(account.uuid)}">
             ${avatarHtml(account)}
             <span class="acc-main">
-              <span class="acc-name">${esc(account.username)}</span>
+              <span class="acc-name" translate="no">${esc(account.username)}</span>
               <span class="acc-sub">${esc(kindLabel(account.kind))}</span>
             </span>
             ${account.uuid === activeId ? '<span class="acc-dot" title="Активный"></span>' : ""}
@@ -9072,7 +9054,7 @@
       setStatus(`Microsoft недоступен: ${esc(String(err))}`, "warn");
       return;
     }
-    if (codeBox) codeBox.textContent = flow.user_code;
+    if (codeBox) { codeBox.setAttribute("translate", "no"); codeBox.textContent = flow.user_code; }
     setStatus("Ждём подтверждения… Открой <b>microsoft.com/link</b> и введи код выше.");
     const link = $("#acc-open-link");
     if (link) link.dataset.uri = flow.verification_uri || "https://www.microsoft.com/link";
@@ -9156,8 +9138,10 @@
     }));
 
     const settings = state.settings || {};
-    // перерисовка не должна дёргать прокрутку: иначе после «+» профиль улетает вниз
+    // Сохраняем оба независимых скролла: тело настроек и список скинов.
+    // Последний пересоздаётся при выборе скина и иначе возвращается к началу.
     const keepScroll = body.scrollTop;
+    const keepSkinScroll = $("#skin-library", body)?.scrollTop;
     renderPrefsAccountCard();
     if (prefsCategory === "profile") body.innerHTML = prefsProfile();
     if (prefsCategory === "look") body.innerHTML = prefsLook(settings);
@@ -9174,11 +9158,12 @@
       bindFavorites();
       bindSkin();
     }
-    if (prefsCategory === "wall") {
-      bindWallpaperLibrary();
-      if (wallpaperEngineEnabled() && !state.wallpaperLibrary.controlBusy && !state.wallpaperLibrary.loaded && !state.wallpaperLibrary.loading) refreshWallpaperLibrary();
-    } else if (wallPreviewObserver) { wallPreviewObserver.disconnect(); wallPreviewObserver = null; }
+    if (prefsCategory === "wall") bindWallpaperLinks();
     if (keepScroll) body.scrollTop = keepScroll;
+    if (keepSkinScroll !== undefined) {
+      const library = $("#skin-library", body);
+      if (library) library.scrollTop = keepSkinScroll;
+    }
   }
 
   /** Компоновка профиля: аккаунты слева; профиль и избранное справа. */
@@ -9197,7 +9182,7 @@
             ${accounts.map((account) => `
               <div class="profile-row ${account.uuid === activeId ? "is-active" : ""}" data-uuid="${esc(account.uuid)}">
                 ${avatarHtml(account)}
-                <div class="acc-main"><div class="acc-name">${esc(account.username)}</div><div class="acc-sub">${esc(kindLabel(account.kind))}</div></div>
+                <div class="acc-main"><div class="acc-name" translate="no">${esc(account.username)}</div><div class="acc-sub">${esc(kindLabel(account.kind))}</div></div>
                 ${account.uuid === activeId ? '<span class="tag green">активный</span>' : '<button class="btn btn-small" data-acc="pick">Выбрать</button>'}
                 ${account.kind === "microsoft" ? '<span class="acc-slot" aria-hidden="true"></span>'
                   : '<button class="icon-btn" data-acc="rename-one" title="Изменить ник"><svg class="ic"><use href="#i-pencil"/></svg></button>'}
@@ -9211,7 +9196,7 @@
             <div class="prefs-label">Профиль</div>
             ${active ? `<div class="profile-card">
               ${avatarHtml(active, "lg")}
-              <div class="profile-card-main"><div class="profile-card-name">${esc(active.username)}</div><div class="profile-card-sub">${esc(kindLabel(active.kind))}</div></div>
+              <div class="profile-card-main"><div class="profile-card-name" translate="no">${esc(active.username)}</div><div class="profile-card-sub">${esc(kindLabel(active.kind))}</div></div>
               <div class="profile-card-actions">
                 ${active.kind === "microsoft" ? "" : '<button class="btn btn-small" data-acc="rename">Изменить ник</button>'}
                 <button class="btn btn-small" data-acc="remove">Выйти</button>
@@ -9272,10 +9257,18 @@
     const selectedTab = INITIAL_TABS.find(([id]) => id === initialTab()) || INITIAL_TABS[0];
     return `
       <div class="prefs-section">
+        <div class="prefs-label">Язык интерфейса</div>
+        <div class="settings-row">
+          <label class="label" for="prefs-language">Язык</label>
+          <select class="select" id="prefs-language">${LANGUAGES.map(([code, label]) => `<option value="${code}" translate="no" ${displayedLanguage === code ? "selected" : ""}>${label}</option>`).join("")}</select>
+        </div>
+        <div class="hint">Язык сохраняется автоматически и применяется сразу.</div>
+      </div>
+      <div class="prefs-section">
         <div class="prefs-label" id="launcher-icon-label">Иконка лаунчера</div>
         <div class="launcher-icon-grid" id="launcher-icon-grid" role="radiogroup" aria-labelledby="launcher-icon-label">
           ${LAUNCHER_ICONS.map(([id, label, src]) => `
-            <label class="launcher-icon-option">
+            <label class="launcher-icon-option" ${id === "default" ? "" : 'translate="no"'}>
               <input type="radio" name="launcher-icon" value="${id}" aria-label="${esc(label)}" ${displayedLauncherIcon === id ? "checked" : ""}>
               <span class="launcher-icon-card"><img src="${src}" alt="" draggable="false"><span>${esc(label)}</span></span>
             </label>`).join("")}
@@ -9372,63 +9365,6 @@
     }).join("");
   }
 
-  function wallpaperLibraryHtml(settings) {
-    const library = state.wallpaperLibrary;
-    const projects = library.projects || [];
-    const enabled = settings.wallpaper_engine_enabled !== false;
-    const audio = settings.wallpaper_workshop_audio === true;
-    const busy = Boolean(library.controlBusy || library.audioBusy);
-    const typeLabel = { video: "Видео", scene: "Сцена", web: "Web", application: "Приложение", unknown: "Проект" };
-    return `
-      <div class="prefs-section we-section">
-        <div class="prefs-label-row"><span class="prefs-label">Wallpaper Engine · Steam Workshop</span><div class="spacer"></div>
-          <button class="btn btn-small" id="we-refresh" ${!enabled || busy || library.loading ? "disabled" : ""}>${library.loading ? "Поиск…" : "Обновить"}</button>
-          <button class="btn btn-small" id="we-folder" ${!enabled || busy || library.loading ? "disabled" : ""}>Папка Steam…</button>
-        </div>
-        <div class="we-controls">
-          <div class="we-control-row">
-            <div class="we-control-text"><strong>Загружать Wallpaper Engine в OmniSpec</strong><span>При выключении фон и поиск останавливаются, выбор сохраняется. Обои рабочего стола не меняются.</span></div>
-            <button type="button" class="switch ${enabled ? "on" : ""}" id="we-enabled" role="switch" aria-label="Загружать Wallpaper Engine в OmniSpec" aria-checked="${enabled}" ${busy ? "disabled" : ""}></button>
-          </div>
-          <div class="we-control-row">
-            <div class="we-control-text"><strong>Звук видео Workshop в OmniSpec</strong><span>Только видео в лаунчере; на собственные файлы и звук рабочего стола не влияет.</span></div>
-            <button type="button" class="switch ${audio ? "on" : ""}" id="we-audio" role="switch" aria-label="Звук видео Workshop в OmniSpec" aria-checked="${audio}" ${busy || library.audioBusy ? "disabled" : ""}></button>
-          </div>
-        </div>
-        <div class="skin-note">Звук сцен воспроизводит сам Wallpaper Engine. Отдельно выключить его для окна OmniSpec без риска затронуть рабочий стол пока нельзя.</div>
-        ${enabled ? `<div class="skin-note">${settings.wallpaper_steam_path ? `Дополнительная папка: ${esc(settings.wallpaper_steam_path)}` : "Поиск в стандартных папках Steam и на других дисках."}
-          ${settings.wallpaper_steam_path ? '<button class="we-reset-path" id="we-auto">Вернуть автопоиск</button>' : ""}</div>` : ""}
-        <div class="we-link-row">
-          <input class="input" id="wall-link" value="${esc(library.link || "")}" placeholder="Ссылка Steam Workshop или прямая ссылка GIF / MP4" spellcheck="false" aria-label="Ссылка на обои">
-          <button class="btn" id="wall-link-add" ${library.linkBusy ? "disabled" : ""}>${library.linkBusy ? "Загрузка…" : "Добавить"}</button>
-        </div>
-        <div class="skin-note">Для Workshop сначала подпишись и дождись загрузки в Steam, затем нажми «Обновить». Прямой файл до 512 МБ сохраняется в лаунчер.</div>
-        ${enabled ? `
-        <div class="skin-note">GIF не содержит звука. Сцены на Windows передаются кадрами из запущенного Wallpaper Engine; может отображаться его вспомогательное окно и индикатор захвата. Web-обои и приложения открываются только отдельно. Если анимация стоит, проверь правила паузы в Wallpaper Engine.</div>
-        ${settings.wallpaper === "workshop" && settings.wallpaper_workshop_project ? `<button class="btn btn-small" id="we-retry" ${library.retrying ? "disabled" : ""}>${library.retrying ? "Восстанавливаем…" : "Восстановить обои"}</button>` : ""}
-        ${library.sceneError ? `<div class="skin-import-errors" role="alert">${esc(library.sceneError)}</div>` : ""}
-        ${library.error ? `<div class="skin-import-errors" role="alert">${esc(library.error)}</div>` : ""}
-        <div class="we-library-head">
-          <span class="muted">${library.loading ? "Ищем проекты…" : `Найдено: ${projects.length}${library.truncated ? " (показаны первые)" : ""}`}</span>
-          ${projects.length ? `<input class="input we-search" id="we-search" value="${esc(library.query || "")}" placeholder="Поиск обоев" aria-label="Поиск обоев">` : ""}
-        </div>
-        ${projects.length ? `<div class="we-grid" id="we-grid">
-          ${projects.map((project, index) => `
-            <article class="we-card ${library.highlight === project.workshop_id ? "is-highlighted" : ""}" data-we-card="${index}" data-we-search="${esc(`${project.title} ${project.workshop_id || ""} ${typeLabel[project.kind] || ""}`.toLowerCase())}">
-              <div class="we-thumb">${project.preview ? `<img alt="" data-we-preview="${esc(project.preview)}" loading="lazy">` : '<span>Нет превью</span>'}
-                <span class="we-type">${esc(typeLabel[project.kind] || "Проект")}</span></div>
-              <div class="we-title" title="${esc(project.title)}">${esc(project.title)}</div>
-              ${project.workshop_id ? `<div class="we-id">Workshop ${esc(project.workshop_id)}</div>` : '<div class="we-id">Локальный проект</div>'}
-              <div class="we-actions">
-                ${project.playable || (project.kind === "scene" && library.sceneCapture) ? `<button class="btn btn-small btn-primary" data-we-apply="${index}" aria-label="Установить «${esc(project.title)}» как фон">На фон</button>` : ""}
-                <button class="btn btn-small" data-we-open="${index}" title="Открыть отдельно через Wallpaper Engine" aria-label="Открыть «${esc(project.title)}» в Wallpaper Engine">В Wallpaper Engine</button>
-              </div>
-            </article>`).join("")}
-        </div>` : `<div class="we-empty">${library.loading ? "" : "Проекты не найдены. Укажи папку Steam, библиотеку на другом диске или папку обоев Wallpaper Engine."}</div>`}
-        ` : `<div class="we-empty" role="status">Wallpaper Engine выключен в OmniSpec. Последний проект сохранён; выбранный фон восстановится после включения.</div>`}
-      </div>`;
-  }
-
   function prefsWall(settings) {
     const recent = ((state.wall.recent && state.wall.recent.length) ? state.wall.recent : (settings.wallpaper_recent || []))
       .filter((id) => WALLS.some(([wall]) => wall === id)).slice(0, 6);
@@ -9445,10 +9381,15 @@
           <button class="wall-chip ${state.wall.wallpaper === "custom" ? "is-active" : ""}" data-wall="custom" id="wall-custom-chip">
             <span>${state.customWall ? (state.customWall.kind === "video" ? "Своё видео" : "Свой фон") : "Свой фон…"}</span>
           </button>
-          ${state.workshopWall || settings.wallpaper_workshop_project ? `<button class="wall-chip ${state.wall.wallpaper === "workshop" ? "is-active" : ""}" data-wall="workshop" ${!wallpaperEngineEnabled() ? "disabled title=\"Включи Wallpaper Engine ниже\"" : ""}><span>Steam · ${!wallpaperEngineEnabled() ? "выключено" : state.workshopWall?.kind === "scene" ? "сцена" : state.workshopWall ? "видео" : "сохранено"}</span></button>` : ""}
           <button class="btn" id="wall-pick">${state.customWall ? "Заменить файл…" : "Выбрать файл…"}</button>
         </div>
         <div class="skin-note">PNG, JPG, WebP, GIF, MP4 или WebM · до 512 МБ. Видео воспроизводится без звука.</div>
+        ${settings.wallpaper === "workshop" ? '<div class="skin-note">Прежний фон Workshop больше не поддерживается. Выбери другой фон; исходные файлы не удалены.</div>' : ""}
+        <div class="wall-link-row">
+          <input class="input" id="wall-link" value="${esc(state.wallLink.value)}" placeholder="Ссылка на файл или страницу Imgur" spellcheck="false" aria-label="Ссылка на обои">
+          <button class="btn" id="wall-link-add" ${state.wallLink.busy ? "disabled" : ""}>${state.wallLink.busy ? "Загрузка…" : "Добавить"}</button>
+        </div>
+        <div class="skin-note">Прямая HTTP(S)-ссылка на медиа или ссылка Imgur. Другие страницы и альбомы могут не поддерживаться.</div>
         ${groups.map((group) => `<div class="wall-group"><div class="wall-group-name">${esc(group.label)}</div><div class="wall-grid">${wallGridHtml(group.ids)}</div></div>`).join("")}
         ${recent.length ? `<div class="wall-group"><div class="wall-group-name">Недавние</div><div class="wall-grid">${wallGridHtml(recent)}</div></div>` : ""}
       </div>
@@ -9462,279 +9403,36 @@
           <div class="field" style="flex:1;min-width:170px"><label>Затемнение</label><div class="range"><input type="range" id="wall-dim" min="0" max="100" value="${state.wall.dim}"><span class="tag" id="wall-dim-value">${state.wall.dim}%</span></div></div>
         </div>
         <div class="skin-note">Для видео режим «Плиткой» работает как «Заполнить».</div>
-      </div>
-      ${wallpaperLibraryHtml(settings)}`;
+      </div>`;
   }
 
-  let wallPreviewObserver = null;
-  let wallpaperScanTask = null;
-  let wallpaperScanRevision = 0;
-  let wallpaperControlRevision = 0;
-
-  function clearWallpaperLibrary() {
-    wallpaperScanRevision += 1;
-    wallpaperScanTask = null; // новый поиск не ждёт отменённого обхода
-    if (wallPreviewObserver) { wallPreviewObserver.disconnect(); wallPreviewObserver = null; }
-    Object.assign(state.wallpaperLibrary, {
-      projects: [], searched: [], engine: null, sceneCapture: false, truncated: false,
-      loading: false, loaded: false, error: "", sceneError: "", retrying: false
-    });
-  }
-
-  function refreshWallpaperLibrary() {
-    if (!wallpaperEngineEnabled()) return Promise.resolve();
-    if (wallpaperScanTask) return wallpaperScanTask;
-    const library = state.wallpaperLibrary;
-    const revision = wallpaperScanRevision;
-    library.loading = true;
-    library.error = "";
-    if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
-    wallpaperScanTask = (async () => {
-      try {
-        const result = await api.scanWallpaperLibrary();
-        if (revision !== wallpaperScanRevision || !wallpaperEngineEnabled()) return;
-        if (!result) throw new Error("не удалось получить библиотеку");
-        library.projects = result.projects || [];
-        library.searched = result.searched || [];
-        library.engine = result.engine || null;
-        library.sceneCapture = Boolean(result.scene_capture);
-        library.truncated = Boolean(result.truncated);
-        library.loaded = true;
-      } catch (error) {
-        if (revision !== wallpaperScanRevision || !wallpaperEngineEnabled()) return;
-        library.error = String(error);
-        library.loaded = true;
-      } finally {
-        if (revision === wallpaperScanRevision) {
-          library.loading = false;
-          wallpaperScanTask = null;
-          if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
-        }
-      }
-    })();
-    return wallpaperScanTask;
-  }
-
-  async function restoreSavedWorkshop(notify = false) {
-    const library = state.wallpaperLibrary;
-    const revision = wallpaperControlRevision;
-    const project = state.settings?.wallpaper_workshop_project;
-    if (!wallpaperEngineEnabled() || state.wall?.wallpaper !== "workshop" || !project) return;
-    library.retrying = true;
-    if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
-    try {
-      const media = await loadWallpaperSource("workshop");
-      if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()
-          || state.wall?.wallpaper !== "workshop" || state.settings?.wallpaper_workshop_project !== project) return;
-      if (!media) throw new Error("выбранные обои недоступны");
-      library.sceneError = "";
-      await applyWallpaper(state.wall);
-      if (notify) toast("Обои восстановлены", "ok");
-    } catch (error) {
-      if (revision === wallpaperControlRevision && wallpaperEngineEnabled()
-          && state.wall?.wallpaper === "workshop" && state.settings?.wallpaper_workshop_project === project) {
-        library.sceneError = String(error?.message || error);
-        toast(`Не удалось восстановить обои: ${library.sceneError}`, "err");
-      }
-    } finally {
-      if (revision === wallpaperControlRevision) {
-        library.retrying = false;
-        if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
-      }
-    }
-  }
-
-  async function changeWallpaperEngineEnabled(enabled) {
-    const library = state.wallpaperLibrary;
-    if (library.controlBusy || library.audioBusy || enabled === wallpaperEngineEnabled()) return;
-    const before = wallpaperEngineEnabled();
-    const wallBefore = state.wall?.wallpaper;
-    ++wallpaperControlRevision;
-    ++wallSourceRevision.workshop;
-    library.controlBusy = true;
-    state.settings = { ...(state.settings || {}), wallpaper_engine_enabled: enabled };
-    state.workshopWall = null;
-    clearWallpaperLibrary();
-    applyWallpaper(state.wall);
-    renderPrefs();
-    try {
-      const saved = await api.setWallpaperEngineEnabled(enabled);
-      // Во время команды мог завершиться предыдущий выбор сцены. Используем
-      // записанный backend выбор, если пользователь сам не сменил фон.
-      if (saved && state.wall?.wallpaper === wallBefore && Object.prototype.hasOwnProperty.call(saved, "wallpaper")) {
-        state.settings = { ...state.settings, wallpaper: saved.wallpaper,
-          wallpaper_workshop_project: saved.wallpaper_workshop_project };
-        state.wall.wallpaper = saved.wallpaper || null;
-      }
-      library.controlBusy = false;
-      if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
-      if (enabled) void restoreSavedWorkshop();
-    } catch (error) {
-      state.settings = { ...(state.settings || {}), wallpaper_engine_enabled: before };
-      library.controlBusy = false;
-      toast(`Не удалось сохранить настройку Wallpaper Engine: ${error}`, "err");
-      if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
-      if (before) void restoreSavedWorkshop();
-      else applyWallpaper(state.wall);
-    }
-  }
-
-  async function changeWallpaperWorkshopAudio(enabled) {
-    const library = state.wallpaperLibrary;
-    if (library.controlBusy || library.audioBusy || enabled === wallpaperWorkshopAudioEnabled()) return;
-    const before = wallpaperWorkshopAudioEnabled();
-    library.audioBusy = true;
-    state.settings = { ...(state.settings || {}), wallpaper_workshop_audio: enabled };
-    // До первого await: у WebView сохраняется пользовательский жест для звука.
-    applyWallpaper(state.wall);
-    renderPrefs();
-    try {
-      await api.setWallpaperWorkshopAudio(enabled);
-    } catch (error) {
-      state.settings = { ...(state.settings || {}), wallpaper_workshop_audio: before };
-      applyWallpaper(state.wall);
-      toast(`Не удалось сохранить звук видео: ${error}`, "err");
-    } finally {
-      library.audioBusy = false;
-      if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs();
-    }
-  }
-
-  function filterWallpaperCards() {
-    const query = (state.wallpaperLibrary.query || "").trim().toLowerCase();
-    $$("#we-grid [data-we-card]").forEach((card) => { card.hidden = Boolean(query && !card.dataset.weSearch.includes(query)); });
-  }
-
-  function bindWallpaperLibrary() {
-    const library = state.wallpaperLibrary;
+  function bindWallpaperLinks() {
     const customChip = $("#wall-custom-chip");
     if (customChip && state.customWall && state.customWall.kind !== "video") customChip.style.backgroundImage = `url("${state.customWall.src}")`;
-    $("#we-enabled")?.addEventListener("click", () => changeWallpaperEngineEnabled(!wallpaperEngineEnabled()));
-    $("#we-audio")?.addEventListener("click", () => changeWallpaperWorkshopAudio(!wallpaperWorkshopAudioEnabled()));
-    $("#we-refresh")?.addEventListener("click", refreshWallpaperLibrary);
-    $("#we-retry")?.addEventListener("click", () => {
-      if (!library.retrying) void restoreSavedWorkshop(true);
-    });
-    $("#we-folder")?.addEventListener("click", async () => {
-      const revision = wallpaperControlRevision;
-      const path = await api.pickDir("Папка Steam, библиотеки Steam или Wallpaper Engine").catch((error) => { toast(String(error), "err"); return null; });
-      if (!path || revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
-      try {
-        const next = { ...(state.settings || {}), wallpaper_steam_path: path };
-        await api.saveSettings(next);
-        state.settings = { ...(state.settings || {}), wallpaper_steam_path: path };
-        clearWallpaperLibrary();
-        await refreshWallpaperLibrary();
-      } catch (error) { toast(`Не удалось сохранить папку: ${error}`, "err"); }
-    });
-    $("#we-auto")?.addEventListener("click", async () => {
-      try {
-        const next = { ...(state.settings || {}), wallpaper_steam_path: null };
-        await api.saveSettings(next);
-        state.settings = { ...(state.settings || {}), wallpaper_steam_path: null };
-        clearWallpaperLibrary();
-        await refreshWallpaperLibrary();
-      } catch (error) { toast(String(error), "err"); }
-    });
-    $("#we-search")?.addEventListener("input", (event) => { library.query = event.target.value; filterWallpaperCards(); });
-    filterWallpaperCards();
     const link = $("#wall-link");
-    link?.addEventListener("input", () => { library.link = link.value; });
-    link?.addEventListener("keydown", (event) => { if (event.key === "Enter") $("#wall-link-add")?.click(); });
+    link?.addEventListener("input", () => { state.wallLink.value = link.value; });
+    link?.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); void addWallpaperLink(); } });
     $("#wall-link-add")?.addEventListener("click", addWallpaperLink);
-    $$("[data-we-apply]").forEach((button) => button.addEventListener("click", async () => {
-      const project = library.projects[Number(button.dataset.weApply)];
-      const revision = wallpaperControlRevision;
-      if (!wallpaperEngineEnabled() || !project || !(project.playable || (project.kind === "scene" && library.sceneCapture))) return;
-      if (project.kind === "scene") {
-        const confirmed = await askConfirm({ title: "Сцена Wallpaper Engine на фоне",
-          text: "Запусти Wallpaper Engine заранее. Он откроет вспомогательное окно выбранной сцены; OmniSpec захватит его изображение. Окно или системная рамка захвата могут быть видны, звук зависит от настроек Wallpaper Engine. Используй только доверенные проекты.", ok: "Включить" });
-        if (!confirmed) return;
-      }
-      if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
-      button.disabled = true;
-      try {
-        const saved = await api.setWorkshopWallpaper(project.directory);
-        if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
-        state.settings = { ...(state.settings || {}), wallpaper: saved.wallpaper,
-          wallpaper_workshop_project: saved.wallpaper_workshop_project };
-        state.wall.wallpaper = "workshop";
-        await loadWallpaperSource("workshop");
-        if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled() || state.wall.wallpaper !== "workshop") return;
-        state.wall.recent = rememberWallpaper(state.wall.recent, "workshop");
-        await persistWallpaper();
-        if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
-        library.sceneError = "";
-        applyWallpaper(state.wall);
-        renderPrefs();
-        toast(`${project.kind === "scene" ? "Сцена" : "Видео"} «${project.title}» ${project.kind === "scene" ? "выбрана" : "выбрано"} как фон`, "ok");
-      } catch (error) {
-        if (revision === wallpaperControlRevision && wallpaperEngineEnabled()) toast(String(error), "err");
-        button.disabled = false;
-      }
-    }));
-    $$("[data-we-open]").forEach((button) => button.addEventListener("click", async () => {
-      const project = library.projects[Number(button.dataset.weOpen)];
-      const revision = wallpaperControlRevision;
-      if (!wallpaperEngineEnabled() || !project) return;
-      const confirmed = await askConfirm({ title: "Открыть в Wallpaper Engine",
-        text: "Проект откроется в отдельном окне Wallpaper Engine в Windows, не внутри OmniSpec. Web-обои и приложения могут выполнять код автора — продолжай только если доверяешь ему. Заранее запусти Wallpaper Engine.", ok: "Открыть" });
-      if (!confirmed || revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
-      button.disabled = true;
-      try { await api.openWallpaperEngine(project.directory); toast("Команда отправлена в Wallpaper Engine", "ok"); }
-      catch (error) { toast(String(error), "err"); }
-      finally { button.disabled = false; }
-    }));
-    if (wallPreviewObserver) wallPreviewObserver.disconnect();
-    const images = $$("#we-grid [data-we-preview]");
-    const load = async (image) => {
-      const data = await api.imageDataUrl(image.dataset.wePreview).catch(() => null);
-      if (data && image.isConnected) image.src = data;
-    };
-    if ("IntersectionObserver" in window) {
-      wallPreviewObserver = new IntersectionObserver((entries) => entries.forEach((entry) => {
-        if (entry.isIntersecting) { wallPreviewObserver?.unobserve(entry.target); load(entry.target); }
-      }), { root: $("#prefs-body"), rootMargin: "180px" });
-      images.forEach((image) => wallPreviewObserver.observe(image));
-    } else images.slice(0, 100).forEach(load);
   }
 
   async function addWallpaperLink() {
-    const library = state.wallpaperLibrary;
-    const url = String(library.link || $("#wall-link")?.value || "").trim();
-    if (!url || library.linkBusy) return;
-    library.linkBusy = true; renderPrefs();
+    const link = state.wallLink;
+    const url = String(link.value || $("#wall-link")?.value || "").trim();
+    if (!url || link.busy) return;
+    link.busy = true; renderPrefs();
     try {
-      const id = await api.parseWorkshopLink(url);
-      if (id) {
-        if (!wallpaperEngineEnabled()) throw new Error("Включи Wallpaper Engine в OmniSpec, чтобы найти обои Workshop");
-        const revision = wallpaperControlRevision;
-        if (!library.loaded || library.loading) await refreshWallpaperLibrary();
-        if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
-        const item = library.projects.find((project) => project.workshop_id === id);
-        if (item) {
-          library.query = id; library.highlight = id; library.linkBusy = false; renderPrefs();
-          $("#we-grid .is-highlighted")?.scrollIntoView({ block: "nearest" });
-          toast(`Обои «${item.title}» найдены в библиотеке`, "ok");
-        } else {
-          library.linkBusy = false; renderPrefs();
-          const confirmed = await askConfirm({ title: "Обои ещё не скачаны",
-            text: "Откроется страница Steam Workshop. Подпишись на обои, дождись загрузки в Steam, затем вернись и нажми «Обновить». Для подписки может потребоваться приобретённый Wallpaper Engine.", ok: "Открыть Steam" });
-          if (confirmed) await api.openUrl(`https://steamcommunity.com/sharedfiles/filedetails/?id=${id}`);
-        }
-      } else {
-        const saved = await api.downloadWallpaper(url);
-        state.settings = { ...saved, launcher_icon: displayedLauncherIcon };
-        await loadWallpaperSource("custom");
-        state.wall.wallpaper = "custom";
-        state.wall.recent = rememberWallpaper(state.wall.recent, "custom");
-        await persistWallpaper();
-        applyWallpaper(state.wall);
-        library.link = "";
-        toast("Файл обоев загружен и выбран", "ok");
-      }
+      const saved = await api.downloadWallpaper(url);
+      state.settings = { ...(state.settings || {}), wallpaper: saved.wallpaper,
+        custom_wallpaper: saved.custom_wallpaper, launcher_icon: displayedLauncherIcon };
+      await loadWallpaperSource("custom");
+      state.wall.wallpaper = "custom";
+      state.wall.recent = rememberWallpaper(state.wall.recent, "custom");
+      await persistWallpaper();
+      applyWallpaper(state.wall);
+      link.value = "";
+      toast("Файл обоев загружен и выбран", "ok");
     } catch (error) { toast(String(error), "err"); }
-    finally { library.linkBusy = false; if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs(); }
+    finally { link.busy = false; if (prefsCategory === "wall" && !$("#modal-prefs").hidden) renderPrefs(); }
   }
 
   function prefsFx() {
@@ -10088,6 +9786,7 @@
 
   /* обработчики для всех категорий сразу — их немного */
   function bindPrefs() {
+    $("#prefs-language")?.addEventListener("change", (event) => { void chooseLanguage(event.target.value); });
     const settings = state.settings || {};
 
     $$("#launcher-icon-grid input[name='launcher-icon']").forEach((radio) => radio.addEventListener("change", () => {
@@ -10353,7 +10052,8 @@
       wallPick.disabled = true;
       try {
         const saved = await api.setCustomWallpaper(path);
-        state.settings = { ...saved, launcher_icon: displayedLauncherIcon };
+        state.settings = { ...(state.settings || {}), wallpaper: saved.wallpaper,
+          custom_wallpaper: saved.custom_wallpaper, launcher_icon: displayedLauncherIcon };
         await loadWallpaperSource("custom");
         state.wall.wallpaper = "custom";
         state.wall.recent = rememberWallpaper(state.wall.recent, "custom");
@@ -10391,31 +10091,6 @@
     $$("#prefs-body [data-wall]").forEach((chip) => chip.addEventListener("click", async () => {
       const picked = chip.dataset.wall || null;
       if (picked === "custom" && !state.customWall) return toast("Сначала выбери файл фона", "err");
-      if (picked === "workshop" && !wallpaperEngineEnabled()) return toast("Сначала включи Wallpaper Engine в OmniSpec", "err");
-      if (picked === "workshop" && !state.workshopWall) {
-        const project = state.settings?.wallpaper_workshop_project;
-        if (!project) return toast("Выбранные обои Workshop недоступны", "err");
-        const revision = wallpaperControlRevision;
-        chip.disabled = true;
-        try {
-          const saved = await api.setWorkshopWallpaper(project);
-          if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
-          state.settings = { ...(state.settings || {}), wallpaper: saved.wallpaper,
-            wallpaper_workshop_project: saved.wallpaper_workshop_project };
-          state.wall.wallpaper = "workshop";
-          await loadWallpaperSource("workshop");
-          if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled() || state.wall.wallpaper !== "workshop") return;
-          state.wall.recent = rememberWallpaper(state.wall.recent, "workshop");
-          await persistWallpaper();
-          if (revision !== wallpaperControlRevision || !wallpaperEngineEnabled()) return;
-          applyWallpaper(state.wall);
-          renderPrefs();
-        } catch (error) {
-          if (revision === wallpaperControlRevision && wallpaperEngineEnabled()) toast(String(error), "err");
-          chip.disabled = false;
-        }
-        return;
-      }
       state.wall.wallpaper = picked;
       state.wall.recent = rememberWallpaper(state.wall.recent, picked);
       $$("#prefs-body [data-wall]").forEach((el) => el.classList.toggle("is-active", el === chip));
@@ -10678,7 +10353,13 @@
     };
     try {
       await api.saveSettings(next);
-      state.settings = { ...next, launcher_icon: displayedLauncherIcon };
+      // Addressed changes and wallpaper controls may have completed while this
+      // older full-settings snapshot was waiting to save.
+      state.settings = { ...next, language: displayedLanguage, launcher_icon: displayedLauncherIcon,
+        wallpaper: state.wall.wallpaper, wallpaper_fit: state.wall.fit,
+        wallpaper_blur: state.wall.blur, wallpaper_dim: state.wall.dim,
+        wallpaper_recent: state.wall.recent || [],
+        custom_wallpaper: state.settings?.custom_wallpaper ?? next.custom_wallpaper };
       toast("Настройки сохранены", "ok");
       $("#modal-prefs").hidden = true;
     } catch (err) { toast(String(err), "err"); }
@@ -10943,8 +10624,8 @@
     const filled = favorites.map((fav) => `
       <button class="fav-slot ${fav.id === (skinState().favorite || "") ? "is-active" : ""}" data-fav="${esc(fav.id)}" title="${esc(fav.name)}">
         <span class="skin-mini fav-mini" data-fav-src="${esc(fav.skinDataUrl || "")}" data-fav-cape="${esc(fav.capeDataUrl || "")}"></span>
-        <span class="fav-name">${esc(fav.name)}</span>
-        <span class="fav-cape">${esc(fav.capeAlias || "без плаща")}</span>
+        <span class="fav-name" translate="no">${esc(fav.name)}</span>
+        <span class="fav-cape" ${fav.capeAlias ? 'translate="no"' : ""}>${esc(fav.capeAlias || "без плаща")}</span>
         <span class="preset-del" data-del-fav="${esc(fav.id)}" title="Удалить образ">×</span>
       </button>`);
     const canAdd = favorites.length < FAV_SLOTS;
@@ -11083,7 +10764,9 @@
   function skinStatusText() {
     const skin = skinState();
     const variant = skin.variant === "slim" ? "slim, руки 3 px" : "wide, руки 4 px";
-    let text = skin.currentName
+    let text = skin.fromAccount && skin.accountNameDefault
+      ? `Выбран скин аккаунта · ${variant}.${skin.licensed ? "" : " Смена скина доступна только лицензионному аккаунту."}`
+      : skin.currentName
       ? `Выбран скин «${skin.currentName}» · ${variant}.${skin.licensed ? "" : " Смена скина доступна только лицензионному аккаунту."}`
       : skin.licensed ? "Загрузи PNG 64×64, чтобы поставить новый скин."
         : "Смена скина возможна только у лицензионного аккаунта.";
@@ -11141,7 +10824,7 @@
             ${library.length ? library.map((item) => `
               <div class="skin-library-item ${item.id === skin.selectedSkin ? "is-active" : ""}">
                 <button class="skin-library-select" data-skin-id="${esc(item.id)}" title="${esc(item.name)}">
-                  <span class="skin-mini" data-thumb-path="${esc(item.path)}"></span><span class="skin-library-name">${esc(item.name)}</span>
+                  <span class="skin-mini" data-thumb-path="${esc(item.path)}"></span><span class="skin-library-name" translate="no">${esc(item.name)}</span>
                 </button>
                 <button class="skin-library-remove" data-del-skin="${esc(item.id)}" title="Убрать из библиотеки" aria-label="Убрать ${esc(item.name)} из библиотеки">×</button>
               </div>`).join("") : '<div class="skin-note">Библиотека пуста — загрузи свои скины.</div>'}
@@ -11159,7 +10842,7 @@
     const cards = list.map((cape) => `
       <button class="cape-card ${cape.id === activeId ? "is-active" : ""}" data-cape-id="${esc(cape.id)}" title="${esc(cape.alias)}">
         <canvas class="cape-thumb" width="40" height="64" data-cape-src="${esc(cape.data_url || "")}"></canvas>
-        <span class="cape-name">${esc(cape.alias)}</span>
+        <span class="cape-name" translate="no">${esc(cape.alias)}</span>
       </button>`).join("");
     return `
       <div class="cape-list" id="skin-capes">
@@ -11604,6 +11287,7 @@
         skin.dataUrl = info.data_url;
         skin.fromAccount = true;
         skin.currentPath = "";
+        skin.accountNameDefault = !info.name;
         skin.currentName = info.name || "скин аккаунта";
       }
       if (!keepLocal && info.variant && !skin.touchedVariant) skin.variant = info.variant === "slim" ? "slim" : "classic";
@@ -11670,8 +11354,8 @@
                 <div class="flex-row">
                   <select class="select grow" id="inst-java">
                     <option value="" ${!meta.java_path ? "selected" : ""}>автоматически</option>
-                    ${javas.map((item) => `<option value="${esc(item.path)}" ${meta.java_path === item.path ? "selected" : ""}>Java ${item.major} — ${esc(item.path)}</option>`).join("")}
-                    ${meta.java_path && !javas.some((item) => item.path === meta.java_path) ? `<option value="${esc(meta.java_path)}" selected>${esc(meta.java_path)}</option>` : ""}
+                    ${javas.map((item) => `<option translate="no" value="${esc(item.path)}" ${meta.java_path === item.path ? "selected" : ""}>Java ${item.major} — ${esc(item.path)}</option>`).join("")}
+                    ${meta.java_path && !javas.some((item) => item.path === meta.java_path) ? `<option translate="no" value="${esc(meta.java_path)}" selected>${esc(meta.java_path)}</option>` : ""}
                   </select>
                   <button class="btn" id="inst-java-pick"><svg class="ic"><use href="#i-folder"/></svg>Файл…</button>
                 </div>
@@ -11693,7 +11377,7 @@
               </div>
               <div class="settings-row">
                 <div class="label">Наиграно</div>
-                <div class="muted" style="padding-top:7px">${esc(playtimeLabel(meta.playtime_secs))}${meta.last_played ? ` · последний запуск ${esc(relativeWhen(meta.last_played))}` : ""}</div>
+                <div class="muted instance-playtime" style="padding-top:7px">${esc(playtimeLabel(meta.playtime_secs))}${meta.last_played ? ` · последний запуск ${esc(relativeWhen(meta.last_played))}` : ""}</div>
               </div>
               <div class="settings-row">
                 <div class="label">Экспорт</div>
@@ -11724,6 +11408,7 @@
       if (!picked) return;
       const select = $("#inst-java");
       const option = document.createElement("option");
+      option.setAttribute("translate", "no");
       option.value = picked;
       option.textContent = picked;
       option.selected = true;
@@ -11873,13 +11558,17 @@
       if (entry.published_at) {
         const date = document.createElement("span");
         date.className = "muted";
-        date.textContent = new Date(entry.published_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+        date.dataset.localeDate = entry.published_at;
+        date.setAttribute("translate", "no");
+        date.textContent = localizedReleaseDate(entry.published_at);
         head.appendChild(date);
       }
       const pre = document.createElement("pre");
-      pre.textContent = entry.notes && entry.notes.trim()
-        ? entry.notes
-        : "Описание изменений не указано.";
+      if (entry.notes && entry.notes.trim()) pre.textContent = entry.notes;
+      else {
+        pre.dataset.emptyUpdateNotes = "";
+        pre.textContent = I18N.translate("Описание изменений не указано.");
+      }
       block.appendChild(head);
       block.appendChild(pre);
       box.appendChild(block);
@@ -11895,9 +11584,15 @@
     }
     $("#upd-title").textContent = `Доступна версия ${info.version}`;
     $("#upd-versions").textContent = `${info.current_version} → ${info.version}`;
-    $("#upd-date").textContent = info.published_at
-      ? new Date(info.published_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })
-      : "";
+    const date = $("#upd-date");
+    if (info.published_at) {
+      date.dataset.localeDate = info.published_at;
+      date.setAttribute("translate", "no");
+      date.textContent = localizedReleaseDate(info.published_at);
+    } else {
+      delete date.dataset.localeDate;
+      date.textContent = "";
+    }
     $("#upd-asset").textContent = info.asset_name || "";
     renderUpdateNotes(info);
     $("#upd-progress").hidden = true;
@@ -12346,8 +12041,8 @@
           <label>Java</label>
           <select class="select" id="c-java">
             <option value="" ${!cfg.javaPath ? "selected" : ""}>по умолчанию — подобрать автоматически</option>
-            ${cfg.javas.map((item) => `<option value="${esc(item.path)}" ${cfg.javaPath === item.path ? "selected" : ""}>Java ${esc(String(item.major))} — ${esc(item.vendor || "Java")} (${esc(item.path)})</option>`).join("")}
-            ${cfg.javaPath && !cfg.javas.some((item) => item.path === cfg.javaPath) ? `<option value="${esc(cfg.javaPath)}" selected>${esc(cfg.javaPath)}</option>` : ""}
+            ${cfg.javas.map((item) => `<option translate="no" value="${esc(item.path)}" ${cfg.javaPath === item.path ? "selected" : ""}>Java ${esc(String(item.major))} — ${esc(item.vendor || "Java")} (${esc(item.path)})</option>`).join("")}
+            ${cfg.javaPath && !cfg.javas.some((item) => item.path === cfg.javaPath) ? `<option translate="no" value="${esc(cfg.javaPath)}" selected>${esc(cfg.javaPath)}</option>` : ""}
           </select>
         </div>
 
@@ -12439,8 +12134,9 @@
     const hint = $("#create-hint");
     if (!hint || !cfg) return;
     const loader = cfg.loader === "vanilla" ? "ваниль" : `${LOADER_NAMES[cfg.loader] || cfg.loader} ${cfg.loaderVersion || "—"}`;
-    const where = cfg.installMode === "custom" && cfg.customDir ? cfg.customDir : "папка лаунчера";
-    hint.textContent = `MC ${cfg.mc || "—"} · ${loader} · ${cfg.memory} МБ · ${where}`;
+    const customPath = cfg.installMode === "custom" && cfg.customDir;
+    const where = customPath ? cfg.customDir : "папка лаунчера";
+    hint.innerHTML = `<span translate="no">MC ${esc(cfg.mc || "—")}</span> · <span>${esc(loader)}</span> · <span>${esc(cfg.memory)} МБ</span> · <span ${customPath ? 'translate="no"' : ""}>${esc(where)}</span>`;
   }
 
   /** Превью картинки-иконки до создания сборки. */
@@ -12954,6 +12650,9 @@
     try {
       state.settings = await api.settings();
     } catch { state.settings = { ...DEMO.settings }; }
+    displayedLanguage = LANGUAGES.some(([code]) => code === state.settings?.language) ? state.settings.language : "ru";
+    confirmedLanguage = displayedLanguage;
+    I18N.setLanguage(displayedLanguage);
     displayedLauncherIcon = launcherIconOption(state.settings?.launcher_icon)[0];
     confirmedLauncherIcon = displayedLauncherIcon;
     state.settings = { ...(state.settings || {}), launcher_icon: displayedLauncherIcon };
@@ -13020,14 +12719,7 @@
         ? state.settings.wallpaper_recent.slice(0, 6)
         : []
     };
-    // Ожидание запуска сцены не должно задерживать статус игр и Discord.
     loadWallpaperSource("custom").then(() => applyWallpaper(state.wall)).catch(() => null);
-    if (wallpaperEngineEnabled()) loadWallpaperSource("workshop").then(() => applyWallpaper(state.wall)).catch((error) => {
-      if (wallpaperEngineEnabled() && state.wall.wallpaper === "workshop") {
-        state.wallpaperLibrary.sceneError = String(error?.message || error);
-        toast(`Не удалось восстановить обои Workshop: ${state.wallpaperLibrary.sceneError}`, "err");
-      }
-    });
     applyWallpaper();
     await loadAccounts();
     bindFileDrop();

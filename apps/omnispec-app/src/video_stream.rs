@@ -96,7 +96,7 @@ impl VideoServer {
 
     /// Слот — только внутренний идентификатор, URL не содержит локального пути.
     pub fn expose(&self, slot: &str, path: &Path) -> Result<String, String> {
-        if !matches!(slot, "custom" | "workshop") {
+        if slot != "custom" {
             return Err("неизвестный источник видео".into());
         }
         let media = crate::wallpapers::media_at(path)?;
@@ -364,23 +364,20 @@ mod tests {
         body
     }
     #[test]
-    fn revoking_workshop_stops_its_stream_without_touching_custom_video() {
+    fn only_custom_video_is_exposed_and_revocation_cancels_streams() {
         let dir = std::env::temp_dir().join(format!("omnispec-video-slots-{}-{}", std::process::id(), random_hex().unwrap()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("movie.mp4");
         std::fs::write(&file, b"\x00\x00\x00\x18ftypisom01234567890123456789").unwrap();
         let server = VideoServer::new().unwrap();
+        assert!(server.expose("workshop", &file).is_err());
         let custom = server.expose("custom", &file).unwrap();
-        let workshop = server.expose("workshop", &file).unwrap();
         let custom_path = reqwest::Url::parse(&custom).unwrap().path().to_string();
-        let workshop_path = reqwest::Url::parse(&workshop).unwrap().path().to_string();
-        let old = server.entries.lock().unwrap().values().find(|e| e.slot == "workshop").unwrap().clone();
-        server.revoke("workshop");
-        assert!(!old.active.load(Ordering::Acquire), "already-open transfers are cancelled");
-        assert!(String::from_utf8_lossy(&request(&server, &workshop_path, "")).starts_with("HTTP/1.1 404"));
+        let old = server.entries.lock().unwrap().values().find(|e| e.slot == "custom").unwrap().clone();
         assert!(String::from_utf8_lossy(&request(&server, &custom_path, "")).starts_with("HTTP/1.1 200"));
-        assert!(!server.is_empty());
         server.revoke("custom");
+        assert!(!old.active.load(Ordering::Acquire), "already-open transfers are cancelled");
+        assert!(String::from_utf8_lossy(&request(&server, &custom_path, "")).starts_with("HTTP/1.1 404"));
         assert!(server.is_empty());
         let port = server.port;
         drop(server);

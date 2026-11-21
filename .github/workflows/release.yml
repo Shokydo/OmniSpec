@@ -27,7 +27,10 @@ jobs:
         uses: swatinem/rust-cache@v2
 
       - name: Тесты ядра
-        run: cargo test -p omnispec-core
+        run: cargo test --locked -p omnispec-core
+
+      - name: Тесты приложения на Windows
+        run: cargo test --locked -p omnispec-app
 
       - name: Сверить версию в Cargo.toml с тегом
         if: startsWith(github.ref, 'refs/tags/')
@@ -42,13 +45,27 @@ jobs:
           }
 
       - name: Сборка
-        run: cargo build --release -p omnispec-app
+        run: cargo build --locked --release -p omnispec-app
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tools/tests/package-lock.json
+      - name: Установить Playwright для проверки настоящего WebView2
+        run: npm ci --prefix tools/tests
+      - name: Проверить языки и фон в настоящем Windows WebView2
+        shell: pwsh
+        run: ./tools/tests/windows-language-wallpaper-cdp.ps1 -Launcher 'target/release/omnispec-app.exe'
+      - name: Проверить нативные иконки и Discord IPC в Windows
+        shell: pwsh
+        run: ./tools/tests/windows-launcher-icon-cdp.ps1 -Launcher 'target/release/omnispec-app.exe'
 
       - name: Собрать установщик (консольный, как в OmniPanel)
         shell: pwsh
         run: |
           $env:OMNISPEC_SETUP_PAYLOAD = "target/release/omnispec-app.exe"
-          cargo build --release -p omnispec-setup
+          cargo build --locked --release -p omnispec-setup
           if ($LASTEXITCODE -ne 0) { throw "установщик не собрался" }
           # в установщик вшит exe лаунчера — проверяем, что он не пустой
           $setup = Get-Item target/release/omnispec-setup.exe
@@ -140,14 +157,23 @@ jobs:
           # libwebkit2gtk — для лаунчера (Tauri), libx11/glutin — для окна установщика (egui)
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev librsvg2-dev patchelf \
-            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libwayland-dev
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libwayland-dev \
+            xvfb xauth dbus-x11 at-spi2-core python3-pyatspi
+
+      - name: Тесты приложения на Linux
+        run: cargo test --locked -p omnispec-app
 
       - name: Сборка
-        run: cargo build --release -p omnispec-app
+        run: cargo build --locked --release -p omnispec-app
+
+      - name: Проверить языки в настоящем Linux WebKitGTK
+        env:
+          LANGUAGE_BINARY: target/release/omnispec-app
+        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1440x900x24' /usr/bin/python3 tools/tests/language-linux-native.py
 
       - name: Собрать установщик
         run: |
-          OMNISPEC_SETUP_PAYLOAD=target/release/omnispec-app cargo build --release -p omnispec-setup
+          OMNISPEC_SETUP_PAYLOAD=target/release/omnispec-app cargo build --locked --release -p omnispec-setup
 
       - name: Подготовить артефакты
         run: |

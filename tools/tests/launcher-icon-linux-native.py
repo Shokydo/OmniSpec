@@ -254,7 +254,7 @@ try:
     print('STARTUP_NATIVE', wait_native('default'), flush=True)
     fake.wait_icon('/icon-512.png')
     action('Настройки'); action('Оформление')
-    for icon,name in [('ru','Россия'),('by','Беларусь'),('kz','Казахстан'),('ua','Украина'),('us','США')]:
+    for icon,name in [('ru','Россия'),('by','Беларусь'),('kz','Қазақстан'),('ua','Україна'),('us','USA')]:
         start=fake.count(); action(name); wait_saved(icon)
         result=wait_native(icon); fake.wait_icon('/'+icon+'.png',start)
         assert saved()['username']=='IconFixture' and saved()['discord_instance_icon'] is False
@@ -267,7 +267,7 @@ try:
         # Не принимаем исходное состояние за результат операции: дожидаемся
         # реальной ошибки записи, затем проверяем восстановленный выбор.
         wait_visible_text('Не удалось сохранить иконку лаунчера', 15)
-        wait_checked('США', 15)
+        wait_checked('USA', 15)
         time.sleep(.6)  # worker IPC должен успеть обработать возможное изменение
         assert saved()['launcher_icon']=='us'
         print('LINUX_NATIVE_SAVE_FAILURE_ROLLBACK',wait_native('us'),flush=True)
@@ -292,7 +292,7 @@ except Exception:
         subprocess.run(['import','-window','root',str(pathlib.Path(tempfile.gettempdir())/'omnispec-launcher-icon-linux-failure.png')],check=False,timeout=10)
         for node in walk(pyatspi.Registry.getDesktop(0)):
             try:
-                if node.name and any(x in node.name for x in ('икон', 'Россия','США','Оформление')):
+                if node.name and any(x in node.name for x in ('икон', 'Россия','USA','Оформление')):
                     print('ACCESSIBLE_NODE',node.getRoleName(),repr(node.name),flush=True)
             except Exception: pass
     except Exception: pass

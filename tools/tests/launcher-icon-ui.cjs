@@ -96,7 +96,7 @@ async function saved(page,id) {
     assert.equal(await page.locator('.tb-logo img').getAttribute('src'),'assets/logo.png');
     await prefs(page);
     const options=[['default','Оригинал'],['ru','Россия'],['by','Беларусь'],
-      ['kz','Казахстан'],['ua','Украина'],['us','США']];
+      ['kz','Қазақстан'],['ua','Україна'],['us','USA']];
     assert.equal(await page.getByRole('radiogroup',{name:'Иконка лаунчера'}).count(),1);
     assert.equal(await page.getByRole('radio').count(),6);
     assert(await page.getByRole('radio',{name:'Оригинал'}).isChecked());
@@ -130,7 +130,7 @@ async function saved(page,id) {
     await choose(page,'by');
     await page.waitForFunction(()=>document.querySelector('#toasts')?.textContent.includes('тестовый сбой записи'));
     assert.equal(await page.locator('.tb-logo img').getAttribute('data-launcher-icon'),'kz');
-    assert(await page.getByRole('radio',{name:'Казахстан'}).isChecked());
+    assert(await page.getByRole('radio',{name:'Қазақстан'}).isChecked());
     assert.equal(await page.evaluate(()=>window.__launcherIconTest.settings.launcher_icon),'kz');
     console.log('FAILED_SAVE_ROLLS_BACK_OK');
 
@@ -149,11 +149,11 @@ async function saved(page,id) {
     await page.waitForFunction(()=>window.omnispecDebug?.state?.settings);
     assert.equal(await page.locator('.tb-logo img').getAttribute('data-launcher-icon'),'ua');
     await prefs(page);
-    assert(await page.getByRole('radio',{name:'Украина'}).isChecked());
+    assert(await page.getByRole('radio',{name:'Україна'}).isChecked());
     assert.equal(await page.evaluate(()=>window.__launcherIconTest.settings.theme),'navy');
-    const ua=page.getByRole('radio',{name:'Украина'});
+    const ua=page.getByRole('radio',{name:'Україна'});
     await ua.focus(); await page.keyboard.press('ArrowRight'); await saved(page,'us');
-    assert(await page.getByRole('radio',{name:'США'}).isChecked());
+    assert(await page.getByRole('radio',{name:'USA'}).isChecked());
     console.log('RESTART_AND_KEYBOARD_OK');
 
     // На 150% все варианты остаются в контейнере и доступны после прокрутки.

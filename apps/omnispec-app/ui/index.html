@@ -57,7 +57,7 @@
   <symbol id="i-base" viewBox="0 0 24 24"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Zm0 2.2 5.6 2.8L12 10.8 6.4 8 12 5.2Z"/></symbol>
 </svg>
 
-<div class="wall" id="wall" hidden><video class="wall-video" id="wall-video" muted loop playsinline preload="metadata" hidden></video><img class="wall-video" id="wall-scene" alt="" hidden></div>
+<div class="wall" id="wall" hidden><video class="wall-video" id="wall-video" muted loop playsinline preload="metadata" hidden></video></div>
 
 <!-- фоновая анимация: звёзды, пыль, палочки, снег -->
 <canvas class="ambient" id="ambient" hidden aria-hidden="true"></canvas>
@@ -126,7 +126,7 @@
       <div class="build-head">
         <div class="tb-icon" id="tb-icon"><img src="assets/logo.png" alt="" draggable="false" /></div>
         <div class="tb-titles">
-          <div class="tb-name" id="tb-name">OmniSpec</div>
+          <div class="tb-name" id="tb-name" translate="no">OmniSpec</div>
           <div class="tb-meta">
             <span class="dot" id="tb-dot"></span>
             <span id="tb-status">сборка не выбрана</span>
@@ -265,7 +265,7 @@
         <span class="tag" id="upd-versions">—</span>
         <span class="muted" id="upd-date"></span>
         <span class="spacer"></span>
-        <span class="muted" id="upd-asset"></span>
+        <span class="muted" id="upd-asset" translate="no"></span>
       </div>
       <div class="upd-notes" id="upd-notes"></div>
       <div class="upd-progress" id="upd-progress" hidden>
@@ -469,11 +469,11 @@
 <div class="modal-backdrop project-image-backdrop" id="modal-project-image" hidden>
   <div class="modal project-image-modal" role="dialog" aria-modal="true" aria-labelledby="project-image-title">
     <header class="modal-head">
-      <h2 id="project-image-title">Изображение</h2>
+      <h2 id="project-image-title" translate="no">Изображение</h2>
       <div class="spacer"></div>
       <button class="icon-btn" id="project-image-close" title="Закрыть" aria-label="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
     </header>
-    <div class="project-image-stage"><img id="project-image-full" alt=""></div>
+    <div class="project-image-stage"><img id="project-image-full" translate="no" alt=""></div>
     <div class="project-image-controls">
       <button class="btn" id="project-image-prev" type="button">← Предыдущее</button>
       <span id="project-image-count" class="mono"></span>
@@ -554,6 +554,8 @@
   </div>
 </div>
 
+<script src="i18n-data.js"></script>
+<script src="i18n.js"></script>
 <script src="diagnostics.js"></script>
 <script src="app.js"></script>
 

@@ -1,8 +1,5 @@
-//! Безопасное чтение локальной библиотеки Wallpaper Engine и медиафонов.
-//! Workshop-проекты не выполняются в WebView: только их метаданные, превью,
-//! обычное видео и на Windows кадры сцены из официального Wallpaper Engine.
+//! Безопасный импорт собственных изображений, GIF и видеофонов.
 
-use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Component, Path, PathBuf};
@@ -11,14 +8,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use serde::Serialize;
-use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 
 const MAX_MEDIA: u64 = 512 * 1024 * 1024;
-const MAX_MANIFEST: u64 = 256 * 1024;
-const MAX_PREVIEW: u64 = 8 * 1024 * 1024;
-const MAX_PROJECTS: usize = 1500;
-const MAX_DIRECTORIES: usize = 12_000;
 static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,29 +20,6 @@ pub struct Media {
     pub kind: String,
     /// Потоковый loopback URL только для видео; для картинок — asset protocol.
     pub src: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Project {
-    pub directory: String,
-    pub title: String,
-    /// video | scene | web | application | unknown
-    pub kind: String,
-    pub workshop_id: Option<String>,
-    pub preview: Option<String>,
-    /// Можно ли применить как фон непосредственно в OmniSpec.
-    pub playable: bool,
-}
-
-#[derive(Debug, Serialize)]
-pub struct Library {
-    pub projects: Vec<Project>,
-    pub searched: Vec<String>,
-    pub engine: Option<String>,
-    /// Нужны Windows и обнаруженная установка WE; работоспособность WGC
-    /// проверяется только при попытке запуска конкретной сцены.
-    pub scene_capture: bool,
-    pub truncated: bool,
 }
 
 /// Только новые файлы: даже одинаковые имена в одном пакетном импорте никогда
@@ -93,8 +62,7 @@ pub fn create_unique(
     Err("не удалось подобрать уникальное имя файла".into())
 }
 
-/// Проверяем не только расширение, но и сигнатуру: HTML/JS из Workshop нельзя
-/// заставить открыться как картинку или видео в привилегированном окне Tauri.
+/// Проверяем расширение и сигнатуру: HTML/JS не могут открыться как медиа.
 fn sniff(data: &[u8]) -> Option<(&'static str, &'static str)> {
     if data.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some(("image", "png"));
@@ -203,421 +171,6 @@ pub fn custom_media(dir: &Path, name: &str) -> Result<Media, String> {
     media_at(&file)
 }
 
-fn valid_relative(dir: &Path, raw: &str) -> Option<PathBuf> {
-    if raw.is_empty() || raw.len() > 4096 {
-        return None;
-    }
-    // Файлы Workshop часто описаны Windows-разделителями даже в Linux.
-    let normal = raw.replace('\\', "/");
-    let path = Path::new(&normal);
-    if path
-        .components()
-        .any(|c| !matches!(c, Component::Normal(_)))
-    {
-        return None;
-    }
-    let root = dir.canonicalize().ok()?;
-    let file = root.join(path).canonicalize().ok()?;
-    (file.starts_with(&root) && file.is_file()).then_some(file)
-}
-
-fn project_document(dir: &Path) -> Option<(PathBuf, Value)> {
-    let dir = dir.canonicalize().ok()?;
-    if !dir.is_dir() {
-        return None;
-    }
-    let manifest = valid_relative(&dir, "project.json")?;
-    if std::fs::metadata(&manifest).ok()?.len() > MAX_MANIFEST {
-        return None;
-    }
-    let raw = std::fs::read_to_string(manifest).ok()?;
-    let doc = serde_json::from_str::<Value>(raw.trim_start_matches('\u{feff}')).ok()?;
-    if !doc.is_object() {
-        return None;
-    }
-    Some((dir, doc))
-}
-
-fn workshop_id(doc: &Value, dir: &Path) -> Option<String> {
-    let from_doc = doc.get("workshopid").and_then(|v| {
-        v.as_str()
-            .map(str::to_string)
-            .or_else(|| v.as_u64().map(|n| n.to_string()))
-    });
-    let from_dir = dir.file_name().and_then(|s| s.to_str()).map(str::to_string);
-    from_doc.into_iter().chain(from_dir).find(|s| {
-        !s.is_empty() && s != "0" && s.len() <= 20 && s.bytes().all(|c| c.is_ascii_digit())
-    })
-}
-
-pub fn project(dir: &Path) -> Option<Project> {
-    let (dir, doc) = project_document(dir)?;
-    let kind = doc
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_ascii_lowercase();
-    let kind = if matches!(kind.as_str(), "video" | "scene" | "web" | "application") {
-        kind
-    } else {
-        "unknown".into()
-    };
-    let title = doc
-        .get("title")
-        .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| dir.file_name().and_then(|s| s.to_str()).unwrap_or("Обои"));
-    let title: String = title.chars().take(200).collect();
-    let preview = doc
-        .get("preview")
-        .and_then(Value::as_str)
-        .and_then(|p| valid_relative(&dir, p))
-        .filter(|p| {
-            std::fs::metadata(p)
-                .map(|m| m.len() > 0 && m.len() <= MAX_PREVIEW)
-                .unwrap_or(false)
-        })
-        .filter(|p| {
-            media_at(p)
-                .map(|m| m.kind == "image" || m.kind == "gif")
-                .unwrap_or(false)
-        })
-        .map(|p| p.to_string_lossy().into_owned());
-    let playable = kind == "video" && project_media(&dir).is_ok();
-    Some(Project {
-        directory: dir.to_string_lossy().into_owned(),
-        title,
-        kind,
-        workshop_id: workshop_id(&doc, &dir),
-        preview,
-        playable,
-    })
-}
-
-pub fn project_media(dir: &Path) -> Result<Media, String> {
-    let (dir, doc) = project_document(dir)
-        .ok_or_else(|| "проект Wallpaper Engine не найден или повреждён".to_string())?;
-    if doc
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_ascii_lowercase()
-        != "video"
-    {
-        return Err("проект не является обычным видео Wallpaper Engine".into());
-    }
-    let name = doc
-        .get("file")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "в проекте не указан видеофайл".to_string())?;
-    let path = valid_relative(&dir, name)
-        .ok_or_else(|| "видеофайл проекта не найден или выходит за его папку".to_string())?;
-    let media = media_at(&path)?;
-    if media.kind != "video" && media.kind != "gif" {
-        return Err("проект не содержит поддерживаемого видео".into());
-    }
-    Ok(media)
-}
-
-// Минимальный разбор Valve KeyValues: строки, фигурные скобки, комментарии и
-// экранированные обратные слэши. Поддерживаются старый и новый libraryfolders.vdf.
-fn vdf_tokens(input: &str) -> Vec<String> {
-    let mut chars = input.chars().peekable();
-    let mut result = Vec::new();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => {
-                let mut s = String::new();
-                while let Some(ch) = chars.next() {
-                    if ch == '"' {
-                        break;
-                    }
-                    if ch == '\\' {
-                        match chars.peek().copied() {
-                            Some('\\' | '"') => s.push(chars.next().unwrap()),
-                            _ => s.push('\\'),
-                        }
-                    } else {
-                        s.push(ch);
-                    }
-                }
-                result.push(s);
-            }
-            '{' | '}' => result.push(c.to_string()),
-            '/' if chars.peek() == Some(&'/') => {
-                for ch in chars.by_ref() {
-                    if ch == '\n' {
-                        break;
-                    }
-                }
-            }
-            _ => {}
-        }
-        if result.len() > 100_000 {
-            break;
-        }
-    }
-    result
-}
-
-fn vdf_library_paths(input: &str) -> Vec<PathBuf> {
-    let tokens = vdf_tokens(input);
-    let mut paths = Vec::new();
-    for pair in tokens.windows(2) {
-        let key = &pair[0];
-        let val = &pair[1];
-        if (key.eq_ignore_ascii_case("path")
-            || (!key.is_empty() && key.bytes().all(|b| b.is_ascii_digit())))
-            && val != "{"
-            && val != "}"
-            && !val.is_empty()
-        {
-            paths.push(PathBuf::from(val));
-        }
-    }
-    paths
-}
-
-#[cfg(windows)]
-fn registry_steam_path() -> Option<PathBuf> {
-    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
-    let key: Vec<u16> = "Software\\Valve\\Steam\0".encode_utf16().collect();
-    let name: Vec<u16> = "SteamPath\0".encode_utf16().collect();
-    let mut data = vec![0u16; 32768];
-    let mut len = (data.len() * 2) as u32;
-    let code = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            key.as_ptr(),
-            name.as_ptr(),
-            RRF_RT_REG_SZ,
-            std::ptr::null_mut(),
-            data.as_mut_ptr().cast(),
-            &mut len,
-        )
-    };
-    if code != 0 {
-        return None;
-    }
-    let end = data.iter().position(|x| *x == 0).unwrap_or(data.len());
-    let text = String::from_utf16(&data[..end]).ok()?;
-    (!text.is_empty()).then(|| PathBuf::from(text))
-}
-
-fn default_steam_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    #[cfg(windows)]
-    {
-        if let Some(path) = registry_steam_path() {
-            roots.push(path);
-        }
-        for key in ["ProgramFiles(x86)", "ProgramFiles"] {
-            if let Some(value) = std::env::var_os(key) {
-                roots.push(PathBuf::from(value).join("Steam"));
-            }
-        }
-    }
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home.join(".steam/steam"));
-        roots.push(home.join(".local/share/Steam"));
-        roots.push(home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam"));
-        roots.push(home.join("Library/Application Support/Steam"));
-    }
-    roots
-}
-
-fn add_existing(list: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, p: PathBuf) {
-    if let Ok(canonical) = p.canonicalize() {
-        if canonical.is_dir() && seen.insert(canonical.clone()) {
-            list.push(canonical);
-        }
-    }
-}
-
-#[cfg(test)]
-fn scan_library(manual: Option<&str>) -> Result<Library, String> {
-    scan_library_cancellable(manual, || false)
-}
-
-/// Поиск прерывается при выключении интеграции или смене папки. Повторное
-/// включение использует новую ревизию и не принимает результат старого обхода.
-pub fn scan_library_cancellable(manual: Option<&str>, cancelled: impl Fn() -> bool) -> Result<Library, String> {
-    let check = || if cancelled() { Err("поиск Wallpaper Engine отменён".to_string()) } else { Ok(()) };
-    check()?;
-    let mut seeds = default_steam_roots();
-    if let Some(raw) = manual.filter(|s| !s.trim().is_empty()) {
-        let path = PathBuf::from(raw);
-        if !path.is_dir() {
-            return Err("выбранная папка Steam или Wallpaper Engine недоступна".into());
-        }
-        seeds.push(path);
-    }
-    let mut libraries = Vec::new();
-    let mut seen = HashSet::new();
-    for seed in seeds {
-        check()?;
-        add_existing(&mut libraries, &mut seen, seed);
-    }
-    // Каждая библиотека Steam может быть на другом диске.
-    let initial = libraries.clone();
-    for root in initial {
-        check()?;
-        for file in [
-            root.join("steamapps/libraryfolders.vdf"),
-            root.join("libraryfolders.vdf"),
-        ] {
-            if std::fs::metadata(&file)
-                .map(|m| m.len() <= 1024 * 1024)
-                .unwrap_or(false)
-            {
-                if let Ok(text) = std::fs::read_to_string(file) {
-                    for path in vdf_library_paths(&text) {
-                        check()?;
-                        add_existing(&mut libraries, &mut seen, path);
-                    }
-                }
-            }
-        }
-    }
-    let mut search = Vec::new();
-    let mut searched = HashSet::new();
-    let mut engine = None;
-    for root in &libraries {
-        check()?;
-        let steamapps = if root.file_name().is_some_and(|n| n == "steamapps") {
-            root.clone()
-        } else {
-            root.join("steamapps")
-        };
-        for path in [
-            steamapps.join("workshop/content/431960"),
-            steamapps.join("common/wallpaper_engine/projects"),
-            root.join("projects"),
-        ] {
-            add_existing(&mut search, &mut searched, path);
-        }
-        for folder in [steamapps.join("common/wallpaper_engine"), root.clone()] {
-            for name in ["wallpaper64.exe", "wallpaper32.exe"] {
-                let exe = folder.join(name);
-                if engine.is_none() && exe.is_file() {
-                    engine = Some(exe.to_string_lossy().into_owned());
-                }
-            }
-        }
-    }
-    // Можно выбрать саму папку проекта, projects или workshop/content/431960.
-    if let Some(raw) = manual.filter(|s| !s.trim().is_empty()) {
-        let root = PathBuf::from(raw);
-        let known_steam = root.join("steamapps").is_dir()
-            || root.join("workshop/content/431960").is_dir()
-            || root.join("projects").is_dir();
-        if !known_steam {
-            add_existing(&mut search, &mut searched, root.clone());
-        }
-        for ancestor in root.ancestors().take(5) {
-            for name in ["wallpaper64.exe", "wallpaper32.exe"] {
-                let exe = ancestor.join(name);
-                if engine.is_none() && exe.is_file() {
-                    engine = Some(exe.to_string_lossy().into_owned());
-                }
-            }
-        }
-    }
-    let mut projects = Vec::new();
-    let mut visited = HashSet::new();
-    let mut truncated = false;
-    let mut pending: Vec<(PathBuf, usize, PathBuf)> = search
-        .iter()
-        .rev()
-        .map(|p| (p.clone(), 0, p.clone()))
-        .collect();
-    while let Some((dir, depth, root)) = pending.pop() {
-        check()?;
-        if visited.len() >= MAX_DIRECTORIES || projects.len() >= MAX_PROJECTS {
-            truncated = true;
-            break;
-        }
-        let Ok(canonical) = dir.canonicalize() else {
-            continue;
-        };
-        if !canonical.starts_with(&root) || !visited.insert(canonical.clone()) {
-            continue;
-        }
-        if let Some(item) = project(&canonical) {
-            projects.push(item);
-            continue;
-        }
-        if depth >= 3 {
-            continue;
-        }
-        let Ok(entries) = std::fs::read_dir(&canonical) else {
-            continue;
-        };
-        let mut subdirs = Vec::new();
-        for entry in entries.flatten() {
-            check()?;
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                subdirs.push(entry.path());
-            }
-        }
-        subdirs.sort();
-        pending.extend(
-            subdirs
-                .into_iter()
-                .rev()
-                .map(|p| (p, depth + 1, root.clone())),
-        );
-    }
-    check()?;
-    projects.sort_by(|a, b| {
-        a.title
-            .to_lowercase()
-            .cmp(&b.title.to_lowercase())
-            .then(a.directory.cmp(&b.directory))
-    });
-    Ok(Library {
-        projects,
-        searched: search
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect(),
-        scene_capture: cfg!(windows) && engine.is_some(),
-        engine,
-        truncated,
-    })
-}
-
-pub fn workshop_link(value: &str) -> Option<String> {
-    let url = reqwest::Url::parse(value.trim()).ok()?;
-    if !matches!(url.scheme(), "https" | "http")
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || !matches!(
-            url.host_str(),
-            Some("steamcommunity.com" | "www.steamcommunity.com")
-        )
-        || !matches!(
-            url.path().trim_end_matches('/'),
-            "/sharedfiles/filedetails" | "/workshop/filedetails"
-        )
-    {
-        return None;
-    }
-    let ids: Vec<_> = url
-        .query_pairs()
-        .filter(|(k, _)| k == "id")
-        .map(|(_, v)| v.into_owned())
-        .collect();
-    if ids.len() != 1
-        || ids[0].is_empty()
-        || ids[0].len() > 20
-        || !ids[0].bytes().all(|b| b.is_ascii_digit())
-    {
-        return None;
-    }
-    Some(ids[0].clone())
-}
-
 fn public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(a) => public_v4(a),
@@ -722,10 +275,84 @@ async fn direct_response(mut url: reqwest::Url) -> Result<reqwest::Response, Str
     Err("слишком много перенаправлений".into())
 }
 
+/// Только метаданные самой страницы Imgur. В привилегированный WebView HTML
+/// не попадает; найденный CDN-адрес скачивается тем же проверенным способом.
+fn imgur_metadata_media(html: &str) -> Option<reqwest::Url> {
+    use std::sync::OnceLock;
+    static TAG: OnceLock<regex::Regex> = OnceLock::new();
+    static ATTR: OnceLock<regex::Regex> = OnceLock::new();
+    let tags = TAG.get_or_init(|| regex::Regex::new(r"(?is)<meta\b[^>]{0,4096}>").unwrap());
+    let attrs = ATTR.get_or_init(|| regex::Regex::new(
+        r#"(?is)\b(property|name|content)\s*=\s*(?:"([^"]*)"|'([^']*)')"#
+    ).unwrap());
+    let mut candidates: Vec<(u8, reqwest::Url)> = Vec::new();
+    for tag in tags.find_iter(html) {
+        let mut property = "";
+        let mut content = "";
+        for capture in attrs.captures_iter(tag.as_str()) {
+            let value = capture.get(2).or_else(|| capture.get(3)).map_or("", |m| m.as_str());
+            match capture.get(1).map_or("", |m| m.as_str()).to_ascii_lowercase().as_str() {
+                "property" | "name" => property = value,
+                "content" => content = value,
+                _ => {}
+            }
+        }
+        let priority = match property.to_ascii_lowercase().as_str() {
+            "og:video:secure_url" => 0,
+            "og:video" => 1,
+            "og:image:secure_url" => 2,
+            "og:image" => 3,
+            _ => continue,
+        };
+        // Не доверяем ссылкам на другие серверы, учётным данным, портам или
+        // внешним ресурсам без поддерживаемого расширения. Query не нужен.
+        let Ok(mut url) = reqwest::Url::parse(&content.replace("&amp;", "&")) else { continue; };
+        if url.scheme() != "https" || url.host_str() != Some("i.imgur.com")
+            || !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
+            continue;
+        }
+        let ext = url.path().rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif" | "mp4" | "m4v" | "webm") { continue; }
+        url.set_query(None);
+        url.set_fragment(None);
+        candidates.push((priority, url));
+    }
+    candidates.into_iter().min_by_key(|(priority, _)| *priority).map(|(_, url)| url)
+}
+
+fn is_imgur_html(response: &reqwest::Response) -> bool {
+    let host = response.url().host_str().unwrap_or("");
+    matches!(host, "imgur.com" | "www.imgur.com" | "m.imgur.com" | "i.imgur.com")
+        && response.headers().get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("text/html"))
+}
+
+async fn resolve_imgur_page(response: reqwest::Response) -> Result<reqwest::Response, String> {
+    if !is_imgur_html(&response) { return Ok(response); }
+    const MAX_PAGE: usize = 1024 * 1024;
+    if response.content_length().is_some_and(|n| n > MAX_PAGE as u64) {
+        return Err("страница Imgur слишком большая".into());
+    }
+    let mut stream = response.bytes_stream();
+    let mut html = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("ошибка загрузки страницы Imgur: {e}"))?;
+        if html.len().saturating_add(chunk.len()) > MAX_PAGE {
+            return Err("страница Imgur слишком большая".into());
+        }
+        html.extend_from_slice(&chunk);
+    }
+    let text = std::str::from_utf8(&html).map_err(|_| "не удалось прочитать страницу Imgur".to_string())?;
+    let media = imgur_metadata_media(text).ok_or_else(||
+        "на странице Imgur не найден поддерживаемый файл. Попробуй прямую ссылку на изображение или видео".to_string())?;
+    direct_response(media).await
+}
+
 pub async fn download_media(value: &str, dir: &Path) -> Result<String, String> {
     let url =
         reqwest::Url::parse(value.trim()).map_err(|_| "неверная ссылка на файл".to_string())?;
-    let response = direct_response(url).await?;
+    let response = resolve_imgur_page(direct_response(url).await?).await?;
     if response.content_length().is_some_and(|n| n > MAX_MEDIA) {
         return Err("файл больше 512 МБ".into());
     }
@@ -809,105 +436,6 @@ mod tests {
         std::fs::write(path, value).unwrap();
     }
     #[test]
-    fn old_and_new_steam_library_paths_are_parsed() {
-        let vdf = r#""libraryfolders" { "0" { "path" "C:\\Program Files (x86)\\Steam" "apps" { "431960" "42" } } "1" "D:\\Games\\SteamLibrary" // comment
-        "2" { "path" "/media/disk/Steam" } }"#;
-        let paths = vdf_library_paths(vdf);
-        assert!(paths.contains(&PathBuf::from(r"C:\Program Files (x86)\Steam")));
-        assert!(paths.contains(&PathBuf::from(r"D:\Games\SteamLibrary")));
-        assert!(paths.contains(&PathBuf::from("/media/disk/Steam")));
-    }
-    #[test]
-    fn workshop_link_is_strict_and_rejects_tricks() {
-        assert_eq!(
-            workshop_link(
-                "https://steamcommunity.com/sharedfiles/filedetails/?id=123&searchtext=x"
-            )
-            .as_deref(),
-            Some("123")
-        );
-        assert_eq!(
-            workshop_link("https://steamcommunity.com/workshop/filedetails/?id=999").as_deref(),
-            Some("999")
-        );
-        for url in [
-            "https://steamcommunity.com.evil.test/sharedfiles/filedetails/?id=1",
-            "https://steamcommunity.com@evil.test/sharedfiles/filedetails/?id=1",
-            "file:///etc/passwd",
-            "https://steamcommunity.com/sharedfiles/filedetails/?id=1&id=2",
-            "https://steamcommunity.com/sharedfiles/filedetails/?id=1%26x",
-        ] {
-            assert!(workshop_link(url).is_none(), "{url}");
-        }
-    }
-    #[test]
-    fn scan_finds_video_and_scenes_without_trusting_project_paths() {
-        let root = temp_dir("steam");
-        let content = root.join("steamapps/workshop/content/431960");
-        let one = content.join("123");
-        let two = content.join("456");
-        let bad = content.join("789");
-        for dir in [&one, &two, &bad] {
-            std::fs::create_dir_all(dir).unwrap();
-        }
-        write(&one.join("project.json"), br#"{"title":"Video <one>","type":"video","file":"movie.mp4","preview":"preview.gif","workshopid":123}"#);
-        write(
-            &one.join("movie.mp4"),
-            b"\x00\x00\x00\x18ftypisom000000000000000000000000",
-        );
-        write(
-            &one.join("preview.gif"),
-            b"GIF89a0000000000000000000000000000",
-        );
-        write(
-            &two.join("project.json"),
-            br#"{"title":"Scene","type":"scene","file":"scene.pkg"}"#,
-        );
-        write(&bad.join("project.json"), br#"{"title":"Escape","type":"video","file":"../123/movie.mp4","preview":"../123/preview.gif"}"#);
-        let library = scan_library(Some(root.to_str().unwrap())).unwrap();
-        assert_eq!(library.projects.len(), 3);
-        let video = library
-            .projects
-            .iter()
-            .find(|p| p.workshop_id.as_deref() == Some("123"))
-            .unwrap();
-        assert!(video.playable && video.preview.is_some());
-        assert!(
-            !library
-                .projects
-                .iter()
-                .find(|p| p.title == "Scene")
-                .unwrap()
-                .playable
-        );
-        let escaped = library
-            .projects
-            .iter()
-            .find(|p| p.title == "Escape")
-            .unwrap();
-        assert!(!escaped.playable && escaped.preview.is_none());
-        assert!(project_media(&bad).is_err());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-    #[test]
-    fn scan_stops_when_cancelled_even_during_directory_traversal() {
-        let root = temp_dir("cancel-scan");
-        let content = root.join("steamapps/workshop/content/431960");
-        for n in 0..64 {
-            std::fs::create_dir_all(content.join(n.to_string())).unwrap();
-        }
-        assert!(scan_library_cancellable(Some(root.to_str().unwrap()), || true).is_err());
-        let checks = std::cell::Cell::new(0usize);
-        let result = scan_library_cancellable(Some(root.to_str().unwrap()), || {
-            checks.set(checks.get() + 1);
-            checks.get() >= 12
-        });
-        assert!(result.is_err());
-        assert_eq!(checks.get(), 12, "the old traversal must stop immediately");
-        assert!(scan_library_cancellable(Some(root.to_str().unwrap()), || false).is_ok());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-    #[test]
     fn media_and_unique_copy_do_not_replace_previous_files() {
         let root = temp_dir("media");
         let source = root.join("original.gif");
@@ -940,26 +468,39 @@ mod tests {
         assert!(public_ip("8.8.8.8".parse().unwrap()));
         assert!(public_ip("2606:4700:4700::1111".parse().unwrap()));
     }
-    #[cfg(unix)]
     #[test]
-    fn project_rejects_symlink_escape() {
-        use std::os::unix::fs::symlink;
-        let root = temp_dir("symlink");
-        let project_dir = root.join("project");
-        std::fs::create_dir_all(&project_dir).unwrap();
-        write(
-            &root.join("outside.mp4"),
-            b"\x00\x00\x00\x18ftypisom000000000000000000000000",
-        );
-        symlink(root.join("outside.mp4"), project_dir.join("movie.mp4")).unwrap();
-        write(
-            &project_dir.join("project.json"),
-            br#"{"title":"escape","type":"video","file":"movie.mp4"}"#,
-        );
-        assert!(!project(&project_dir).unwrap().playable);
-        assert!(project_media(&project_dir).is_err());
+    fn imgur_metadata_is_whitelisted_and_preserves_animation() {
+        let html = r#"<meta content='https://i.imgur.com/Example.jpg?fb' property='og:image'>
+            <meta property="og:video" content="https://i.imgur.com/Animated.gif?noredirect&amp;x=1">"#;
+        assert_eq!(imgur_metadata_media(html).unwrap().as_str(), "https://i.imgur.com/Animated.gif");
+        for malicious in [
+            "https://i.imgur.com.evil.invalid/a.gif", "https://i.imgur.com@127.0.0.1/a.gif",
+            "http://i.imgur.com/a.gif", "https://i.imgur.com:444/a.gif",
+            "https://i.imgur.com/a.gifv", "file:///etc/passwd",
+        ] {
+            let html = format!(r#"<meta property="og:image" content="{malicious}">"#);
+            assert!(imgur_metadata_media(&html).is_none(), "{malicious}");
+        }
+        assert!(imgur_metadata_media("<script>alert(1)</script>").is_none());
+    }
+
+    // Opt-in live test: never makes the regular unit suite depend on network.
+    #[tokio::test]
+    async fn live_imgur_single_image_and_gif() {
+        if std::env::var("OMNISPEC_TEST_IMGUR_NETWORK").is_err() { return; }
+        let root = temp_dir("imgur-network");
+        for (url, kind) in [
+            ("https://imgur.com/YobcUsr", "image"),
+            ("https://imgur.com/5yS6GCZ", "gif"),
+            ("https://i.imgur.com/5yS6GCZ.gifv", "gif"),
+            ("https://i.imgur.com/5yS6GCZ.mp4", "video"),
+        ] {
+            let name = download_media(url, &root).await.unwrap_or_else(|e| panic!("{url}: {e}"));
+            assert_eq!(custom_media(&root, &name).unwrap().kind, kind, "{url}");
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
+
     #[tokio::test]
     async fn direct_links_do_not_access_local_addresses() {
         let root = temp_dir("private");
