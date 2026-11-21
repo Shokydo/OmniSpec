@@ -307,7 +307,7 @@ async function checkSmallCells(page, scale, seen) {
         await page.waitForFunction(()=>window.omnispecDebug.state.selectedId==='alpha');
         await audit(page,'буква в шапке',scale,seen);
         await page.locator('#btn-quick-settings').click();
-        await page.locator('[data-pref="profile"]').click();
+        await page.locator('[data-pref="avatar"]').click();
         await page.waitForSelector('#skin-library [data-skin-id]');
         await page.waitForSelector('.cape-thumb-off .ic');
         await audit(page,'профиль и скины',scale,seen);

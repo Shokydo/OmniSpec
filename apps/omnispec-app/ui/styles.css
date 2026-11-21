@@ -3489,3 +3489,66 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 .home-loader-option .ic { width: 14px; height: 14px; opacity: 0; }
 .home-loader-option.is-active .ic { opacity: 1; }
 .home-loader-trigger:focus-visible, .home-loader-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Аватар: всё основное видно при масштабе 100%; длинные коллекции скроллятся внутри. */
+.prefs-body.is-avatar { min-height: 0; gap: 0; padding: 10px; overflow: auto; }
+.prefs-body.is-avatar > .avatar-layout { flex: 1 1 auto; min-height: 440px; }
+.avatar-layout {
+  display: grid; min-width: 0;
+  grid-template-columns: minmax(190px, 30%) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 142px;
+  grid-template-areas: "model collection" "capes capes";
+  gap: 10px; align-items: stretch;
+}
+.avatar-layout .prefs-section { min-width: 0; min-height: 0; padding: 9px 10px; }
+.avatar-layout .prefs-label-row { min-height: 22px; margin-bottom: 6px; }
+.avatar-layout .profile-model { display: flex; flex-direction: column; }
+.avatar-layout .profile-model .skin-stage { display: block; flex: 1 1 auto; min-height: 90px; height: auto; }
+/* Не позволяем размеру backing canvas раздвигать grid после уменьшения окна. */
+.avatar-layout .skin-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.avatar-layout .skin-model-options { gap: 4px; margin-top: 7px; }
+.avatar-layout .skin-apply { flex: none; margin-top: 7px; }
+.avatar-layout #skin-status { flex: none; max-height: 5.4em; margin-top: 5px; overflow-y: auto; line-height: 1.35; }
+.avatar-collection { grid-area: collection; display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
+.avatar-collection .profile-favorites { flex: none; }
+.avatar-fav-count { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.avatar-layout .fav-slots { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; margin: 0; }
+.avatar-layout .fav-slot { min-height: 76px; height: 76px; gap: 1px; padding: 4px 3px; }
+.avatar-layout .fav-slot .fav-mini { height: 40px; }
+.avatar-layout .fav-slot .fav-mini canvas { height: 40px; }
+.avatar-layout .fav-name, .avatar-layout .fav-cape { line-height: 1.15; }
+.avatar-layout .profile-skins { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; }
+.avatar-layout .profile-skins > .skin-note { flex: none; margin: 0; font-size: 10.5px; line-height: 1.35; }
+.avatar-layout .skin-import-errors { flex: none; max-height: 3em; margin-top: 5px; overflow: auto; }
+.avatar-layout .skin-library {
+  flex: 1 1 0; min-height: 0; max-height: none; margin-top: 8px; padding-right: 3px;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 6px;
+  overscroll-behavior: contain;
+}
+.avatar-layout .skin-library-select .skin-mini { width: 52px; height: 76px; aspect-ratio: auto; }
+.avatar-layout .profile-capes { display: flex; flex-direction: column; }
+.avatar-cape-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--dim-2); }
+.cape-carousel { display: flex; align-items: stretch; gap: 5px; flex: 1 1 0; min-width: 0; min-height: 0; }
+.cape-scroll { flex: none; align-self: center; width: 27px; height: 32px; }
+.cape-scroll-prev .ic { transform: rotate(90deg); }
+.cape-scroll-next .ic { transform: rotate(-90deg); }
+.cape-scroll[disabled] { opacity: .3; cursor: default; }
+.avatar-layout .cape-list {
+  flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-wrap: nowrap; gap: 6px;
+  align-items: stretch; overflow-x: auto; overflow-y: hidden; padding-bottom: 4px;
+  overscroll-behavior-x: contain; scroll-snap-type: x proximity;
+}
+.avatar-layout .cape-list::-webkit-scrollbar { height: 5px; }
+.avatar-layout .cape-card {
+  flex: 0 0 78px; width: 78px; min-width: 0; min-height: 0; padding: 4px;
+  justify-content: center; gap: 2px; scroll-snap-align: start;
+}
+.avatar-layout .cape-thumb { flex: 1 1 auto; width: 50px; height: 64px; min-height: 0; max-height: 65px; }
+.avatar-layout .cape-name { flex: none; width: 100%; line-height: 1.15; }
+.avatar-layout .cape-note { flex: 0 0 auto; width: min(250px, 50%); max-height: 100%; overflow-y: auto; padding: 5px 3px; line-height: 1.35; }
+.cape-card:focus-visible, .cape-scroll:focus-visible, .cape-list:focus-visible, .skin-library:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (max-width: 680px) {
+  .prefs-body.is-avatar > .avatar-layout { min-height: 800px; }
+  .avatar-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: 320px 320px 142px; grid-template-areas: "model" "collection" "capes"; }
+  .avatar-cape-hint, .avatar-fav-count { display: none; }
+}

@@ -112,6 +112,7 @@ async function setup(page) {
     });
     assert.equal(snapshot.account,'B'); assert.equal(snapshot.name,'B'); assert(snapshot.pixel[2]>200 && snapshot.pixel[0]<40);
     assert.equal(snapshot.cape,'cape-B'); assert.match(snapshot.avatar,/^data:image\/png/,'own Mojang texture supplies the avatar');
+    await page.locator('[data-pref="avatar"]').click();
 
     // Choosing a local file while a refresh is pending must not be overwritten.
     await page.evaluate(()=>window.__raceTest.skinMode.B='defer');
@@ -177,6 +178,7 @@ async function setup(page) {
     await page.locator('#skin-capes [data-cape-id=""]').click();
     await page.waitForFunction(()=>window.__raceTest.pending.some(p=>p.key==='set-cape'));
     assert.equal(await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').at(-1).args.accountUuid),'B');
+    await page.locator('[data-pref="profile"]').click();
     await page.locator('[data-uuid="A"] [data-acc="pick"]').click();
     await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='A' && window.omnispecDebug.state.capes?.list[0]?.id==='cape-A');
     await page.evaluate(()=>window.__raceTest.release('set-cape'));
@@ -189,17 +191,20 @@ async function setup(page) {
     await page.evaluate(()=>{window.__raceTest.skinMode.A='ok';window.__raceTest.capeMode.A='ok';window.__raceTest.applyMode='defer';});
     await page.locator('[data-uuid="A"] [data-acc="pick"]').click();
     await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='A' && window.omnispecDebug.state.skin?.currentName==='A');
+    await page.locator('[data-pref="avatar"]').click();
     await page.locator('[data-skin-id="local"]').click();
     await page.waitForFunction(()=>window.omnispecDebug.state.skin.currentPath==='/skins/local.png');
     await page.locator('#skin-apply').click();
     await page.waitForFunction(()=>window.__raceTest.pending.some(x=>x.key==='apply'));
     const applied=await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='apply_skin').at(-1));
     assert.equal(applied.args.accountUuid,'A'); assert.equal(applied.args.path,'/skins/local.png');
+    await page.locator('[data-pref="profile"]').click();
     await page.locator('[data-uuid="B"] [data-acc="pick"]').click();
     await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='B' && window.omnispecDebug.state.skin?.currentName==='B');
     await page.evaluate(()=>window.__raceTest.release('apply'));
     await page.waitForTimeout(200);
     assert.equal(await page.evaluate(()=>window.omnispecDebug.state.skin.currentName),'B');
+    await page.locator('[data-pref="avatar"]').click();
 
     // If switching accounts while a favorite is being saved, do not submit it at all.
     await page.evaluate(()=>{
@@ -209,6 +214,7 @@ async function setup(page) {
     const before=await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='apply_skin').length);
     await page.locator('#skin-apply').click();
     await page.waitForFunction(()=>window.__raceTest.pending.some(x=>x.key==='save'));
+    await page.locator('[data-pref="profile"]').click();
     await page.locator('[data-uuid="A"] [data-acc="pick"]').click();
     await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='A');
     await page.evaluate(()=>window.__raceTest.release('save'));
@@ -217,6 +223,7 @@ async function setup(page) {
 
     await page.locator('[data-uuid="O"] [data-acc="pick"]').click();
     await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='O' && !window.omnispecDebug.state.skin.licensed);
+    await page.locator('[data-pref="avatar"]').click();
     assert(await page.locator('#skin-apply').isDisabled());
     assert.deepEqual(errors,[]);
     console.log('profile-account-races-ui: stale responses, switching, local preview, errors, capes and target UUID passed (mocked services)');

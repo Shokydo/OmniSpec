@@ -2,14 +2,18 @@
 # Uses Windows UI Automation and the real multi-file picker, not a mocked backend.
 # The externally signed probe is trusted only on the disposable CI runner; it is
 # NOT Wallpaper Engine and must never be used as a production certificate.
+# -AvatarOnly exercises just the new layout and real multi-file picker, with no
+# wallpaper fixtures, network requests or test certificate.
 param(
-  [Parameter(Mandatory=$true)][string]$SignedEngine,
-  [string]$Launcher = 'target/debug/omnispec-app.exe'
+  [string]$SignedEngine = '',
+  [string]$Launcher = 'target/debug/omnispec-app.exe',
+  [switch]$AvatarOnly
 )
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or -not $env:RUNNER_TEMP -or $env:RUNNER_OS -ne 'Windows') {
   throw 'Run only on a disposable GitHub-hosted Windows runner.'
 }
+if (-not $AvatarOnly -and -not $SignedEngine) { throw 'The full wallpaper test requires a trusted signed fixture.' }
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms
@@ -203,7 +207,8 @@ function StartLauncher {
     if($script:proc.MainWindowHandle -ne [IntPtr]::Zero){break}
   }
   if($script:proc.MainWindowHandle -eq [IntPtr]::Zero){throw 'No launcher window'}
-  [void][OmniProfileProbe]::MoveWindow($script:proc.MainWindowHandle,0,0,1080,720,$true)
+  $height=if($AvatarOnly){640}else{720}
+  [void][OmniProfileProbe]::MoveWindow($script:proc.MainWindowHandle,0,0,1080,$height,$true)
   [void][OmniProfileProbe]::SetForegroundWindow($script:proc.MainWindowHandle)
   $script:ui=[System.Windows.Automation.AutomationElement]::FromHandle($script:proc.MainWindowHandle)
   [void](WaitId 'btn-quick-settings' 120)
@@ -234,39 +239,62 @@ function InvokeEngine([string]$title,[string]$dir) {
 }
 
 try {
-  New-Item -ItemType Directory -Force -Path $data,$engine,$videoDir,$sceneDir,$webDir,(Join-Path $data 'wallpapers'),(Join-Path $data 'meta\skins') | Out-Null
-  Copy-Item (Join-Path $fixture 'animated.gif') (Join-Path $data 'wallpapers\custom.gif')
-  Copy-Item (Join-Path $fixture 'animated.mp4') (Join-Path $videoDir 'movie.mp4')
-  Copy-Item (Join-Path $fixture 'animated.gif') (Join-Path $videoDir 'preview.gif')
+  New-Item -ItemType Directory -Force -Path $data,(Join-Path $data 'meta\skins') | Out-Null
   Copy-Item (Join-Path $fixture 'one.png') (Join-Path $data 'meta\skins\old.png')
-  WriteJson (Join-Path $videoDir 'project.json') @{title='AAA Windows video';type='video';file='movie.mp4';preview='preview.gif';workshopid='123'}
-  WriteJson (Join-Path $sceneDir 'project.json') @{title='BBB Windows scene';type='scene';file='scene.pkg';workshopid='456'}
-  WriteJson (Join-Path $webDir 'project.json') @{title='CCC Windows web';type='web';file='index.html';workshopid='789'}
-  $vdf='"libraryfolders" { "0" { "path" "'+$steam.Replace('\','\\')+'" } "1" { "path" "'+$library.Replace('\','\\')+'" } }'
-  New-Item -ItemType Directory -Force -Path (Join-Path $steam 'steamapps') | Out-Null
-  [IO.File]::WriteAllText((Join-Path $steam 'steamapps\libraryfolders.vdf'),$vdf,$utf8)
-  New-Item -Path $reg -Force | Out-Null
-  $item=Get-Item $reg; $regHad=$item.GetValueNames() -contains 'SteamPath'
-  if($regHad){$regOld=$item.GetValue('SteamPath')}
-  New-ItemProperty -Path $reg -Name SteamPath -Value $steam -PropertyType String -Force | Out-Null
-  $probe=(Resolve-Path $SignedEngine).Path
-  if((Get-AuthenticodeSignature -LiteralPath $probe).Status -ne 'Valid'){throw 'Fake engine must be signed and trusted by the disposable parent preflight'}
-  Copy-Item -LiteralPath $probe -Destination (Join-Path $engine 'wallpaper64.exe')
+  if(-not $AvatarOnly) {
+    New-Item -ItemType Directory -Force -Path $engine,$videoDir,$sceneDir,$webDir,(Join-Path $data 'wallpapers') | Out-Null
+    Copy-Item (Join-Path $fixture 'animated.gif') (Join-Path $data 'wallpapers\custom.gif')
+    Copy-Item (Join-Path $fixture 'animated.mp4') (Join-Path $videoDir 'movie.mp4')
+    Copy-Item (Join-Path $fixture 'animated.gif') (Join-Path $videoDir 'preview.gif')
+    WriteJson (Join-Path $videoDir 'project.json') @{title='AAA Windows video';type='video';file='movie.mp4';preview='preview.gif';workshopid='123'}
+    WriteJson (Join-Path $sceneDir 'project.json') @{title='BBB Windows scene';type='scene';file='scene.pkg';workshopid='456'}
+    WriteJson (Join-Path $webDir 'project.json') @{title='CCC Windows web';type='web';file='index.html';workshopid='789'}
+    $vdf='"libraryfolders" { "0" { "path" "'+$steam.Replace('\','\\')+'" } "1" { "path" "'+$library.Replace('\','\\')+'" } }'
+    New-Item -ItemType Directory -Force -Path (Join-Path $steam 'steamapps') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $steam 'steamapps\libraryfolders.vdf'),$vdf,$utf8)
+    New-Item -Path $reg -Force | Out-Null
+    $item=Get-Item $reg; $regHad=$item.GetValueNames() -contains 'SteamPath'
+    if($regHad){$regOld=$item.GetValue('SteamPath')}
+    New-ItemProperty -Path $reg -Name SteamPath -Value $steam -PropertyType String -Force | Out-Null
+    $probe=(Resolve-Path $SignedEngine).Path
+    if((Get-AuthenticodeSignature -LiteralPath $probe).Status -ne 'Valid'){throw 'Fake engine must be signed and trusted by the disposable parent preflight'}
+    Copy-Item -LiteralPath $probe -Destination (Join-Path $engine 'wallpaper64.exe')
+  }
   $old=Join-Path $data 'meta\skins\old.png'
-  WriteJson (Join-Path $data 'settings.json') @{
+  $settings=@{
     onboarded=$true;update_enabled=$false;discord_rpc=$false;click_fx='off';ambient='off';trail=$false;sound_fx=$false;ui_scale=100
-    wallpaper='custom';custom_wallpaper='custom.gif';wallpaper_fit='cover';wallpaper_dim=0;wallpaper_blur=0
     skin_presets=@(@{id='legacy';name='Old skin';path=$old;variant='slim';angle=12})
     skin_favorites=@(@{id='old-fav';name='Old favorite';skinPath=$old;skinDataUrl='';variant='slim';capeId='';futureField='preserved'})
   }
+  if(-not $AvatarOnly) {
+    $settings.wallpaper='custom';$settings.custom_wallpaper='custom.gif';$settings.wallpaper_fit='cover';$settings.wallpaper_dim=0;$settings.wallpaper_blur=0
+  }
+  WriteJson (Join-Path $data 'settings.json') $settings
+  if($AvatarOnly) {
+    $uuid='00000000-0000-3000-8000-000000000001'
+    WriteJson (Join-Path $data 'accounts.json') @{active=$uuid;accounts=@(@{username='WindowsFixture';uuid=$uuid;kind='offline';access_token='';refresh_token='';expires_at=0})}
+  }
   StartLauncher
   Start-Sleep -Seconds 3
-  AssertAnimated 'GIF'
-  Screenshot 'windows-gif.png'
+  if(-not $AvatarOnly) {
+    AssertAnimated 'GIF'; Screenshot 'windows-gif.png'
+    [void][OmniProfileProbe]::MoveWindow($script:proc.MainWindowHandle,0,0,1080,640,$true)
+  }
 
-  OpenPrefs 'Профиль'
+  OpenPrefs 'Аватар'
   $apply=WaitId 'skin-apply'
   if($apply.Current.IsEnabled){throw 'Offline account can incorrectly change its skin'}
+  # Actual Windows WebView2 at the minimum 1080×640 window: the skin region is
+  # to the right of the model controls, and the cape region stays below both.
+  $libraryRect=(WaitId 'skin-library').Current.BoundingRectangle
+  $capesRect=(WaitId 'skin-capes').Current.BoundingRectangle
+  $modelRect=$apply.Current.BoundingRectangle
+  $windowRect=$script:ui.Current.BoundingRectangle
+  if($libraryRect.Width -le 0 -or $libraryRect.Height -le 0 -or $capesRect.Width -le 0 -or $capesRect.Height -le 0){throw 'Avatar lists have no visible area'}
+  if($libraryRect.Left -lt $modelRect.Right -or $capesRect.Top -le $libraryRect.Bottom -or $capesRect.Top -le $modelRect.Bottom){throw 'Avatar panels do not follow the requested layout'}
+  if($capesRect.Bottom -gt $windowRect.Bottom -or $capesRect.Right -gt $windowRect.Right){throw 'Cape wardrobe is clipped by the minimum window'}
+  Screenshot 'windows-avatar-minimum.png'
+  Write-Host 'WINDOWS_WEBVIEW2_AVATAR_MINIMUM_LAYOUT_OK'
   Click (WaitId 'skin-upload')
   $script:dialog=WaitDialog
   SelectFilesInDialog $script:dialog @((Join-Path $fixture 'one.png'),(Join-Path $fixture 'two.png'),(Join-Path $fixture 'bad.png'))
@@ -282,6 +310,8 @@ try {
   if(-not (Test-Path $old)){throw 'Legacy skin was deleted'}
   Screenshot 'windows-profile.png'
   Write-Host 'WINDOWS_REAL_MULTIFILE_IMPORT_AND_LEGACY_OK'
+  if($AvatarOnly) { Write-Host 'WINDOWS_AVATAR_PREFLIGHT_PASSED'; return }
+  [void][OmniProfileProbe]::MoveWindow($script:proc.MainWindowHandle,0,0,1080,720,$true)
 
   Click (WaitButton 'Фон')
   Click (WaitButton 'Установить «AAA Windows video» как фон' 120)
@@ -323,9 +353,11 @@ try {
   throw $originalError
 } finally {
   StopLauncher
-  if($regCreated){Remove-Item -Path $reg -Recurse -Force -ErrorAction SilentlyContinue}
-  elseif($regHad){New-ItemProperty -Path $reg -Name SteamPath -Value $regOld -PropertyType String -Force | Out-Null}
-  else {Remove-ItemProperty -Path $reg -Name SteamPath -ErrorAction SilentlyContinue}
+  if(-not $AvatarOnly) {
+    if($regCreated){Remove-Item -Path $reg -Recurse -Force -ErrorAction SilentlyContinue}
+    elseif($regHad){New-ItemProperty -Path $reg -Name SteamPath -Value $regOld -PropertyType String -Force | Out-Null}
+    else {Remove-ItemProperty -Path $reg -Name SteamPath -ErrorAction SilentlyContinue}
+  }
   Remove-Item Env:\OMNISPEC_HOME -ErrorAction SilentlyContinue
   Remove-Item Env:\WEBVIEW2_USER_DATA_FOLDER -ErrorAction SilentlyContinue
   Remove-Item Env:\OMNISPEC_TEST_WE_LOG -ErrorAction SilentlyContinue

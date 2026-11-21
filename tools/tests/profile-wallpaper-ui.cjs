@@ -94,17 +94,21 @@ async function assertCalls(page, command, count) {
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.waitForFunction(()=>window.omnispecDebug?.state.accounts?.active==='licensed');
     await openPrefs(page,'profile');
+    assert.equal(await page.locator('.profile-accounts, .profile-active').count(),2,'аккаунты остались в профиле');
+    assert.equal(await page.locator('#skin-library, #skin-favorites, #skin-capes').count(),0,'аватар больше не занимает профиль');
+    await openPrefs(page,'avatar');
     await page.waitForSelector('#skin-library [data-skin-id="legacy"]');
     await page.waitForSelector('#skin-capes [data-cape-id="cape-1"]');
     assert.equal(await page.locator('#skin-favorites [data-fav="saved-fav"]').count(),1,'старый образ загружается');
     assert(!((await page.locator('#prefs-body').innerText()).includes('Пресеты')),'нет интерфейса пресетов');
     const boxes=await page.evaluate(()=>{
       const r=s=>{const x=document.querySelector(s).getBoundingClientRect();return {x:x.x,y:x.y,w:x.width,h:x.height};};
-      return {accounts:r('.profile-accounts'),profile:r('.profile-active'),favorites:r('.profile-favorites'),model:r('.profile-model'),capes:r('.profile-capes'),skins:r('.profile-skins')};
+      return {favorites:r('.profile-favorites'),model:r('.profile-model'),capes:r('.profile-capes'),skins:r('.profile-skins')};
     });
-    assert(boxes.accounts.x < boxes.profile.x && boxes.favorites.y > boxes.profile.y,'верхние блоки по схеме');
-    assert(boxes.model.x < boxes.capes.x && boxes.skins.y > boxes.capes.y,'нижние блоки по схеме');
-    if (process.env.OMNISPEC_UI_SHOTS) await page.screenshot({path:path.join(process.env.OMNISPEC_UI_SHOTS,'profile.png')});
+    assert(boxes.model.x < boxes.skins.x && boxes.favorites.y < boxes.skins.y,'модель слева, избранное и скины справа');
+    assert(boxes.capes.y >= boxes.model.y+boxes.model.h-1 && Math.abs(boxes.capes.x-boxes.model.x)<1,'плащи снизу на всю ширину');
+    assert(await page.locator('#prefs-body').evaluate(el=>el.scrollHeight<=el.clientHeight+1),'при 100% не нужна общая вертикальная прокрутка');
+    if (process.env.OMNISPEC_UI_SHOTS) await page.screenshot({path:path.join(process.env.OMNISPEC_UI_SHOTS,'avatar.png')});
 
     await page.locator('[data-skin-id="legacy"]').click();
     await page.waitForFunction(()=>window.omnispecDebug.state.skin.currentPath==='/skins/old.png');
@@ -125,7 +129,7 @@ async function assertCalls(page, command, count) {
     assert.equal(await page.locator('#skin-favorites [data-fav]').count(),2);
     await page.reload();
     await page.waitForFunction(()=>window.omnispecDebug?.state.accounts?.active==='licensed');
-    await openPrefs(page,'profile');
+    await openPrefs(page,'avatar');
     await page.waitForSelector('#skin-library [data-skin-id="legacy"]');
     assert.equal(await page.locator('#skin-library [data-skin-id]').count(),3,'библиотека переживает перезапуск');
     assert.equal(await page.locator('#skin-favorites [data-fav]').count(),2,'избранное переживает перезапуск');
@@ -137,12 +141,16 @@ async function assertCalls(page, command, count) {
     await page.locator('#confirm-ok').click();
     await waitSaved(page,()=>window.__profileTest.settings.skin_presets.length===2);
     assert.equal(await page.locator('#skin-favorites [data-fav]').count(),2,'удаление из списка не удаляет образы');
+    await page.locator('[data-pref="profile"]').click();
     await page.locator('[data-uuid="offline"] [data-acc="pick"]').click();
     await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='offline' && !window.omnispecDebug.state.skin.licensed);
+    await page.locator('[data-pref="avatar"]').click();
     assert(await page.locator('#skin-apply').isDisabled(),'смена скина недоступна офлайн');
     assert.equal(await page.locator('#skin-capes [data-cape-id="cape-1"]').count(),0,'не показываем плащ другого аккаунта');
+    await page.locator('[data-pref="profile"]').click();
     await page.locator('[data-uuid="licensed"] [data-acc="pick"]').click();
     await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='licensed' && window.omnispecDebug.state.skin.licensed);
+    await page.locator('[data-pref="avatar"]').click();
 
     // Перерисовка после выбора скина не должна возвращать ни вложенную,
     // ни внешнюю прокрутку к началу. Список заметно превышает высоту ячейки.
@@ -153,7 +161,7 @@ async function assertCalls(page, command, count) {
         id:`bulk-${n}`,name:`Skin ${n}`,path:`/skins/bulk-${n}.png`,variant:'classic',angle:0
       }))];
     });
-    await page.locator('[data-pref="profile"]').click();
+    await page.locator('[data-pref="avatar"]').click();
     await page.waitForSelector('#skin-library [data-skin-id="bulk-50"]');
     await page.locator('[data-skin-id="bulk-50"]').scrollIntoViewIfNeeded();
     const beforeScroll=await page.evaluate(()=>({
@@ -162,7 +170,7 @@ async function assertCalls(page, command, count) {
       max:document.querySelector('#skin-library').scrollHeight-document.querySelector('#skin-library').clientHeight
     }));
     assert(beforeScroll.skins > 100 && beforeScroll.max > 100,'библиотека реально прокручена');
-    assert(beforeScroll.body > 0,'внешний контейнер тоже прокручен');
+    assert.equal(beforeScroll.body,0,'аватар помещается без внешней прокрутки');
     await page.locator('[data-skin-id="bulk-50"]').click();
     await page.waitForFunction(()=>window.omnispecDebug.state.skin.currentPath==='/skins/bulk-50.png'
       && document.querySelector('[data-skin-id="bulk-50"]')?.closest('.skin-library-item')?.classList.contains('is-active'));

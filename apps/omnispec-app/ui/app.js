@@ -8877,17 +8877,19 @@
       // Свою голову из профиля Minecraft загружаем и при запуске, и при
       // переключении вне настроек; не зависим только от стороннего кеша.
       if (activeAccount()?.kind === "microsoft") {
-        refreshAccountSkin().then(() => { if (prefsCategory === "profile" && $("#modal-prefs") && !$("#modal-prefs").hidden) renderPrefs(); });
+        refreshAccountSkin().then(() => { if (accountPrefsVisible()) renderPrefs(); });
+      } else {
+        skinState(); // офлайн-профиль сразу не имеет разрешения менять скин
       }
-      if (prefsCategory === "profile" && $("#modal-prefs") && !$("#modal-prefs").hidden) {
-        refreshAccountCapes().then(() => { if (prefsCategory === "profile" && !$("#modal-prefs").hidden) renderPrefs(); });
+      if (accountPrefsVisible()) {
+        refreshAccountCapes().then(() => { if (accountPrefsVisible()) renderPrefs(); });
       }
     }
     renderAccountChip();
     const pop = $("#account-pop");
     if (pop && !pop.hidden) renderAccountPopover();
     renderPrefsAccountCard();
-    if (prefsCategory === "profile" && !$("#modal-prefs").hidden) renderPrefs();
+    if (accountPrefsVisible()) renderPrefs();
   }
 
   /** Карточка активного аккаунта в колонке настроек (как в OmniPanel). */
@@ -9092,6 +9094,7 @@
   /* ==================== НАСТРОЙКИ ЛАУНЧЕРА (по категориям) ==================== */
   const PREFS = [
     { id: "profile", label: "Профиль" },
+    { id: "avatar", label: "Аватар" },
     { id: "look", label: "Оформление" },
     { id: "wall", label: "Фон" },
     { id: "fx", label: "Эффекты" },
@@ -9101,6 +9104,13 @@
     { id: "discord", label: "Discord" }
   ];
   let prefsCategory = "look";
+  // Списки аватара переживают перерисовку и переход в другие категории.
+  const avatarScroll = { skins: 0, capes: 0, accountId: "" };
+
+  function accountPrefsVisible() {
+    const modal = $("#modal-prefs");
+    return Boolean(modal && !modal.hidden && (prefsCategory === "profile" || prefsCategory === "avatar"));
+  }
 
   function openPrefs(category) {
     const modal = $("#modal-prefs");
@@ -9118,10 +9128,10 @@
     skinState();
     // скин аккаунта тянем при каждом открытии настроек: лицензия могла появиться только что
     refreshAccountSkin().then(() => {
-      if (!$("#modal-prefs").hidden && prefsCategory === "profile") renderPrefs();
+      if (accountPrefsVisible()) renderPrefs();
     });
     refreshAccountCapes().then(() => {
-      if (!$("#modal-prefs").hidden && prefsCategory === "profile") renderPrefs();
+      if (accountPrefsVisible()) renderPrefs();
     });
     modal.hidden = false;
     renderPrefsAccountCard();
@@ -9140,12 +9150,30 @@
     }));
 
     const settings = state.settings || {};
-    // Сохраняем оба независимых скролла: тело настроек и список скинов.
-    // Последний пересоздаётся при выборе скина и иначе возвращается к началу.
-    const keepScroll = body.scrollTop;
-    const keepSkinScroll = $("#skin-library", body)?.scrollTop;
+    const previousCategory = body.dataset.prefCategory || "";
+    const keepScroll = previousCategory === prefsCategory ? body.scrollTop : 0;
+    // Выбор плаща перерисовывает гардероб. Сохраняем фокус карточки, чтобы
+    // после Enter/пробела можно было продолжить пользоваться стрелками.
+    const focusedCape = previousCategory === "avatar" && prefsCategory === "avatar"
+      && body.dataset.avatarAccount === currentProfileId()
+      ? document.activeElement?.closest?.("#skin-capes .cape-card") : null;
+    const focusedCapeId = focusedCape?.dataset.capeId;
+    if (previousCategory === "avatar") {
+      avatarScroll.skins = $("#skin-library", body)?.scrollTop || 0;
+      avatarScroll.capes = $("#skin-capes", body)?.scrollLeft || 0;
+      avatarScroll.accountId = body.dataset.avatarAccount || "";
+    }
+    const accountId = currentProfileId();
+    if (avatarScroll.accountId !== accountId) {
+      avatarScroll.capes = 0;
+      avatarScroll.accountId = accountId;
+    }
+    body.classList.toggle("is-avatar", prefsCategory === "avatar");
+    body.dataset.prefCategory = prefsCategory;
+    body.dataset.avatarAccount = accountId;
     renderPrefsAccountCard();
     if (prefsCategory === "profile") body.innerHTML = prefsProfile();
+    if (prefsCategory === "avatar") body.innerHTML = prefsAvatar();
     if (prefsCategory === "look") body.innerHTML = prefsLook(settings);
     if (prefsCategory === "wall") body.innerHTML = prefsWall(settings);
     if (prefsCategory === "fx") body.innerHTML = prefsFx();
@@ -9154,18 +9182,22 @@
     if (prefsCategory === "discord") body.innerHTML = prefsDiscord(settings);
     if (prefsCategory === "sound") body.innerHTML = prefsSound(settings);
     bindPrefs();
-    if (prefsCategory === "profile") {
-      bindPrefsProfile();
+    if (prefsCategory === "profile") bindPrefsProfile();
+    if (prefsCategory === "avatar") {
       bindCapes();
       bindFavorites();
       bindSkin();
+      const library = $("#skin-library", body);
+      const capes = $("#skin-capes", body);
+      if (library) library.scrollTop = avatarScroll.skins;
+      if (capes) capes.scrollLeft = avatarScroll.capes;
+      updateCapeScrollControls();
+      if (capes && focusedCapeId !== undefined) {
+        $$(".cape-card", capes).find((card) => card.dataset.capeId === focusedCapeId)?.focus({ preventScroll: true });
+      }
     }
     if (prefsCategory === "wall") bindWallpaperLinks();
-    if (keepScroll) body.scrollTop = keepScroll;
-    if (keepSkinScroll !== undefined) {
-      const library = $("#skin-library", body);
-      if (library) library.scrollTop = keepSkinScroll;
-    }
+    body.scrollTop = keepScroll;
   }
 
   /** Компоновка профиля: аккаунты слева; профиль и избранное справа. */
@@ -9205,13 +9237,8 @@
               </div>
             </div>` : '<div class="profile-card is-empty"><span class="muted">Аккаунта пока нет</span></div>'}
           </section>
-          <section class="prefs-section profile-favorites">
-            <div class="prefs-label-row"><span class="prefs-label">Избранное</span><div class="spacer"></div><span class="muted" style="font-size:10.5px">скин + плащ · до ${FAV_SLOTS}</span></div>
-            ${favoriteSlotsHtml()}
-          </section>
         </div>
-      </div>
-      ${skinSectionHtml()}`;
+      </div>`;
   }
 
   function bindPrefsProfile() {
@@ -10477,14 +10504,15 @@
    * Отрисовка модели в canvas: второй слой поверх, грани отвёрнутые от камеры не рисуем,
    * дальние — первыми. `yaw` крутит вокруг оси Y, `pitch` наклоняет (плюс — камера сверху).
    */
-  function drawSkinModel(canvas, texture, variant, yawDeg, pitchDeg, capeTexture) {
+  function drawSkinModel(canvas, texture, variant, yawDeg, pitchDeg, capeTexture, options = {}) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const W = canvas.width;
     const H = canvas.height;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    if (!texture) return;
+    const capeOnly = options.capeOnly === true;
+    if (capeOnly ? !capeTexture : !texture) return;
 
     const yaw = (Number(yawDeg) || 0) * Math.PI / 180;
     const pitch = (Number(pitchDeg) || 0) * Math.PI / 180;
@@ -10497,13 +10525,14 @@
       return [x1, y * cp - z1 * sp, y * sp + z1 * cp];
     };
 
-    // масштаб постоянный: модель не «дышит» при вращении
-    const unit = Math.min(W / 24, H / 38);
+    // Масштаб постоянный: модель не «дышит» при вращении. Для отдельной
+    // миниатюры плаща увеличиваем ту же трёхмерную деталь, а не плоский кроп.
+    const unit = capeOnly ? Math.min(W / 16, H / 22) : Math.min(W / 24, H / 38);
     const originX = W / 2;
     const originY = H / 2;
     const project = ([x, y, z]) => [originX + x * unit, originY - (y - 16) * unit, z];
 
-    const parts = (SKIN_MODEL[variant] || SKIN_MODEL.classic).slice();
+    const parts = capeOnly ? [] : (SKIN_MODEL[variant] || SKIN_MODEL.classic).slice();
     // плащ — отдельная деталь со своей картинкой (64×32), показываем, если он есть
     if (capeTexture) parts.push({ ...SKIN_CAPE, tex: capeTexture });
 
@@ -10784,13 +10813,14 @@
     if (el) el.textContent = skinStatusText();
   }
 
-  function skinSectionHtml() {
+  /** Аватар: модель и библиотека сверху, горизонтальный гардероб плащей снизу. */
+  function prefsAvatar() {
     const skin = skinState();
     const licensed = Boolean(skin.licensed);
     const library = userSkinLibrary();
     const variant = skin.variant === "slim" ? "slim" : "classic";
     return `
-      <div class="profile-skin-grid">
+      <div class="avatar-layout">
         <section class="prefs-section profile-model skin-section">
           <div class="prefs-label-row">
             <span class="prefs-label">Модель игрока</span><div class="spacer"></div>
@@ -10810,19 +10840,18 @@
           <button class="btn btn-primary skin-apply" id="skin-apply" ${licensed ? "" : "disabled"}>Применить к аккаунту</button>
           <div class="skin-note ${licensed ? "" : "warn"}" id="skin-status">${esc(skinStatusText())}</div>
         </section>
-        <section class="prefs-section profile-capes">
-          <div class="prefs-label-row"><span class="prefs-label">Плащи</span><div class="spacer"></div>
-            <button class="icon-btn" id="cape-refresh" title="Обновить плащи аккаунта"><svg class="ic"><use href="#i-refresh"/></svg></button>
-          </div>
-          ${capeColumnHtml()}
-        </section>
-        <section class="prefs-section profile-skins">
+        <div class="avatar-collection">
+          <section class="prefs-section profile-favorites">
+            <div class="prefs-label-row"><span class="prefs-label">Избранные образы</span><div class="spacer"></div><span class="muted avatar-fav-count">скин + плащ · до ${FAV_SLOTS}</span></div>
+            ${favoriteSlotsHtml()}
+          </section>
+          <section class="prefs-section profile-skins">
           <div class="prefs-label-row"><span class="prefs-label">Скины <span class="muted">${library.length}</span></span><div class="spacer"></div>
             <button class="btn btn-small" id="skin-upload" ${skin.importing ? "disabled" : ""}><svg class="ic"><use href="#i-plus"/></svg>${skin.importing ? "Загружаем…" : "Загрузить PNG…"}</button>
           </div>
           <div class="skin-note">Выбери один или несколько PNG 64×64 / 64×32. Они сразу сохранятся в библиотеке.</div>
           ${skin.importErrors?.length ? `<div class="skin-import-errors" role="alert"><b>Не удалось загрузить ${skin.importErrors.length}:</b> ${skin.importErrors.map(esc).join("; ")}</div>` : ""}
-          <div class="skin-library" id="skin-library">
+          <div class="skin-library" id="skin-library" tabindex="0" role="region" aria-label="Библиотека скинов">
             ${library.length ? library.map((item) => `
               <div class="skin-library-item ${item.id === skin.selectedSkin ? "is-active" : ""}">
                 <button class="skin-library-select" data-skin-id="${esc(item.id)}" title="${esc(item.name)}">
@@ -10831,6 +10860,13 @@
                 <button class="skin-library-remove" data-del-skin="${esc(item.id)}" title="Убрать из библиотеки" aria-label="Убрать ${esc(item.name)} из библиотеки">×</button>
               </div>`).join("") : '<div class="skin-note">Библиотека пуста — загрузи свои скины.</div>'}
           </div>
+          </section>
+        </div>
+        <section class="prefs-section profile-capes">
+          <div class="prefs-label-row"><span class="prefs-label">Плащи</span><span class="avatar-cape-hint">Колесо — прокрутка · нажми, чтобы выбрать</span><div class="spacer"></div>
+            <button class="icon-btn" id="cape-refresh" title="Обновить плащи аккаунта"><svg class="ic"><use href="#i-refresh"/></svg></button>
+          </div>
+          ${capeColumnHtml()}
         </section>
       </div>`;
   }
@@ -10842,21 +10878,25 @@
     const list = capes.list || [];
     const activeId = (list.find((cape) => cape.active) || {}).id || "";
     const cards = list.map((cape) => `
-      <button class="cape-card ${cape.id === activeId ? "is-active" : ""}" data-cape-id="${esc(cape.id)}" title="${esc(cape.alias)}">
-        <canvas class="cape-thumb" width="40" height="64" data-cape-src="${esc(cape.data_url || "")}"></canvas>
+      <button type="button" class="cape-card ${cape.id === activeId ? "is-active" : ""}" data-cape-id="${esc(cape.id)}" title="${esc(cape.alias)}" aria-pressed="${cape.id === activeId}">
+        <canvas class="cape-thumb" width="108" height="128" data-cape-src="${esc(cape.data_url || "")}" aria-hidden="true"></canvas>
         <span class="cape-name" translate="no">${esc(cape.alias)}</span>
       </button>`).join("");
     return `
-      <div class="cape-list" id="skin-capes">
-        <button class="cape-card cape-off ${activeId ? "" : "is-active"}" data-cape-id="" title="Снять плащ">
-          <span class="cape-thumb cape-thumb-off"><svg class="ic"><use href="#i-minus"/></svg></span>
-          <span class="cape-name">Без плаща</span>
-        </button>
-        ${cards}
-        ${!licensed ? `<div class="cape-note">Плащи есть только у лицензионного аккаунта.</div>`
-          : (capes.error && !capes.loading ? `<div class="cape-note">${esc(capes.error)}</div>`
-            : (!list.length && !capes.loading ? `<div class="cape-note">У аккаунта нет плащей.</div>` : ""))}
-        ${capes.loading ? `<div class="cape-note">Загружаем плащи…</div>` : ""}
+      <div class="cape-carousel">
+        <button type="button" class="icon-btn cape-scroll cape-scroll-prev" id="cape-prev" aria-controls="skin-capes" title="Прокрутить плащи влево" aria-label="Прокрутить плащи влево" disabled><svg class="ic"><use href="#i-chev"/></svg></button>
+        <div class="cape-list" id="skin-capes" tabindex="0" role="region" aria-label="Гардероб плащей">
+          <button type="button" class="cape-card cape-off ${activeId ? "" : "is-active"}" data-cape-id="" title="Снять плащ" aria-pressed="${!activeId}">
+            <span class="cape-thumb cape-thumb-off"><svg class="ic"><use href="#i-minus"/></svg></span>
+            <span class="cape-name">Без плаща</span>
+          </button>
+          ${cards}
+          ${!licensed ? `<div class="cape-note">Плащи есть только у лицензионного аккаунта.</div>`
+            : (capes.error && !capes.loading ? `<div class="cape-note">${esc(capes.error)}</div>`
+              : (!list.length && !capes.loading ? `<div class="cape-note">У аккаунта нет плащей.</div>` : ""))}
+          ${capes.loading ? `<div class="cape-note">Загружаем плащи…</div>` : ""}
+        </div>
+        <button type="button" class="icon-btn cape-scroll cape-scroll-next" id="cape-next" aria-controls="skin-capes" title="Прокрутить плащи вправо" aria-label="Прокрутить плащи вправо" disabled><svg class="ic"><use href="#i-chev"/></svg></button>
       </div>`;
   }
 
@@ -10866,16 +10906,14 @@
     return state.capes;
   }
 
-  /** Спина плаща из текстуры 64×32 в миниатюру. */
+  /** Та же объёмная деталь, что и на модели, повернута спиной в три четверти. */
   function paintCapeThumb(canvas, src) {
     if (!canvas || !src) return;
     const image = new Image();
     image.onload = () => {
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(image, 1, 1, 10, 16, 0, 0, canvas.width, canvas.height);
+      if (!canvas.isConnected) return;
+      drawSkinModel(canvas, null, "classic", 154, 7, image, { capeOnly: true });
+      canvas.dataset.capeRendered = "3d";
     };
     image.src = src;
   }
@@ -10931,9 +10969,59 @@
     }
   }
 
+  function updateCapeScrollControls() {
+    const list = $("#skin-capes");
+    const prev = $("#cape-prev");
+    const next = $("#cape-next");
+    if (!list || !prev || !next) return;
+    const max = Math.max(0, list.scrollWidth - list.clientWidth);
+    prev.disabled = list.scrollLeft <= 1;
+    next.disabled = list.scrollLeft >= max - 1;
+  }
+
+  function bindCapeCarousel() {
+    const list = $("#skin-capes");
+    if (!list) return;
+    const move = (direction) => {
+      const card = $(".cape-card", list);
+      const step = card ? card.getBoundingClientRect().width / uiZoom() + 8 : 100;
+      const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      list.scrollBy({ left: direction * step, behavior: reduced ? "auto" : "smooth" });
+    };
+    $("#cape-prev")?.addEventListener("click", () => move(-1));
+    $("#cape-next")?.addEventListener("click", () => move(1));
+    list.addEventListener("scroll", updateCapeScrollControls, { passive: true });
+    list.addEventListener("wheel", (event) => {
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (!delta) return;
+      const pixels = delta * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? list.clientWidth : 1);
+      const before = list.scrollLeft;
+      list.scrollLeft += pixels;
+      // Колесо над гардеробом листает плащи, но не запирает страницу на краю.
+      if (Math.abs(list.scrollLeft - before) > 0.01) event.preventDefault();
+    }, { passive: false });
+    list.addEventListener("keydown", (event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      const cards = $$(".cape-card", list);
+      if (!cards.length) return;
+      const focused = event.target.closest?.(".cape-card");
+      let index = cards.indexOf(focused);
+      if (index < 0) index = Math.max(0, cards.findIndex((card) => card.classList.contains("is-active")));
+      if (event.key === "ArrowLeft") index = Math.max(0, index - 1);
+      if (event.key === "ArrowRight") index = Math.min(cards.length - 1, index + 1);
+      if (event.key === "Home") index = 0;
+      if (event.key === "End") index = cards.length - 1;
+      event.preventDefault();
+      cards[index].focus({ preventScroll: true });
+      cards[index].scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+    requestAnimationFrame(updateCapeScrollControls);
+  }
+
   function bindCapes() {
     const thumbs = $$(".cape-thumb[data-cape-src]");
     thumbs.forEach((canvas) => paintCapeThumb(canvas, canvas.dataset.capeSrc));
+    bindCapeCarousel();
     const refresh = $("#cape-refresh");
     if (refresh) refresh.addEventListener("click", async () => {
       const capes = capeState();
@@ -11141,7 +11229,10 @@
 
   }
 
-  window.addEventListener("resize", () => { if ($("#skin-canvas")) redrawSkinPreview(); }, { passive: true });
+  window.addEventListener("resize", () => {
+    if ($("#skin-canvas")) redrawSkinPreview();
+    updateCapeScrollControls();
+  }, { passive: true });
 
   async function uploadSkin() {
     const skin = skinState();
