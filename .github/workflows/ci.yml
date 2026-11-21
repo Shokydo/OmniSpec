@@ -16,6 +16,7 @@ jobs:
         run: |
           python3 tools/tests/discord_release_test.py
           python3 tools/tests/release_publish_test.py
+          python3 tools/tests/site_build_test.py
 
       - name: Установить Rust
         uses: dtolnay/rust-toolchain@stable

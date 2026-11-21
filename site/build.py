@@ -4,7 +4,8 @@
     python3 site/build.py [--offline]
 
 Что делает:
-  · берёт список релизов из git-тегов (или из site/src/releases.json, если тегов нет);
+  · берёт список релизов из git-тегов и описание из release-notes в каждом теге
+    (или из site/src/releases.json, если тегов нет);
   · уточняет последнюю версию и размеры файлов через GitHub API (--offline — не ходить в сеть);
   · вклáдывает CSS, JS и картинки внутрь HTML, чтобы страницы были самодостаточными;
   · пишет site/dist/index.html, site/dist/changelog.html, og.png, favicon.png.
@@ -121,6 +122,30 @@ def split_bullets(text):
     return out or [text]
 
 
+def release_notes_from_git(tag):
+    """Пункты описания именно на момент тега, не текущий рабочий файл.
+
+    Старые релизы без отдельного описания по-прежнему используют тему коммита.
+    На сайте показываем обычный текст, поэтому убираем обратные кавычки Markdown;
+    HTML экранируется позже при формировании разметки.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", ROOT, "show", f"{tag}:release-notes/{tag}.md"],
+            capture_output=True, text=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    bullets = []
+    for line in result.stdout.splitlines():
+        match = re.match(r"^[-*]\s+(.+?)\s*$", line)
+        if match:
+            bullets.append(match.group(1).replace("`", ""))
+        elif bullets and line[:1].isspace() and line.strip():
+            bullets[-1] += " " + line.strip().replace("`", "")
+    return bullets or None
+
+
 def releases_from_git():
     try:
         tags = subprocess.run(
@@ -133,6 +158,9 @@ def releases_from_git():
         return None
     items = []
     for tag in tags:
+        # Только простые версии используются в именах файлов и ссылках сайта.
+        if not re.fullmatch(r"v?\d+\.\d+\.\d+", tag):
+            continue
         try:
             meta = subprocess.run(
                 ["git", "-C", ROOT, "log", "-1", "--format=%ad%x00%s", "--date=short", f"{tag}^{{commit}}"],
@@ -142,13 +170,11 @@ def releases_from_git():
             continue
         date, _, subject = meta.partition("\x00")
         version = tag.lstrip("v")
-        if not re.match(r"^\d+\.\d+\.\d+$", version):
-            continue
         items.append({
             "version": version,
             "tag": tag,
             "date": date,
-            "bullets": split_bullets(clean_subject(subject)),
+            "bullets": release_notes_from_git(tag) or split_bullets(clean_subject(subject)),
         })
     items.sort(key=lambda x: version_key(x["version"]), reverse=True)
     return items or None
