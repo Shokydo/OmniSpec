@@ -25,6 +25,18 @@ fs.writeFileSync(path.join(data,'settings.json'),JSON.stringify({
   trail:false,sound_fx:false,ui_scale:100,username:'OfflineFixture'
 }));
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function removeDisposableRoot() {
+  let last=null;
+  for(let attempt=0;attempt<60;attempt++) {
+    try { fs.rmSync(root,{recursive:true,force:true,maxRetries:4,retryDelay:250}); return; }
+    catch(error) {
+      last=error;
+      if(!['EBUSY','ENOTEMPTY','EPERM'].includes(error.code)) throw error;
+      await delay(500);
+    }
+  }
+  console.warn(`TEMP_CLEANUP_DEFERRED ${last?.code||'unknown'} ${last?.message||''}`);
+}
 let child=null,browser=null,page=null;
 async function waitFor(fn,label,timeout=30000) {
   const end=Date.now()+timeout;
@@ -107,6 +119,6 @@ async function waitFor(fn,label,timeout=30000) {
     }
     if(browser)await browser.close().catch(()=>{});
     // WebView2 may still flush its disposable profile after the launcher exits.
-    fs.rmSync(root,{recursive:true,force:true,maxRetries:12,retryDelay:500});
+    await removeDisposableRoot();
   }
 })().catch(error=>{console.error(error);process.exitCode=1;});

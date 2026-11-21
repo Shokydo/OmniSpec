@@ -27,6 +27,18 @@ function wav(){
 }
 const original=path.join(root,'event-tone.wav'),wavBytes=wav();fs.writeFileSync(original,wavBytes);
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function removeDisposableRoot() {
+  let last=null;
+  for(let attempt=0;attempt<60;attempt++) {
+    try { fs.rmSync(root,{recursive:true,force:true,maxRetries:4,retryDelay:250}); return; }
+    catch(error) {
+      last=error;
+      if(!['EBUSY','ENOTEMPTY','EPERM'].includes(error.code)) throw error;
+      await delay(500);
+    }
+  }
+  console.warn(`TEMP_CLEANUP_DEFERRED ${last?.code||'unknown'} ${last?.message||''}`);
+}
 let child=null,browser=null,page=null;
 function saved(){try{return JSON.parse(fs.readFileSync(settingsFile,'utf8'));}catch{return {};}}
 async function waitFor(fn,label,timeout=30000){
@@ -182,6 +194,6 @@ async function restartLauncher(errors){
   } finally {
     await stopLauncher();
     // WebView2 may still flush its disposable profile after the launcher exits.
-    fs.rmSync(root,{recursive:true,force:true,maxRetries:12,retryDelay:500});
+    await removeDisposableRoot();
   }
 })().catch(error=>{console.error(error);process.exitCode=1;});
