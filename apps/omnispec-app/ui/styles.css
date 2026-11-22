@@ -3176,6 +3176,8 @@ body.has-wall .modal-head { background: transparent; }
 /* --- поиск в заголовке панели модов/шейдеров/ресурспаков --- */
 .content-search { width: 220px; height: var(--h-sm); margin: 0; }
 .content-search input { font-size: 11.5px; }
+.content-count { flex: 0 0 auto; min-width: max-content; white-space: nowrap; }
+.content-update-error { color: var(--danger, #e06c75); white-space: normal; }
 .content-row { align-items: center; }
 .content-row.is-off .item-title,
 .content-row.is-off .item-sub,

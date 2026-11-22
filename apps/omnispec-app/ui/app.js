@@ -2294,8 +2294,23 @@
     contentList: (instanceId, kind) => invoke("content_list", { instanceId, kind }),
     contentToggle: (instanceId, kind, name) => invoke("content_toggle", { instanceId, kind, name }),
     contentDelete: (instanceId, kind, name) => invoke("content_delete", { instanceId, kind, name }),
-    contentUpdates: (instanceId, kind) => invoke("content_updates", { instanceId, kind }),
-    contentUpdate: (instanceId, kind, name, update) => invoke("content_update", { instanceId, kind, name, update: update || null }),
+    contentUpdates: (instanceId, kind, target = null, opId = null) => invoke("content_updates", {
+      instanceId,
+      kind,
+      mcVersion: target?.mcVersion || null,
+      loader: target?.loader || null,
+      opId
+    }),
+    contentCompatibility: (instanceId, kind, target = null, opId = null) => invoke("content_compatibility", {
+      instanceId,
+      kind,
+      mcVersion: target?.mcVersion || null,
+      loader: target?.loader || null,
+      opId
+    }),
+    contentUpdate: (instanceId, kind, name, update, opId = null) => invoke("content_update", {
+      instanceId, kind, name, update: update || null, opId
+    }),
     replaceModVersion: (instanceId, kind, name, versionId, opId = null) => invoke("content_replace_version", { instanceId, kind, name, versionId, opId }),
     ensureDependencies: (instanceId, opId = null) => invoke("mods_ensure_dependencies", { instanceId, opId }),
     scanExternal: () => invoke("scan_external_launchers"),
@@ -2692,6 +2707,12 @@
       return null;
     },
     contentUpdates: async (_id, kind) => demoUpdates(kind),
+    contentCompatibility: async (_id, kind) => ({
+      checked: kind === "mod" ? demoMods.length : 0,
+      compatible: kind === "mod" ? demoMods.length : 0,
+      incompatible: [],
+      updates: demoUpdates(kind)
+    }),
     replaceModVersion: async () => ({ installed: ["mod.jar"], skipped: [] }),
     contentUpdate: async (_id, kind, name, passed) => {
       const update = passed || demoUpdates(kind).find((item) => item.filename === name);
@@ -2831,6 +2852,10 @@
     modIcons: {},
     contentUpdates: {},
     contentQuery: {},
+    // Проверка и массовая установка обновлений взаимно блокируются: одна
+    // операция должна завершиться целиком, прежде чем пользователь запустит
+    // следующую.
+    contentTask: null,
     mcver: null,
     external: { list: null, loading: false, error: null },
     iconCache: {},
@@ -4016,7 +4041,7 @@
   /* ==================== ПРОГРЕСС ==================== */
   const PROGRESS_STAGES = {
     version: "версия", libraries: "библиотеки", assets: "ресурсы", java: "Java",
-    mods: "моды", modpack: "модпак", loader: "загрузчик", launch: "запуск",
+    mods: "моды", modpack: "модпак", loader: "загрузчик", launch: "запуск", check: "проверка",
     unzip: "распаковка", copy: "копирование", import: "импорт"
   };
 
@@ -4108,7 +4133,7 @@
     $("#progress-fill").style.width = `${percent}%`;
     const stageNames = {
       version: "версия", libraries: "библиотеки", assets: "ресурсы", java: "Java",
-      mods: "моды", modpack: "модпак", loader: "загрузчик", launch: "запуск",
+      mods: "моды", modpack: "модпак", loader: "загрузчик", launch: "запуск", check: "проверка",
       import: "импорт", copy: "копирование", unzip: "распаковка"
     };
     const importStage = ["import", "copy", "unzip", "modpack"].includes(payload.stage);
@@ -4132,7 +4157,7 @@
   const DL_STAGE_TITLES = {
     modpack: "Установка сборки", mods: "Установка модов", update: "Обновление модов",
     libraries: "Библиотеки игры", assets: "Ресурсы игры",
-    version: "Версия игры", java: "Java", loader: "Загрузчик",
+    version: "Версия игры", java: "Java", loader: "Загрузчик", check: "Проверяем…",
     import: "Импорт", unzip: "Распаковка", copy: "Копирование"
   };
 
@@ -4150,7 +4175,7 @@
     const dl = state.downloads;
     if (!payload) return;
     const stage = String(payload.stage || "");
-    const isDownloadStage = ["modpack", "mods", "update", "libraries", "assets", "version", "java", "loader", "import"].includes(stage);
+    const isDownloadStage = ["modpack", "mods", "update", "check", "libraries", "assets", "version", "java", "loader", "import"].includes(stage);
     if (!isDownloadStage) return;
     // Глобальная панель показывает последний пришедший этап; op позволяет не
     // завершить чужую загрузку ответом параллельной попытки запуска.
@@ -4427,11 +4452,20 @@
   }
 
   /** Показываем операцию от её начала до ответа команды, включая зависимости. */
-  async function withInstallProgress(instanceId, stage, fn) {
-    const op = `install:${Date.now().toString(36)}-${(++contentOperationSerial).toString(36)}`;
-    // Запрос метаданных тоже часть установки: старый таймер не должен закрыть
+  async function withInstallProgress(instanceId, stage, fn, options = {}) {
+    const prefix = options.opPrefix || "install:";
+    const op = `${prefix}${Date.now().toString(36)}-${(++contentOperationSerial).toString(36)}`;
+    // Запрос метаданных тоже часть операции: старый таймер не должен закрыть
     // панель, пока первый сетевой ответ ещё не получен.
-    const start = { instance: instanceId, stage, done: 0, total: 0, detail: "подготавливаем установку", state: "active", op };
+    const start = {
+      instance: instanceId,
+      stage,
+      done: 0,
+      total: 0,
+      detail: options.detail || "подготавливаем установку",
+      state: "active",
+      op
+    };
     activeContentProgress.set(op, start);
     setProgress(start);
     let outcome = "error";
@@ -5810,6 +5844,9 @@
       : entries;
     const enabled = entries.filter((entry) => entry.enabled).length;
     const updates = contentUpdates(kind);
+    const taskBusy = Boolean(state.contentTask?.busy);
+    const checkLabel = state.contentTask?.type === "check" || state.contentTask?.type === "check-one"
+      ? "Проверяем…" : "Проверить обновления";
 
     const rows = visible.map((entry) => {
       const update = updateOf(kind, entry);
@@ -5831,14 +5868,14 @@
         <div class="panel">
           <div class="panel-head">
             <strong>${cfg.title}</strong>
-            <span class="badge">${enabled} вкл. / ${entries.length}</span>
+            <span class="badge content-count" title="Включено файлов: ${enabled}">${enabled} вкл.</span>
             <div class="spacer"></div>
             <label class="search content-search">
               <svg class="ic"><use href="#i-search"/></svg>
               <input id="content-query" placeholder="${cfg.search}" spellcheck="false" autocomplete="off" value="${esc(state.contentQuery[kind] || "")}">
             </label>
-            <button class="btn btn-small" id="content-check" title="Проверить обновления под эту версию игры и загрузчик">
-              <svg class="ic"><use href="#i-refresh"/></svg>Проверить обновления
+            <button class="btn btn-small" id="content-check" title="Проверить обновления под эту версию игры и загрузчик" ${taskBusy ? "disabled" : ""}>
+              <svg class="ic"><use href="#i-refresh"/></svg>${checkLabel}
             </button>
             ${cfg.deps ? `<button class="btn btn-small" id="content-deps" title="Докачать недостающие зависимости модов"><svg class="ic"><use href="#i-download"/></svg>Зависимости</button>` : ""}
             <button class="btn btn-small" id="content-open">Открыть папку</button>
@@ -5939,70 +5976,153 @@
     });
   }
 
+  function contentTarget(meta) {
+    return {
+      mcVersion: meta.mc_version,
+      loader: meta.loader || { type: "vanilla" }
+    };
+  }
+
+  function syncContentTaskControls() {
+    const busy = Boolean(state.contentTask?.busy);
+    const check = $("#content-check");
+    if (check) {
+      const checking = state.contentTask?.type === "check" || state.contentTask?.type === "check-one";
+      check.disabled = busy;
+      check.innerHTML = `<svg class="ic"><use href="#i-refresh"/></svg>${checking ? "Проверяем…" : "Проверить обновления"}`;
+    }
+    const all = $("#upd-list-all");
+    if (all) {
+      const hasRows = Boolean($("#upd-list-body")?.querySelector("[data-upd]"));
+      all.disabled = busy || !hasRows;
+      if (!busy) all.textContent = "Обновить всё";
+    }
+    $$("#upd-list-body [data-upd-one]").forEach((button) => {
+      if (!busy && button.textContent !== "Обновить") button.textContent = "Обновить";
+      button.disabled = busy;
+    });
+  }
+
+  function beginContentTask(kind, type, instanceId) {
+    if (state.contentTask?.busy) {
+      toast("Дождись окончания текущей операции", "");
+      return null;
+    }
+    const task = { kind, type, instanceId, busy: true };
+    state.contentTask = task;
+    syncContentTaskControls();
+    return task;
+  }
+
+  function endContentTask(task) {
+    if (state.contentTask === task) state.contentTask = null;
+    syncContentTaskControls();
+    const modal = $("#modal-updates-list");
+    const body = $("#upd-list-body");
+    if (modal && !modal.hidden && body && !body.querySelector("[data-upd]")) modal.hidden = true;
+  }
+
+  function contentTaskIsCurrent(task, meta) {
+    return state.contentTask === task && task.busy
+      && state.selectedId === meta.id && selected()?.id === meta.id;
+  }
+
+  function contentErrorText(error) {
+    return String(error?.message || error || "неизвестная ошибка");
+  }
+
+  async function confirmContentUpdate(meta, kind, item, count = 1) {
+    const target = `Minecraft ${meta.mc_version}${kind === "mod" ? ` · ${loaderLabel(meta.loader)}` : ""}`;
+    return askConfirm({
+      title: count > 1 ? "Обновить найденные файлы?" : "Поставить обновление?",
+      text: count > 1
+        ? `Будет обновлено файлов: ${count}.\nЦелевой профиль: ${target}.\nПользовательские данные, настройки и миры не удаляются.`
+        : `${item.title}: ${item.current} → ${item.latest}.\nПоставить под ${target}?`,
+      ok: count > 1 ? "Обновить всё" : "Обновить",
+      danger: false
+    });
+  }
+
   /** Проверка обновлений: одного файла или всех сразу. */
   async function checkContentUpdates(kind, filename = null) {
     const meta = selected();
     if (!meta) return;
+    const task = beginContentTask(kind, filename ? "check-one" : "check", meta.id);
+    if (!task) return;
     const generation = tabRenderGeneration;
     const stillCurrent = () => generation === tabRenderGeneration && state.selectedId === meta.id;
     const body = kind === "mod" ? "моды сборки" : kind === "shader" ? "шейдеры сборки" : "ресурспаки сборки";
     toast(filename ? `Проверяем обновления «${filename}»…` : `Проверяем обновления (${body})…`);
     try {
-      const updates = await api.contentUpdates(meta.id, kind);
+      const report = await withInstallProgress(
+        meta.id,
+        "check",
+        (op) => api.contentCompatibility(meta.id, kind, contentTarget(meta), op),
+        { detail: "Проверяем…", opPrefix: "check:" }
+      );
       if (!stillCurrent()) return;
+      // Старые демо/плагины могли вернуть сам массив; принимаем оба формата,
+      // но новое ядро возвращает ещё и список несовместимых файлов.
+      const updates = Array.isArray(report) ? report : (report?.updates || []);
       state.contentUpdates[kind] = updates;
       if (filename) {
         const found = updates.find((item) => item.filename === filename);
-        if (!found) { toast("Это последняя версия", "ok"); return; }
-        const ok = await askConfirm({
-          title: "Поставить обновление?",
-          text: `${found.title}: ${found.current} → ${found.latest}.\nПоставить под Minecraft ${meta.mc_version}${kind === "mod" ? ` · ${esc(loaderLabel(meta.loader))}` : ""}?`,
-          ok: "Обновить",
-          danger: false
-        });
+        if (!found) { toast("Это последняя совместимая версия", "ok"); return; }
+        const ok = await confirmContentUpdate(meta, kind, found);
         if (!stillCurrent()) return;
-        if (ok) await updateContentFile(kind, filename);
-        else renderContent(kind);
+        if (ok) {
+          // Проверка уже заняла task-lock; отпускаем его перед вложенной
+          // установкой, которая создаст собственную операцию прогресса.
+          task.busy = false;
+          endContentTask(task);
+          await updateContentFile(kind, filename, null, { confirmed: true });
+        } else renderContent(kind);
         return;
       }
       renderContent(kind);
-      if (!updates.length) { toast("Обновлений нет — все файлы актуальны", "ok"); return; }
-      openUpdatesDialog(kind, updates);
+      const incompatible = Array.isArray(report?.incompatible) ? report.incompatible.length : 0;
+      if (!updates.length) {
+        if (incompatible) openUpdatesDialog(kind, updates, report);
+        toast(incompatible
+          ? `Совместимых обновлений нет; несовместимых файлов: ${incompatible}`
+          : "Обновлений нет — все файлы актуальны", incompatible ? "" : "ok");
+        return;
+      }
+      openUpdatesDialog(kind, updates, report);
     } catch (err) {
-      toast(String(err), "err");
+      if (stillCurrent()) toast(`Не удалось проверить обновления: ${contentErrorText(err)}`, "err");
+    } finally {
+      task.busy = false;
+      endContentTask(task);
     }
   }
 
   /** Окно «Обновления»: список найденного и «Обновить всё». */
-  function openUpdatesDialog(kind, updates) {
+  function openUpdatesDialog(kind, updates, report = null) {
     const modal = $("#modal-updates-list");
     if (!modal) return;
     const cfg = CONTENT_KINDS[kind] || CONTENT_KINDS.mod;
+    const list = Array.isArray(updates) ? updates.slice() : [];
     $("#upd-list-title").textContent = `Обновления: ${cfg.title.toLowerCase()}`;
-    $("#upd-list-body").innerHTML = updates.map((item) => `
+    const incompatible = Array.isArray(report?.incompatible) ? report.incompatible : [];
+    $("#upd-list-body").innerHTML = `${list.map((item) => `
       <div class="item-row upd-row" data-upd="${esc(item.filename)}">
         <div class="item-main">
           <div class="item-title" translate="no">${esc(item.title)}</div>
           <div class="item-sub">${esc(item.current)} → ${esc(item.latest)} · ${esc(item.new_filename)}</div>
+          ${item.error ? `<div class="item-sub content-update-error" role="alert">Ошибка: ${esc(item.error)}</div>` : ""}
         </div>
         <button class="btn btn-small btn-primary" data-upd-one="${esc(item.filename)}">Обновить</button>
-      </div>`).join("");
+      </div>`).join("")}${incompatible.length ? `
+      <div class="panel-foot muted" role="status">
+        <div>Несовместимых файлов: ${incompatible.length}. Они сохранены без изменений.</div>
+        ${incompatible.map((issue) => `<div class="content-update-error" translate="no">${esc(issue.filename)}: ${esc(issue.reason || "нет совместимой версии")}</div>`).join("")}
+      </div>` : ""}`;
     $$("#upd-list-body [data-upd-one]").forEach((btn) => btn.addEventListener("click", () => updateContentFile(kind, btn.dataset.updOne, btn)));
     const all = $("#upd-list-all");
-    all.onclick = async () => {
-      all.disabled = true;
-      $$("#upd-list-body [data-upd-one]").forEach((btn) => { btn.disabled = true; });
-      for (const item of updates.slice()) {
-        try {
-          await api.contentUpdate(selected().id, kind, item.filename, item);
-          removeUpdateRow(item.filename);
-        } catch (err) { toast(String(err), "err"); }
-      }
-      state.contentUpdates[kind] = [];
-      modal.hidden = true;
-      renderContent(kind);
-      toast("Обновления установлены", "ok");
-    };
+    all.disabled = !list.length || Boolean(state.contentTask?.busy);
+    all.textContent = "Обновить всё";
+    all.onclick = () => updateContentBatch(kind, list);
     modal.hidden = false;
   }
 
@@ -6011,26 +6131,107 @@
     const row = $(`#upd-list-body [data-upd="${CSS.escape(filename)}"]`);
     if (row) row.remove();
     const body = $("#upd-list-body");
-    if (body && !body.querySelector("[data-upd]")) {
+    if (body && !body.querySelector("[data-upd]") && !state.contentTask?.busy) {
       const modal = $("#modal-updates-list");
       if (modal) modal.hidden = true;
     }
   }
 
-  /** Поставить обновление одного файла: прогресс — в панели загрузок. */
-  async function updateContentFile(kind, filename, btn = null) {
+  /** Установить все найденные обновления последовательно и дождаться каждого.
+   * Ошибка одного файла не прерывает остальные: успешные исчезают из списка,
+   * а неудачные остаются для повторной попытки. */
+  async function updateContentBatch(kind, updates, options = {}) {
     const meta = selected();
+    if (!meta || !Array.isArray(updates) || !updates.length) return { succeeded: [], failed: [] };
+    const task = beginContentTask(kind, "update-all", meta.id);
+    if (!task) return { succeeded: [], failed: updates.slice() };
+    const succeeded = [];
+    const failed = [];
+    let cancelled = false;
+    try {
+      let confirmed = Boolean(options.confirmed);
+      if (!confirmed) {
+        confirmed = await confirmContentUpdate(meta, kind, updates[0], updates.length);
+        if (!confirmed) cancelled = true;
+      }
+      if (!cancelled) {
+        try {
+          await withInstallProgress(meta.id, "update", async (op) => {
+            for (const item of updates.slice()) {
+              if (!contentTaskIsCurrent(task, meta)) throw new Error("операция обновления отменена");
+              try {
+                await api.contentUpdate(meta.id, kind, item.filename, item, op);
+                succeeded.push(item);
+              } catch (error) {
+                failed.push({ item, error: contentErrorText(error) });
+              }
+            }
+            if (failed.length) {
+              throw new Error(`не удалось обновить ${failed.length} из ${updates.length} файлов`);
+            }
+          }, { detail: "Обновляем…" });
+        } catch (error) {
+          // Ошибка одного файла уже учтена и не прерывает очередь. Сюда
+          // попадают отмена и неожиданный сбой до обработки очереди.
+          if (!failed.length && updates.length) {
+            failed.push(...updates
+              .filter((item) => !succeeded.some((done) => done.filename === item.filename))
+              .map((item) => ({ item, error: contentErrorText(error) })));
+          }
+        }
+      }
+    } finally {
+      task.busy = false;
+      endContentTask(task);
+    }
+
+    if (cancelled) return { succeeded, failed };
+    state.contentUpdates[kind] = (state.contentUpdates[kind] || []).filter(
+      (item) => !succeeded.some((done) => done.filename === item.filename)
+    );
+    renderContent(kind);
+    if (failed.length) {
+      const failedItems = failed.map(({ item, error }) => ({ ...item, error }));
+      if (options.openDialogOnFailure !== false) openUpdatesDialog(kind, failedItems);
+      if (options.announce !== false) {
+        toast(`Обновлено ${succeeded.length} из ${updates.length}; ошибок: ${failed.length}`, "err");
+      }
+    } else {
+      if (options.closeModal !== false) $("#modal-updates-list").hidden = true;
+      if (options.announce !== false) toast(`Обновлено модов: ${succeeded.length}`, "ok");
+    }
+    return { succeeded, failed };
+  }
+
+  /** Поставить обновление одного файла: прогресс — в панели загрузок. */
+  async function updateContentFile(kind, filename, btn = null, options = {}) {
+    const meta = selected();
+    if (!meta) return;
+    const task = beginContentTask(kind, "update-one", meta.id);
+    if (!task) return;
     const item = (state.contentUpdates[kind] || []).find((entry) => entry.filename === filename) || null;
+    if (!item) {
+      endContentTask(task);
+      toast("Обновление устарело — проверь список ещё раз", "err");
+      return;
+    }
     if (btn) { btn.disabled = true; btn.textContent = "Обновляем…"; }
     try {
-      await api.contentUpdate(meta.id, kind, filename, item);
+      if (!options.confirmed && !(await confirmContentUpdate(meta, kind, item))) {
+        if (btn) { btn.disabled = false; btn.textContent = "Обновить"; }
+        return;
+      }
+      await withInstallProgress(meta.id, "update", (op) => api.contentUpdate(meta.id, kind, filename, item, op), { detail: "Обновляем…" });
       state.contentUpdates[kind] = (state.contentUpdates[kind] || []).filter((entry) => entry.filename !== filename);
       removeUpdateRow(filename);
       renderContent(kind);
       toast("Обновлено", "ok");
     } catch (err) {
-      toast(String(err), "err");
+      toast(`Не удалось обновить: ${contentErrorText(err)}`, "err");
       if (btn) { btn.disabled = false; btn.textContent = "Обновить"; }
+    } finally {
+      task.busy = false;
+      endContentTask(task);
     }
   }
 
@@ -12561,21 +12762,73 @@
   async function applyVersionChange() {
     const cfg = state.mcver;
     if (!cfg) return;
-    const meta = cfg.meta;
+    const meta = selected();
+    if (!meta || meta.id !== cfg.meta.id) return toast("Сборка изменилась — открой смену версии заново", "err");
     const loader = cfg.loader === "vanilla" || !cfg.loader
       ? { type: "vanilla" }
       : { type: cfg.loader, version: cfg.loaderVersion };
     if (loader.type !== "vanilla" && !loader.version) return toast("Выбери версию загрузчика", "err");
+    const changed = meta.mc_version !== cfg.mc
+      || JSON.stringify(meta.loader || { type: "vanilla" }) !== JSON.stringify(loader);
+    if (!changed) {
+      $("#modal-mcver").hidden = true;
+      return;
+    }
     const button = $("#mcver-apply");
     button.disabled = true;
     try {
+      // Смена версии сама по себе ничего не удаляет. Только явное согласие
+      // запускает проверку каталога и обновление модов под новый профиль.
+      const updateMods = await askConfirm({
+        title: "Обновить моды под новую версию?",
+        text: `Сборка будет переключена на Minecraft ${cfg.mc} · ${loaderLabel(loader)}. Хотите обновить моды под этот профиль?\n\nЕсли отказаться, файлы модов и пользовательские данные останутся без изменений.`,
+        ok: "Проверить и обновить",
+        danger: false
+      });
+      let updateSummary = null;
+      let incompatibleCount = 0;
+      if (updateMods) {
+        const target = { mcVersion: cfg.mc, loader };
+        const report = await withInstallProgress(
+          meta.id,
+          "check",
+          (op) => api.contentCompatibility(meta.id, "mod", target, op),
+          { detail: "Проверяем совместимость…", opPrefix: "check:" }
+        );
+        const updates = Array.isArray(report) ? report : (report?.updates || []);
+        state.contentUpdates.mod = updates;
+        if (updates.length) {
+          updateSummary = await updateContentBatch("mod", updates, {
+            confirmed: true,
+            announce: false,
+            openDialogOnFailure: false,
+            closeModal: false
+          });
+        } else {
+          updateSummary = { succeeded: [], failed: [] };
+        }
+        incompatibleCount = Array.isArray(report?.incompatible) ? report.incompatible.length : 0;
+        if (updateSummary.failed.length || incompatibleCount) {
+          toast(`Проверка завершена: обновлено ${updateSummary.succeeded.length}, несовместимых ${incompatibleCount}, ошибок ${updateSummary.failed.length}.`, "err");
+        }
+      }
+
+      // Метаданные меняются после проверки/обновления; игровая папка, миры,
+      // конфиги, настройки и оставшиеся несовместимые моды не трогаются.
       await api.updateInstance({ ...meta, mc_version: cfg.mc, loader, version_override: null });
       $("#modal-mcver").hidden = true;
+      state.contentUpdates = {};
       await refreshInstances();
       selectInstance(meta.id);
-      toast(`Версия сборки — MC ${cfg.mc}`, "ok");
+      if (updateMods && updateSummary && !updateSummary.failed.length && !incompatibleCount) {
+        toast(`Версия сборки — MC ${cfg.mc}; моды обновлены`, "ok");
+      } else if (!updateMods) {
+        toast(`Версия сборки — MC ${cfg.mc}; моды сохранены без изменений`, "ok");
+      } else {
+        toast(`Версия сборки — MC ${cfg.mc}; проверь оставшиеся моды`, "");
+      }
     } catch (err) {
-      toast(String(err), "err");
+      toast(`Не удалось сменить версию: ${contentErrorText(err)}`, "err");
     } finally {
       button.disabled = false;
     }

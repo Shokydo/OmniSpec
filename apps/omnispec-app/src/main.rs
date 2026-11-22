@@ -22,7 +22,7 @@ use omnispec_core::auth::Account;
 use omnispec_core::game;
 use omnispec_core::game::java::JavaInstall;
 use omnispec_core::game::launch::LaunchPlan;
-use omnispec_core::instances::{self, CreateInstanceRequest, InstanceMeta};
+use omnispec_core::instances::{self, CreateInstanceRequest, InstanceMeta, Loader};
 use omnispec_core::loaders::{self, LoaderOption};
 use omnispec_core::modrinth::{install as modrinth_install, mrpack, Modrinth, SearchQuery};
 use omnispec_core::curseforge::{install as curseforge_install, modpack as curseforge_modpack, CurseForge};
@@ -250,7 +250,7 @@ fn reporter_for(app: &AppHandle, instance_id: &str) -> Reporter {
 fn reporter_for_content(app: &AppHandle, instance_id: &str, op_id: Option<String>) -> Reporter {
     let reporter = reporter_for(app, instance_id);
     match op_id.filter(|id| {
-        id.starts_with("install:")
+        (id.starts_with("install:") || id.starts_with("check:"))
             && id.len() <= 100
             && id
                 .bytes()
@@ -2511,19 +2511,71 @@ fn content_delete(
     omnispec_core::content::remove(&state.paths, &meta, &kind, &name).map_err(err)
 }
 
+fn target_instance(
+    mut meta: InstanceMeta,
+    mc_version: Option<String>,
+    loader: Option<Loader>,
+) -> InstanceMeta {
+    if let Some(version) = mc_version.filter(|value| !value.trim().is_empty()) {
+        meta.mc_version = version;
+    }
+    if let Some(loader) = loader {
+        meta.loader = loader;
+    }
+    meta
+}
+
 /// Проверить обновления под эту версию игры и загрузчик.
 #[tauri::command]
 async fn content_updates(
+    app: AppHandle,
     state: State<'_, AppState>,
     instance_id: String,
     kind: String,
+    mc_version: Option<String>,
+    loader: Option<Loader>,
+    op_id: Option<String>,
 ) -> Result<Value, String> {
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    let updates =
-        omnispec_core::content::check_updates(&state.modrinth, &state.paths, &meta, &kind)
-            .await
-            .map_err(err)?;
-    Ok(json!(updates))
+    let target = target_instance(meta, mc_version, loader);
+    let reporter = reporter_for_content(&app, &target.id, op_id);
+    let report = omnispec_core::content::check_compatibility(
+        &state.modrinth,
+        &state.paths,
+        &target,
+        &kind,
+        Some(&reporter),
+    )
+    .await
+    .map_err(err)?;
+    Ok(json!(report.updates))
+}
+
+/// Полный результат проверки нужен перед сменой Minecraft-версии: кроме
+/// обновлений UI получает файлы, для которых под выбранный профиль версий нет.
+#[tauri::command]
+async fn content_compatibility(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    instance_id: String,
+    kind: String,
+    mc_version: Option<String>,
+    loader: Option<Loader>,
+    op_id: Option<String>,
+) -> Result<Value, String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let target = target_instance(meta, mc_version, loader);
+    let reporter = reporter_for_content(&app, &target.id, op_id);
+    omnispec_core::content::check_compatibility(
+        &state.modrinth,
+        &state.paths,
+        &target,
+        &kind,
+        Some(&reporter),
+    )
+    .await
+    .map(|report| json!(report))
+    .map_err(err)
 }
 
 /// Поставить обновление одного файла. Данные обновления приходят из UI
@@ -2536,10 +2588,11 @@ async fn content_update(
     kind: String,
     name: String,
     update: Option<Value>,
+    op_id: Option<String>,
 ) -> Result<Value, String> {
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    let reporter = reporter_for(&app, &meta.id);
+    let reporter = reporter_for_content(&app, &meta.id, op_id);
     let update = match update {
         Some(value) => {
             let parsed: omnispec_core::content::ContentUpdate =
@@ -3934,6 +3987,7 @@ fn main() {
             content_toggle,
             content_delete,
             content_updates,
+            content_compatibility,
             content_update,
             content_replace_version,
             mods_ensure_dependencies,
