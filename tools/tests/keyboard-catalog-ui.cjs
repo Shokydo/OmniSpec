@@ -67,15 +67,16 @@ async function noLaunch(page, label) {
 async function changeSelect(page, selector, key, resultRoot) {
   await page.locator(selector).focus();
   const before = await page.evaluate(() => window.__keyboardCalls.filter(x => x.command.startsWith('search_')).length);
-  await page.keyboard.press(key);
+  await page.keyboard.press(key); // открывает стилизованный listbox и ставит фокус на option
+  await page.keyboard.press('Enter'); // выбрать Home/End-позицию
   await page.waitForFunction(n => window.__keyboardCalls.filter(x => x.command.startsWith('search_')).length > n, before);
   await page.waitForSelector(`${resultRoot} .card`);
   await page.waitForTimeout(180); // ответ поиска тоже мог перерисовать фильтры
   assert.equal(await page.evaluate(() => document.activeElement.id), selector.slice(1), `${selector}: фокус потерялся`);
-  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // снова открыть меню
   await noLaunch(page, selector);
-  await page.keyboard.press('Escape'); // закрыть нативный список, если Enter его открыл
-  assert.equal(await page.evaluate(() => document.activeElement.id), selector.slice(1), `${selector}: фокус потерялся после Enter`);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.evaluate(() => document.activeElement.id), selector.slice(1), `${selector}: фокус потерялся после Escape`);
 }
 async function changeSource(page, scope, source, key = 'Enter') {
   const selector = `[data-${scope}-source="${source}"]`;
@@ -112,6 +113,7 @@ async function changeSource(page, scope, source, key = 'Enter') {
     await page.evaluate(() => { window.__heldSearch = {command:'search_modrinth', resolve:null}; });
     await page.locator('#mr-type').focus();
     await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
     await page.waitForFunction(() => typeof window.__heldSearch.resolve === 'function');
     await page.locator('#dl-query').focus();
     await page.evaluate(() => window.__heldSearch.resolve());

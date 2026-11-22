@@ -2866,11 +2866,13 @@
     dlRoot: null,
     modrinth: {
       query: "", type: "mod", mc: "", loader: "",
+      categories: { mod: "", resourcepack: "", shader: "" },
       results: [], total: 0, loading: false, loadingMore: false,
       error: null, tried: false
     },
     curseforge: {
       query: "", type: "mod", mc: "", loader: "", sort: "downloads",
+      categories: { mod: "", modpack: "", resourcepack: "", shader: "" },
       results: [], total: 0, loading: false, loadingMore: false,
       error: null, tried: false
     },
@@ -6650,6 +6652,193 @@
     }
   }
 
+  function downloadVersionOptions(meta, cfg) {
+    const ids = new Set();
+    const add = (value) => {
+      const id = typeof value === "string" ? value : value && value.id;
+      if (id && /^[0-9][A-Za-z0-9._+-]*$/.test(String(id))) ids.add(String(id));
+    };
+    add(meta && meta.mc_version);
+    (DEMO.versions || []).forEach(add);
+    ((state.discover && state.discover.versions) || []).forEach(add);
+    add(cfg && cfg.mc);
+    return Array.from(ids).slice(0, 18);
+  }
+
+  function downloadFilterListboxHtml(source, field, label, value, options) {
+    const prefix = source === "curseforge" ? "cf" : "mr";
+    const id = `${prefix}-${field}`;
+    const selected = options.find(([optionValue]) => optionValue === value) || options[0] || ["", ""];
+    return `<div class="field catalog-filter-field">
+      <label for="${id}">${esc(label)}</label>
+      <div class="catalog-listbox" id="${id}-wrap">
+        <button type="button" class="catalog-listbox-trigger" id="${id}"
+          data-dl-filter-trigger data-dl-filter-source="${source}" data-dl-filter-field="${field}" data-dl-filter-value="${esc(value)}"
+          aria-haspopup="listbox" aria-expanded="false" aria-controls="${id}-options">
+          <span id="${id}-label"${field === "mc" ? " translate=\"no\"" : ""}>${esc(selected[1])}</span>
+          <svg class="ic"><use href="#i-chev"/></svg>
+        </button>
+        <div class="catalog-listbox-menu" id="${id}-options" role="listbox" aria-label="${esc(label)}" data-trigger-id="${id}" hidden>
+          ${options.map(([optionValue, optionLabel]) => `<button type="button" role="option" tabindex="-1"
+            data-dl-filter-option data-dl-filter-source="${source}" data-dl-filter-field="${field}"
+            data-dl-filter-value="${esc(optionValue)}" aria-selected="${optionValue === value}"
+            class="catalog-listbox-option ${optionValue === value ? "is-active" : ""}">
+            <span${field === "mc" ? " translate=\"no\"" : ""}>${esc(optionLabel)}</span><svg class="ic"><use href="#i-check"/></svg>
+          </button>`).join("")}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function downloadCategoryFilterHtml(source, cfg) {
+    const type = cfg.type || "mod";
+    const categories = downloadCategoryOptions(source, type);
+    if (!categories.length) return "";
+    const active = downloadCategoryValue(cfg);
+    const title = type === "mod" ? "Категории модов"
+      : type === "modpack" ? "Категории сборок"
+        : type === "resourcepack" ? "Категории ресурспаков" : "Категории шейдеров";
+    return `<details class="download-category-group" open>
+      <summary>${title}<svg class="ic"><use href="#i-chev"/></svg></summary>
+      <div class="download-category-list" role="group" aria-label="${title}">
+        <button type="button" data-dl-category="" data-dl-category-source="${source}" data-dl-category-type="${type}"
+          class="home-category ${!active ? "is-active" : ""}" aria-pressed="${!active}">
+          <svg class="ic"><use href="#i-grid"/></svg>Все категории
+        </button>
+        ${categories.map(([id, label, icon]) => `<button type="button" data-dl-category="${esc(id)}" data-dl-category-source="${source}" data-dl-category-type="${type}"
+          class="home-category ${active === id ? "is-active" : ""}" aria-pressed="${active === id}">
+          <svg class="ic"><use href="#${icon}"/> </svg>${esc(label)}
+        </button>`).join("")}
+      </div>
+    </details>`;
+  }
+
+  function downloadFilterPanelHtml(source, cfg, meta) {
+    const typeOptions = source === "curseforge"
+      ? [["mod", "Моды"], ["modpack", "Модпаки"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]]
+      : [["mod", "Моды"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
+    const mcOptions = [["", "Любая версия"], ...downloadVersionOptions(meta, cfg).map((version) => [version, version])];
+    const loaderOptions = [["", "Любой загрузчик"], ...CATALOG_LOADERS.map((loader) => [loader, LOADER_NAMES[loader]])];
+    const fields = [
+      downloadFilterListboxHtml(source, "type", "Тип", cfg.type, typeOptions),
+      downloadFilterListboxHtml(source, "mc", "Версия игры", cfg.mc, mcOptions)
+    ];
+    if (source === "modrinth" ? cfg.type === "mod" : ["mod", "modpack"].includes(cfg.type)) {
+      fields.push(downloadFilterListboxHtml(source, "loader", "Загрузчик", cfg.loader, loaderOptions));
+    }
+    if (source === "curseforge") {
+      fields.push(downloadFilterListboxHtml(source, "sort", "Сортировка", cfg.sort || "downloads", CF_SORTS));
+    }
+    return `<aside class="download-catalog-sidebar" id="${source}-download-filters" aria-label="Фильтры каталога">
+      <div class="download-filter-head"><span>Фильтры</span><span class="download-filter-source">${source === "curseforge" ? "CurseForge" : "Modrinth"}</span></div>
+      <div class="download-filter-fields">${fields.join("")}</div>
+      ${downloadCategoryFilterHtml(source, cfg)}
+    </aside>`;
+  }
+
+  function closeDownloadFilterMenu(menu, restoreFocus = false) {
+    if (!menu || menu.hidden) return;
+    menu.hidden = true;
+    const trigger = document.getElementById(menu.dataset.triggerId || "");
+    if (trigger) {
+      trigger.setAttribute("aria-expanded", "false");
+      if (restoreFocus) trigger.focus();
+    }
+    menu.style.maxHeight = "";
+    menu.classList.remove("is-up");
+  }
+
+  function closeDownloadFilterMenus(restoreFocus = false, exceptWrap = null) {
+    $$(".catalog-listbox-menu").forEach((menu) => {
+      if (exceptWrap && menu.closest(".catalog-listbox") === exceptWrap) return;
+      closeDownloadFilterMenu(menu, restoreFocus);
+    });
+  }
+
+  function openDownloadFilterMenu(trigger, menu, options, index) {
+    closeHomeLoader();
+    closeHomeVersion();
+    closeDownloadFilterMenus(false, trigger.closest(".catalog-listbox"));
+    menu.hidden = false;
+    menu.classList.remove("is-up");
+    menu.style.maxHeight = "";
+    const area = trigger.closest(".download-catalog-layout")?.getBoundingClientRect();
+    const triggerRect = trigger.getBoundingClientRect();
+    const top = Math.max(0, area?.top || 0);
+    const bottom = Math.min(window.innerHeight, area?.bottom || window.innerHeight);
+    const spacing = 6 * uiZoom();
+    const below = Math.max(0, bottom - triggerRect.bottom - spacing);
+    const above = Math.max(0, triggerRect.top - top - spacing);
+    const flip = menu.getBoundingClientRect().height > below && above > below;
+    menu.classList.toggle("is-up", flip);
+    menu.style.maxHeight = `${Math.max(0, (flip ? above : below) / uiZoom())}px`;
+    trigger.setAttribute("aria-expanded", "true");
+    (options[index] || options[0])?.focus();
+  }
+
+  function runDownloadFilterSearch(source) {
+    if (source === "curseforge") cfRunSearch();
+    else runSearch();
+  }
+
+  function bindDownloadFilterControls(source) {
+    $$("[data-dl-filter-trigger]").forEach((trigger) => {
+      const menu = document.getElementById(trigger.getAttribute("aria-controls"));
+      const options = menu ? $$('[data-dl-filter-option]', menu) : [];
+      if (!menu || !options.length) return;
+      const currentIndex = () => Math.max(0, options.findIndex((option) => option.dataset.dlFilterValue === (source === "curseforge"
+        ? state.curseforge[trigger.dataset.dlFilterField] : state.modrinth[trigger.dataset.dlFilterField])));
+      const open = (index = currentIndex()) => openDownloadFilterMenu(trigger, menu, options, index);
+      trigger.addEventListener("click", () => {
+        if (!menu.hidden) return closeDownloadFilterMenu(menu);
+        open();
+      });
+      trigger.addEventListener("keydown", (event) => {
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const current = currentIndex();
+        open(event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
+          : event.key === "ArrowDown" ? Math.min(current + 1, options.length - 1) : Math.max(current - 1, 0));
+      });
+      menu.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") { event.preventDefault(); closeDownloadFilterMenu(menu, true); return; }
+        if (event.key === "Tab") { closeDownloadFilterMenu(menu, true); return; }
+        const index = options.indexOf(document.activeElement);
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
+          : event.key === "ArrowDown" ? Math.min(Math.max(index, 0) + 1, options.length - 1) : Math.max(index - 1, 0);
+        options[next].focus();
+      });
+      options.forEach((option) => option.addEventListener("click", () => {
+        const field = trigger.dataset.dlFilterField;
+        const value = option.dataset.dlFilterValue || "";
+        const cfg = source === "curseforge" ? state.curseforge : state.modrinth;
+        const changed = cfg[field] !== value;
+        closeDownloadFilterMenu(menu, true);
+        if (!changed) return;
+        if (field === "sort") cfg.sort = value;
+        else setDownloadFilter(source, field, value);
+        runDownloadFilterSearch(source);
+      }));
+    });
+
+    $$(`[data-dl-category-source="${source}"]`).forEach((button) => button.addEventListener("click", () => {
+      const cfg = source === "curseforge" ? state.curseforge : state.modrinth;
+      const type = cfg.type || "mod";
+      const value = button.dataset.dlCategory || "";
+      const categories = downloadCategoryState(cfg, type);
+      if (categories[type] === value) return;
+      categories[type] = value;
+      $$(`[data-dl-category-source="${source}"]`).forEach((item) => {
+        const active = (item.dataset.dlCategory || "") === value && (item.dataset.dlCategoryType || "") === type;
+        item.classList.toggle("is-active", active);
+        item.setAttribute("aria-pressed", String(active));
+      });
+      runDownloadFilterSearch(source);
+    }));
+  }
+
   /** Страница «Загрузить»: одна строка поиска и один вид для обоих источников. */
   function renderDownload() {
     // Поиск учитывает версию и загрузчик сборки: ответ от прошлой сборки не подходит новой.
@@ -6736,41 +6925,17 @@
     const cfg = state.modrinth;
     const view = state.modsView;
     // Внутри сборки модпаки не нужны — они ставятся только при создании сборки.
-    const types = [["mod", "Моды"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
-    const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
     replaceCatalogHtml(root, `
-      <div class="modrinth-wrap">
-        <div class="modrinth-filters">
-          <div class="field">
-            <label>Тип</label>
-            <select class="select" id="mr-type">
-              ${types.map(([value, label]) => `<option value="${value}" ${cfg.type === value ? "selected" : ""}>${label}</option>`).join("")}
-            </select>
+      <div class="download-source-view">
+        <div class="download-catalog-layout">
+          ${downloadFilterPanelHtml("modrinth", cfg, meta)}
+          <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${modsGridLevel()}` : ""}" id="mr-results" style="--feed-cols:${modsColumns()}">
+            ${resultsHtml()}
           </div>
-          <div class="field">
-            <label>Версия игры</label>
-            <select class="select" id="mr-mc">
-              <option value="">любая</option>
-              ${mcOptions.map((value) => `<option value="${esc(value)}" ${cfg.mc === value ? "selected" : ""}>${esc(value)}</option>`).join("")}
-            </select>
-          </div>
-          ${cfg.type === "mod" ? `<div class="field">
-            <label>Загрузчик</label>
-            <select class="select" id="mr-loader">
-              <option value="">любой</option>
-              ${CATALOG_LOADERS.map((value) => `<option value="${value}" ${cfg.loader === value ? "selected" : ""}>${LOADER_NAMES[value]}</option>`).join("")}
-            </select>
-          </div>` : ""}
-        </div>
-        <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${modsGridLevel()}` : ""}" id="mr-results" style="--feed-cols:${modsColumns()}">
-          ${resultsHtml()}
         </div>
       </div>`);
 
-    $("#mr-type").addEventListener("change", (event) => { setDownloadFilter("modrinth", "type", event.target.value); runSearch(); });
-    $("#mr-mc").addEventListener("change", (event) => { setDownloadFilter("modrinth", "mc", event.target.value); runSearch(); });
-    const loaderSelect = $("#mr-loader");
-    if (loaderSelect) loaderSelect.addEventListener("change", (event) => { setDownloadFilter("modrinth", "loader", event.target.value); runSearch(); });
+    bindDownloadFilterControls("modrinth");
     bindResultEvents();
     const retry = $("#mr-retry");
     if (retry) retry.addEventListener("click", () => runSearch());
@@ -7044,6 +7209,60 @@
   };
   const CATALOG_LOADERS = ["fabric", "quilt", "forge", "neoforge"];
 
+  // Категории для вкладки «Загрузить». Для каждой площадки используются её
+  // собственные идентификаторы: Modrinth принимает строковые теги, а
+  // CurseForge — числовые categoryId. Состояние ниже хранится по типу проекта,
+  // поэтому переход между модами, сборками и ресурспаками не смешивает выбор.
+  const DOWNLOAD_RESOURCEPACK_CATEGORIES = {
+    modrinth: [
+      ["8x-", "8x и меньше", "i-grid"], ["16x", "16x", "i-grid"], ["32x", "32x", "i-grid"],
+      ["64x", "64x", "i-grid"], ["128x", "128x", "i-grid"], ["256x", "256x", "i-grid"],
+      ["512x+", "512x и выше", "i-grid"], ["combat", "Бои", "i-shield"],
+      ["decoration", "Декорации", "i-house"], ["modded", "Для модов", "i-mod"],
+      ["realistic", "Реалистичные", "i-image"], ["simplistic", "Простые", "i-grid"],
+      ["themed", "Тематические", "i-gem"], ["tweaks", "Изменения", "i-sliders"],
+      ["utility", "Утилиты", "i-dots"], ["vanilla-like", "Ванильные", "i-cube"]
+    ],
+    curseforge: [
+      ["393", "16x", "i-grid"], ["394", "32x", "i-grid"], ["395", "64x", "i-grid"],
+      ["396", "128x", "i-grid"], ["397", "256x", "i-grid"], ["398", "512x и выше", "i-grid"],
+      ["399", "Стимпанк", "i-settings"], ["400", "Фотореализм", "i-image"],
+      ["401", "Современные", "i-grid"], ["402", "Средневековые", "i-crown"],
+      ["403", "Традиционные", "i-cube"], ["404", "Анимированные", "i-star"],
+      ["4465", "Для модов", "i-mod"]
+    ]
+  };
+  const DOWNLOAD_SHADER_CATEGORIES = {
+    modrinth: [
+      ["cartoon", "Мультяшные", "i-image"], ["cursed", "Проклятые", "i-flame"],
+      ["fantasy", "Фэнтези", "i-gem"], ["realistic", "Реалистичные", "i-image"],
+      ["semi-realistic", "Полуреалистичные", "i-grid"], ["vanilla-like", "Ванильные", "i-cube"]
+    ],
+    curseforge: [
+      ["6553", "Реалистичные", "i-image"], ["6554", "Фэнтези", "i-gem"],
+      ["6555", "Ванильные", "i-cube"]
+    ]
+  };
+
+  function downloadCategoryOptions(source, type) {
+    const sets = type === "mod" ? MOD_CATEGORIES
+      : type === "modpack" ? PACK_CATEGORIES
+        : type === "resourcepack" ? DOWNLOAD_RESOURCEPACK_CATEGORIES
+          : type === "shader" ? DOWNLOAD_SHADER_CATEGORIES : null;
+    return (sets && (sets[source] || sets.modrinth)) || [];
+  }
+
+  function downloadCategoryState(cfg, type = cfg.type || "mod") {
+    if (!cfg.categories || typeof cfg.categories !== "object" || Array.isArray(cfg.categories)) cfg.categories = {};
+    if (!(type in cfg.categories)) cfg.categories[type] = "";
+    return cfg.categories;
+  }
+
+  function downloadCategoryValue(cfg) {
+    const type = cfg.type || "mod";
+    return downloadCategoryState(cfg, type)[type] || "";
+  }
+
   function discoverCategoryState(cfg, source) {
     const current = cfg.categories && cfg.categories[source];
     if (current && typeof current === "object" && !Array.isArray(current)) return current;
@@ -7294,6 +7513,8 @@
     if (loaderWrap && !loaderWrap.contains(event.target)) closeHomeLoader();
     const versionWrap = $("#home-version-select");
     if (versionWrap && !versionWrap.contains(event.target)) closeHomeVersion();
+    const downloadWrap = event.target.closest?.(".catalog-listbox") || null;
+    closeDownloadFilterMenus(false, downloadWrap);
   });
 
   function bindHomeCatalogFilters(cfg) {
@@ -8032,6 +8253,7 @@
       // у ресурспаков и шейдеров нет тега загрузчика — иначе Modrinth
       // возвращал моды с категорией fabric
       loader: cfg.type === "mod" ? (cfg.loader || (meta && meta.loader ? meta.loader.type : null)) : null,
+      categories: [downloadCategoryValue(cfg)].filter(Boolean),
       offset: offset || 0,
       limit: MR_PAGE
     };
@@ -8666,8 +8888,6 @@
     cancelDownloadSearchTimer();
     const cfg = state.modrinth;
     if (catalogVisible("modrinth") && $("#dl-query")) state.modsQuery = cfg.query = $("#dl-query").value;
-    if ($("#mr-mc")) setDownloadFilter("modrinth", "mc", $("#mr-mc").value);
-    if ($("#mr-loader")) setDownloadFilter("modrinth", "loader", $("#mr-loader").value);
     const generation = ++mrSearchGeneration;
     const params = searchQuery(0);
     cfg.loading = true;
@@ -8740,48 +8960,17 @@
     const cfg = state.curseforge;
     const view = state.modsView;
     // модпаки ставим отдельной сборкой, моды/ресурспаки/шейдеры — в текущую
-    const types = [["mod", "Моды"], ["modpack", "Модпаки"], ["resourcepack", "Ресурспаки"], ["shader", "Шейдеры"]];
-    const mcOptions = Array.from(new Set([meta && meta.mc_version, ...(DEMO.versions || []).map((v) => v.id)].filter(Boolean))).slice(0, 14);
     replaceCatalogHtml(root, `
-      <div class="modrinth-wrap">
-        <div class="modrinth-filters">
-          <div class="field">
-            <label>Тип</label>
-            <select class="select" id="cf-type">
-              ${types.map(([value, label]) => `<option value="${value}" ${cfg.type === value ? "selected" : ""}>${label}</option>`).join("")}
-            </select>
+      <div class="download-source-view">
+        <div class="download-catalog-layout">
+          ${downloadFilterPanelHtml("curseforge", cfg, meta)}
+          <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${modsGridLevel()}` : ""}" id="cf-results" style="--feed-cols:${modsColumns()}">
+            ${cfResultsHtml()}
           </div>
-          <div class="field">
-            <label>Версия игры</label>
-            <select class="select" id="cf-mc">
-              <option value="">любая</option>
-              ${mcOptions.map((value) => `<option value="${esc(value)}" ${cfg.mc === value ? "selected" : ""}>${esc(value)}</option>`).join("")}
-            </select>
-          </div>
-          ${["mod", "modpack"].includes(cfg.type) ? `<div class="field">
-            <label>Загрузчик</label>
-            <select class="select" id="cf-loader">
-              <option value="">любой</option>
-              ${CATALOG_LOADERS.map((value) => `<option value="${value}" ${cfg.loader === value ? "selected" : ""}>${LOADER_NAMES[value]}</option>`).join("")}
-            </select>
-          </div>` : ""}
-          <div class="field">
-            <label>Сортировка</label>
-            <select class="select" id="cf-sort">
-              ${CF_SORTS.map(([value, label]) => `<option value="${value}" ${cfg.sort === value ? "selected" : ""}>${label}</option>`).join("")}
-            </select>
-          </div>
-        </div>
-        <div class="modrinth-results ${view === "grid" ? `is-grid feed-grid-${modsGridLevel()}` : ""}" id="cf-results" style="--feed-cols:${modsColumns()}">
-          ${cfResultsHtml()}
         </div>
       </div>`);
 
-    $("#cf-type").addEventListener("change", (event) => { setDownloadFilter("curseforge", "type", event.target.value); cfRunSearch(); });
-    $("#cf-mc").addEventListener("change", (event) => { setDownloadFilter("curseforge", "mc", event.target.value); cfRunSearch(); });
-    $("#cf-sort").addEventListener("change", (event) => { state.curseforge.sort = event.target.value; cfRunSearch(); });
-    const loaderSelect = $("#cf-loader");
-    if (loaderSelect) loaderSelect.addEventListener("change", (event) => { setDownloadFilter("curseforge", "loader", event.target.value); cfRunSearch(); });
+    bindDownloadFilterControls("curseforge");
     bindCfEvents();
     const retry = $("#cf-retry");
     if (retry) retry.addEventListener("click", () => cfRunSearch());
@@ -8876,6 +9065,7 @@
       mcVersion: cfg.mc || (meta ? meta.mc_version : null),
       loader: ["mod", "modpack"].includes(cfg.type)
         ? (cfg.loader || (cfg.type === "mod" && meta && meta.loader ? meta.loader.type : null)) : null,
+      categories: [downloadCategoryValue(cfg)].filter(Boolean),
       offset: offset || 0,
       limit: CF_PAGE,
       sort: cfg.sort || "downloads"
@@ -9026,8 +9216,6 @@
     cancelDownloadSearchTimer();
     const cfg = state.curseforge;
     if (catalogVisible("curseforge") && $("#dl-query")) state.modsQuery = cfg.query = $("#dl-query").value;
-    if ($("#cf-mc")) setDownloadFilter("curseforge", "mc", $("#cf-mc").value);
-    if ($("#cf-loader")) setDownloadFilter("curseforge", "loader", $("#cf-loader").value);
     const generation = ++cfSearchGeneration;
     const params = cfSearchQuery(0);
     cfg.loading = true;
