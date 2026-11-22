@@ -74,6 +74,9 @@ async function pageWith(browser, race=false) {
       assert.deepEqual(state.sessions,[['alpha',['alpha#a','alpha#b']],['beta',['beta#c']]]);
       assert.equal(state.presence.details,'Alpha'); assert.equal(state.presence.startedAt,1700000000);
       assert.equal(await page.locator('[data-dup-of="alpha"]').count(),1);
+      const groupOrder=await page.locator('#instance-list > .cat').evaluateAll(groups=>groups.map(group=>({id:group.dataset.cat,name:group.querySelector('.cat-name')?.textContent.trim()})));
+      assert.equal(groupOrder[0]?.id,'__running','running category stays pinned above ordinary categories');
+      assert.equal(groupOrder[0]?.name,'ЗАПУЩЕННЫЕ');
       await page.locator('.instance[data-id="beta"]').first().click();
       await page.waitForFunction(()=>window.__sessionsTest.presence.at(-1)?.details==='Beta');
       assert.equal((await page.evaluate(()=>window.__sessionsTest.presence.at(-1))).startedAt,1700000020);
