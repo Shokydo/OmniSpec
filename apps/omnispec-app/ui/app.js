@@ -2875,7 +2875,9 @@
       error: null, tried: false
     },
     discover: {
-      query: "", type: "modpack", mc: "", loader: "", categories: { modrinth: "", curseforge: "" },
+      query: "", type: "modpack", mc: "", loader: "", categories: {
+        modrinth: { modpack: "", mod: "" }, curseforge: { modpack: "", mod: "" }
+      },
       versions: [], versionsLoading: false, versionsLoaded: false,
       results: [], total: 0, loading: false, loadingMore: false, error: null, moreError: null,
       retrySeconds: 0, tried: false, view: "grid", source: "modrinth", filtersCollapsed: true
@@ -7012,7 +7014,50 @@
       ["10683", "RLCraft", "i-shield"]
     ]
   };
+  // Это категории именно модов Modrinth из /v2/tag/category. На CurseForge
+  // используются числовые categoryId из /v1/categories?gameId=432.
+  const MOD_CATEGORIES = {
+    modrinth: [
+      ["adventure", "Приключения", "i-globe"], ["cursed", "Проклятые", "i-flame"],
+      ["decoration", "Декорации", "i-house"], ["economy", "Экономика", "i-cube"],
+      ["equipment", "Снаряжение", "i-shield"], ["food", "Еда", "i-leaf"],
+      ["game-mechanics", "Игровые механики", "i-settings"], ["library", "Библиотеки", "i-file"],
+      ["magic", "Магия", "i-gem"], ["management", "Управление", "i-sliders"],
+      ["minigame", "Мини-игры", "i-star"], ["mobs", "Мобы", "i-user"],
+      ["optimization", "Оптимизация", "i-bolt"], ["social", "Социальные", "i-user"],
+      ["storage", "Хранилище", "i-folder"], ["technology", "Технологии", "i-settings"],
+      ["transportation", "Транспорт", "i-globe"], ["utility", "Утилиты", "i-dots"],
+      ["worldgen", "Генерация мира", "i-globe"]
+    ],
+    curseforge: [
+      ["422", "Приключения и RPG", "i-globe"], ["421", "API и библиотеки", "i-file"],
+      ["434", "Броня, инструменты и оружие", "i-shield"], ["6821", "Исправления", "i-settings"],
+      ["424", "Косметика", "i-house"], ["436", "Еда", "i-leaf"],
+      ["419", "Магия", "i-gem"], ["423", "Карта и информация", "i-globe"],
+      ["425", "Разное", "i-cube"], ["406", "Генерация мира", "i-globe"],
+      ["412", "Технологии", "i-settings"], ["420", "Хранилище", "i-folder"],
+      ["6814", "Производительность", "i-bolt"], ["435", "Утилиты сервера", "i-terminal"],
+      ["5191", "Утилиты и QoL", "i-dots"], ["4558", "Redstone", "i-bolt"],
+      ["411", "Мобы", "i-user"], ["408", "Руды и ресурсы", "i-gem"],
+      ["409", "Структуры", "i-cube"], ["410", "Измерения", "i-globe"]
+    ]
+  };
   const CATALOG_LOADERS = ["fabric", "quilt", "forge", "neoforge"];
+
+  function discoverCategoryState(cfg, source) {
+    const current = cfg.categories && cfg.categories[source];
+    if (current && typeof current === "object" && !Array.isArray(current)) return current;
+    // Совместимость со старым состоянием: раньше здесь хранилась одна
+    // категория источника, только для модпаков.
+    const migrated = { modpack: typeof current === "string" ? current : "", mod: "" };
+    cfg.categories = { ...(cfg.categories || {}), [source]: migrated };
+    return migrated;
+  }
+
+  function discoverCategoryValue(cfg, source) {
+    const type = cfg.type === "mod" ? "mod" : "modpack";
+    return discoverCategoryState(cfg, source)[type] || "";
+  }
 
   function discoverVersionOptions() {
     const cfg = state.discover || {};
@@ -7031,8 +7076,10 @@
   }
 
   function homeCatalogFiltersHtml(cfg, source) {
-    const categories = PACK_CATEGORIES[source] || PACK_CATEGORIES.modrinth;
-    const active = cfg.categories[source] || "";
+    const type = cfg.type === "mod" ? "mod" : "modpack";
+    const categorySets = type === "mod" ? MOD_CATEGORIES : PACK_CATEGORIES;
+    const categories = categorySets[source] || categorySets.modrinth;
+    const active = discoverCategoryValue(cfg, source);
     const versions = discoverVersionOptions();
     const collapsed = Boolean(cfg.filtersCollapsed);
     return `<aside class="home-catalog-sidebar" id="home-catalog-filters" aria-label="Фильтры каталога"${collapsed ? " hidden" : ""}>
@@ -7053,18 +7100,26 @@
       </div>
       <div class="home-filter-group home-version-filter">
         <label class="home-filter-label" for="dv-mc">Версия Minecraft</label>
-        <select class="select" id="dv-mc" aria-label="Версия Minecraft">
-          <option value="">Любая версия</option>
-          ${versions.map((version) => `<option value="${esc(version)}" ${cfg.mc === version ? "selected" : ""}>${esc(version)}</option>`).join("")}
-        </select>
+        <div class="home-version-select" id="home-version-select">
+          <button type="button" class="home-version-trigger" id="dv-mc" aria-haspopup="listbox" aria-expanded="false" aria-controls="dv-mc-options">
+            <span id="dv-mc-label">${esc(cfg.mc || "Любая версия")}</span>
+            <svg class="ic"><use href="#i-chev"/></svg>
+          </button>
+          <div class="home-version-menu" id="dv-mc-options" role="listbox" aria-label="Версия Minecraft" hidden>
+            ${[["", "Любая версия"], ...versions.map((version) => [version, version])].map(([value, label]) => `
+              <button type="button" role="option" tabindex="-1" data-dv-version="${esc(value)}" aria-selected="${cfg.mc === value}" class="home-version-option ${cfg.mc === value ? "is-active" : ""}">
+                <span translate="no">${esc(label)}</span><svg class="ic"><use href="#i-check"/></svg>
+              </button>`).join("")}
+          </div>
+        </div>
       </div>
-      ${cfg.type === "modpack" ? `<details class="home-category-group" open>
-        <summary>Категория <svg class="ic"><use href="#i-chev"/></svg></summary>
-        <div class="home-category-list" role="group" aria-label="Категории сборок">
+      <details class="home-category-group" open>
+        <summary>${type === "mod" ? "Категории модов" : "Категории сборок"}<svg class="ic"><use href="#i-chev"/></svg></summary>
+        <div class="home-category-list" role="group" aria-label="${type === "mod" ? "Категории модов" : "Категории сборок"}">
           <button type="button" data-dv-category="" class="home-category ${!active ? "is-active" : ""}" aria-pressed="${!active}"><svg class="ic"><use href="#i-grid"/></svg>Все категории</button>
           ${categories.map(([id, label, icon]) => `<button type="button" data-dv-category="${id}" class="home-category ${active === id ? "is-active" : ""}" aria-pressed="${active === id}"><svg class="ic"><use href="#${icon}"/></svg>${esc(label)}</button>`).join("")}
         </div>
-      </details>` : `<div class="home-filter-note">Выбирай версию и загрузчик, чтобы найти подходящие моды.</div>`}
+      </details>
     </aside>`;
   }
 
@@ -7082,7 +7137,7 @@
     measureHead();
     toggle.addEventListener("click", () => {
       const collapsed = !cfg.filtersCollapsed;
-      if (collapsed) closeHomeLoader();
+      if (collapsed) { closeHomeLoader(); closeHomeVersion(); }
       cfg.filtersCollapsed = collapsed;
       // Панель заменяется при смене типа/источника, а кнопка в шапке остаётся.
       const panel = $("#home-catalog-filters");
@@ -7129,6 +7184,7 @@
     };
     trigger.addEventListener("click", () => {
       if (!menu.hidden) return closeHomeLoader();
+      closeHomeVersion();
       open(Math.max(0, options.findIndex((option) => option.dataset.dvLoader === cfg.loader)));
     });
     trigger.addEventListener("keydown", (event) => {
@@ -7165,25 +7221,91 @@
       if (changed) dvReset();
     }));
   }
+  // Версии оформлены тем же listbox, что и загрузчик: системное меню
+  // select на Windows не наследует тему приложения и выглядит чужеродно.
+  function closeHomeVersion(restoreFocus = false) {
+    const trigger = $("#dv-mc"), menu = $("#dv-mc-options");
+    if (!trigger || !menu || menu.hidden) return;
+    menu.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus) trigger.focus();
+  }
+  function bindHomeVersionFilter(cfg) {
+    const trigger = $("#dv-mc"), menu = $("#dv-mc-options");
+    const options = $$("[data-dv-version]", menu);
+    if (!trigger || !menu || !options.length) return;
+    const open = (index) => {
+      closeHomeLoader();
+      menu.hidden = false;
+      menu.classList.remove("is-up");
+      menu.style.maxHeight = "";
+      const scroll = $("#home-scroll")?.getBoundingClientRect();
+      const triggerRect = trigger.getBoundingClientRect();
+      const top = Math.max(0, scroll?.top || 0);
+      const bottom = Math.min(window.innerHeight, scroll?.bottom || window.innerHeight);
+      const spacing = 6 * uiZoom();
+      const below = Math.max(0, bottom - triggerRect.bottom - spacing);
+      const above = Math.max(0, triggerRect.top - top - spacing);
+      const flip = menu.getBoundingClientRect().height > below && above > below;
+      menu.classList.toggle("is-up", flip);
+      const available = flip ? above : below;
+      menu.style.maxHeight = `${Math.max(0, available / uiZoom())}px`;
+      trigger.setAttribute("aria-expanded", "true");
+      (options[index] || options[0]).focus();
+    };
+    trigger.addEventListener("click", () => {
+      if (!menu.hidden) return closeHomeVersion();
+      open(Math.max(0, options.findIndex((option) => option.dataset.dvVersion === cfg.mc)));
+    });
+    trigger.addEventListener("keydown", (event) => {
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const current = Math.max(0, options.findIndex((option) => option.dataset.dvVersion === cfg.mc));
+      open(event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
+        : event.key === "ArrowDown" ? Math.min(current + 1, options.length - 1) : Math.max(0, current - 1));
+    });
+    menu.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.preventDefault(); closeHomeVersion(true); return; }
+      if (event.key === "Tab") { closeHomeVersion(true); return; }
+      const i = options.indexOf(document.activeElement);
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
+          : event.key === "ArrowDown" ? Math.min(Math.max(0, i) + 1, options.length - 1) : Math.max(i - 1, 0);
+        options[next].focus();
+      }
+    });
+    options.forEach((option) => option.addEventListener("click", () => {
+      const value = option.dataset.dvVersion || "";
+      const changed = cfg.mc !== value;
+      cfg.mc = value;
+      $("#dv-mc-label").textContent = value || "Любая версия";
+      options.forEach((item) => {
+        const selected = (item.dataset.dvVersion || "") === value;
+        item.classList.toggle("is-active", selected);
+        item.setAttribute("aria-selected", String(selected));
+      });
+      closeHomeVersion(true);
+      if (changed) dvReset();
+    }));
+  }
   document.addEventListener("pointerdown", (event) => {
-    const wrap = $("#home-loader");
-    if (wrap && !wrap.contains(event.target)) closeHomeLoader();
+    const loaderWrap = $("#home-loader");
+    if (loaderWrap && !loaderWrap.contains(event.target)) closeHomeLoader();
+    const versionWrap = $("#home-version-select");
+    if (versionWrap && !versionWrap.contains(event.target)) closeHomeVersion();
   });
 
   function bindHomeCatalogFilters(cfg) {
     bindHomeLoaderFilter(cfg);
-    const version = $("#dv-mc");
-    if (version) version.addEventListener("change", (event) => {
-      const value = event.target.value || "";
-      if (cfg.mc === value) return;
-      cfg.mc = value;
-      dvReset();
-    });
+    bindHomeVersionFilter(cfg);
     $$("#home-catalog-filters [data-dv-category]").forEach((button) => button.addEventListener("click", () => {
       const source = cfg.source || "modrinth";
       const category = button.dataset.dvCategory || "";
-      if ((cfg.categories[source] || "") === category) return;
-      cfg.categories[source] = category;
+      const type = cfg.type === "mod" ? "mod" : "modpack";
+      const categoryState = discoverCategoryState(cfg, source);
+      if (categoryState[type] === category) return;
+      categoryState[type] = category;
       $$("#home-catalog-filters [data-dv-category]").forEach((item) => {
         const active = (item.dataset.dvCategory || "") === category;
         item.classList.toggle("is-active", active);
@@ -7732,7 +7854,7 @@
   function dvQuery(offset) {
     const cfg = state.discover;
     const source = cfg.source || "modrinth";
-    const category = cfg.type === "modpack" ? (cfg.categories[source] || "") : "";
+    const category = discoverCategoryValue(cfg, source);
     return { source, params: {
       query: cfg.query, projectType: cfg.type || "modpack", mcVersion: cfg.mc || null,
       loader: cfg.loader || null, categories: category ? [category] : [],
