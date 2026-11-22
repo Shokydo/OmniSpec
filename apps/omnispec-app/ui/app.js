@@ -11424,6 +11424,9 @@
     const H = canvas.height;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
+    // Minecraft-текстура состоит из жёстких пикселей: сглаживание canvas
+    // превращает увеличенную модель в «мыльную», особенно на WebView2.
+    ctx.imageSmoothingEnabled = false;
     const capeOnly = options.capeOnly === true;
     if (capeOnly ? !capeTexture : !texture) return;
 
