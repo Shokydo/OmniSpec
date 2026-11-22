@@ -6,6 +6,7 @@
 <title>OmniSpec</title>
 <link rel="icon" href="favicon.png" />
 <link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="server.css" />
 </head>
 <body data-theme="dark">
 <svg style="display:none" aria-hidden="true">
@@ -100,7 +101,7 @@
     </div>
 
     <button class="btn btn-small sidebar-new" id="btn-new-build">
-      <svg class="ic"><use href="#i-plus"/></svg><span>Создать сборку</span>
+      <svg class="ic"><use href="#i-plus"/></svg><span>Создать</span>
     </button>
 
     <label class="search">
@@ -151,7 +152,12 @@
 
     <nav class="tabs" id="tabs">
       <button class="tab" data-tab="discover">Главная</button>
+      <button class="tab" data-tab="servers">Сервера</button>
       <button class="tab is-active" data-tab="console">Консоль</button>
+      <button class="tab" data-tab="server">Обзор</button>
+      <button class="tab" data-tab="players">Игроки</button>
+      <button class="tab" data-tab="metrics">Метрики</button>
+      <button class="tab" data-tab="backups">Бэкапы</button>
       <button class="tab" data-tab="errors">Ошибки <span class="tab-badge errors-badge" id="badge-errors" hidden></span></button>
       <button class="tab" data-tab="files">Файлы</button>
       <button class="tab" data-tab="mods">Моды <span class="tab-badge" id="badge-mods" hidden>0</span></button>
@@ -199,7 +205,7 @@
 <div class="modal-backdrop" id="modal-create" hidden>
   <div class="modal">
     <header class="modal-head">
-      <h2>Создание сборки</h2>
+      <h2>Создание</h2>
       <button class="icon-btn" data-close-modal><svg class="ic"><use href="#i-close"/></svg></button>
     </header>
     <div class="modal-body" id="create-body"></div>

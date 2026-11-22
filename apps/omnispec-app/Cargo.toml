@@ -9,7 +9,8 @@ license.workspace = true
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+# Tray icon and PNG decoding are used by the optional minimize-to-tray mode.
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png"] }
 dirs = { workspace = true }
 getrandom = "0.3"
 serde = { workspace = true }

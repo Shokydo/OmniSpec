@@ -30,6 +30,13 @@ fn default_language() -> String {
 fn default_true() -> bool {
     true
 }
+
+/// Сворачивать окно в область уведомлений нужно включать явно.
+/// Старые settings.json без этого поля остаются с обычным сворачиванием.
+fn default_minimize_to_tray() -> bool {
+    false
+}
+
 /// Репозиторий обновлений по умолчанию.
 fn default_theme() -> String {
     "dark".to_string()
@@ -189,6 +196,10 @@ pub struct Settings {
     pub enable_modrinth: bool,
     /// Показывать окно лаунчера после запуска игры (обычно нет).
     pub hide_on_launch: bool,
+    /// По кнопке сворачивания прятать окно в системный трей, не завершая приложение.
+    /// Кнопка закрытия окна всегда завершает приложение.
+    #[serde(default = "default_minimize_to_tray")]
+    pub minimize_to_tray: bool,
     /// Последняя выбранная сборка.
     pub last_instance: Option<String>,
 
@@ -420,6 +431,7 @@ impl Default for Settings {
             keep_console_open: false,
             enable_modrinth: default_true(),
             hide_on_launch: false,
+            minimize_to_tray: default_minimize_to_tray(),
             last_instance: None,
             proxy: None,
             ms_client_id: None,
@@ -595,6 +607,18 @@ mod discord_tests {
         assert!(!fresh.onboarded && fresh.onboarding_pending);
         let restarted = Settings::load_from(&file).unwrap();
         assert!(restarted.onboarding_pending);
+    }
+
+    #[test]
+    fn tray_setting_is_opt_in_and_roundtrips_with_legacy_settings() {
+        let old: Settings = serde_json::from_str(r#"{"username":"LegacyPlayer","onboarded":true}"#).unwrap();
+        assert!(!old.minimize_to_tray);
+
+        let mut changed = old.clone();
+        changed.minimize_to_tray = true;
+        let restored: Settings = serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
+        assert!(restored.minimize_to_tray);
+        assert_eq!(restored.username, "LegacyPlayer");
     }
 
     #[test]

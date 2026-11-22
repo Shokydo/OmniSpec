@@ -806,6 +806,9 @@
         return clean;
       },
       refreshInk: () => ambientInkRefresh && ambientInkRefresh(),
+      // Тихий режим сворачивания останавливает только WebView-анимацию.
+      pause: stop,
+      resume: () => { if (style !== "off") start(); },
       apply: (name) => {
         style = AMBIENT_STYLES[name] ? name : "stars";
         document.body.dataset.ambient = style;
@@ -1044,6 +1047,9 @@
         opacity = clean / 100;
         return clean;
       },
+      // Тихий режим не очищает RPC/состояние — только прекращает отрисовку следа.
+      pause: stop,
+      resume: () => { if (enabled && points.length) start(); },
       refreshInk: readInk
     };
   })();
@@ -1447,7 +1453,7 @@
   }
 
   function instanceIconHtml(meta) {
-    const icon = meta && meta.icon;
+    const icon = isServer(meta) ? "server-icon.png" : (meta && meta.icon);
     if (isImageIcon(icon)) {
       // кэша нет (файл ещё не прочитан) — показываем букву, а не пустую рамку
       const data = state.iconCache[meta.id];
@@ -1469,14 +1475,15 @@
       return;
     }
     const html = instanceIconHtml(meta);
-    const letter = !isImageIcon(meta.icon) && !(meta.icon && INSTANCE_ICONS.includes(meta.icon));
+    const imageIcon = isImageIcon(isServer(meta) ? "server-icon.png" : meta.icon);
+    const letter = !imageIcon && !(meta.icon && INSTANCE_ICONS.includes(meta.icon));
     box.classList.toggle("is-letter", letter);
     box.innerHTML = letter ? `<span class="tb-letter" translate="no">${esc(html)}</span>` : html;
   }
 
   /** Подтянуть картинки-иконки сборок (webview не читает локальные пути). */
   async function loadInstanceIcons() {
-    const customs = state.instances.filter((item) => isImageIcon(item.icon));
+    const customs = state.instances.filter((item) => isImageIcon(item.icon) || isServer(item));
     await Promise.all(customs.map(async (item) => {
       try {
         const data = await api.instanceIcon(item.id);
@@ -1735,7 +1742,9 @@
     const cats = (state.settings && state.settings.categories) || [];
     const groups = [];
     const uncategorized = instances.filter((item) => !item.category || !cats.some((cat) => cat.id === item.category));
+    const running = instances.filter((item) => state.running.has(item.id));
     const ordered = [
+      { id: "__running", name: "ЗАПУЩЕННЫЕ", items: running },
       ...cats.map((cat) => ({ id: cat.id, name: cat.name, items: instances.filter((item) => item.category === cat.id) })),
       { id: "", name: "Без категории", items: uncategorized }
     ].filter((group) => group.items.length);
@@ -1761,15 +1770,16 @@
     const running = state.running.has(item.id);
     const sessions = sessionsOf(item.id);
     const letter = esc(String(item.name || "?").trim().charAt(0).toUpperCase());
-    const cached = isImageIcon(item.icon) ? state.iconCache[item.id] : "";
+    const iconPath = isServer(item) ? "server-icon.png" : item.icon;
+    const cached = isImageIcon(iconPath) ? state.iconCache[item.id] : "";
     const icon = cached
       ? `<img class="build-tile-icon" src="${cached}" alt="">`
-      : isImageIcon(item.icon)
+      : isImageIcon(iconPath)
         ? `<img class="build-tile-icon" data-tile-icon="${esc(item.id)}" alt=""><span class="build-tile-icon is-letter" hidden>${letter}</span>`
         : item.icon && INSTANCE_ICONS.includes(item.icon)
           ? `<span class="build-tile-icon is-symbol"><svg class="ic"><use href="#${item.icon}"/></svg></span>`
           : `<span class="build-tile-icon is-letter">${letter}</span>`;
-    const version = [item.mc_version, loaderLabel(item.loader)].filter(Boolean).join(" · ");
+    const version = isServer(item) ? serverLabel(item) : [item.mc_version, loaderLabel(item.loader)].filter(Boolean).join(" · ");
     return `
       <button class="build-tile ${running ? "is-running" : ""}" data-build-tile="${esc(item.id)}" title="${esc(item.name)}">
         <span class="build-tile-shot">${icon}</span>
@@ -2221,7 +2231,7 @@
       { username: "Vanya_2012", uuid: "5627dd98-1f5e-3f4e-9c1a-2b3c4d5e6f70", kind: "offline", access_token: "" }
     ],
     active: "069a79f4-44e9-4726-a5be-fca90e38aaf5",
-    settings: { categories: [{ id: "cat-mods", name: "Моды", collapsed: false }, { id: "cat-perf", name: "Производительность", collapsed: false }], username: "Player", java_path: null, memory_mb: 4096, jvm_args: "-XX:+UseG1GC", game_args: "", auto_java: true, show_snapshots: false, verify_hashes: false, language: "ru", keep_console_open: false, enable_modrinth: true, hide_on_launch: false, last_instance: null, update_repo: "Shokydo/OmniSpec", update_enabled: true, update_token: null, update_prerelease: false, theme: "dark", click_fx: "wave", discord_rpc: true, cape_view: "list" },
+    settings: { categories: [{ id: "cat-mods", name: "Моды", collapsed: false }, { id: "cat-perf", name: "Производительность", collapsed: false }], username: "Player", java_path: null, memory_mb: 4096, jvm_args: "-XX:+UseG1GC", game_args: "", auto_java: true, show_snapshots: false, verify_hashes: false, language: "ru", keep_console_open: false, enable_modrinth: true, hide_on_launch: false, minimize_to_tray: false, last_instance: null, update_repo: "Shokydo/OmniSpec", update_enabled: true, update_token: null, update_prerelease: false, theme: "dark", click_fx: "wave", discord_rpc: true, cape_view: "list" },
     versions: ["1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21", "1.20.6", "1.20.4", "1.20.1", "1.19.4", "1.18.2", "1.16.5", "1.12.2", "1.8.9"].map((id) => ({ id, type: "release", url: "", release_time: null })),
     demoLogs: [
       "[12:01:14] [main/INFO]: OmniSpec 0.1.0 — лаунчер готов к работе",
@@ -2267,6 +2277,30 @@
     stop: (id, runId) => invoke("stop_instance", { instanceId: id, runId: runId || null }),
     running: () => invoke("running_instances"),
     runningSessions: () => invoke("running_sessions"),
+    serverKernels: () => invoke("server_kernels"),
+    serverKernelVersions: (kernel) => invoke("server_kernel_versions", { kernel }),
+    serverCreate: (req) => invoke("server_create", { req }),
+    serverGet: (instanceId) => invoke("server_get", { instanceId }),
+    serverSave: (instanceId, config) => invoke("server_save", { instanceId, config }),
+    serverSetEula: (instanceId, accepted) => invoke("server_set_eula", { instanceId, accepted }),
+    serverStart: (instanceId) => invoke("server_start", { instanceId }),
+    serverStop: (instanceId) => invoke("server_stop", { instanceId }),
+    serverCommand: (instanceId, command) => invoke("server_command", { instanceId, command }),
+    serverSnapshot: (instanceId) => invoke("server_snapshot", { instanceId }),
+    serverFiles: (instanceId, sub = null) => invoke("server_files", { instanceId, sub }),
+    serverPlayers: (instanceId) => invoke("server_players", { instanceId }),
+    serverAddons: (instanceId) => invoke("server_addons", { instanceId }),
+    serverToggleAddon: (instanceId, path) => invoke("server_toggle_addon", { instanceId, path }),
+    serverDeleteAddon: (instanceId, path) => invoke("server_delete_addon", { instanceId, path }),
+    serverSearchAddons: (query, projectType, mcVersion, loader) => invoke("server_search_addons", { query, projectType, mcVersion, loader }),
+    serverAddonVersions: (projectId, mcVersion, loader) => invoke("server_addon_versions", { projectId, mcVersion, loader }),
+    serverInstallAddon: (instanceId, url, kind = null) => invoke("server_install_addon", { instanceId, url, kind }),
+    serverBackupList: (instanceId) => invoke("server_backup_list", { instanceId }),
+    serverBackupCreate: (instanceId, label, lean = true) => invoke("server_backup_create", { instanceId, label, lean }),
+    serverBackupDelete: (instanceId, name) => invoke("server_backup_delete", { instanceId, name }),
+    serverBackupRestore: (instanceId, name) => invoke("server_backup_restore", { instanceId, name }),
+    serverSync: (instanceId, destination, direction = "push") => invoke("server_sync", { instanceId, destination, direction }),
+    serverScan: (roots = []) => invoke("server_scan", { roots }),
     search: (q) => invoke("search_modrinth", q),
     modrinthVersions: (projectId, mc, loader) => invoke("modrinth_versions", { projectId, mcVersion: mc, loader }),
     installMod: (instanceId, projectId, opId = null) => invoke("install_mod", { instanceId, projectId, opId }),
@@ -2324,6 +2358,7 @@
     javas: () => invoke("list_java"),
     openPath: (path) => invoke("open_path", { path }),
     window: (action) => invoke("window_action", { action }),
+    onWindowVisibility: (cb) => TAURI.event.listen("window-visibility", (e) => cb(e.payload)),
     onProgress: (cb) => TAURI.event.listen("progress", (e) => cb(e.payload)),
     onLog: (cb) => TAURI.event.listen("game-log", (e) => cb(e.payload)),
     onExit: (cb) => TAURI.event.listen("game-exit", (e) => cb(e.payload)),
@@ -2586,6 +2621,39 @@
     stop: async () => null,
     running: async () => [],
     runningSessions: async () => null,
+    serverKernels: async () => [
+      { id: "paper", label: "Paper", group: "Bukkit-плагины", supports_plugins: true, supports_mods: false },
+      { id: "purpur", label: "Purpur", group: "Bukkit-плагины", supports_plugins: true, supports_mods: false },
+      { id: "fabric", label: "Fabric", group: "Модовые", supports_plugins: false, supports_mods: true },
+      { id: "forge", label: "Forge", group: "Модовые", supports_plugins: false, supports_mods: true },
+      { id: "neoforge", label: "NeoForge", group: "Модовые", supports_plugins: false, supports_mods: true },
+      { id: "vanilla", label: "Vanilla", group: "Официальные", supports_plugins: false, supports_mods: false },
+      { id: "velocity", label: "Velocity", group: "Прокси", supports_plugins: true, supports_mods: false },
+      { id: "custom", label: "Другое / свой jar", group: "Другое", supports_plugins: true, supports_mods: true }
+    ],
+    serverKernelVersions: async () => DEMO.versions.map((item) => ({ id: item.id, label: item.id })),
+    serverCreate: async (req) => ({ id: `server-${Date.now()}`, name: req.name, mc_version: req.mc_version || "", loader: { type: "vanilla" }, category: null, is_server: true, kind: "server", server: { kernel: req.kernel || "paper", mc_version: req.mc_version || "", memory_mb: req.memory_mb || 4096, port: req.port || 25565 } }),
+    serverGet: async () => ({ kernel: "paper", mc_version: "1.21.4", kernel_version: "1.21.4", memory_mb: 4096, port: 25565, stop_command: "stop", jar: "server.jar" }),
+    serverSave: async (_, config) => config,
+    serverSetEula: async () => null,
+    serverStart: async (id) => ({ instance_id: id, run_id: `${id}#server`, pid: 0, started_at: Math.floor(Date.now() / 1000) }),
+    serverStop: async () => null,
+    serverCommand: async () => null,
+    serverSnapshot: async (id) => ({ id, config: await DEMO.settings, root: "demo/server", eula_accepted: true, running: false, metrics: { pid: null, memory_bytes: 0, cpu_percent: 0, uptime_secs: 0, tps: null }, players: [], files: [], log_tail: [] }),
+    serverFiles: async () => [],
+    serverPlayers: async () => [],
+    serverAddons: async () => [],
+    serverToggleAddon: async () => null,
+    serverDeleteAddon: async () => null,
+    serverSearchAddons: async () => ({ hits: [] }),
+    serverAddonVersions: async () => [],
+    serverInstallAddon: async () => null,
+    serverBackupList: async () => [],
+    serverBackupCreate: async () => null,
+    serverBackupDelete: async () => null,
+    serverBackupRestore: async () => null,
+    serverSync: async () => null,
+    serverScan: async () => [],
     search: async (q) => {
       const type = (q && q.projectType) || "mod";
       // демо-выдача никогда не смешивает типы: ресурспаки отдельно, шейдеры отдельно
@@ -2781,6 +2849,7 @@
     ]),
     openPath: async () => null,
     window: async () => null,
+    onWindowVisibility: async () => () => {},
     versionInfo: async () => ({ version: "0.1.0 (демо)", repo: "Shokydo/OmniSpec", enabled: true, platform: "windows / x86_64" }),
     checkUpdate: async () => DEMO_UPDATE,
     installUpdate: async () => { await new Promise((r) => setTimeout(r, 1500)); return DEMO_UPDATE; },
@@ -2845,6 +2914,10 @@
     preparing: new Map(),
     diagnosticInstalls: new Map(),
     liveLogAvailable: !IS_APP,
+    // Нативный tray скрывает всё окно, но не останавливает RPC и процессы.
+    windowHidden: false,
+    quiet: false,
+    uiRefreshPending: false,
     compact: false,
     logs: {},
     files: { path: "", entries: [], selected: null },
@@ -2909,6 +2982,49 @@
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+  /**
+   * Тихий режим tray: WebView перестаёт перерисовывать эффекты, логи и
+   * страницы, но native RPC worker и процессы игры/сервера продолжают жить.
+   */
+  function setQuietMode(hidden) {
+    const next = Boolean(hidden);
+    if (state.windowHidden === next) return;
+    state.windowHidden = next;
+    state.quiet = next;
+    state.uiRefreshPending = next;
+    if (document.body) document.body.dataset.windowHidden = next ? "true" : "false";
+
+    if (next) {
+      ambient.pause();
+      trailFx.pause();
+      const wallVideo = $("#wall-video");
+      if (wallVideo && !wallVideo.hidden) wallVideo.pause();
+      if (logFlushRaf) {
+        cancelAnimationFrame(logFlushRaf);
+        logFlushRaf = 0;
+      }
+      if (diagnosticsRenderTimer) {
+        clearTimeout(diagnosticsRenderTimer);
+        diagnosticsRenderTimer = 0;
+      }
+      return;
+    }
+
+    ambient.resume();
+    trailFx.resume();
+    const wallVideo = $("#wall-video");
+    if (wallVideo && !wallVideo.hidden) playWallpaperVideo(wallVideo);
+    if (logPending.length && !logFlushRaf) logFlushRaf = requestAnimationFrame(flushLog);
+    // Один полный снимок после показа заменяет частые обновления, пропущенные
+    // в свёрнутом состоянии; присутствие в Discord синхронизируем отдельно.
+    state.uiRefreshPending = false;
+    renderSidebar();
+    updateStatus();
+    renderTab();
+    refreshInstances().catch(() => {});
+    syncPresence();
+  }
+
   /** Небольшой вход только при смене страницы, а не при обновлении её данных. */
   function animateView(element) {
     if (!element) return;
@@ -2919,6 +3035,7 @@
 
   /** Общая подложка движется к активной вкладке, не меняя доступный фокус. */
   function refreshActiveIndicators() {
+    if (state.windowHidden) return;
     $$(".tabs, .home-catalog-tabs, .mr-view, .modal-tabs, .prefs-nav").forEach((group) => {
       const active = group.matches(".home-catalog-tabs") ? $("[data-dv-type].is-active", group) : $(".is-active", group);
       if (!active || !active.offsetWidth || !active.offsetHeight) return;
@@ -3062,6 +3179,16 @@
     return `${LOADER_NAMES[loader.type] || loader.type} ${loader.version || ""}`.trim();
   }
 
+  function isServer(meta) {
+    return Boolean(meta && (meta.is_server === true || meta.kind === "server" || meta.server));
+  }
+
+  function serverLabel(meta) {
+    const config = meta && meta.server;
+    if (!config) return "Сервер";
+    return `${config.kernel || "Сервер"}${config.mc_version ? ` · MC ${config.mc_version}` : ""}`;
+  }
+
   function humanSize(bytes) {
     const units = ["Б", "КБ", "МБ", "ГБ"];
     let size = Number(bytes) || 0;
@@ -3071,6 +3198,7 @@
   }
 
   function toast(message, kind = "") {
+    if (state.windowHidden) return;
     if (kind === "ok") semanticSound("success");
     else if (kind === "err") semanticSound("error");
     const box = document.createElement("div");
@@ -3253,6 +3381,7 @@
 
   function flushLog() {
     logFlushRaf = 0;
+    if (state.windowHidden) return;
     const consoleEl = $("#console-out");
     const instanceId = state.selectedId;
     if (!consoleEl || !logPending.length) {
@@ -3298,13 +3427,13 @@
     list.push({ line, kind });
     if (list.length > 4000) {
       list.splice(0, 500);
-      if (state.tab === "console" && state.selectedId === instanceId) {
+      if (!state.windowHidden && state.tab === "console" && state.selectedId === instanceId) {
         logPending = [];
         renderLogs(instanceId);
       }
       return;
     }
-    if (state.tab !== "console" || state.selectedId !== instanceId || state.logQuery) return;
+    if (state.windowHidden || state.tab !== "console" || state.selectedId !== instanceId || state.logQuery) return;
     logPending.push(list.length - 1);
     if (!logFlushRaf) logFlushRaf = requestAnimationFrame(flushLog);
   }
@@ -3431,7 +3560,7 @@
         <div class="instance-icon" translate="no">${instanceIconHtml(item)}</div>
         <div class="instance-body">
           <div class="instance-name" translate="no">${esc(item.name)}</div>
-          <div class="instance-sub">MC ${esc(item.mc_version)} · ${esc(loaderLabel(item.loader))}${sessions.length > 1 ? ` · <span class="dup-count">${sessions.length} окна</span>` : ""}</div>
+          <div class="instance-sub">${isServer(item) ? esc(serverLabel(item)) : `MC ${esc(item.mc_version)} · ${esc(loaderLabel(item.loader))}`}${sessions.length > 1 ? ` · <span class="dup-count">${sessions.length} окна</span>` : ""}</div>
         </div>
         <span class="instance-time" title="Время игры">${esc(playtimeLabel(item.playtime_secs))}</span>
         ${running ? '<div class="instance-running" title="Запущена"></div>' : ""}
@@ -3456,6 +3585,10 @@
   }
 
   function renderSidebar() {
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return;
+    }
     const list = $("#instance-list");
     const filter = ($("#instance-search").value || "").toLowerCase();
     const items = state.instances.filter((item) => item.name.toLowerCase().includes(filter));
@@ -3824,7 +3957,7 @@
   function openListMenu(x, y) {
     fillCtxMenu(x, y, `
       <div class="ctx-caption">Сборки</div>
-      <button class="ctx-item" data-act="create"><svg class="ic"><use href="#i-plus"/></svg>Создать сборку</button>
+      <button class="ctx-item" data-act="create"><svg class="ic"><use href="#i-plus"/></svg>Создать</button>
       <button class="ctx-item" data-act="import"><svg class="ic"><use href="#i-download"/></svg>Загрузить сборку</button>
       <div class="ctx-sep"></div>
       <button class="ctx-item" data-act="category"><svg class="ic"><use href="#i-folder"/></svg>Создать категорию</button>`, (act) => {
@@ -3982,7 +4115,8 @@
   }
 
   function openInstance(id) {
-    if (id && state.instances.some((meta) => meta.id === id)) state.tab = initialTab();
+    const meta = id && state.instances.find((item) => item.id === id);
+    if (meta) state.tab = isServer(meta) ? "server" : initialTab();
     selectInstance(id);
   }
 
@@ -3997,7 +4131,7 @@
     const versionLabel = $("#tb-version");
     const versionSep = $("#tb-version-sep");
     if (versionLabel) {
-      versionLabel.textContent = meta ? `MC ${meta.mc_version} · ${loaderLabel(meta.loader)}` : "";
+      versionLabel.textContent = meta ? (isServer(meta) ? serverLabel(meta) : `MC ${meta.mc_version} · ${loaderLabel(meta.loader)}`) : "";
       versionLabel.hidden = !meta;
     }
     if (versionSep) versionSep.hidden = !meta;
@@ -4029,17 +4163,21 @@
   }
 
   function updateStatus() {
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return;
+    }
     const meta = selected();
     const toolbar = document.querySelector(".toolbar");
     if (toolbar) toolbar.classList.toggle("is-idle", !meta);
     const running = meta && state.running.has(meta.id);
     const preparing = meta && state.preparing.has(meta.id);
-    const status = running ? "запущена" : preparing ? "подготавливается" : "остановлена";
+    const status = running ? (isServer(meta) ? "сервер запущен" : "запущена") : preparing ? "подготавливается" : (meta && isServer(meta) ? "сервер остановлен" : "остановлена");
     $("#tb-dot").className = `dot ${running ? "on" : ""}`;
     $("#tb-status").textContent = meta ? status : "сборка не выбрана";
     $("#tb-center").textContent = meta ? `${meta.name} — ${status}` : "OmniSpec — лаунчер Minecraft";
     const playButton = $("#btn-play");
-    playButton.querySelector("span").textContent = running ? "Играть снова" : "Играть";
+    playButton.querySelector("span").textContent = isServer(meta) ? (running ? "Перезапустить сервер" : "Запустить сервер") : (running ? "Играть снова" : "Играть");
     playButton.disabled = Boolean(preparing);
   }
 
@@ -4130,6 +4268,10 @@
       if (latestContentProgress().op !== payload.op) return;
     }
     state.progress = payload || null;
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return;
+    }
     renderImpProgress();
     const box = $("#progress");
     if (!payload) { box.hidden = true; return; }
@@ -4509,36 +4651,203 @@
   /* ==================== ВКЛАДКИ ==================== */
   /** Какие вкладки показывать: без сборки — только лента, со сборкой — всё остальное. */
   function applyTabs(meta) {
+    const server = isServer(meta);
+    const serverTabs = new Set(["server", "players", "metrics", "backups"]);
+    const serverAllowed = new Set(["server", "console", "files", "players", "metrics", "backups", "settings"]);
     $$(".tab").forEach((tab) => {
       const id = tab.dataset.tab;
-      tab.hidden = meta ? id === "discover" : id !== "discover";
+      if (!meta) tab.hidden = !["discover", "servers"].includes(id);
+      else if (server) tab.hidden = !serverAllowed.has(id);
+      else tab.hidden = id === "discover" || serverTabs.has(id) || id === "servers";
     });
+  }
+
+  function serverUptime(seconds) {
+    const value = Number(seconds) || 0;
+    const h = Math.floor(value / 3600);
+    const m = Math.floor((value % 3600) / 60);
+    const s = value % 60;
+    return h ? `${h} ч ${m} мин` : m ? `${m} мин ${s} с` : `${s} с`;
+  }
+
+  function renderServerList() {
+    const body = $("#tab-body");
+    const servers = state.instances.filter(isServer);
+    body.innerHTML = `
+      <section class="discover-wrap">
+        <div class="discover-head"><div><div class="eyebrow">ОМНИПАНЕЛЬ</div><h1>Сервера</h1><p class="muted">Создание, импорт, запуск и обслуживание локальных серверов в одном списке.</p></div>
+          <button class="btn btn-primary" id="server-new"><svg class="ic"><use href="#i-plus"/></svg>Создать сервер</button></div>
+        <div class="card-grid server-grid">
+          ${servers.length ? servers.map((item) => `<article class="build-tile ${state.running.has(item.id) ? "is-running" : ""}" data-server-open="${esc(item.id)}"><div class="build-tile-icon">${instanceIconHtml(item)}</div><div class="build-tile-body"><strong translate="no">${esc(item.name)}</strong><span>${esc(serverLabel(item))}</span><small>${state.running.has(item.id) ? "запущен" : "остановлен"} · порт ${esc(item.server?.port || 25565)}</small></div><span class="build-tile-arrow">›</span></article>`).join("") : `<div class="empty-state">Серверов пока нет.<br><span class="muted">Создай новый сервер или импортируй готовую папку.</span></div>`}
+        </div>
+        <div class="server-list-actions"><button class="btn" id="server-scan"><svg class="ic"><use href="#i-search"/></svg>Сканировать папки</button><span class="muted">Найденные серверы можно импортировать без потери ядра, модов и плагинов.</span></div>
+        <div id="server-scan-result"></div>
+      </section>`;
+    $("#server-new")?.addEventListener("click", () => openCreate({ mode: "server" }));
+    $$("[data-server-open]").forEach((item) => item.addEventListener("click", () => openInstance(item.dataset.serverOpen)));
+    $("#server-scan")?.addEventListener("click", async () => {
+      const result = $("#server-scan-result");
+      result.innerHTML = `<div class="loading-line">Ищем серверные папки…</div>`;
+      try {
+        const roots = await api.pickDir("Где искать серверы").catch(() => null);
+        if (!roots) { result.innerHTML = ""; return; }
+        const found = await api.serverScan([roots]);
+        result.innerHTML = found.length ? `<div class="server-scan-list">${found.map((item) => `<button class="server-scan-item" data-import-server="${esc(item.path)}"><strong>${esc(item.name)}</strong><span>${esc(item.kernel)} ${esc(item.mc_version || "")} · ${esc(item.path)}</span><em>${item.has_icon ? "server-icon.png найден" : ""}</em></button>`).join("")}</div>` : `<div class="empty-state">Похожие папки не найдены.</div>`;
+        $$('[data-import-server]').forEach((button) => button.addEventListener("click", () => openCreate({ mode: "server", importPath: button.dataset.importServer })));
+      } catch (error) { result.innerHTML = `<div class="error-text">${esc(String(error))}</div>`; }
+    });
+  }
+
+  async function renderServerOverview() {
+    const meta = selected();
+    if (!meta) return;
+    const body = $("#tab-body");
+    body.innerHTML = `<section class="server-view"><div class="loading-line">Загружаем состояние сервера…</div></section>`;
+    const snapshot = await api.serverSnapshot(meta.id).catch((error) => ({ error: String(error) }));
+    if (state.windowHidden || selected()?.id !== meta.id || state.tab !== "server") {
+      state.uiRefreshPending = true;
+      return;
+    }
+    state.serverSnapshot = snapshot;
+    if (snapshot.error) { body.innerHTML = `<section class="server-view"><div class="error-text">${esc(snapshot.error)}</div></section>`; return; }
+    const running = state.running.has(meta.id) || snapshot.running;
+    const addons = await api.serverAddons(meta.id).catch(() => []);
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return;
+    }
+    body.innerHTML = `<section class="server-view">
+      <div class="server-head"><div><div class="eyebrow">СЕРВЕР</div><h1 translate="no">${esc(meta.name)}</h1><p class="muted">${esc(serverLabel(meta))} · ${esc(snapshot.root || "")}</p></div><div class="server-actions"><button class="btn ${running ? "btn-stop" : "btn-primary"}" id="server-toggle">${running ? "Остановить" : "Запустить"}</button><button class="btn" id="server-settings">Настройки</button><button class="btn" id="server-sync">Синхронизация</button><button class="btn" id="server-folder">Папка</button></div></div>
+      ${snapshot.eula_accepted === false ? `<div class="server-eula"><strong>Нужно принять EULA</strong><span>Для запуска Minecraft-сервера подтверди лицензионное соглашение Mojang в этом интерфейсе.</span><button class="btn btn-small btn-primary" id="server-eula">Принять EULA</button></div>` : ""}
+      <div class="server-stat-grid"><div class="stat-card"><span>Состояние</span><strong>${running ? "Работает" : "Остановлен"}</strong></div><div class="stat-card"><span>TPS</span><strong>${snapshot.metrics?.tps == null ? "—" : Number(snapshot.metrics.tps).toFixed(1)}</strong></div><div class="stat-card"><span>Память</span><strong>${humanSize(snapshot.metrics?.memory_bytes || 0)}</strong></div><div class="stat-card"><span>Игроки</span><strong>${(snapshot.players || []).filter((item) => item.online).length}</strong></div></div>
+      <div class="server-command"><input class="input grow" id="server-command-input" placeholder="Команда без /, например say Привет" ${running ? "" : "disabled"}><button class="btn" id="server-command-send" ${running ? "" : "disabled"}>Отправить</button></div>
+      <div class="server-columns"><div class="panel"><div class="panel-head"><strong>Аддоны</strong><div class="flex-row"><button class="btn btn-small" id="server-addon-catalog">Каталог</button><button class="btn btn-small" id="server-addon-url">Установить по URL</button></div></div><div class="server-addon-list">${addons.length ? addons.map((item) => `<div class="server-addon"><span>${esc(item.name)}</span><small>${esc(item.kind)} · ${humanSize(item.size)}</small><button class="icon-btn" data-addon-toggle="${esc(item.path)}" title="Включить/выключить">${item.enabled ? "✓" : "○"}</button><button class="icon-btn danger" data-addon-delete="${esc(item.path)}" title="Удалить">×</button></div>`).join("") : `<div class="empty-state">Плагинов и модов пока нет.</div>`}</div></div><div class="panel"><div class="panel-head"><strong>Последние строки</strong><button class="btn btn-small" id="server-refresh">Обновить</button></div><div class="server-log-preview">${(snapshot.log_tail || []).slice(-80).map((line) => `<div>${esc(line)}</div>`).join("") || `<span class="muted">Лог появится после запуска.</span>`}</div></div></div>
+    </section>`;
+    $("#server-toggle")?.addEventListener("click", async () => { try { if (running) await api.serverStop(meta.id); else await api.serverStart(meta.id); await refreshInstances(); renderSidebar(); renderTab(); } catch (error) { toast(String(error), "err"); } });
+    $("#server-settings")?.addEventListener("click", async () => {
+      try {
+        const config = await api.serverGet(meta.id);
+        const port = window.prompt("Порт сервера", String(config.port || 25565));
+        if (port == null) return;
+        const memory = window.prompt("ОЗУ сервера, МБ", String(config.memory_mb || 4096));
+        if (memory == null) return;
+        await api.serverSave(meta.id, { ...config, port: Number(port) || 25565, memory_mb: Number(memory) || 4096 });
+        toast("Настройки сервера сохранены", "ok"); renderServerOverview();
+      } catch (error) { toast(String(error), "err"); }
+    });
+    $("#server-sync")?.addEventListener("click", async () => {
+      const destination = await api.pickDir("Папка синхронизации").catch(() => null);
+      if (!destination) return;
+      const direction = String(window.prompt("Направление: push — из сервера в папку, pull — из папки в сервер", "push") || "push").toLowerCase();
+      if (!["push", "pull"].includes(direction)) return toast("Нужно указать push или pull", "err");
+      if (!window.confirm(`${direction === "push" ? "Скопировать файлы сервера в выбранную папку" : "Скопировать файлы выбранной папки в сервер"}?`)) return;
+      try { await api.serverSync(meta.id, destination, direction); toast("Синхронизация завершена", "ok"); renderServerOverview(); }
+      catch (error) { toast(String(error), "err"); }
+    });
+    $("#server-eula")?.addEventListener("click", async () => {
+      if (!window.confirm("Я принимаю EULA Minecraft и разрешаю запуск этого сервера.")) return;
+      try { await api.serverSetEula(meta.id, true); toast("EULA принята", "ok"); renderServerOverview(); }
+      catch (error) { toast(String(error), "err"); }
+    });
+    $("#server-folder")?.addEventListener("click", () => api.openPath(snapshot.root).catch((error) => toast(String(error), "err")));
+    $("#server-refresh")?.addEventListener("click", () => renderServerOverview());
+    $("#server-command-send")?.addEventListener("click", async () => { const input = $("#server-command-input"); try { await api.serverCommand(meta.id, input.value); input.value = ""; toast("Команда отправлена", "ok"); } catch (error) { toast(String(error), "err"); } });
+    $("#server-command-input")?.addEventListener("keydown", (event) => { if (event.key === "Enter") $("#server-command-send")?.click(); });
+    $("#server-addon-url")?.addEventListener("click", async () => { const url = window.prompt("Прямая ссылка на .jar аддона"); if (!url) return; try { await api.serverInstallAddon(meta.id, url, null); toast("Аддон установлен", "ok"); renderServerOverview(); } catch (error) { toast(String(error), "err"); } });
+    $("#server-addon-catalog")?.addEventListener("click", async () => {
+      const query = window.prompt("Поиск плагина или мода в Modrinth");
+      if (!query) return;
+      try {
+        const type = window.confirm("Искать моды? Отмена — плагины") ? "mod" : "plugin";
+        const results = await api.serverSearchAddons(query, type, meta.server?.mc_version || meta.mc_version, type === "mod" ? (meta.server?.kernel || null) : null);
+        const hits = (results.hits || []).slice(0, 8);
+        if (!hits.length) return toast("Ничего не найдено", "");
+        const choice = window.prompt(`Найдено:\n${hits.map((item, index) => `${index + 1}. ${item.title} — ${item.project_id}`).join("\n")}\n\nВведи номер`);
+        const hit = hits[Number(choice) - 1];
+        if (!hit) return;
+        const versions = await api.serverAddonVersions(hit.project_id, meta.server?.mc_version || meta.mc_version, type === "mod" ? meta.server?.kernel : null);
+        const file = versions[0]?.files?.find((item) => item.primary) || versions[0]?.files?.[0];
+        if (!file?.url) return toast("У проекта нет совместимого jar", "err");
+        await api.serverInstallAddon(meta.id, file.url, type);
+        toast(`${hit.title} установлен`, "ok");
+        renderServerOverview();
+      } catch (error) { toast(String(error), "err"); }
+    });
+    $$('[data-addon-toggle]').forEach((button) => button.addEventListener("click", async () => { try { await api.serverToggleAddon(meta.id, button.dataset.addonToggle); renderServerOverview(); } catch (error) { toast(String(error), "err"); } }));
+    $$('[data-addon-delete]').forEach((button) => button.addEventListener("click", async () => { if (!window.confirm("Удалить аддон?")) return; try { await api.serverDeleteAddon(meta.id, button.dataset.addonDelete); renderServerOverview(); } catch (error) { toast(String(error), "err"); } }));
+  }
+
+  async function renderServerPlayers() {
+    const meta = selected(); if (!meta) return;
+    const players = await api.serverPlayers(meta.id).catch(() => []);
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return;
+    }
+    $("#tab-body").innerHTML = `<section class="server-view"><div class="server-head"><div><div class="eyebrow">ОНЛАЙН</div><h1>Игроки</h1><p class="muted">Состояние определяется по журналу сервера.</p></div><button class="btn" id="players-refresh">Обновить</button></div><div class="player-list">${players.length ? players.map((item) => `<div class="player-row"><span class="dot ${item.online ? "on" : ""}"></span><strong translate="no">${esc(item.name)}</strong><span class="muted">${item.online ? "онлайн" : "последний вход в логе"}</span></div>`).join("") : `<div class="empty-state">Игроки пока не обнаружены.</div>`}</div></section>`;
+    $("#players-refresh")?.addEventListener("click", renderServerPlayers);
+  }
+
+  async function renderServerMetrics() {
+    const meta = selected(); if (!meta) return;
+    const snapshot = await api.serverSnapshot(meta.id).catch(() => null);
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return;
+    }
+    const metrics = snapshot?.metrics || {};
+    $("#tab-body").innerHTML = `<section class="server-view"><div class="server-head"><div><div class="eyebrow">НАБЛЮДЕНИЕ</div><h1>Метрики</h1><p class="muted">Оперативные показатели процесса и последние данные TPS.</p></div><button class="btn" id="metrics-refresh">Обновить</button></div><div class="server-stat-grid"><div class="stat-card"><span>PID</span><strong>${metrics.pid || "—"}</strong></div><div class="stat-card"><span>CPU</span><strong>${Number(metrics.cpu_percent || 0).toFixed(1)}%</strong></div><div class="stat-card"><span>Память</span><strong>${humanSize(metrics.memory_bytes || 0)}</strong></div><div class="stat-card"><span>Аптайм</span><strong>${serverUptime(metrics.uptime_secs)}</strong></div><div class="stat-card"><span>TPS</span><strong>${metrics.tps == null ? "—" : Number(metrics.tps).toFixed(1)}</strong></div></div><p class="muted">Для Paper/Spigot TPS обновляется после команды и появления ответа в логе; системные метрики читаются без доступа к игровым данным.</p></section>`;
+    $("#metrics-refresh")?.addEventListener("click", renderServerMetrics);
+  }
+
+  async function renderServerBackups() {
+    const meta = selected(); if (!meta) return;
+    const backups = await api.serverBackupList(meta.id).catch(() => []);
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return;
+    }
+    $("#tab-body").innerHTML = `<section class="server-view"><div class="server-head"><div><div class="eyebrow">ДАННЫЕ</div><h1>Бэкапы</h1><p class="muted">Архивируются ядро, конфиги, плагины, моды и миры. Логи и кэши исключаются из лёгкого бэкапа.</p></div><button class="btn btn-primary" id="backup-create">Создать бэкап</button></div><div class="backup-list">${backups.length ? backups.map((item) => `<div class="backup-row"><div><strong>${esc(item.name)}</strong><span>${humanSize(item.size)} · ${new Date(Number(item.created) * 1000).toLocaleString()}</span></div><button class="btn btn-small" data-backup-restore="${esc(item.name)}">Восстановить</button><button class="icon-btn danger" data-backup-delete="${esc(item.name)}">×</button></div>`).join("") : `<div class="empty-state">Бэкапов пока нет.</div>`}</div></section>`;
+    $("#backup-create")?.addEventListener("click", async () => { try { await api.serverBackupCreate(meta.id, "manual", true); toast("Бэкап создан", "ok"); renderServerBackups(); } catch (error) { toast(String(error), "err"); } });
+    $$('[data-backup-restore]').forEach((button) => button.addEventListener("click", async () => { if (!window.confirm("Восстановить архив поверх файлов сервера?")) return; try { await api.serverBackupRestore(meta.id, button.dataset.backupRestore); toast("Сервер восстановлен", "ok"); } catch (error) { toast(String(error), "err"); } }));
+    $$('[data-backup-delete]').forEach((button) => button.addEventListener("click", async () => { if (!window.confirm("Удалить бэкап?")) return; try { await api.serverBackupDelete(meta.id, button.dataset.backupDelete); renderServerBackups(); } catch (error) { toast(String(error), "err"); } }));
   }
 
   let tabRenderGeneration = 0;
   function renderTab() {
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return;
+    }
     tabRenderGeneration += 1;
     const body = $("#tab-body");
     const meta = selected();
     applyTabs(meta);
     updateErrorsBadge();
-    // без сборки показываем ленту готовых сборок, со сборкой — её вкладки
-    if (!meta) state.tab = "discover";
-    else if (state.tab === "discover") state.tab = "console";
+    // Без выбранной записи остаются главная и отдельная вкладка серверов.
+    // Серверы получают собственный набор разделов и не наследуют ресурсные
+    // вкладки Minecraft-сборки.
+    if (!meta && !["discover", "servers"].includes(state.tab)) state.tab = "discover";
+    else if (meta && state.tab === "discover") state.tab = isServer(meta) ? "server" : "console";
+    else if (meta && isServer(meta) && !["server", "console", "files", "players", "metrics", "backups", "settings"].includes(state.tab)) state.tab = "server";
+    else if (meta && !isServer(meta) && ["server", "players", "metrics", "backups", "servers"].includes(state.tab)) state.tab = "console";
     $$(".tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.tab));
     const viewKey = `${state.selectedId || "home"}:${state.tab}`;
     if (body.dataset.activeView !== viewKey) { body.dataset.activeView = viewKey; animateView(body); }
     refreshActiveIndicators();
 
     if (!meta) {
-      // Сборка не выбрана — в главном окне лента готовых сборок, ничего не
-      // подставляем сами: любую сборку пользователь выбирает осознанно.
-      if (state.tab === "download") return renderDownload();
-      if (state.tab === "settings") return renderSettings();
+      // Сборка не выбрана — в главном окне лента готовых сборок или каталог
+      // серверов. Серверный каталог не подменяет список сборок слева.
+      if (state.tab === "servers") return renderServerList();
       return renderDiscover();
     }
 
     switch (state.tab) {
+      case "server": return renderServerOverview();
+      case "players": return renderServerPlayers();
+      case "metrics": return renderServerMetrics();
+      case "backups": return renderServerBackups();
       case "discover": return renderDiscover();
       case "console": return renderConsole();
       case "errors": return renderErrors();
@@ -4555,6 +4864,10 @@
 
   /* ---------- локальная помощь с ошибками ---------- */
   function updateErrorsBadge() {
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return;
+    }
     const badge = $("#badge-errors");
     if (!badge) return;
     const run = state.selectedId && diagnostics.latest(state.selectedId);
@@ -4568,6 +4881,10 @@
   /** Вызывается только при смене состояния или новой сигнатуре, не на каждую строку. */
   function diagnosticsChanged(instanceId) {
     if (instanceId !== state.selectedId) return;
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return;
+    }
     updateErrorsBadge();
     if (state.tab !== "errors" || diagnosticsRenderTimer) return;
     diagnosticsRenderTimer = setTimeout(() => {
@@ -5025,10 +5342,17 @@
     const instanceId = state.selectedId;
     const revision = fm.revision;
     if (fm.cache.has(key)) return fm.cache.get(key);
-    const entries = await api.listDir(instanceId, key)
-      .catch((error) => { if (state.tab === "files" && state.selectedId === instanceId && fm.revision === revision) toast(String(error), "err"); return []; });
+    const meta = selected();
+    const entries = (isServer(meta)
+      ? api.serverFiles(instanceId, key || null).then((items) => (items || []).map((item) => ({
+          name: item.name, path: item.path, size: item.size || 0, modified: item.modified || null,
+          is_dir: item.kind === "directory"
+        })))
+      : api.listDir(instanceId, key)
+    ).catch((error) => { if (state.tab === "files" && state.selectedId === instanceId && fm.revision === revision) toast(String(error), "err"); return []; });
+    const result = await entries;
     if (state.tab !== "files" || state.selectedId !== instanceId || fm.revision !== revision) return [];
-    const sorted = entries.slice().sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name, "ru"));
+    const sorted = result.slice().sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name, "ru"));
     fm.cache.set(key, sorted);
     return sorted;
   }
@@ -5823,8 +6147,11 @@
     const generation = tabRenderGeneration;
     const serial = ++contentRenderSerial;
     const entries = await api.contentList(meta.id, kind).catch(() => []);
-    if (serial !== contentRenderSerial || generation !== tabRenderGeneration
-        || state.tab !== tabForKind || state.selectedId !== meta.id) return;
+    if (state.windowHidden || serial !== contentRenderSerial || generation !== tabRenderGeneration
+        || state.tab !== tabForKind || state.selectedId !== meta.id) {
+      state.uiRefreshPending = true;
+      return;
+    }
     if (kind === "mod") {
       state.mods = entries;
       $("#badge-mods").hidden = !entries.length;
@@ -5833,8 +6160,11 @@
     // иконки подгружаются для модов, ресурспаков и шейдеров
     if (!Object.keys(state.modIcons).length) {
       api.modIcons(meta.id).then((map) => {
-        if (!map || !Object.keys(map).length || generation !== tabRenderGeneration
-            || state.selectedId !== meta.id || contentViewInstance !== meta.id) return;
+        if (state.windowHidden || !map || !Object.keys(map).length || generation !== tabRenderGeneration
+            || state.selectedId !== meta.id || contentViewInstance !== meta.id) {
+          if (state.windowHidden) state.uiRefreshPending = true;
+          return;
+        }
         state.modIcons = map;
         if (state.tab === "mods" || state.tab === "resourcepacks" || state.tab === "shaders") {
           renderContent(state.tab === "mods" ? "mod" : state.tab === "resourcepacks" ? "resourcepack" : "shader");
@@ -7558,12 +7888,16 @@
         cfg.versionsLoading = false;
         cfg.versionsLoaded = true;
         discoverVersionsRequest = null;
-        if (state.tab === "discover" && $("#home-catalog-filters")) updateHomeCatalogFilters(cfg);
+        if (!state.windowHidden && state.tab === "discover" && $("#home-catalog-filters")) updateHomeCatalogFilters(cfg);
       });
     return discoverVersionsRequest;
   }
 
   function renderDiscover() {
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return;
+    }
     const cfg = state.discover;
     const view = cfg.view || "grid";
     if (!cfg.source) cfg.source = (state.settings && state.settings.feed_source) || "modrinth";
@@ -9888,6 +10222,10 @@
   }
 
   function renderPrefs() {
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return;
+    }
     const nav = $("#prefs-nav");
     const body = $("#prefs-body");
     if (!nav || !body) return;
@@ -10077,6 +10415,16 @@
               <svg class="ic initial-tab-chevron"><use href="#i-chev"/></svg>
             </button>
             <div class="hint">Выбери, что показывать первым при нажатии на сборку.</div>
+          </div>
+        </div>
+      </div>
+      <div class="prefs-section">
+        <div class="prefs-label">Поведение окна</div>
+        <div class="settings-row">
+          <div class="label">Сворачивать в трей</div>
+          <div>
+            <div class="switch-row"><button type="button" class="switch ${settings.minimize_to_tray === true ? "on" : ""}" id="set-minimize-to-tray" role="switch" aria-label="Сворачивать окно в системный трей" aria-checked="${settings.minimize_to_tray === true}"></button><span class="muted">кнопка «свернуть» прячет окно; X по-прежнему закрывает приложение</span></div>
+            <div class="hint">RPC Discord и серверы продолжают работать, пока окно скрыто.</div>
           </div>
         </div>
       </div>
@@ -11059,11 +11407,14 @@
     if (memory) memory.addEventListener("input", () => updateMemoryRange(memory));
     const autoJava = $("#set-auto-java");
     if (autoJava) autoJava.addEventListener("click", () => autoJava.classList.toggle("on"));
-    [$("#set-discord-rpc"), $("#set-discord-icon"), $("#set-discord-upload")].forEach((control) => {
+    [$("#set-discord-rpc"), $("#set-discord-icon"), $("#set-discord-upload"), $("#set-minimize-to-tray")].forEach((control) => {
       if (!control) return;
       control.addEventListener("click", () => {
         const enabled = control.classList.toggle("on");
         control.setAttribute("aria-checked", String(enabled));
+        if (control.id === "set-minimize-to-tray") {
+          commit({ minimize_to_tray: enabled });
+        }
       });
       control.parentElement?.addEventListener("click", (event) => {
         if (!control.contains(event.target)) control.click();
@@ -11254,6 +11605,7 @@
       java_path_legacy: value("#set-java-legacy") !== undefined ? (value("#set-java-legacy").trim() || null) : settings.java_path_legacy,
       jvm_args: value("#set-jvm") !== undefined ? value("#set-jvm") : settings.jvm_args,
       auto_java: flag("#set-auto-java", settings.auto_java),
+      minimize_to_tray: flag("#set-minimize-to-tray", settings.minimize_to_tray === true),
       proxy: value("#set-proxy") !== undefined ? (value("#set-proxy").trim() || null) : settings.proxy,
       ms_client_id: value("#set-ms-client") !== undefined ? (value("#set-ms-client").trim() || null) : settings.ms_client_id,
       discord_rpc: flag("#set-discord-rpc", settings.discord_rpc),
@@ -12857,6 +13209,10 @@
     return Array.isArray(item.renamed_froms) ? item.renamed_froms : (item.renamed_from ? [item.renamed_from] : []);
   }
   function refreshInstances() {
+    if (state.windowHidden) {
+      state.uiRefreshPending = true;
+      return Promise.resolve();
+    }
     // Два одновременных запроса не должны применять старый список поверх нового.
     if (instancesRefreshPending) return instancesRefreshPending;
     instancesRefreshPending = (async () => {
@@ -12941,6 +13297,12 @@
   async function play() {
     const meta = selected();
     if (!meta) return toast("Выбери сборку", "err");
+    if (isServer(meta)) {
+      if (state.running.has(meta.id)) return toast("Сервер уже запущен", "");
+      try { await api.serverStart(meta.id); await refreshInstances(); renderSidebar(); renderTab(); toast("Сервер запущен", "ok"); }
+      catch (error) { toast(String(error), "err"); }
+      return;
+    }
     if (state.running.has(meta.id) || state.preparing.has(meta.id)) return toast("Сборка уже запущена или подготавливается", "err");
     const attemptId = nextAttemptId();
     diagnostics.begin(meta.id, attemptId, diagnosticLaunchContext(meta));
@@ -12978,6 +13340,11 @@
   async function stopGame() {
     const meta = selected();
     if (!meta) return;
+    if (isServer(meta)) {
+      try { await api.serverStop(meta.id); await refreshInstances(); renderSidebar(); renderTab(); toast("Сервер останавливается", ""); }
+      catch (error) { toast(String(error), "err"); }
+      return;
+    }
     const marked = diagnostics.requestStop(meta.id);
     const targetedRuns = sessionsOf(meta.id).map((session) => session.runId);
     try {
@@ -13214,6 +13581,17 @@
   async function openCreate(options = {}) {
     const settings = state.settings || {};
     state.create = {
+      mode: options.mode === "server" ? "server" : "build",
+      serverSource: options.importPath ? "import" : "new",
+      importPath: options.importPath || "",
+      serverKernel: "paper",
+      serverKernelVersion: "",
+      serverKernels: [],
+      serverVersions: [],
+      serverUrl: "",
+      serverPort: 25565,
+      serverCommand: "",
+      serverStopCommand: "stop",
       name: "",
       mc: "",
       loader: "fabric",
@@ -13233,6 +13611,30 @@
     };
     $("#modal-create").hidden = false;
     renderCreateModal();
+    if (state.create.mode === "server") {
+      state.create.serverKernels = await api.serverKernels().catch(() => []);
+      if (state.create.serverSource === "new") {
+        state.create.mc = "1.21.4";
+        state.create.name = "Сервер 1.21.4";
+      } else {
+        state.create.name = state.create.importPath.split(/[\\/]/).pop() || "Импортированный сервер";
+        const found = await api.serverScan([state.create.importPath]).catch(() => []);
+        const candidate = found[0];
+        if (candidate) {
+          state.create.serverKernel = candidate.kernel || state.create.serverKernel;
+          state.create.mc = candidate.mc_version || "";
+          state.create.serverKernelVersion = candidate.mc_version || "";
+          state.create.serverPort = candidate.port || state.create.serverPort;
+          state.create.serverCommand = candidate.command || "";
+        }
+      }
+      state.create.serverVersions = await api.serverKernelVersions(state.create.serverKernel).catch(() => []);
+      const recommended = state.create.serverVersions[0];
+      state.create.serverKernelVersion = state.create.serverKernelVersion || recommended?.id || state.create.mc;
+      if (state.create.serverSource === "new" && recommended?.mc_version) state.create.mc = recommended.mc_version;
+      renderCreateModal();
+      return;
+    }
     state.create.versions = await api.versions((settings.show_snapshots) || false).catch(() => []);
     state.create.mc = latestReleaseId(state.create.versions) || "1.21.4";
     state.create.name = `Сборка ${state.create.mc}`;
@@ -13265,12 +13667,68 @@
     return esc(String(cfg.name || "?").trim().charAt(0).toUpperCase() || "?");
   }
 
+  function renderServerCreateModal() {
+    const cfg = state.create;
+    const body = $("#create-body");
+    const kernels = cfg.serverKernels || [];
+    const versions = cfg.serverVersions || [];
+    body.innerHTML = `<div class="create-grid">
+      <div class="field is-wide"><label>Тип</label><div class="chips" id="c-mode"><button class="chip" id="c-mode-build">Сборка</button><button class="chip is-active" id="c-mode-server">Сервер</button></div></div>
+      <div class="field"><label>Название</label><input class="input" id="s-name" value="${esc(cfg.name)}" spellcheck="false"></div>
+      <div class="field"><label>Источник</label><div class="chips" id="s-source"><button class="chip ${cfg.serverSource === "new" ? "is-active" : ""}" data-server-source="new">Создать с нуля</button><button class="chip ${cfg.serverSource === "import" ? "is-active" : ""}" data-server-source="import">Импорт папки</button></div></div>
+      <div class="field is-wide" ${cfg.serverSource === "import" ? "" : "hidden"}><label>Папка сервера</label><div class="flex-row"><input class="input grow" id="s-import" value="${esc(cfg.importPath)}" readonly placeholder="Выбери готовую папку"><button class="btn" id="s-import-pick"><svg class="ic"><use href="#i-folder"/></svg>Выбрать…</button></div><div class="hint">Сохраняются все файлы, миры, плагины/моды и server-icon.png.</div></div>
+      <div class="field"><label>Ядро</label><select class="select" id="s-kernel">${kernels.map((item) => `<option value="${esc(item.id)}" ${item.id === cfg.serverKernel ? "selected" : ""}>${esc(item.label)} — ${esc(item.group || "")}</option>`).join("") || `<option value="paper">Paper</option>`}</select></div>
+      <div class="field"><label>Версия ядра / Minecraft</label><select class="select" id="s-version">${versions.map((item) => `<option value="${esc(item.id)}" ${item.id === cfg.serverKernelVersion ? "selected" : ""}>${esc(item.label || item.id)}</option>`).join("") || `<option value="${esc(cfg.serverKernelVersion || cfg.mc || "1.21.4")}">${esc(cfg.serverKernelVersion || cfg.mc || "1.21.4")}</option>`}</select></div>
+      <div class="field is-wide" ${["custom", "spigot", "bungeecord"].includes(cfg.serverKernel) ? "" : "hidden"}><label>Прямая ссылка на jar (если нужна)</label><input class="input" id="s-url" value="${esc(cfg.serverUrl)}" placeholder="https://…/server.jar" spellcheck="false"></div>
+      <div class="field"><label>Порт</label><input class="input" id="s-port" type="number" min="1" max="65535" value="${esc(cfg.serverPort)}"></div>
+      <div class="field"><label>ОЗУ, МБ</label><input class="input" id="s-memory" type="number" min="512" max="65536" step="256" value="${esc(cfg.memory || 4096)}"></div>
+      <div class="field"><label>Java (необязательно)</label><input class="input" id="s-java" value="${esc(cfg.javaPath || "")}" placeholder="java или путь к java.exe" spellcheck="false"></div>
+      <div class="field"><label>Команда остановки</label><input class="input" id="s-stop" value="${esc(cfg.serverStopCommand)}" placeholder="stop"></div>
+      <div class="field is-wide"><label>Команда запуска (необязательно)</label><input class="input" id="s-command" value="${esc(cfg.serverCommand)}" placeholder="по умолчанию: java -Xmx… -jar server.jar nogui" spellcheck="false"></div>
+      <div class="field is-wide server-icon-note"><strong>server-icon.png</strong><span>При импорте файл используется автоматически. Для нового сервера его можно положить в папку после создания — OmniSpec подхватит его без конвертации в иконку сборки.</span></div>
+    </div>`;
+    $("#c-mode-build")?.addEventListener("click", async () => {
+      cfg.mode = "build";
+      if (!cfg.versions.length) cfg.versions = await api.versions((state.settings?.show_snapshots) || false).catch(() => []);
+      cfg.mc = cfg.mc || latestReleaseId(cfg.versions) || "1.21.4";
+      cfg.name = /^Сервер /.test(cfg.name) ? `Сборка ${cfg.mc}` : (cfg.name || `Сборка ${cfg.mc}`);
+      renderCreateModal();
+      await loadLoaderVersions();
+    });
+    $$("[data-server-source]").forEach((button) => button.addEventListener("click", async () => { cfg.serverSource = button.dataset.serverSource; if (cfg.serverSource === "import") { renderCreateModal(); return; } renderCreateModal(); }));
+    $("#s-name")?.addEventListener("input", (event) => { cfg.name = event.target.value; });
+    $("#s-import-pick")?.addEventListener("click", async () => { const picked = await api.pickDir("Папка существующего сервера").catch(() => null); if (!picked) return; cfg.importPath = picked; cfg.serverSource = "import"; const found = await api.serverScan([picked]).catch(() => []); const item = found[0]; if (item) { cfg.serverKernel = item.kernel || cfg.serverKernel; cfg.mc = item.mc_version || cfg.mc; cfg.serverKernelVersion = item.mc_version || cfg.serverKernelVersion; } renderCreateModal(); });
+    $("#s-kernel")?.addEventListener("change", async (event) => {
+      cfg.serverKernel = event.target.value;
+      cfg.serverVersions = await api.serverKernelVersions(cfg.serverKernel).catch(() => []);
+      const recommended = cfg.serverVersions[0];
+      cfg.serverKernelVersion = recommended?.id || cfg.serverKernelVersion;
+      if (recommended?.mc_version) cfg.mc = recommended.mc_version;
+      else if (cfg.serverKernel !== "neoforge" && recommended?.id) cfg.mc = recommended.id;
+      renderCreateModal();
+    });
+    $("#s-version")?.addEventListener("change", (event) => {
+      cfg.serverKernelVersion = event.target.value;
+      const option = cfg.serverVersions.find((item) => item.id === cfg.serverKernelVersion);
+      if (option?.mc_version) cfg.mc = option.mc_version;
+      else if (cfg.serverKernel !== "neoforge") cfg.mc = event.target.value;
+    });
+    $("#s-url")?.addEventListener("input", (event) => { cfg.serverUrl = event.target.value; });
+    $("#s-port")?.addEventListener("input", (event) => { cfg.serverPort = Number(event.target.value) || 25565; });
+    $("#s-memory")?.addEventListener("input", (event) => { cfg.memory = Number(event.target.value) || 4096; });
+    $("#s-java")?.addEventListener("input", (event) => { cfg.javaPath = event.target.value; });
+    $("#s-stop")?.addEventListener("input", (event) => { cfg.serverStopCommand = event.target.value; });
+    $("#s-command")?.addEventListener("input", (event) => { cfg.serverCommand = event.target.value; });
+  }
+
   function renderCreateModal() {
     const cfg = state.create;
     const body = $("#create-body");
+    if (cfg?.mode === "server") return renderServerCreateModal();
     const dir = cfg.installMode === "custom" && cfg.customDir ? cfg.customDir : defaultInstallDir();
     body.innerHTML = `
       <div class="create-grid">
+        <div class="field is-wide"><label>Тип</label><div class="chips" id="c-mode"><button class="chip is-active" id="c-mode-build">Сборка</button><button class="chip" id="c-mode-server">Сервер</button></div></div>
         <div class="field">
           <label>Название</label>
           <input class="input" id="c-name" value="${esc(cfg.name)}" spellcheck="false" autocomplete="off">
@@ -13336,6 +13794,13 @@
       </div>`;
 
     // --- привязки ---
+    $("#c-mode-server")?.addEventListener("click", async () => {
+      cfg.mode = "server";
+      cfg.serverKernels = await api.serverKernels().catch(() => []);
+      cfg.serverVersions = await api.serverKernelVersions(cfg.serverKernel).catch(() => []);
+      cfg.serverKernelVersion = cfg.serverVersions[0]?.id || cfg.mc || "1.21.4";
+      renderCreateModal();
+    });
     $("#c-name").addEventListener("input", (event) => {
       cfg.name = event.target.value;
       const chips = $("#c-icons");
@@ -13425,9 +13890,38 @@
     renderCreateModal();
   }
 
+  async function submitServerCreate(cfg) {
+    const submit = $("#create-submit");
+    submit.disabled = true;
+    try {
+      if (cfg.serverSource === "import" && !cfg.importPath) throw new Error("выбери папку существующего сервера");
+      if (cfg.serverSource === "new" && !cfg.mc) throw new Error("укажи версию Minecraft");
+      const meta = await api.serverCreate({
+        name: cfg.name || "Новый сервер",
+        mc_version: cfg.serverSource === "import" ? (cfg.mc || "") : cfg.mc,
+        kernel: cfg.serverKernel,
+        kernel_version: cfg.serverSource === "import" ? "" : (cfg.serverKernelVersion || cfg.mc),
+        import_path: cfg.serverSource === "import" ? cfg.importPath : null,
+        custom_url: cfg.serverUrl || null,
+        java_path: cfg.javaPath || null,
+        memory_mb: Number(cfg.memory || 4096),
+        port: Number(cfg.serverPort || 25565),
+        command: cfg.serverCommand || null,
+        stop_command: cfg.serverStopCommand || "stop",
+        category: cfg.category || null
+      });
+      $("#modal-create").hidden = true;
+      await refreshInstances();
+      openInstance(meta.id);
+      toast(`Сервер «${meta.name}» готов`, "ok");
+    } catch (error) { toast(String(error), "err"); }
+    finally { submit.disabled = false; }
+  }
+
   async function submitCreate() {
     const cfg = state.create;
     if (!cfg) return;
+    if (cfg.mode === "server") return submitServerCreate(cfg);
     const submit = $("#create-submit");
     submit.disabled = true;
     try {
@@ -13486,7 +13980,17 @@
     }));
     on("#btn-play", "click", play);
     on("#btn-stop", "click", stopGame);
-    on("#btn-restart", "click", async () => { await stopGame(); setTimeout(play, 800); });
+    on("#btn-restart", "click", async () => {
+      const meta = selected();
+      await stopGame();
+      if (!meta || !isServer(meta)) { setTimeout(play, 800); return; }
+      for (let attempt = 0; attempt < 20 && state.running.has(meta.id); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        await refreshInstances();
+      }
+      if (!state.running.has(meta.id)) play();
+      else toast("Сервер ещё останавливается — запусти его после завершения", "");
+    });
     on("#btn-home", "click", () => selectInstance(null));
     on("#btn-create", "click", openCreate);
 
@@ -13596,7 +14100,7 @@
     const accModal = $("#modal-account");
     if (accModal) accModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-account") accModal.hidden = true; });
 
-    on("#btn-folder", "click", () => { const meta = selected(); if (meta) api.openPath(`/instances/${meta.id}/minecraft`).catch(() => {}); });
+    on("#btn-folder", "click", () => { const meta = selected(); if (!meta) return; const path = isServer(meta) ? api.instancePath(meta.id) : Promise.resolve(`/instances/${meta.id}/minecraft`); path.then((value) => api.openPath(value)).catch(() => {}); });
     // «Вид» больше не переключает компактный список — открывает окно «Все сборки»
     binderAllBuilds();
     on("#btn-sort", "click", () => {
@@ -13676,6 +14180,9 @@
   }
 
   async function attachBackendEvents() {
+    // Событие приходит только от нативного tray/window слоя. Оно не влияет
+    // на set_presence: RPC должен жить независимо от видимости WebView.
+    await api.onWindowVisibility((payload) => setQuietMode(Boolean(payload && payload.hidden)));
     if (!IS_APP) {
       // демо-режим: показываем «живой» лог
       const demo = DEMO.demoLogs;
@@ -13703,7 +14210,8 @@
       const stopped = typeof payload.stopped === "boolean" ? payload.stopped : Boolean(run && run.status === "stopped");
       dropSession(payload.instance, payload.run_id);
       const hasCode = Number.isInteger(payload.code);
-      const endText = stopped ? "Игра остановлена пользователем" : "Игра завершилась";
+      const subject = payload.server ? "Сервер" : "Игра";
+      const endText = stopped ? `${subject} остановлен пользователем` : `${subject} завершён`;
       pushLog(payload.instance, `[omnispec] ${endText}${hasCode ? ` (код ${payload.code})` : ""}`, stopped || !hasCode || payload.code === 0 ? "ok" : "err");
       // время игры пишется в мету сборки на стороне ядра — подтягиваем его
       await refreshInstances();
@@ -13717,10 +14225,10 @@
   }
 
   /* ==================== ПЕРВЫЙ ЗАПУСК ====================
-   * Пять коротких шагов: тема, эффекты, трейсер, масштаб и импорт сборок.
+   * Короткие шаги: язык, тема, эффекты, трей, трейсер, масштаб и импорт сборок.
    * Показываем один раз — отметка onboarded живёт в настройках.
    */
-  const ONBOARD_STEPS = ["language", "theme", "effects", "trail", "scale", "import"];
+  const ONBOARD_STEPS = ["language", "theme", "effects", "tray", "trail", "scale", "import"];
   let onboardStep = 0;
 
   /** Окно первого запуска — только при самом первом входе, не при обновлении. */
@@ -13794,6 +14302,20 @@
             <span class="muted">если мешают — выключите, лаунчер будет спокойнее</span>
           </div>
           <button class="switch ${onboardEffectsOn() ? "on" : ""}" id="onboard-fx"></button>
+        </div>`;
+    }
+    if (step === "tray") {
+      const on = state.settings?.minimize_to_tray === true;
+      return `<div class="onboard-lead">
+          <span class="onboard-title">Сворачивание в трей</span>
+          <span class="muted">окно можно спрятать в область уведомлений, не останавливая Discord RPC и серверы</span>
+        </div>
+        <div class="onboard-row">
+          <div class="onboard-row-main">
+            <span class="onboard-row-title">${on ? "Включено" : "Выключено"}</span>
+            <span class="muted">кнопка «свернуть» прячет окно; кнопка X завершает приложение</span>
+          </div>
+          <button class="switch ${on ? "on" : ""}" id="onboard-tray" role="switch" aria-label="Сворачивать окно в системный трей" aria-checked="${on}"></button>
         </div>`;
     }
     if (step === "trail") {
@@ -13879,6 +14401,14 @@
         applyAmbient(on ? (state.ambient && state.ambient !== "off" ? state.ambient : "stars") : "off");
         event.currentTarget.classList.toggle("on", on);
         onboardSave({ click_fx: state.fx, ambient: on ? "stars" : "off" });
+        renderOnboard();
+      });
+    }
+    if (step === "tray") {
+      $("#onboard-tray").addEventListener("click", (event) => {
+        const on = event.currentTarget.classList.toggle("on");
+        event.currentTarget.setAttribute("aria-checked", String(on));
+        onboardSave({ minimize_to_tray: on });
         renderOnboard();
       });
     }
@@ -14049,8 +14579,8 @@
         if (startup) installMrpackPath(startup);
       } catch (error) { /* без аргументов — обычный запуск */ }
     }
-    // первое окно: короткая настройка (тема, эффекты, трейсер, масштаб, импорт).
-    // Показывается только при самом первом входе. Если лаунчером уже
+    // первое окно: короткая настройка (язык, тема, эффекты, трей, трейсер,
+    // масштаб и импорт). Показывается только при самом первом входе. Если лаунчером уже
     // пользовались (есть следы работы в настройках), просто ставим отметку.
     if (onboardNeeded() && onboardLooksUsed()) {
       state.settings = { ...(state.settings || {}), onboarded: true, onboarding_pending: false };
