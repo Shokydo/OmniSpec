@@ -144,6 +144,11 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
       assert.equal(await page.locator('#home-filters-toggle').getAttribute('aria-expanded'),'false');
       assert(await page.locator('#home-catalog-filters').isHidden());
       await page.locator('#home-filters-toggle').click();
+      assert.equal(await page.locator('#dv-mc').count(),1);
+      assert.deepEqual(await page.locator('#dv-mc option').allTextContents(),['Любая версия','1.21.1','1.20.1','1.19.4']);
+      await page.locator('#dv-mc').selectOption('1.20.1');
+      await waitHome(page,'modrinth','modpack');
+      assert.equal((await calls(page,'search_modrinth')).at(-1).args.mcVersion,'1.20.1');
       assert.equal(await page.locator('[data-dv-category]').count(),11);
       for (const category of ['adventure','challenging','combat','kitchen-sink','lightweight','magic','multiplayer','optimization','quests','technology']) {
         assert.equal(await page.locator(`[data-dv-category="${category}"]`).count(),1,category);
@@ -154,26 +159,27 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
       await page.locator('#dv-query').fill('magic test');
       await waitHome(page,'modrinth','modpack','magic test');
       let last = (await calls(page,'search_modrinth')).filter(c => c.args.query === 'magic test').at(-1);
-      assert.deepEqual(last.args.categories,['magic']); assert.equal(last.args.loader,'fabric'); assert.equal(last.args.projectType,'modpack');
+      assert.deepEqual(last.args.categories,['magic']); assert.equal(last.args.loader,'fabric'); assert.equal(last.args.mcVersion,'1.20.1'); assert.equal(last.args.projectType,'modpack');
       await page.locator('#home-scroll').evaluate(el => {el.scrollTop=el.scrollHeight;});
       await page.waitForFunction(() => window.__homeTest.calls.some(c => c.command === 'search_modrinth' && c.args.query === 'magic test' && c.args.offset === 24));
       last = (await calls(page,'search_modrinth')).find(c => c.args.query === 'magic test' && c.args.offset === 24);
-      assert.deepEqual(last.args.categories,['magic']); assert.equal(last.args.loader,'fabric');
+      assert.deepEqual(last.args.categories,['magic']); assert.equal(last.args.loader,'fabric'); assert.equal(last.args.mcVersion,'1.20.1');
       await page.locator('[data-dv-source="curseforge"]').click();
       await waitHome(page,'curseforge','modpack','magic test');
       await page.locator('[data-dv-category="4473"]').click();
       await waitHome(page,'curseforge','modpack','magic test');
       last = (await calls(page,'search_curseforge')).at(-1);
-      assert.deepEqual(last.args.categories,['4473']); assert.equal(last.args.loader,'fabric');
+      assert.deepEqual(last.args.categories,['4473']); assert.equal(last.args.loader,'fabric'); assert.equal(last.args.mcVersion,'1.20.1');
       await page.locator('[data-dv-type="mod"]').click();
       await waitHome(page,'curseforge','mod','magic test');
       last = (await calls(page,'search_curseforge')).at(-1);
-      assert.equal(last.args.projectType,'mod'); assert.deepEqual(last.args.categories,[]); assert.equal(last.args.loader,'fabric');
+      assert.equal(last.args.projectType,'mod'); assert.deepEqual(last.args.categories,[]); assert.equal(last.args.loader,'fabric'); assert.equal(last.args.mcVersion,'1.20.1');
       assert.equal(await page.locator('[data-dv-category]').count(),0);
       await page.locator('[data-dv-source="modrinth"]').click();
       await waitHome(page,'modrinth','mod','magic test');
       assert.equal(await page.locator('#dv-query').inputValue(),'magic test');
       assert.equal((await calls(page,'search_modrinth')).at(-1).args.projectType,'mod');
+      assert.equal((await calls(page,'search_modrinth')).at(-1).args.mcVersion,'1.20.1');
       await page.locator('[data-dv-type="modpack"]').click();
       await waitHome(page,'modrinth','modpack','magic test');
       assert.equal(await page.locator('[data-dv-category="magic"]').getAttribute('aria-pressed'),'true');
@@ -190,7 +196,7 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
       assert.equal(await page.locator('#dv-results [data-project="mr-pack"]').count(),0);
       assert.equal(await page.locator('#dv-results [data-project="mr-mod"]').count(),1);
       assert.deepEqual(errors,[]);
-      console.log('HOME_FILTERS: server filters, categories, loader, paging and stale responses — OK');
+      console.log('HOME_FILTERS: server filters, version, categories, loader, paging and stale responses — OK');
       await page.close();
     }
 

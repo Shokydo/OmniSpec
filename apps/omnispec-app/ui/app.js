@@ -2875,7 +2875,8 @@
       error: null, tried: false
     },
     discover: {
-      query: "", type: "modpack", loader: "", categories: { modrinth: "", curseforge: "" },
+      query: "", type: "modpack", mc: "", loader: "", categories: { modrinth: "", curseforge: "" },
+      versions: [], versionsLoading: false, versionsLoaded: false,
       results: [], total: 0, loading: false, loadingMore: false, error: null, moreError: null,
       retrySeconds: 0, tried: false, view: "grid", source: "modrinth", filtersCollapsed: true
     },
@@ -7013,9 +7014,26 @@
   };
   const CATALOG_LOADERS = ["fabric", "quilt", "forge", "neoforge"];
 
+  function discoverVersionOptions() {
+    const cfg = state.discover || {};
+    const ids = new Set();
+    const add = (value) => {
+      const id = typeof value === "string" ? value : value && value.id;
+      // Поддерживаем и обычные релизы, и snapshot/pre-release IDs (25w14a, 1.21-pre1).
+      if (id && /^[0-9][A-Za-z0-9._+-]*$/.test(String(id))) ids.add(String(id));
+    };
+    (cfg.versions || []).forEach(add);
+    (state.instances || []).forEach((item) => add(item && item.mc_version));
+    // Демо-режим не должен отличаться от настоящего каталога по набору версий.
+    if (!IS_APP) (DEMO.versions || []).forEach(add);
+    add(cfg.mc);
+    return Array.from(ids);
+  }
+
   function homeCatalogFiltersHtml(cfg, source) {
     const categories = PACK_CATEGORIES[source] || PACK_CATEGORIES.modrinth;
     const active = cfg.categories[source] || "";
+    const versions = discoverVersionOptions();
     const collapsed = Boolean(cfg.filtersCollapsed);
     return `<aside class="home-catalog-sidebar" id="home-catalog-filters" aria-label="Фильтры каталога"${collapsed ? " hidden" : ""}>
       <div class="home-filter-head"><label class="home-filter-label" for="dv-loader">Загрузчик</label></div>
@@ -7033,13 +7051,20 @@
           </div>
         </div>
       </div>
+      <div class="home-filter-group home-version-filter">
+        <label class="home-filter-label" for="dv-mc">Версия Minecraft</label>
+        <select class="select" id="dv-mc" aria-label="Версия Minecraft">
+          <option value="">Любая версия</option>
+          ${versions.map((version) => `<option value="${esc(version)}" ${cfg.mc === version ? "selected" : ""}>${esc(version)}</option>`).join("")}
+        </select>
+      </div>
       ${cfg.type === "modpack" ? `<details class="home-category-group" open>
         <summary>Категория <svg class="ic"><use href="#i-chev"/></svg></summary>
         <div class="home-category-list" role="group" aria-label="Категории сборок">
           <button type="button" data-dv-category="" class="home-category ${!active ? "is-active" : ""}" aria-pressed="${!active}"><svg class="ic"><use href="#i-grid"/></svg>Все категории</button>
           ${categories.map(([id, label, icon]) => `<button type="button" data-dv-category="${id}" class="home-category ${active === id ? "is-active" : ""}" aria-pressed="${active === id}"><svg class="ic"><use href="#${icon}"/></svg>${esc(label)}</button>`).join("")}
         </div>
-      </details>` : `<div class="home-filter-note">Выбирай загрузчик, чтобы найти подходящие моды.</div>`}
+      </details>` : `<div class="home-filter-note">Выбирай версию и загрузчик, чтобы найти подходящие моды.</div>`}
     </aside>`;
   }
 
@@ -7147,6 +7172,13 @@
 
   function bindHomeCatalogFilters(cfg) {
     bindHomeLoaderFilter(cfg);
+    const version = $("#dv-mc");
+    if (version) version.addEventListener("change", (event) => {
+      const value = event.target.value || "";
+      if (cfg.mc === value) return;
+      cfg.mc = value;
+      dvReset();
+    });
     $$("#home-catalog-filters [data-dv-category]").forEach((button) => button.addEventListener("click", () => {
       const source = cfg.source || "modrinth";
       const category = button.dataset.dvCategory || "";
@@ -7169,6 +7201,23 @@
     sidebar.outerHTML = homeCatalogFiltersHtml(cfg, cfg.source || "modrinth");
     bindHomeCatalogFilters(cfg);
     syncFeedColumns();
+  }
+
+  let discoverVersionsRequest = null;
+  async function ensureDiscoverVersions() {
+    const cfg = state.discover;
+    if (cfg.versionsLoaded || cfg.versionsLoading) return discoverVersionsRequest;
+    cfg.versionsLoading = true;
+    discoverVersionsRequest = api.versions((state.settings && state.settings.show_snapshots) || false)
+      .then((versions) => { cfg.versions = Array.isArray(versions) ? versions : []; })
+      .catch(() => { cfg.versions = []; })
+      .finally(() => {
+        cfg.versionsLoading = false;
+        cfg.versionsLoaded = true;
+        discoverVersionsRequest = null;
+        if (state.tab === "discover" && $("#home-catalog-filters")) updateHomeCatalogFilters(cfg);
+      });
+    return discoverVersionsRequest;
   }
 
   function renderDiscover() {
@@ -7245,6 +7294,7 @@
       dvReset();
     }));
     bindHomeCatalogFilters(cfg);
+    ensureDiscoverVersions();
     $$("#tab-body [data-dv-source]").forEach((button) => button.addEventListener("click", () => {
       const source = button.dataset.dvSource;
       if (source === state.discover.source) {
@@ -7684,7 +7734,7 @@
     const source = cfg.source || "modrinth";
     const category = cfg.type === "modpack" ? (cfg.categories[source] || "") : "";
     return { source, params: {
-      query: cfg.query, projectType: cfg.type || "modpack", mcVersion: null,
+      query: cfg.query, projectType: cfg.type || "modpack", mcVersion: cfg.mc || null,
       loader: cfg.loader || null, categories: category ? [category] : [],
       offset, limit: DV_PAGE, sort: "downloads"
     } };
