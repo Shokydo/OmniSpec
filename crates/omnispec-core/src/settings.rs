@@ -167,6 +167,43 @@ impl LauncherIcon {
     }
 }
 
+/// Пользовательская компоновка интерфейса лаунчера.
+///
+/// Храним именно семантические настройки, а не координаты пикселей: так
+/// раскладка остаётся устойчивой к разным размерам окна и обновлениям UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiLayout {
+    /// Ширина боковой панели в пикселях.
+    pub sidebar_width: u16,
+    /// Сторона боковой панели: left | right.
+    pub sidebar_side: String,
+    /// Порядок крупных блоков внутри основной области.
+    pub main_order: Vec<String>,
+    /// Скрытые блоки: toolbar | tabs | sidebar.
+    pub hidden: Vec<String>,
+    /// Отступ основной области в пикселях.
+    pub main_padding: u8,
+    /// Расстояние между крупными блоками в пикселях.
+    pub main_gap: u8,
+    /// Плотность карточек: compact | comfortable | airy.
+    pub density: String,
+}
+
+impl Default for UiLayout {
+    fn default() -> Self {
+        Self {
+            sidebar_width: 264,
+            sidebar_side: "left".to_string(),
+            main_order: vec!["toolbar".into(), "tabs".into(), "content".into()],
+            hidden: Vec::new(),
+            main_padding: 0,
+            main_gap: 0,
+            density: "comfortable".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -305,6 +342,12 @@ pub struct Settings {
     /// Своя тема: цвет текста.
     #[serde(default)]
     pub theme_text: Option<String>,
+    /// Пользовательский CSS-слой темы. Только стили, без выполнения JavaScript.
+    #[serde(default)]
+    pub custom_css: String,
+    /// Раскладка крупных областей лаунчера из визуального конструктора.
+    #[serde(default)]
+    pub ui_layout: UiLayout,
     /// Эффект от клика: wave | dot | ring | cross | off.
     #[serde(default = "default_click_fx")]
     pub click_fx: String,
@@ -466,6 +509,8 @@ impl Default for Settings {
             theme_bg: None,
             theme_accent: None,
             theme_text: None,
+            custom_css: String::new(),
+            ui_layout: UiLayout::default(),
             click_fx: default_click_fx(),
             ui_scale: default_ui_scale(),
             initial_tab: default_initial_tab(),
@@ -595,6 +640,25 @@ mod discord_tests {
         let future: Settings = serde_json::from_str(r#"{"username":"Alex","launcher_icon":"future"}"#).unwrap();
         assert_eq!(future.launcher_icon, LauncherIcon::Default);
         assert_eq!(future.username, "Alex");
+    }
+
+    #[test]
+    fn custom_css_and_layout_default_for_legacy_and_roundtrip() {
+        let legacy: Settings = serde_json::from_str(r#"{"username":"Alex"}"#).unwrap();
+        assert!(legacy.custom_css.is_empty());
+        assert_eq!(legacy.ui_layout.sidebar_width, 264);
+        assert_eq!(legacy.ui_layout.sidebar_side, "left");
+
+        let mut changed = legacy.clone();
+        changed.custom_css = "[data-os=sidebar]{width:300px}".into();
+        changed.ui_layout.sidebar_width = 300;
+        changed.ui_layout.sidebar_side = "right".into();
+        changed.ui_layout.main_order = vec!["tabs".into(), "content".into(), "toolbar".into()];
+        let restored: Settings = serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
+        assert_eq!(restored.custom_css, changed.custom_css);
+        assert_eq!(restored.ui_layout.sidebar_width, 300);
+        assert_eq!(restored.ui_layout.sidebar_side, "right");
+        assert_eq!(restored.ui_layout.main_order, changed.ui_layout.main_order);
     }
 
     #[test]
