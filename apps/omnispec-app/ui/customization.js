@@ -195,7 +195,7 @@
 }
 .customizer-footer .hint { min-width: 0; color: var(--dim-2); font-size: 10.5px; }
 .customizer-footer-actions { display: flex; gap: 6px; }
-.customizer-launcher-btn { border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); }
+.sidebar-foot .customizer-launcher-btn { display: inline-flex; margin: 0; flex: none; border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); }
 .customizer-launcher-btn .ic { color: var(--accent); }
 body[data-customizer-open="true"] .customizer-launcher-btn { background: var(--bg-4); }
 @media (max-width: 720px) {
