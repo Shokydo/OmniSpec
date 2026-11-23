@@ -170,25 +170,45 @@ pub async fn install(
     Ok(meta)
 }
 
-/// Иконка внутри `.mrpack`: `icon.png`, `icon.jpg` или `overrides/icon.png`.
+/// Иконка внутри `.mrpack`: `icon.*` или `overrides/icon.*`.
+/// Читаем байты как есть, чтобы GIF оставался анимированным после импорта.
 fn read_icon(archive: &Path) -> Option<(String, Vec<u8>)> {
     let file = std::fs::File::open(archive).ok()?;
     let mut zip = zip::ZipArchive::new(file).ok()?;
-    for name in [
-        "icon.png",
-        "icon.jpg",
-        "icon.jpeg",
-        "overrides/icon.png",
-        "overrides/icon.jpg",
-    ] {
-        let Ok(mut entry) = zip.by_name(name) else {
+    // Сначала проверяем корень, затем overrides — так сохраняется привычный
+    // приоритет формата, но добавляются WebP/GIF и регистр имён не важен.
+    let candidates = ["icon.png", "icon.jpg", "icon.jpeg", "icon.webp", "icon.gif"];
+    for candidate in candidates {
+        for prefix in ["", "overrides/"] {
+            let wanted = format!("{prefix}{candidate}");
+            let Ok(mut entry) = zip.by_name(&wanted) else {
+                continue;
+            };
+            let mut bytes = Vec::new();
+            if entry.read_to_end(&mut bytes).is_err() || bytes.is_empty() {
+                continue;
+            }
+            let extension = candidate.rsplit('.').next().unwrap_or("png");
+            return Some((format!("icon.{extension}"), bytes));
+        }
+    }
+    // ZIP-архивы, созданные сторонними лаунчерами, иногда сохраняют регистр
+    // расширения/папки. Для них делаем регистронезависимый проход.
+    for index in 0..zip.len() {
+        let Ok(mut entry) = zip.by_index(index) else {
             continue;
         };
+        let name = entry.name().replace('\\', "/").to_ascii_lowercase();
+        let file_name = name.strip_prefix("overrides/").unwrap_or(name.as_str());
+        let allowed = ["icon.png", "icon.jpg", "icon.jpeg", "icon.webp", "icon.gif"];
+        if !allowed.contains(&file_name) {
+            continue;
+        }
         let mut bytes = Vec::new();
         if entry.read_to_end(&mut bytes).is_err() || bytes.is_empty() {
             continue;
         }
-        let extension = if name.ends_with(".png") { "png" } else { "jpg" };
+        let extension = file_name.rsplit('.').next().unwrap_or("png");
         return Some((format!("icon.{extension}"), bytes));
     }
     None
@@ -286,7 +306,7 @@ pub async fn install_archive(
         },
     )?;
 
-    // Иконка, если она лежит внутри архива (многие сборки кладут icon.png).
+    // Иконка, если она лежит внутри архива (PNG/JPG/WebP/GIF сохраняем как есть).
     let mut meta = meta;
     if let Some((file_name, bytes)) = read_icon(archive) {
         let dir = paths.instance_dir(&meta.id);
@@ -345,4 +365,30 @@ pub async fn install_archive(
     reporter.emit("modpack", 4, 4, format!("готово (overrides: {extracted})"));
 
     Ok(meta)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn mrpack_gif_icon_is_read_without_reencoding() {
+        let root = std::env::temp_dir().join(format!("omnispec-mrpack-gif-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let archive = root.join("icon.mrpack");
+        let gif = b"GIF89a-fixture";
+        let file = std::fs::File::create(&archive).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("OVERRIDES/ICON.GIF", options).unwrap();
+        zip.write_all(gif).unwrap();
+        zip.finish().unwrap();
+
+        let result = read_icon(&archive).unwrap();
+        assert_eq!(result.0, "icon.gif");
+        assert_eq!(result.1, gif);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

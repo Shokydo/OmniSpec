@@ -96,7 +96,8 @@ pub struct InstanceMeta {
     /// Переопределение JVM-аргументов.
     #[serde(default)]
     pub jvm_args: Option<String>,
-    /// Иконка: путь к png внутри сборки либо имя встроенной иконки.
+    /// Иконка: имя изображения (`icon.png`, `icon.gif` и т. п.) внутри сборки
+    /// либо имя встроенной иконки.
     #[serde(default)]
     pub icon: Option<String>,
     /// Описание/заметка.

@@ -1607,7 +1607,7 @@
       return;
     }
     if (action === "icon") {
-      const path = await api.pickFile("Иконка сборки", ["png", "jpg", "jpeg", "webp"]).catch(() => null);
+      const path = await api.pickFile("Иконка сборки", ["png", "jpg", "jpeg", "webp", "gif"]).catch(() => null);
       if (path) await setIconFromFile(fresh, path);
       return;
     }
@@ -1939,7 +1939,7 @@
       if (lower.endsWith(".mrpack")) { await installMrpackPath(path); continue; }
       const meta = selected();
       if (!meta) { toast("Сначала выбери сборку слева", "err"); continue; }
-      if (/\.(png|jpe?g|webp)$/.test(lower)) { await setIconFromFile(meta, path); continue; }
+      if (/\.(png|jpe?g|webp|gif)$/.test(lower)) { await setIconFromFile(meta, path); continue; }
       if (lower.endsWith(".jar") || lower.endsWith(".zip")) {
         const sub = lower.endsWith(".zip") ? "resourcepacks" : "mods";
         try {
@@ -1949,7 +1949,7 @@
         } catch (err) { toast(String(err), "err"); }
         continue;
       }
-      toast(`Файл «${name}» не подходит: нужен .mrpack, .jar, .zip или картинка`, "err");
+      toast(`Файл «${name}» не подходит: нужен .mrpack, .jar, .zip или картинка (PNG/JPG/WebP/GIF)`, "err");
     }
   }
 
@@ -4058,13 +4058,19 @@
     if (!IS_APP) return;
     const sequence = ++presenceSequence;
     const selectedMeta = selected();
-    // Игра остаётся в RPC, даже если пользователь открыл главную страницу
-    // или смотрит настройки другой сборки. При нескольких окнах предпочитаем
-    // выбранную запущенную сборку, затем первую подтверждённую сессию.
-    const playingMeta = selectedMeta && state.running.has(selectedMeta.id) ? selectedMeta
-      : state.instances.find((item) => state.running.has(item.id));
-    const meta = forceMode === "launching" ? selectedMeta : (playingMeta || selectedMeta);
-    const mode = forceMode || (playingMeta ? "playing" : "idle");
+    // Локальные Minecraft-серверы не публикуем в Discord RPC: даже если
+    // сервер запущен, он не должен вытеснять обычную игровую сборку из статуса.
+    // `account: "server"` — дополнительная защита для старого бэкенда, который
+    // ещё мог не добавить is_server в список сборок.
+    const isServerActivity = (item) => isServer(item)
+      || sessionsOf(item.id).some((session) => String(session.account || "").toLowerCase() === "server");
+    // При нескольких окнах предпочитаем выбранную запущенную игру, затем
+    // первую подтверждённую игровую сессию.
+    const selectedGame = selectedMeta && !isServerActivity(selectedMeta) ? selectedMeta : null;
+    const playingMeta = selectedGame && state.running.has(selectedGame.id) ? selectedGame
+      : state.instances.find((item) => !isServerActivity(item) && state.running.has(item.id));
+    const meta = forceMode === "launching" ? selectedGame : (playingMeta || selectedGame);
+    const mode = forceMode === "launching" && selectedGame ? "launching" : (playingMeta ? "playing" : "idle");
     if (mode === "idle") presenceStartedAt = null;
     else if (mode === "playing" && meta && sessionsOf(meta.id).length) {
       presenceStartedAt = sessionsOf(meta.id)[0].startedAt || Math.floor(Date.now() / 1000);
@@ -13127,7 +13133,7 @@
     });
     const iconFile = $("#inst-icon-file");
     if (iconFile) iconFile.addEventListener("click", async () => {
-      const path = await api.pickFile("Иконка сборки", ["png", "jpg", "jpeg", "webp"]).catch(() => null);
+      const path = await api.pickFile("Иконка сборки", ["png", "jpg", "jpeg", "webp", "gif"]).catch(() => null);
       if (path) await setIconFromFile(meta, path);
     });
     const iconReset = $("#inst-icon-reset");
@@ -13962,7 +13968,7 @@
       renderCreateModal();
     }));
     $("#c-icon-file").addEventListener("click", async () => {
-      const path = await api.pickFile("Иконка сборки", ["png", "jpg", "jpeg", "webp"]).catch(() => null);
+      const path = await api.pickFile("Иконка сборки", ["png", "jpg", "jpeg", "webp", "gif"]).catch(() => null);
       if (!path) return;
       cfg.iconFile = path;
       cfg.icon = "";

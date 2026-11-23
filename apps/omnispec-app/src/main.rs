@@ -3926,8 +3926,8 @@ fn set_instance_icon_file(
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_lowercase();
-    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp") {
-        return Err("подойдёт PNG, JPG или WebP".into());
+    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif") {
+        return Err("подойдёт PNG, JPG, WebP или GIF".into());
     }
     let mut meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let dir = state.paths.instance_dir(&instance_id);

@@ -319,13 +319,40 @@ fn loader_from_uid(uid: &str) -> Option<&'static str> {
 }
 
 fn icon_in(folder: &Path) -> Option<String> {
-    for name in ["icon.png", "icon.jpg", "icon.jpeg", "icon.webp"] {
+    for name in ["icon.png", "icon.jpg", "icon.jpeg", "icon.webp", "icon.gif"] {
         let path = folder.join(name);
         if path.is_file() {
             return Some(path.display().to_string());
         }
     }
-    None
+    // На Linux имена чувствительны к регистру, а сторонние лаунчеры иногда
+    // создают `icon.GIF`. Не теряем такую иконку при сканировании профилей.
+    std::fs::read_dir(folder).ok()?.flatten().find_map(|entry| {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if path.is_file() && icon_file_name(&name).is_some() {
+            Some(path.display().to_string())
+        } else {
+            None
+        }
+    })
+}
+
+/// Разрешённое имя файла иконки в корне профиля/архива.
+/// Внутрь метаданных не пропускаем произвольные пути и расширения.
+fn icon_file_name(value: &str) -> Option<String> {
+    let path = Path::new(value);
+    if path.components().count() != 1
+        || !matches!(path.components().next(), Some(std::path::Component::Normal(_)))
+        || !path.file_stem()?.to_string_lossy().eq_ignore_ascii_case("icon")
+    {
+        return None;
+    }
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif") {
+        return None;
+    }
+    path.file_name().map(|name| name.to_string_lossy().into_owned())
 }
 
 /// Все сборки, найденные в других лаунчерах.
@@ -839,7 +866,7 @@ pub fn import_external(
             .and_then(|value| value.to_str())
             .map(|value| value.to_lowercase())
         {
-            if matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+            if matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif") {
                 let file_name = format!("icon.{extension}");
                 if std::fs::copy(&icon_path, paths.instance_dir(&meta.id).join(&file_name)).is_ok() {
                     meta.icon = Some(file_name);
@@ -955,10 +982,11 @@ pub fn import_zip(
         let mut buffer = Vec::new();
         entry.read_to_end(&mut buffer)?;
         // Картинка сборки: кладём её как иконку, а не как файл в игровой папке.
-        if relative.to_string_lossy() == "icon.png" || relative.to_string_lossy() == "icon.jpg" {
-            let ext = if relative.to_string_lossy().ends_with("png") { "png" } else { "jpg" };
-            icon = Some((format!("icon.{ext}"), buffer));
-            continue;
+        if relative.components().count() == 1 {
+            if let Some(file_name) = icon_file_name(&relative.to_string_lossy()) {
+                icon = Some((file_name, buffer));
+                continue;
+            }
         }
         let dest = target.join(&relative);
         if let Some(parent) = dest.parent() {
@@ -1145,11 +1173,15 @@ pub fn export_instance(
             }
         }
     }
-    // иконка сборки — рядом с файлами, чтобы форматы её подхватили
+    // Иконка сборки — рядом с файлами, чтобы форматы её подхватили.
+    // Не перекодируем GIF и не сводим все форматы к PNG: анимация должна
+    // пережить экспорт и последующий импорт без потери кадров.
     if wanted("icon") {
-        let icon = paths.instance_dir(id).join("icon.png");
-        if icon.is_file() {
-            entries.push(("icon.png".to_string(), icon));
+        if let Some(file_name) = meta.icon.as_deref().and_then(icon_file_name) {
+            let icon = paths.instance_dir(id).join(&file_name);
+            if icon.is_file() {
+                entries.push((file_name, icon));
+            }
         }
     }
 
@@ -1202,4 +1234,81 @@ pub fn export_instance(
     zip.finish()
         .map_err(|error| format!("архив не закрылся: {error}"))?;
     Ok(out.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::instances::{self, CreateInstanceRequest};
+
+    fn fixture_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("omnispec-transfer-{label}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn icon_file_name_accepts_gif_but_not_paths_or_unknown_formats() {
+        assert_eq!(icon_file_name("icon.gif").as_deref(), Some("icon.gif"));
+        assert_eq!(icon_file_name("icon.GIF").as_deref(), Some("icon.GIF"));
+        assert!(icon_file_name("nested/icon.gif").is_none());
+        assert!(icon_file_name("pack.gif").is_none());
+        assert!(icon_file_name("icon.bmp").is_none());
+    }
+
+    #[test]
+    fn zip_export_and_import_keep_gif_icon_bytes() {
+        let root = fixture_root("gif-roundtrip");
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::new(&root).unwrap();
+        let meta = instances::create(
+            &paths,
+            CreateInstanceRequest {
+                name: "GIF roundtrip".into(),
+                mc_version: "1.21.1".into(),
+                loader: Loader::Vanilla,
+                icon: Some("icon.gif".into()),
+                notes: String::new(),
+                source: Some("manual".into()),
+                source_url: None,
+                id: None,
+                category: None,
+                memory_mb: None,
+                java_path: None,
+                game_dir: None,
+            },
+        )
+        .unwrap();
+        let gif = b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff!\xf9\x04\x00\0\0\0\0,\0\0\0\0\x01\0\x01\0\0\x02\x02D\x01\0;";
+        std::fs::write(paths.instance_dir(&meta.id).join("icon.gif"), gif).unwrap();
+        let game = instances::ensure_game_dir(&paths, &meta).unwrap();
+        std::fs::write(game.join("options.txt"), b"demo").unwrap();
+
+        let archive = root.join("roundtrip.zip");
+        export_instance(
+            &paths,
+            &meta.id,
+            &archive,
+            "zip",
+            Some(&["icon".to_string()]),
+        )
+        .unwrap();
+        let mut zip = zip::ZipArchive::new(File::open(&archive).unwrap()).unwrap();
+        let mut icon = Vec::new();
+        zip.by_name("icon.gif").unwrap().read_to_end(&mut icon).unwrap();
+        assert_eq!(icon, gif);
+        assert!(zip.by_name("icon.png").is_err());
+        drop(zip);
+
+        let imported = import_zip(
+            &paths,
+            archive.to_str().unwrap(),
+            Some("Imported GIF"),
+            "1.21.1",
+            "vanilla",
+            "",
+        )
+        .unwrap();
+        assert_eq!(imported.icon.as_deref(), Some("icon.gif"));
+        assert_eq!(std::fs::read(paths.instance_dir(&imported.id).join("icon.gif")).unwrap(), gif);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

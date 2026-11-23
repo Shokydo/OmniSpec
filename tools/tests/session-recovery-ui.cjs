@@ -13,10 +13,10 @@ const server = http.createServer((req,res)=>{
     res.writeHead(200,{'Content-Type':type}).end(fs.readFileSync(file));
   } catch {res.writeHead(404).end();}
 });
-async function pageWith(browser, race=false) {
+async function pageWith(browser, race=false, withServer=false) {
   const page=await browser.newPage({viewport:{width:1280,height:800}});
   const errors=[]; page.on('pageerror',e=>errors.push(String(e)));
-  await page.addInitScript((race)=>{
+  await page.addInitScript(({race,withServer})=>{
     const data=window.__sessionsTest={
       events:{}, presence:[], calls:[], race, release:null,
       list:[
@@ -49,6 +49,8 @@ async function pageWith(browser, race=false) {
           case 'search_modrinth': return {hits:[],total_hits:0};
           case 'list_java': return [];
           case 'instance_path': return '/test';
+          case 'server_snapshot': return {error:null,running:true,root:'/test/server',config:{kernel:'Vanilla',mc_version:'1.21.1',port:25565,memory_mb:4096},players:[],log_tail:[],eula_accepted:true};
+          case 'server_addons': return [];
           default:return null;
         }
       },
@@ -58,7 +60,11 @@ async function pageWith(browser, race=false) {
       }
     };
     window.__TAURI__={core:{invoke:(cmd,args)=>data.invoke(cmd,args),convertFileSrc:p=>p},event:{listen:async(name,cb)=>{data.events[name]=cb;return ()=>{};}}};
-  },race);
+    if (withServer) {
+      data.list.push({id:'server-one',name:'Тестовый сервер',mc_version:'1.21.1',loader:{type:'vanilla'},icon:null,created:1,is_server:true,kind:'server',server:{kernel:'Vanilla',mc_version:'1.21.1'}});
+      data.running.push({instance_id:'server-one',run_id:'server-one#server',account:'server',started_at:1700000005});
+    }
+  },{race,withServer});
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   return {page,errors};
 }
@@ -100,6 +106,26 @@ async function pageWith(browser, race=false) {
       assert.deepEqual(sessions,[['alpha',['alpha#b']],['beta',['beta#c']]],'a stale first response must not resurrect an exited run or lose other running games');
       assert.deepEqual(errors,[]); await page.close();
       console.log('SESSION_UI_RACE: stale snapshot ignored and retried without losing other live games');
+    }
+    {
+      const {page,errors}=await pageWith(browser,false,true);
+      await page.waitForFunction(()=>window.omnispecDebug?.state.sessions.has('server-one') && window.__sessionsTest.presence.some(x=>x.mode==='playing'));
+      await page.locator('.instance[data-id="server-one"]').first().click();
+      await page.waitForFunction(()=>window.__sessionsTest.presence.at(-1)?.details==='Alpha' && window.__sessionsTest.presence.at(-1)?.mode==='playing');
+      assert.notEqual((await page.evaluate(()=>window.__sessionsTest.presence.at(-1))).details,'Тестовый сервер');
+      await page.evaluate(()=>window.__sessionsTest.exit('alpha#a','alpha'));
+      await page.waitForFunction(()=>window.__sessionsTest.presence.at(-1)?.details==='Alpha');
+      await page.evaluate(()=>window.__sessionsTest.exit('alpha#b','alpha'));
+      await page.waitForFunction(()=>window.__sessionsTest.presence.at(-1)?.details==='Beta');
+      await page.evaluate(()=>window.__sessionsTest.exit('beta#c','beta'));
+      await page.waitForFunction(()=>window.omnispecDebug.state.running.has('server-one') && window.__sessionsTest.presence.at(-1)?.mode==='idle');
+      const idle=await page.evaluate(()=>window.__sessionsTest.presence.at(-1));
+      assert.equal(idle.details,'OmniSpec');
+      assert.notEqual(idle.details,'Тестовый сервер');
+      await page.evaluate(()=>window.__sessionsTest.exit('server-one#server','server-one'));
+      await page.waitForFunction(()=>window.omnispecDebug.state.running.size===0 && window.__sessionsTest.presence.at(-1)?.mode==='idle');
+      assert.deepEqual(errors,[]); await page.close();
+      console.log('SERVER_RPC_UI: server sessions never replace a game in Discord presence and do not keep it active');
     }
   } finally {await browser.close();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -261,6 +261,21 @@ mod tests {
         assert_eq!((thumb.width(), thumb.height()), (256, 171));
     }
 
+    #[test]
+    fn gif_icon_is_read_for_rpc_without_changing_the_original_bytes() {
+        let root = std::env::temp_dir().join(format!("omnispec-rpc-gif-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::new(&root).unwrap();
+        let mut m = meta();
+        m.icon = Some("icon.gif".into());
+        std::fs::create_dir_all(paths.instance_dir(&m.id)).unwrap();
+        let gif = b"GIF89a-fixture";
+        std::fs::write(paths.instance_dir(&m.id).join("icon.gif"), gif).unwrap();
+        let local = read_local(&paths, &m).unwrap().unwrap();
+        assert_eq!(local.bytes, gif);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[tokio::test]
     #[ignore = "требует живого Modrinth API"]
     async fn real_project_icon_matches_downloaded_bytes() {
