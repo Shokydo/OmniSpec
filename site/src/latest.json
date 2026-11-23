@@ -1,17 +1,17 @@
 {
- "version": "0.51.5",
+ "version": "0.51.6",
  "published_at": "2026-11-23",
  "downloads": 815,
  "setup": {
   "name": "OmniSpec-Setup.exe",
-  "size": 17684480
+  "size": 17710080
  },
  "portable": {
   "name": "OmniSpec.exe",
-  "size": 13833216
+  "size": 13858816
  },
  "linux": {
   "name": "OmniSpec",
-  "size": 16093176
+  "size": 16114680
  }
 }
