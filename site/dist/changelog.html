@@ -763,7 +763,7 @@ h1 .w.in { opacity: 1; transform: none; }
       <a href="https://github.com/Shokydo/OmniSpec">GitHub</a>
       <a class="btn btn-primary" href="https://github.com/Shokydo/OmniSpec/releases/latest/download/OmniSpec-Setup.exe">
         <svg viewBox="0 0 24 24"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16 6.3 10.3l1.4-1.4L11 12.2V3ZM4 18h16v2H4v-2Z"/></svg>
-        Скачать 0.44.0
+        Скачать 0.51.6
       </a>
     </nav>
   </div>
@@ -776,7 +776,7 @@ h1 .w.in { opacity: 1; transform: none; }
       <div class="kicker">список изменений</div>
       <h2>Все версии OmniSpec</h2>
       <p>Каждый релиз — тег в GitHub, из которого автоматически собираются установщик, портативная версия и Linux-бинарник.
-      Текущая версия — <b>0.44.0</b> от 18 ноября 2026.</p>
+      Текущая версия — <b>0.51.6</b> от 23 ноября 2026.</p>
     </div>
 
     <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:20px">
@@ -789,7 +789,435 @@ h1 .w.in { opacity: 1; transform: none; }
     </div>
 
     <div style="display:grid;gap:2px">
-      <h3 class="day" data-day>15 ноября 2026</h3>
+      <h3 class="day" data-day>23 ноября 2026</h3>
+<article class="rel" data-rel id="v0.51.6">
+  <div class="ver">v0.51.6<span>23 ноября 2026</span></div>
+  <div class="body"><ul><li>В лаунчере появился конструктор интерфейса с изменением порядка крупных блоков, ширины сайдбара, отступов и плотности карточек.</li><li>Сайдбар можно перенести вправо, а панель действий, вкладки и рабочую область — скрыть или переставить.</li><li>Раскладка сохраняется между запусками и не зависит от разрешения экрана.</li><li>Layout и пользовательский CSS сохраняются через настройки лаунчера, а темы можно переносить между установками.</li><li>Добавлен редактор пользовательского CSS с живым предпросмотром и стабильными селекторами data-os.</li><li>Добавлены пресеты «Минимализм», «Стекло» и «Неон», а также импорт и экспорт тем в формате .omtheme.</li><li>Пользовательские темы не выполняют JavaScript и не подключают внешний CSS через @import.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.51.6">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.51.5...v0.51.6">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.51.5">
+  <div class="ver">v0.51.5<span>23 ноября 2026</span></div>
+  <div class="body"><ul><li>Большие анимированные GIF-иконки сборок теперь автоматически уменьшаются под лимит загрузки Discord Rich Presence.</li><li>При сжатии сохраняется анимация: кадры могут уменьшаться и прореживаться, а задержки объединяются без ускорения воспроизведения.</li><li>Итоговый GIF для RPC ограничен размером 16 МБ и загружается с MIME image/gif.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.51.5">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.51.4...v0.51.5">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.51.4">
+  <div class="ver">v0.51.4<span>23 ноября 2026</span></div>
+  <div class="body"><ul><li>Анимированные GIF-иконки сборок теперь не превращаются в статичный первый кадр при подготовке маленькой картинки Discord Rich Presence.</li><li>GIF уменьшается покадрово, сохраняет задержки и загружается как image/gif.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.51.4">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.51.3...v0.51.4">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.51.3">
+  <div class="ver">v0.51.3<span>23 ноября 2026</span></div>
+  <div class="body"><ul><li>Запущенные локальные Minecraft-серверы больше не подменяют обычную игровую сборку в Discord Rich Presence.</li><li>При отсутствии обычной игры серверная сессия не продлевает игровой статус — RPC возвращается в idle.</li><li>Пользовательские иконки сборок принимают GIF через проводник и drag-and-drop.</li><li>Анимированные иконки сохраняются как icon.gif и отображаются в списке, шапке и настройках сборки.</li><li>Импорт и экспорт ZIP/MRPACK сохраняют GIF без перекодирования.</li><li>GIF поддержан в подготовке локальной иконки для Discord.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.51.3">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.51.2...v0.51.3">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.51.2">
+  <div class="ver">v0.51.2<span>23 ноября 2026</span></div>
+  <div class="body"><ul><li>Категория «Запущенные» закреплена сверху списка сборок и остаётся доступной при прокрутке.</li><li>Карточки серверов переработаны: иконка, название, ядро, версия Minecraft, порт, статус и отдельные действия.</li><li>Добавлены кнопки «Запуск», «Перезапуск», «Стоп» и подтверждаемая аварийная команда «Килл».</li><li>В обзор сервера добавлены подробная информация о конфигурации и быстрые действия.</li><li>Внутри сервера появилась вкладка «Загрузить» с поиском плагинов на Modrinth.</li><li>Перед установкой можно выбрать совместимую версию и точный JAR-файл.</li><li>Backend повторно проверяет проект, версию, тип, Minecraft, имя файла, размер и SHA-1.</li><li>npm test в tools/tests</li><li>node tools/tests/server-ui.cjs</li><li>cargo check --locked -p omnispec-app --tests -j1</li><li>cargo test --locked -p omnispec-app -j1</li><li>cargo test --locked -p omnispec-core -j1</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.51.2">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.51.1...v0.51.2">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.51.1">
+  <div class="ver">v0.51.1<span>23 ноября 2026</span></div>
+  <div class="body"><ul><li>Иконки серверов теперь приводятся к PNG 64×64 и записываются атомарно через уникальный временный файл; повреждённая или подменённая symlink-путь не попадает в server-icon.png.</li><li>Установка модов и плагинов из серверного каталога повторно проверяет Modrinth project/version/file, тип аддона, Minecraft, загрузчик, URL, имя JAR, границы папок и symlink-защиту на backend.</li><li>После загрузки JAR проверяются обычный файл, размер и SHA-1; при несовпадении файл удаляется.</li><li>В интерфейсе добавлены выбор server icon и встроенный выбор совместимой версии аддона; регрессионный UI-тест покрывает запуск сервера, закреплённую группу, защищённые файлы, бэкап и каталог.</li><li>cargo test --locked -p omnispec-app -j1</li><li>cargo test --locked -p omnispec-core -j1</li><li>npm test в tools/tests</li><li>cargo build --locked --release -p omnispec-app -j1</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.51.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.51.0...v0.51.1">что изменилось</a></div></div>
+</article>
+<h3 class="day" data-day>22 ноября 2026</h3>
+<article class="rel" data-rel id="v0.51.0">
+  <div class="ver">v0.51.0<span>22 ноября 2026</span></div>
+  <div class="body"><ul><li>Серверные инстансы: Paper, Purpur, Spigot, Folia, Fabric, Forge, NeoForge, Vanilla, Velocity, Waterfall, BungeeCord и custom/imported servers.</li><li>Создание, импорт, сканирование, EULA, запуск/остановка, консоль, файлы, аддоны, Modrinth, бэкапы, восстановление и синхронизация серверов.</li><li>Защиты серверных операций: проверка корней и symlink, безопасные относительные пути, ограничения архивов, atomic backup writes и блокировки операций во время запуска.</li><li>Опциональное сворачивание окна в системный трей.</li><li>Тихий режим при скрытом окне: UI-анимации и частые UI-обновления приостанавливаются, Discord Rich Presence и фоновые серверные процессы продолжают работать.</li><li>Настройка добавлена в параметры и отдельным шагом в мастер первого запуска.</li><li>Полный UI regression suite.</li><li>cargo test --locked -p omnispec-core.</li><li>cargo check --locked -p omnispec-app --tests.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.51.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.50.8...v0.51.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.50.8">
+  <div class="ver">v0.50.8<span>22 ноября 2026</span></div>
+  <div class="body"><ul><li>Во вкладке «Загрузить» системные списки заменены на тёмные стилизованные меню в интерфейсе OmniSpec.</li><li>Для меню типа проекта, версии Minecraft, загрузчика и сортировки добавлено управление клавиатурой: стрелки, Home/End, Enter, Escape и Tab.</li><li>Меню ограничивают высоту, прокручиваются, открываются вверх у нижнего края окна и закрываются кликом снаружи.</li><li>Во вкладку «Загрузить» добавлена панель фильтров в стиле главной страницы каталога.</li><li>Добавлены категории для модов, сборок, ресурспаков и шейдеров с корректными фильтрами Modrinth и CurseForge.</li><li>Категории сохраняются отдельно для каждого источника и типа проекта и передаются в запросы поиска.</li><li>Изменения не затрагивают пользовательские сборки, настройки и установленные файлы.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.50.8">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.50.7...v0.50.8">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.50.7">
+  <div class="ver">v0.50.7<span>22 ноября 2026</span></div>
+  <div class="body"><ul><li>Выпадающее окно выбора версии Minecraft полностью стилизовано под интерфейс OmniSpec: прокрутка, ограничение по высоте, открытие вверх у нижнего края и управление с клавиатуры.</li><li>В фильтры каталога добавлены категории модов для Modrinth и CurseForge.</li><li>Категории модов и сборок сохраняются раздельно для каждого источника и не смешиваются при переключении типа каталога.</li><li>Фильтры версии Minecraft, загрузчика и категории передаются в запросы поиска без изменения пользовательских сборок, настроек и данных.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.50.7">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.50.6...v0.50.7">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.50.6">
+  <div class="ver">v0.50.6<span>22 ноября 2026</span></div>
+  <div class="body"><ul><li>В каталог готовых сборок и модов добавлен фильтр по версии Minecraft.</li><li>Фильтр версии работает для поиска в Modrinth и CurseForge и передаёт точную выбранную версию в запрос.</li><li>Фильтр доступен одновременно для модов и сборок; выбранная версия сохраняется при переключении типа каталога и источника.</li><li>Список поддерживает релизы, pre-release и snapshot-версии Minecraft.</li><li>Фильтры загрузчика и категорий сборок сохранены; пользовательские сборки, настройки и данные не изменяются.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.50.6">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.50.5...v0.50.6">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.50.5">
+  <div class="ver">v0.50.5<span>22 ноября 2026</span></div>
+  <div class="body"><ul><li>Исправлен счётчик модов сборки: показывается только количество включённых модов без переноса.</li><li>«Обновить всё» теперь последовательно обновляет все найденные моды, ждёт каждую операцию, блокирует повторный запуск и показывает частичные ошибки.</li><li>Обновления Modrinth фильтруются по точной версии Minecraft и загрузчику сборки.</li><li>Добавлены подтверждение, preflight совместимости и живой прогресс при смене версии Minecraft, включая обновление и понижение версии.</li><li>Пользовательские данные, настройки, миры и содержимое сборки сохраняются.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.50.5">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.50.4...v0.50.5">что изменилось</a></div></div>
+</article>
+<h3 class="day" data-day>21 ноября 2026</h3>
+<article class="rel" data-rel id="v0.50.4">
+  <div class="ver">v0.50.4<span>21 ноября 2026</span></div>
+  <div class="body"><ul><li>Исправлено просвечивание скина через непрозрачную часть плаща в 3D-превью и миниатюрах.</li><li>Гардероб плащей получил центральную карусель: выбранный вариант находится по центру, соседние варианты видны по бокам, а колесо мыши переключает варианты.</li><li>Добавлена отдельная карточка «Без плаща» для явного отключения плаща.</li><li>Добавлен переключатель представления гардероба «Список ↔ Плитка»; выбранный режим сохраняется вместе с настройками.</li><li>Обновление не удаляет пользовательские скины, избранные образы и остальные данные профиля.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.50.4">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.50.3...v0.50.4">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.50.3">
+  <div class="ver">v0.50.3<span>21 ноября 2026</span></div>
+  <div class="body"><ul><li>Исправлена компоновка настроек звука на очень узких окнах и при масштабе 150%: подписи, переключатели и ползунки больше не создают горизонтальное переполнение.</li><li>Кнопки вариантов звука и элементы пользовательских WAV-файлов переносятся целиком; выбор звука и вертикальная прокрутка длинной формы сохранены.</li><li>Обновление не удаляет пользовательские настройки и файлы.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.50.3">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.50.2...v0.50.3">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.50.2">
+  <div class="ver">v0.50.2<span>21 ноября 2026</span></div>
+  <div class="body"><ul><li>Дополнительно исправлена компоновка индивидуальных звуковых настроек на узких окнах и при увеличенном масштабе: элементы управления переносятся целиком, без горизонтального переполнения.</li><li>Выбор вариантов звука, пользовательские WAV-файлы и вертикальная прокрутка длинной формы сохранены.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.50.2">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.50.1...v0.50.2">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.50.1">
+  <div class="ver">v0.50.1<span>21 ноября 2026</span></div>
+  <div class="body"><ul><li>Исправлено расположение вариантов звука: кнопки переносятся на новые строки и больше не выходят за край окна.</li><li>Убрана лишняя горизонтальная полоса прокрутки в списке разделов настроек; вертикальная прокрутка длинных настроек сохранена.</li><li>Исправления работают при разных размерах окна и масштабах интерфейса. Настройки и пользовательские данные при обновлении сохраняются.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.50.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.50.0...v0.50.1">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.50.0">
+  <div class="ver">v0.50.0<span>21 ноября 2026</span></div>
+  <div class="body"><ul><li>На главной строка «Фильтры | Готовые сборки | Моды», поиск и инструменты закрепляются при прокрутке каталога. Фильтры по умолчанию свёрнуты; при раскрытии панель появляется слева, а результаты сужаются. Загрузчик находится вверху панели.</li><li>Добавлены плавная прокрутка колёсиком, мягкое появление окон и страниц и движущийся индикатор активной вкладки. Учитывается системный режим уменьшения движения.</li><li>Общая громкость звуков увеличена до 200%, добавлены новые варианты. В режиме «Кастом» можно отдельно назначить звук и громкость для нажатия, переключателя, смены вкладки, открытия и закрытия окна, успеха и ошибки. Поддерживаются WAV, MP3, OGG и FLAC размером до 5 МБ; доступность кодеков зависит от системы. Файлы копируются в папку лаунчера, неназначенные события беззвучны.</li><li>Добавлена история встроенных и собственных фонов с выбором и удалением записей. Удаление записи не удаляет файл и не меняет текущий фон; изображения, GIF и видео остаются доступными после перезапуска.</li><li>При первом запуске можно выбрать один из пяти языков. При обычном обновлении мастер первоначальной настройки повторно не открывается; прежние настройки и данные сохраняются.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.50.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.15...v0.50.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.15">
+  <div class="ver">v0.49.15<span>21 ноября 2026</span></div>
+  <div class="body"><ul><li>Добавлена отдельная вкладка «Настройки → Аватар»: модель игрока находится слева, избранные образы и библиотека скинов — справа, гардероб плащей — снизу. Управление аккаунтами остаётся во вкладке «Профиль».</li><li>При масштабе 100% основная компоновка помещается в окно от 1080×640; длинная библиотека скинов прокручивается внутри своего окна. Позиции списков сохраняются при перерисовке и переходах между настройками.</li><li>Гардероб плащей показывает объёмные 3D-миниатюры: выбирай плащ стрелками, колёсиком, тачпадом, клавиатурой или нажатием на карточку. Лента прокручивается горизонтально. После короткой паузы применяется последний выбор; при ошибке возвращается подтверждённый вариант. Доступны только официальные плащи лицензионного аккаунта; выбор меняет плащ в профиле Minecraft.</li><li>Сохранены выбор wide/slim, поворот модели и загрузка сразу нескольких PNG 64×64 или 64×32. Выбранный скин отправляется в профиль только после нажатия «Применить к аккаунту». Удаление скина из библиотеки не стирает его PNG и избранные образы.</li><li>Ранее загруженные скины, избранное, настройки и сборки сохраняются при обновлении. Вкладка переведена на пять языков; часть переводов машинная.</li><li>Напоминание для старых версий: интеграция Wallpaper Engine удалена ранее. Исходные файлы и старые настройки не удаляются; при необходимости выбери другой фон.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.15">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.14...v0.49.15">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.14">
+  <div class="ver">v0.49.14<span>21 ноября 2026</span></div>
+  <div class="body"><ul><li>В «Настройки → Оформление» добавлены иконки лаунчера «Звездный взрыв» и «Звезда». Выбор сохраняется после перезапуска и применяется к шапке, значку окна, панели задач и большому изображению Discord Rich Presence. Прежние иконки остаются доступны.</li><li>Подсказка «Язык сохраняется автоматически и применяется сразу» стала серой, как другие пояснения в настройках.</li><li>Это полная сборка для Windows и Linux: настройки, скины, избранное и сборки сохраняются при обновлении. Доступны пять языков и собственные фоны из файлов и прямых ссылок; часть переводов машинная.</li><li>Напоминание для пользователей старых версий: интеграция Wallpaper Engine удалена в предыдущем выпуске. Исходные файлы и старые настройки не удаляются; при необходимости выбери другой фон.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.14">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.13...v0.49.14">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.13">
+  <div class="ver">v0.49.13<span>21 ноября 2026</span></div>
+  <div class="body"><ul><li>В «Настройки → Оформление» добавлен язык интерфейса: русский, беларуская, қазақша, українська или English. Выбор применяется сразу, сохраняется после перезапуска и работает без сети. Часть переводов машинная и ещё нуждается в языковой вычитке.</li><li>Подписи иконок стран показаны как Россия, Беларусь, Қазақстан, Україна и USA; пояснение под ними стало серым. Выбор иконки и её работа в окне и Discord не меняются.</li><li>В профиле сохраняются позиции основной прокрутки настроек и списка скинов при обновлении содержимого.</li><li>Интеграция Wallpaper Engine удалена. Если раньше был выбран фон Workshop, выбери другой: исходные файлы Steam и старые настройки не удаляются, обои рабочего стола не меняются.</li><li>Собственный фон можно выбрать из файла, загрузить по прямой HTTP(S)-ссылке или со страницы отдельного изображения/анимации Imgur. Поддерживаются PNG, JPG, WebP, GIF, MP4 и WebM до 512 МБ; видео проигрывается без звука. Другие страницы и альбомы могут не поддерживаться.</li><li>Имена, пути, скины, сборки и другие пользовательские данные сохраняются и не переводятся. При ошибке сохранения языка или загрузки фона прежний выбор не теряется.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.13">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.12...v0.49.13">что изменилось</a></div></div>
+</article>
+<h3 class="day" data-day>20 ноября 2026</h3>
+<article class="rel" data-rel id="v0.49.12">
+  <div class="ver">v0.49.12<span>20 ноября 2026</span></div>
+  <div class="body"><ul><li>В «Настройки → Оформление» добавлен выбор иконки лаунчера: Россия, Беларусь, Казахстан, Украина, США или исходная иконка.</li><li>Выбор сразу применяется в шапке окна, к значку окна и панели задач Windows, а также к большой картинке Discord Rich Presence. Иконка сохраняется после перезапуска; её можно вернуть к исходной.</li><li>Маленькая иконка сборки и разрешение на публикацию локальных изображений не меняются. Для статуса нужен включённый Discord RPC и работающий Discord.</li><li>Настройки сохраняются с атомарной заменой файла; при ошибке записи выбор и нативный значок возвращаются к предыдущему варианту.</li><li>Звук сцен Wallpaper Engine по-прежнему отдельно в OmniSpec не регулируется; звук обоев рабочего стола не меняется.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.12">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.11...v0.49.12">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.11">
+  <div class="ver">v0.49.11<span>20 ноября 2026</span></div>
+  <div class="body"><ul><li>Значки в кнопках, файловом дереве, карточках каталога и окнах выровнены по центру. Буквенные заглушки проектов больше не обрезаются.</li><li>Исправлены расположение и форма некоторых встроенных иконок, включая сердце, молнию, обновление и стрелку.</li><li>Окно «Все сборки» помещается на экране при увеличении масштаба интерфейса до 150%.</li><li>Звук сцен Wallpaper Engine по-прежнему нельзя отключить только в OmniSpec; звук обоев рабочего стола не меняется.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.11">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.10...v0.49.11">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.10">
+  <div class="ver">v0.49.10<span>20 ноября 2026</span></div>
+  <div class="body"><ul><li>В настройках фона можно отключить загрузку Wallpaper Engine в OmniSpec: поиск, видео и захват своей сцены останавливаются, выбранный проект сохраняется и восстанавливается при повторном включении. Обои рабочего стола не переключаются.</li><li>Добавлен отдельный звук видео Workshop в OmniSpec; он не меняет звуки интерфейса и рабочего стола. Звук сцен воспроизводит сам Wallpaper Engine и отдельно для окна OmniSpec пока не регулируется: глобальное отключение звука обоев не используется.</li><li>На главной строка «Готовые сборки / Моды» остаётся на месте при смене типа, источника и вида. Поиск занимает доступную ширину.</li><li>В недавних сборках время игры расположено рядом с названием. Длинные названия и метаданные сокращаются без пересечения с таймером.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.10">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.9...v0.49.10">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.9">
+  <div class="ver">v0.49.9<span>20 ноября 2026</span></div>
+  <div class="body"><ul><li>Улучшено обновление Microsoft/Minecraft-входа: учитывается срок именно игрового токена, сохраняется обновлённый вход, а ошибки сети и профиля больше не выдаются за отсутствие игры. Токены не передаются интерфейсу аккаунтов.</li><li>Аватар лицензионного аккаунта загружается из его профиля Minecraft. Запоздавшие ответы после переключения аккаунта не подменяют выбранный скин или плащ; локальный предпросмотр не меняет аватар до применения. Ошибки скинов и плащей показываются в профиле.</li><li>На Windows сцены Wallpaper Engine можно показывать фоном OmniSpec через захват вспомогательного окна запущенного Wallpaper Engine. Проверяется цифровая подпись программы; окно или индикатор захвата могут быть видны. При остановке потока доступно восстановление, при неподвижном кадре проверьте правила паузы Wallpaper Engine. Web-обои и приложения по-прежнему открываются отдельно. Совместимость конкретных сцен зависит от Windows и Wallpaper Engine.</li><li>Улучшены установка модов Modrinth и CurseForge и работа каталога: уменьшен риск переполнения стека при загрузке, уточнены совместимость, фильтры и раскладка при разных масштабах интерфейса. Если проблема закрытия лаунчера повторится, её конкретную причину потребуется определить по коду завершения и шагам.</li><li>При повторном открытии лаунчера сохраняется информация о ещё работающих игровых процессах; улучшены остановка сессий и защита учёта времени от двойной записи.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.9">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.8...v0.49.9">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.8">
+  <div class="ver">v0.49.8<span>20 ноября 2026</span></div>
+  <div class="body"><ul><li>Переработан профиль: аккаунты, избранные образы, модель игрока, официальные плащи и библиотека скинов расположены в отдельных блоках.</li><li>Несколько PNG-скинов можно выбрать и загрузить за один раз; ранее записанные скины и избранные образы сохраняются. В старых версиях избранное могло не записаться в файл: уже отсутствующие данные восстановить нельзя. Смена скина и плаща работает для лицензионного Microsoft-аккаунта.</li><li>В качестве фона лаунчера поддерживаются картинки, анимированные GIF и видео MP4/WebM без звука. Для видео нужны подходящие системные кодеки; на Linux может потребоваться пакет GStreamer с H.264.</li><li>Добавлен поиск локальной библиотеки Wallpaper Engine и Steam Workshop, включая другие диски и выбранную папку. Поддерживаются Workshop-ссылки и прямые ссылки на файлы обоев.</li><li>Видео и GIF из проектов можно показывать внутри лаунчера. Сцены, web-обои и приложения запускаются отдельно через установленный Wallpaper Engine в Windows; они не встраиваются в фон OmniSpec.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.8">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.7...v0.49.8">что изменилось</a></div></div>
+</article>
+<h3 class="day" data-day>19 ноября 2026</h3>
+<article class="rel" data-rel id="v0.49.7">
+  <div class="ver">v0.49.7<span>19 ноября 2026</span></div>
+  <div class="body"><ul><li>На главной можно переключаться между готовыми сборками и модами Modrinth или CurseForge. Добавлены фильтр загрузчика и категории модпаков; поиск и фильтры работают вместе с пагинацией.</li><li>При установке мода с главной можно явно выбрать существующую совместимую сборку либо создать новую с подходящими версиями Minecraft и загрузчика. Создание и установка начинаются только после подтверждения; выбранная версия не подменяется другой.</li><li>Совместимость файла проверяется перед установкой. Уже существующие файлы с таким именем не перезаписываются; если загрузка или подготовка профиля завершилась ошибкой, лаунчер сообщает об этом и сохраняет созданную сборку.</li><li>В карточках проектов обоих каталогов добавлены вкладка всех изображений и увеличенный просмотр с переключением и управлением с клавиатуры.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.7">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.6...v0.49.7">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.6">
+  <div class="ver">v0.49.6<span>19 ноября 2026</span></div>
+  <div class="body"><ul><li>В настройках оформления можно выбрать начальную вкладку сборки. Выбор сохраняется после перезапуска; при работе вкладки по-прежнему можно переключать вручную.</li><li>Исправлен запуск через контекстное меню: при выборе другой сборки лаунчер переключает её целиком, включая заголовок и содержимое вкладки.</li><li>В Modrinth и CurseForge отмечаются установленные моды любой версии, в том числе импортированные, переименованные и выключенные JAR. Файлы сверяются по содержимому; отметка означает наличие, а не актуальность или совместимость.</li><li>Ползунки памяти учитывают физическую ОЗУ компьютера и предупреждают о запасе для системы. Ранее сохранённые значения за пределами ползунка не изменяются без действия пользователя; если объём памяти определить не удалось, это указано в подсказке.</li><li>Диалоги и длинные контекстные меню остаются доступны при увеличенном масштабе интерфейса. При изменении размера окна фоновые эффекты и след курсора больше не сбрасываются.</li><li>Исправлен выбор файла для автообновления на Linux: лаунчер не принимает установщик за новую версию приложения. Установщик Linux в релизе называется omnispec-setup.bin.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.6">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.5...v0.49.6">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.5">
+  <div class="ver">v0.49.5<span>19 ноября 2026</span></div>
+  <div class="body"><ul><li>Вкладка «Скачать моды» переименована в «Загрузить». Поясняющая надпись об обводке убрана; актуальные установленные моды по-прежнему отмечаются.</li><li>Modrinth и CurseForge переключаются кнопками с фирменными значками. Поисковая фраза и совместимые фильтры сохраняются при переключении, а особые возможности CurseForge остаются доступными.</li><li>Выбранные «Список» или «Плитка» и размер плиток общие для обоих источников и запоминаются после перезапуска.</li><li>Результаты модов и готовых сборок обновляются во время ввода, без обязательного Enter. Опоздавшие ответы и страницы предыдущего поиска не подменяют текущую выдачу.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.5">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.4...v0.49.5">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.4">
+  <div class="ver">v0.49.4<span>19 ноября 2026</span></div>
+  <div class="body"><ul><li>Исправлено создание ярлыков Windows на рабочем столе и в меню «Пуск». Учитываются системные перенаправления папок и пути с пробелами, Unicode и специальными символами; для некоторых путей используется отдельная иконка, которую удаляет деинсталлятор. Если создать ярлык не получилось, установщик сообщает об ошибке, а не объявляет полную установку успешной.</li><li>При переключении Modrinth / CurseForge и фильтров каталога с клавиатуры сохраняется фокус. Enter в пустой области больше не запускает подготовку игры; для запуска можно выбрать кнопку «Играть» и нажать Enter или пробел.</li><li>Деинсталлятор удаляет свои ярлыки из тех же системных папок и не удаляет другие файлы в папке меню «Пуск».</li><li>Если переименовать папку сборки в проводнике, лаунчер обнаружит её при возвращении в окно или обновлении списка. Настройки, миры и внутренние пути сохраняются; внешние пути не меняются. Во время игры или установки сначала дождитесь завершения операции.</li><li>В каталогах Modrinth и CurseForge рамкой выделяются моды, для которых в папке сборки найдена последняя подтверждённая версия под её Minecraft и загрузчик. Учитываются и импортированные, и выключенные JAR; при ошибке проверки отметки не выдаются за достоверные.</li><li>Настройки Discord оформлены едиными переключателями с управлением клавиатурой; разрешение на публикацию собственной иконки по-прежнему выключено по умолчанию.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.4">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.3...v0.49.4">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.3">
+  <div class="ver">v0.49.3<span>19 ноября 2026</span></div>
+  <div class="body"><ul><li>При установке мода из Modrinth или CurseForge каталог больше не возвращается наверх. Позиция и набираемый поисковый запрос сохраняются и при выборе конкретной версии — в списке и плитке.</li><li>Установленные моды в выбранной сборке выделяются заметной рамкой и плашкой. Отметка учитывает источник; файлы без сведений о проекте или с неоднозначными старыми метаданными могут не распознаваться.</li><li>Панель установки скрывается через 3 секунды после завершения, отмены или ошибки. Она не исчезает только потому, что скачался отдельный файл: сначала завершается вся установка с зависимостями или распаковкой модпака.</li><li>Моды и выбранные версии устанавливаются прямо в лаунчере, без перенаправления на сайт.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.3">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.2...v0.49.3">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.2">
+  <div class="ver">v0.49.2<span>19 ноября 2026</span></div>
+  <div class="body"><ul><li>Во вкладке «Ошибки» можно установить Fabric API прямо из лаунчера, не открывая сайт. Для простых сообщений Fabric об отсутствующем моде или требуемой минимальной версии также доступен подбор файла.</li><li>При подборе учитываются Minecraft, Fabric, минимум из лога и требования JAR к Fabric Loader и Java; скачанный файл проверяется по SHA-512. Дополнительные зависимости и сложные конфликты модов могут потребовать отдельной проверки.</li><li>Перед изменением проверяются существующие, выключенные и вложенные JAR. Совместимый выключенный файл можно включить, а замену нужно подтвердить: прежняя версия сохраняется в резервной копии.</li><li>Установка блокируется при работающей игре с той же папкой и при устаревших настройках или изменившихся модах. После изменения состава модов повторите запуск, чтобы обновить диагностику.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.2">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.1...v0.49.2">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.1">
+  <div class="ver">v0.49.1<span>19 ноября 2026</span></div>
+  <div class="body"><ul><li>Диагностика распознаёт отсутствие Fabric API и показывает требуемую минимальную версию и названия модов из лога.</li><li>Для сборок Fabric показаны версии Minecraft и загрузчика; предложены безопасные шаги: проверить существующий файл и требования файла, открыть официальный список версий и папку mods.</li><li>После изменения версии Minecraft или загрузчика старая подсказка не предлагается как готовое исправление. Файлы не устанавливаются и не изменяются автоматически.</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.49.0...v0.49.1">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.49.0">
+  <div class="ver">v0.49.0<span>19 ноября 2026</span></div>
+  <div class="body"><ul><li>Feat: add local launch error diagnostics</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.49.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.48.1...v0.49.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.48.1">
+  <div class="ver">v0.48.1<span>19 ноября 2026</span></div>
+  <div class="body"><ul><li>Feat: Discord icons and modpack feed retry (v0.48.1)</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.48.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.48.0...v0.48.1">что изменилось</a></div></div>
+</article>
+<h3 class="day" data-day>18 ноября 2026</h3>
+<article class="rel" data-rel id="v0.48.0">
+  <div class="ver">v0.48.0<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>Chore: bump version to</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.48.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.47.3...v0.48.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.47.3">
+  <div class="ver">v0.47.3<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>Download panel: actually hide after completion</li><li>Toasts above the panel</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.47.3">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.47.2...v0.47.3">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.47.2">
+  <div class="ver">v0.47.2<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>Screenshots: lazy thumbnails and batched loading instead of all-at-once base64</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.47.2">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.47.1...v0.47.2">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.47.1">
+  <div class="ver">v0.47.1<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>Fix download tab scrolling and panel auto-hide</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.47.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.47.0...v0.47.1">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.47.0">
+  <div class="ver">v0.47.0<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>Merge Modrinth/CurseForge into one 'Скачать моды' tab</li><li>Fix updates</li><li>Panel hides after 10s</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.47.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.13...v0.47.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.13">
+  <div class="ver">v0.46.13<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>Net: parenthesize dyn Fn + Send + Sync bounds</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.13">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.12...v0.46.13">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.12">
+  <div class="ver">v0.46.12<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.46.12: фикс повторной установки Forge/NeoForge</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.12">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.11...v0.46.12">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.11">
+  <div class="ver">v0.46.11<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.46.11: понятная ошибка при несуществующей версии Quilt/Fabric</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.11">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.10...v0.46.11">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.10">
+  <div class="ver">v0.46.10<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>Forge: импорт Deserialize для required_java_major (фикс сборки, потерян при расхождении истории main/тег v0.46.9)</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.10">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.9...v0.46.10">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.9">
+  <div class="ver">v0.46.9<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>Forge: импорт Deserialize для required_java_major (фикс сборки тестов)</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.9">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.8...v0.46.9">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.8">
+  <div class="ver">v0.46.8<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.46.8: Discord RPC без потока чтения (только запись)</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.8">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.7...v0.46.8">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.7">
+  <div class="ver">v0.46.7<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.46.7: диагностика запуска воркера Discord RPC</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.7">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.6...v0.46.7">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.6">
+  <div class="ver">v0.46.6<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.46.6: фикс зависания Discord RPC + Client ID в коде</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.6">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.5...v0.46.6">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.5">
+  <div class="ver">v0.46.5<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.46.5: периодическая переотправка активности Discord RPC</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.5">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.4...v0.46.5">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.4">
+  <div class="ver">v0.46.4<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.46.4: client_id на верхнем уровне handshake</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.4">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.3...v0.46.4">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.3">
+  <div class="ver">v0.46.3<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.46.3: детальный лог Discord RPC</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.3">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.2...v0.46.3">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.2">
+  <div class="ver">v0.46.2<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.46.2: Discord RPC — минимальная активность</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.2">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.1...v0.46.2">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.1">
+  <div class="ver">v0.46.1<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.46.1: фикс Discord RPC (активность без buttons, лог ошибок)</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.46.0...v0.46.1">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.46.0">
+  <div class="ver">v0.46.0<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.46.0: список изменений при обновлении, анонс релиза в Discord</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.46.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.45.0...v0.46.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.45.0">
+  <div class="ver">v0.45.0<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.45.0: отзывы в Discord через вебхуки</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.45.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.44.0...v0.45.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.44.0">
+  <div class="ver">v0.44.0<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.44.0: фикс отправки с сайта и Discord RPC для обновившихся</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.44.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.43.0...v0.44.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.43.0">
+  <div class="ver">v0.43.0<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.43.0: Web3Forms, ровная модалка feedback, 3 кнопки импорта</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.43.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.42.0...v0.43.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.42.0">
+  <div class="ver">v0.42.0<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.42.0: Discord Rich Presence из коробки</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.42.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.41.0...v0.42.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.41.0">
+  <div class="ver">v0.41.0<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.41.0: обратная связь в лаунчере и на сайте</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.41.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.40.0...v0.41.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.40.0">
+  <div class="ver">v0.40.0<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.40.0: Discord Rich Presence</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.40.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.39.1...v0.40.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.39.1">
+  <div class="ver">v0.39.1<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.39.1: фикс лагов пикера цвета и счётчик скриншотов</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.39.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.39.0...v0.39.1">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.39.0">
+  <div class="ver">v0.39.0<span>18 ноября 2026</span></div>
+  <div class="body"><ul><li>0.39.0: диалог экспорта и оптимизация JVM-флагов</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.39.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.38.1...v0.39.0">что изменилось</a></div></div>
+</article>
+<h3 class="day" data-day>17 ноября 2026</h3>
+<article class="rel" data-rel id="v0.38.1">
+  <div class="ver">v0.38.1<span>17 ноября 2026</span></div>
+  <div class="body"><ul><li>0.38.1: перетаскивание окна и фикс лагов пикера цвета</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.38.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.38.0...v0.38.1">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.38.0">
+  <div class="ver">v0.38.0<span>17 ноября 2026</span></div>
+  <div class="body"><ul><li>Cargo.lock: вернуть cssparser 0.37.1 (sed при бампе версии задел зависимость — CI падал на дубле пакета)</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.38.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.37.1...v0.38.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.37.1">
+  <div class="ver">v0.37.1<span>17 ноября 2026</span></div>
+  <div class="body"><ul><li>0.37.1: фикс загрузки скриншотов</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.37.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.37.0...v0.37.1">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.37.0">
+  <div class="ver">v0.37.0<span>17 ноября 2026</span></div>
+  <div class="body"><ul><li>0.37.0: вкладка «Скриншоты»</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.37.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.36.2...v0.37.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.36.2">
+  <div class="ver">v0.36.2<span>17 ноября 2026</span></div>
+  <div class="body"><ul><li>0.36.2: окно первого запуска только при первом входе</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.36.2">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.36.1...v0.36.2">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.36.1">
+  <div class="ver">v0.36.1<span>17 ноября 2026</span></div>
+  <div class="body"><ul><li>0.36.1: импорт из Modrinth App через app.db</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.36.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.36.0...v0.36.1">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.36.0">
+  <div class="ver">v0.36.0<span>17 ноября 2026</span></div>
+  <div class="body"><ul><li>Фикс сборки: write в version_file вместо удалённой переменной</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.36.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.35.0...v0.36.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.35.0">
+  <div class="ver">v0.35.0<span>17 ноября 2026</span></div>
+  <div class="body"><ul><li>Фикс сборки: file перемещался до pack_probe</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.35.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.34.3...v0.35.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.34.3">
+  <div class="ver">v0.34.3<span>17 ноября 2026</span></div>
+  <div class="body"><ul><li>0.34.3: фикс установки Forge/NeoForge (launcher_profiles.json)</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.34.3">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.34.2...v0.34.3">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.34.2">
+  <div class="ver">v0.34.2<span>17 ноября 2026</span></div>
+  <div class="body"><ul><li>0.34.2: новые эффекты на экране — листья, лепестки, бабочки, сердечки</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.34.2">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.34.1...v0.34.2">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.34.1">
+  <div class="ver">v0.34.1<span>17 ноября 2026</span></div>
+  <div class="body"><ul><li>0.34.1: setup создаёт подпапку OmniSpec внутри выбранной папки (D: → D:\OmniSpec)</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.34.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.34.0...v0.34.1">что изменилось</a></div></div>
+</article>
+<h3 class="day" data-day>16 ноября 2026</h3>
+<article class="rel" data-rel id="v0.34.0">
+  <div class="ver">v0.34.0<span>16 ноября 2026</span></div>
+  <div class="body"><ul><li>0.34.0: фикс экспорта в .mrpack/.zip (диалог «сохранить как» не открывался) и импорта .zip</li><li>Появление на сайте через прозрачность и небольшое увеличение</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.34.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.33.0...v0.34.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.33.0">
+  <div class="ver">v0.33.0<span>16 ноября 2026</span></div>
+  <div class="body"><ul><li>Главная: список «Искать в» (Modrinth / CurseForge)</li><li>Модпаки CurseForge отдельной сборкой</li><li>Единый порядок «Список | Плитка»</li><li>README — настоящие скриншоты</li><li>Сайт — частицы, падающий снег, появление разделов и движение фона при скролле</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.33.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.32.0...v0.33.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.32.0">
+  <div class="ver">v0.32.0<span>16 ноября 2026</span></div>
+  <div class="body"><ul><li>Curseforge: отдавать InstallOutcome наружу (сборка падала на приватном типе)</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.32.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.31.0...v0.32.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.31.0">
+  <div class="ver">v0.31.0<span>16 ноября 2026</span></div>
+  <div class="body"><ul><li>Настройки при включённом фоне больше не чернеют — переменные темы пишутся и в :root, поэтому --modal-solid (окно настроек) берёт цвет текущей темы, а не старой тёмной</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.31.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.30.0...v0.31.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.30.0">
+  <div class="ver">v0.30.0<span>16 ноября 2026</span></div>
+  <div class="body"><ul><li>Закругления подчиняются «форме элементов» (появился --r-md)</li><li>Окно первого запуска не возвращается после обновления</li><li>Двойной клик по сборке запускает игру</li><li>«Остановить сборку» в меню ПКМ — красная</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.30.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.29.0...v0.30.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.29.0">
+  <div class="ver">v0.29.0<span>16 ноября 2026</span></div>
+  <div class="body"><ul><li>Окно первого запуска (тема, эффекты, трейсер, масштаб, импорт), ровные ячейки профиля</li><li>Живая строка импорта в стиле лаунчера</li><li>Правильная сторона плаща (развёртка 64×32 из Blockbench)</li><li>Фон готовится в canvas и панели больше не чернеют</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.29.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.28.0...v0.29.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.28.0">
+  <div class="ver">v0.28.0<span>16 ноября 2026</span></div>
+  <div class="body"><ul><li>Файловый менеджер с деревом и ПКМ</li><li>Архивы zip/rar с просмотром картинок и зумом, перенос файлов мышью</li><li>Размер плитки Modrinth 12/9/6</li><li>Базовая подложка темы</li><li>«Без категории» по ЛКМ и перетаскивание категорий</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.28.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.27.0...v0.28.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.27.0">
+  <div class="ver">v0.27.0<span>16 ноября 2026</span></div>
+  <div class="body"><ul><li>Плащ на модели скина: пластина за спиной, мини-модели образов с плащом</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.27.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.26.0...v0.27.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.26.0">
+  <div class="ver">v0.26.0<span>16 ноября 2026</span></div>
+  <div class="body"><ul><li>Окно настроек шире (1280): пять образов «скин + плащ» помещаются в один ряд</li><li>На узких экранах колонки профиля складываются</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.26.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.25.0...v0.26.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.25.0">
+  <div class="ver">v0.25.0<span>16 ноября 2026</span></div>
+  <div class="body"><ul><li>Выключение дубликата (ключ сессии id#n)</li><li>Консоль грузит хвост лога и подгружает по 300 строк</li><li>В профиле список аккаунтов на 5 строк со скроллом и пять образов «скин + плащ»</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.25.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.24.0...v0.25.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.24.0">
+  <div class="ver">v0.24.0<span>16 ноября 2026</span></div>
+  <div class="body"><ul><li>Трейс по умолчанию — искры 50/20/15, в «Обновлениях» версия лаунчера и платформа, кнопка перехода в репозиторий вместо полей репозитория и токена</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.24.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.23.0...v0.24.0">что изменилось</a></div></div>
+</article>
+<h3 class="day" data-day>15 ноября 2026</h3>
+<article class="rel" data-rel id="v0.23.0">
+  <div class="ver">v0.23.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Модель скина из bbmodel (руки 3/4 px), вращение ЛКМ</li><li>Раскладка плащи-модель-пресеты</li><li>Трейс и эффект клика по курсору при любом масштабе, скин по нику обновляется</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.23.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.22.0...v0.23.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.22.0">
+  <div class="ver">v0.22.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Исправить проверку сборки: опрос Java без замыкания с async-блоком</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.22.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.21.0...v0.22.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.21.0">
+  <div class="ver">v0.21.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>У трейсера свои прозрачность и цвет (группы больше не наезжают друг на друга)</li><li>В режиме окна в готовых сборках убрана кнопка ссылки — кнопки не съезжают</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.21.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.20.0...v0.21.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.20.0">
+  <div class="ver">v0.20.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Все ползунки эффектов опускаются до 10 %</li><li>Размер частиц работает для всех стилей, вкладки «Звуки»</li><li>«Игра и Java» и «Обновления» снова открываются и сохраняют правки сразу</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.20.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.19.1...v0.20.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.19.1">
+  <div class="ver">v0.19.1<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Эффекты: цвет и прозрачность для трейса и для частиц («Как в теме»)</li><li>Группы настроек больше не обрезаются</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.19.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.19.0...v0.19.1">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.19.0">
+  <div class="ver">v0.19.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Эффекты: две группы настроек — «Трейсер за курсором» (4 варианта: линия, кисть, свечение, искры; толщина и длина следа) и «Эффект на экране» (размер и количество частиц)</li><li>Сплошная линия без разрывов</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.19.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.18.1...v0.19.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.18.1">
+  <div class="ver">v0.18.1<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Трейс за курсором: непрерывная кисть с сужением на конце и отдельный ползунок «Размер трейса»</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.18.1">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.18.0...v0.18.1">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.18.0">
+  <div class="ver">v0.18.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Поиск по своим модам</li><li>ПКМ-меню с проверкой обновлений, автодокачка зависимостей, снежинки, размер эффектов, трейс за курсором</li><li>Кнопки-иконки на карточках, адаптивная сетка 12/9/6</li><li>Время игры и тема больше не сбрасываются</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.18.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.17.0...v0.18.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.17.0">
+  <div class="ver">v0.17.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Живая строка импорта, плащи аккаунта, цвета из фона, эффекты поверх окон, ручные категории</li><li>Размер плиток и поиск по центру</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.17.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.16.0...v0.17.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.16.0">
+  <div class="ver">v0.16.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Одна кнопка «Добавить аккаунт»</li><li>Иконки создания/импорта в категориях</li><li>Авто-обновление при запуске</li><li>Без раздела «Сеть» и подсказок</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.16.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.15.0...v0.16.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.15.0">
+  <div class="ver">v0.15.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Фоновая анимация (звёзды, пыль, палочки, снег) с переключателем в «Эффектах»</li><li>Варианты звука (мягкий, классический, стекло, дерево, глубокий)</li><li>Версия в шапке без кнопок — смена только в сборке</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.15.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.14.0...v0.15.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.14.0">
+  <div class="ver">v0.14.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>«Выключить дубликат» по ПКМ на ноде</li><li>Иконки сборок без пустых рамок</li><li>Скин аккаунта и лицензия в профиле</li><li>Настройки сборки на всё окно без блока «Лаунчер», широкие кнопки иконок</li><li>Масштаб интерфейса 80–150%</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.14.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.13.0...v0.14.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.13.0">
+  <div class="ver">v0.13.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Без пустой полосы под шапкой и строки-заголовка</li><li>Свои диалоги вместо системных, поворот скина на 360°</li><li>Свои пресеты из загруженных скинов</li><li>Полоса процессов при импорте</li><li>Окно «Все сборки» сеткой по категориям</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.13.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.12.0...v0.13.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.12.0">
+  <div class="ver">v0.12.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Пресеты скина в профиле (свои, сколько угодно)</li><li>Верхнее поле без кнопки настроек, свой drag сборок</li><li>Дубликаты нодами в «Запущенных»</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.12.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.11.0...v0.12.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.11.0">
+  <div class="ver">v0.11.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Шапка на всю ширину, окно настроек крупнее, пресеты скина, категории сборок, ПКМ по списку, окно проекта Modrinth, дубликат запуска</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.11.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.10.0...v0.11.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.10.0">
+  <div class="ver">v0.10.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Главная страница: «Недавнее» со временем игры, импорт .mrpack/.zip</li><li>Лаунчеров (мультивыбор галочками) и ссылки прямо на странице — отдельное окно убрано</li><li>Накопление времени игры при выходе</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.10.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.9.0...v0.10.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.9.0">
+  <div class="ver">v0.9.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Главная страница со своими сборками и импортом</li><li>Кастомная тема с подбором цвета</li><li>Профиль во всю ширину слева сверху, иконка сборки в шапке</li><li>Читаемая строка пути на обоях</li><li>Кнопки-сегменты как в OmniPanel</li><li>Фикс выдачи Modrinth по типам</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.9.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.8.0...v0.9.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.8.0">
+  <div class="ver">v0.8.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Профиль: карандаш переименования только у офлайн-аккаунтов</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.8.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.7.0...v0.8.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.7.0">
+  <div class="ver">v0.7.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Фикс CI: StreamExt для buffer_unordered в mod_icons импортируется на уровне модуля</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.7.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.6.0...v0.7.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.6.0">
+  <div class="ver">v0.6.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Фикс CI: doc-комментарий в параметрах команды search_modrinth не компилируется</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.6.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.5.0...v0.6.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.5.0">
+  <div class="ver">v0.5.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Фикс сборки: локальная переменная startup_path не перекрывает команду startup_file</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.5.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.4.0...v0.5.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.4.0">
+  <div class="ver">v0.4.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Аккаунты Microsoft (device code) и офлайн</li><li>Настройки лаунчера по категориям, свои настройки у сборки, история обоев</li><li>Бесконечная лента Modrinth с выбором версий и видом списком/плиткой</li><li>Кнопки тулбара одного размера</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.4.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.3.0...v0.4.0">что изменилось</a></div></div>
+</article>
+<article class="rel" data-rel id="v0.3.0">
+  <div class="ver">v0.3.0<span>15 ноября 2026</span></div>
+  <div class="body"><ul><li>Оформление без градиентов</li><li>Файловый менеджер в духе OmniPanel, обои и иконки сборок, прокси и проверка связи</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.3.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.2.0...v0.3.0">что изменилось</a></div></div>
+</article>
 <article class="rel" data-rel id="v0.2.0">
   <div class="ver">v0.2.0<span>15 ноября 2026</span></div>
   <div class="body"><ul><li>Установщик с кнопками: окно на egui в стиле консоли OmniPanel, кнопка «Изменить путь»</li><li>Запасной консольный режим --console</li></ul><div class="links"><a href="https://github.com/Shokydo/OmniSpec/releases/tag/v0.2.0">релиз на GitHub</a><a href="https://github.com/Shokydo/OmniSpec/compare/v0.1.7...v0.2.0">что изменилось</a></div></div>

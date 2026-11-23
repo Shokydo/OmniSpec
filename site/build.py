@@ -57,9 +57,12 @@ def downloads_text(count):
 
 
 def human_date(iso):
-    """2026-11-16 → 16 ноября 2026"""
+    """ISO date or timestamp → a readable Russian date."""
     try:
-        y, m, d = (int(x) for x in iso.split("-")[:3])
+        value = iso.replace("Z", "+00:00")
+        if "T" in value:
+            value = value.split("T", 1)[0]
+        y, m, d = (int(x) for x in value.split("-")[:3])
         return f"{d} {MONTHS[m - 1]} {y}"
     except Exception:
         return iso

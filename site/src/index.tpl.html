@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OmniSpec — лаунчер Minecraft для сборок, модов и двух аккаунтов</title>
-<meta name="description" content="OmniSpec — лаунчер Minecraft на Rust: сборки и категории, моды с Modrinth и CurseForge, лицензия через Microsoft и офлайн-ник, 16 тем, обои, эффекты. Установщик и портативная версия для Windows 10/11.">
+<meta name="description" content="OmniSpec — лаунчер Minecraft на Rust: сборки и категории, моды с Modrinth и CurseForge, лицензия через Microsoft и офлайн-ник, темы, CSS-конструктор интерфейса и обои. Установщик и портативная версия для Windows 10/11.">
 <meta name="theme-color" content="#08080a">
 <meta property="og:type" content="website">
-<meta property="og:title" content="OmniSpec — лаунчер Minecraft">
-<meta property="og:description" content="Сборки, моды с Modrinth и CurseForge, лицензия и офлайн-аккаунты. Установщик и портативная версия для Windows 10/11.">
+<meta property="og:title" content="OmniSpec — лаунчер Minecraft с CSS-темами">
+<meta property="og:description" content="Сборки, моды с Modrinth и CurseForge, лицензия и офлайн-аккаунты, конструктор раскладки и пользовательские CSS-темы. Установщик и портативная версия для Windows 10/11.">
 <meta property="og:url" content="{{URL_SITE}}">
 <meta property="og:image" content="{{URL_SITE}}og.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -59,7 +59,8 @@ setTimeout(function () { document.documentElement.classList.remove("js-boot"); }
   <p class="lead">
     Сборки с папками и своими настройками, моды, ресурспаки и шейдеры прямо с Modrinth
     и CurseForge, лицензия через Microsoft и обычный офлайн-ник. Написан на Rust, интерфейс — плотный
-    моно-панель без градиентов и лишних кликов.
+    моно-панель без градиентов и лишних кликов. А ещё его можно перестроить под себя: раскладка блоков,
+    живой CSS-редактор и темы, которыми можно делиться.
   </p>
   <div class="cta">
     <a class="btn btn-primary btn-lg" href="{{URL_SETUP}}">
@@ -126,6 +127,16 @@ setTimeout(function () { document.documentElement.classList.remove("js-boot"); }
         <p>Дерево папок, просмотр файлов с номерами строк, архивы zip и rar с зумом картинок, создание папок и перенос файлов мышью.</p>
       </div>
       <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z"/></svg></div>
+        <h3>Конструктор интерфейса</h3>
+        <p>Настрой порядок и видимость блоков, перенеси сайдбар вправо или влево, задай его ширину и отрегулируй density, padding и gap — layout сохранится.</p>
+      </div>
+      <div class="card">
+        <div class="ico"><svg viewBox="0 0 24 24"><path d="m8.7 5.3-6 6 6 6 1.4-1.4-4.6-4.6 4.6-4.6-1.4-1.4Zm6.6 0-1.4 1.4 4.6 4.6-4.6 4.6 1.4 1.4 6-6-6-6ZM13.1 3.7l-4 16.6 1.9.5 4-16.6-1.9-.5Z"/></svg></div>
+        <h3>CSS-темы</h3>
+        <p>Пиши CSS с живым предпросмотром, используй стабильные селекторы <b>data-os</b>, выбирай пресеты и экспортируй тему в <b>.omtheme</b>.</p>
+      </div>
+      <div class="card">
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M13.6 2 4.8 13.6h5.4l-1.8 8.4 8.8-11.6h-5.4l1.8-8.4Z"/></svg></div>
         <h3>Быстрый запуск</h3>
         <p>Проверка файлов, поиск Java и разбор профиля не повторяются каждый раз — повторный запуск сборки идёт заметно быстрее.</p>
@@ -147,6 +158,10 @@ setTimeout(function () { document.documentElement.classList.remove("js-boot"); }
       <p>Снято с текущей версии — нажми на любой кадр, чтобы открыть его целиком.</p>
     </div>
     <div class="gallery">
+      <figure class="gal">
+        <img src="{{A:customizer}}" alt="Конструктор OmniSpec: CSS с живым предпросмотром, layout, sidebar и импорт тем" width="1600" height="1000">
+        <figcaption>Конструктор: CSS с живым предпросмотром, layout, sidebar и импорт/экспорт тем</figcaption>
+      </figure>
       <figure class="gal">
         <img src="{{A:home}}" alt="Главная страница: недавние сборки, добавление сборки и лента готовых сборок" width="1600" height="1000">
         <figcaption>Главная: недавние сборки, добавление сборки и лента готовых сборок с Modrinth</figcaption>
@@ -315,7 +330,11 @@ setTimeout(function () { document.documentElement.classList.remove("js-boot"); }
       </details>
       <details>
         <summary>Обновления сбрасывают настройки?</summary>
-        <p>Нет. Настройки, сборки, миры и время игры остаются; окно первого запуска после обновления не возвращается.</p>
+        <p>Нет. Настройки, сборки, миры и время игры остаются; окно первого запуска после обновления не возвращается. Свой layout и CSS тоже сохраняются в настройках.</p>
+      </details>
+      <details>
+        <summary>Можно ли настроить внешний вид лаунчера?</summary>
+        <p>Да. В конструкторе можно переставить или скрыть крупные блоки, перенести сайдбар, изменить его ширину, density, padding и gap. CSS применяется с живым предпросмотром. Импорт и экспорт работают через темы <b>.omtheme</b>, а JavaScript из пользовательской темы не выполняется.</p>
       </details>
       <details>
         <summary>CurseForge поддерживается?</summary>
