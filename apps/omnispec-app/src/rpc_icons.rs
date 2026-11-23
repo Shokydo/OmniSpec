@@ -22,7 +22,12 @@ use omnispec_core::paths::Paths;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// Максимальный размер готового payload для временного хостинга/Discord.
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+/// Исходный файл может быть больше: для Discord он сначала уменьшается и
+/// перекодируется. Верхняя граница защищает чтение от бесконечно больших файлов.
+const MAX_SOURCE_FILE_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_GIF_OUTPUT_FRAMES: usize = 240;
 const CACHE_SECS: u64 = 6 * 24 * 60 * 60; // хостинг заявляет семь суток
 const TF_UPLOAD: &str = "https://tmpfile.link/api/upload";
 
@@ -72,11 +77,11 @@ pub fn read_local(paths: &Paths, meta: &InstanceMeta) -> Result<Option<LocalImag
         return Err("иконка должна находиться внутри папки сборки".into());
     }
     let size = std::fs::metadata(&file).map_err(|e| e.to_string())?.len();
-    if size == 0 || size > MAX_FILE_BYTES {
-        return Err("файл иконки пустой или больше 16 МБ".into());
+    if size == 0 || size > MAX_SOURCE_FILE_BYTES {
+        return Err("файл иконки пустой или больше 128 МБ".into());
     }
     let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_FILE_BYTES { return Err("иконка больше 16 МБ".into()); }
+    if bytes.len() as u64 > MAX_SOURCE_FILE_BYTES { return Err("иконка больше 128 МБ".into()); }
     let hash = hex::encode(Sha256::digest(&bytes));
     Ok(Some(LocalImage { bytes, hash }))
 }
@@ -189,10 +194,36 @@ fn png_thumbnail(image: &LocalImage) -> Result<Vec<u8>, String> {
     Ok(data.into_inner())
 }
 
-/// Уменьшить GIF, не превращая его в статичный PNG. `GifDecoder` отдаёт уже
-/// собранные кадры, поэтому Discord получает полноценную анимацию и исходную
-/// задержку между кадрами.
+/// Уменьшить GIF, не превращая его в статичный PNG. Если один проход всё ещё
+/// превышает лимит Discord, уменьшаем размер и прореживаем кадры. Задержка
+/// пропущенных кадров добавляется к следующему оставшемуся кадру, поэтому
+/// длительность анимации не ускоряется.
 fn gif_thumbnail(image: &LocalImage) -> Result<Vec<u8>, String> {
+    // Маленькому RPC-окну не нужны 4K и тысячи кадров. Последний профиль всё
+    // ещё остаётся GIF, но практически гарантирует payload меньше 16 МБ.
+    for &(side, frame_step) in &[
+        (256, 1),
+        (192, 1),
+        (128, 1),
+        (128, 2),
+        (96, 2),
+        (64, 4),
+        (48, 8),
+        (32, 16),
+    ] {
+        let output = gif_thumbnail_attempt(image, side, frame_step)?;
+        if output.len() as u64 <= MAX_FILE_BYTES {
+            return Ok(output);
+        }
+    }
+    Err("GIF слишком большой даже после сжатия для Discord RPC".into())
+}
+
+fn gif_thumbnail_attempt(
+    image: &LocalImage,
+    target_side: u32,
+    frame_step: usize,
+) -> Result<Vec<u8>, String> {
     let mut decoder = GifDecoder::new(Cursor::new(&image.bytes))
         .map_err(|e| format!("не удалось открыть GIF: {e}"))?;
     let (width, height) = decoder.dimensions();
@@ -206,24 +237,48 @@ fn gif_thumbnail(image: &LocalImage) -> Result<Vec<u8>, String> {
     decoder.set_limits(limits).map_err(|e| format!("не удалось проверить GIF: {e}"))?;
 
     let max_side = width.max(height);
-    let target_width = ((u64::from(width) * 256) / u64::from(max_side)).max(1) as u32;
-    let target_height = ((u64::from(height) * 256) / u64::from(max_side)).max(1) as u32;
+    let target_side = target_side.min(max_side);
+    let target_width = ((u64::from(width) * u64::from(target_side)) / u64::from(max_side)).max(1) as u32;
+    let target_height = ((u64::from(height) * u64::from(target_side)) / u64::from(max_side)).max(1) as u32;
     let repeat = match decoder.loop_count() {
         LoopCount::Infinite => Repeat::Infinite,
         LoopCount::Finite(count) => Repeat::Finite(count.get().min(u16::MAX as u32) as u16),
     };
-    let frames = decoder.into_frames().map(move |frame| {
-        let frame = frame?;
-        let delay = frame.delay();
-        let buffer = frame.into_buffer();
-        let resized = image::imageops::resize(
-            &buffer,
-            target_width,
-            target_height,
-            image::imageops::FilterType::Triangle,
-        );
-        Ok(image::Frame::from_parts(resized, 0, 0, delay))
-    });
+    let frame_step = frame_step.max(1);
+    let frames = decoder
+        .into_frames()
+        .enumerate()
+        .take(MAX_GIF_OUTPUT_FRAMES.saturating_mul(frame_step))
+        .scan(0u64, move |pending_ms, (index, frame)| {
+            let frame = match frame {
+                Ok(frame) => frame,
+                Err(error) => return Some(Some(Err(error))),
+            };
+            let (numerator, denominator) = frame.delay().numer_denom_ms();
+            let frame_ms = if denominator == 0 {
+                0
+            } else {
+                (u64::from(numerator) + u64::from(denominator) - 1)
+                    / u64::from(denominator)
+            };
+            if index % frame_step != 0 {
+                *pending_ms = pending_ms.saturating_add(frame_ms);
+                return Some(None);
+            }
+            let delay = image::Delay::from_saturating_duration(Duration::from_millis(
+                pending_ms.saturating_add(frame_ms),
+            ));
+            *pending_ms = 0;
+            let buffer = frame.into_buffer();
+            let resized = image::imageops::resize(
+                &buffer,
+                target_width,
+                target_height,
+                image::imageops::FilterType::Triangle,
+            );
+            Some(Some(Ok(image::Frame::from_parts(resized, 0, 0, delay))))
+        })
+        .flatten();
     let mut output = Vec::new();
     {
         let mut encoder = GifEncoder::new(&mut output);
@@ -364,6 +419,27 @@ mod tests {
         assert_eq!(frames.len(), 2);
         assert!(frames[0].buffer().width() <= 256);
         assert!(frames[0].buffer().height() <= 256);
+    }
+
+    #[test]
+    fn oversized_gif_is_accepted_as_a_source_and_shrunk_for_rpc() {
+        let root = std::env::temp_dir().join(format!("omnispec-rpc-large-gif-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::new(&root).unwrap();
+        let mut source = b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff!\xf9\x04\0\0\0\0\0,\0\0\0\0\x01\0\x01\0\0\x02\x02D\x01\0;".to_vec();
+        // Trailer/payload is deliberately large; the decoder stops at the GIF
+        // trailer, while read_local verifies the larger source limit separately.
+        source.resize(MAX_FILE_BYTES as usize + 1024, 0);
+        let mut m = meta();
+        m.icon = Some("icon.gif".into());
+        std::fs::create_dir_all(paths.instance_dir(&m.id)).unwrap();
+        std::fs::write(paths.instance_dir(&m.id).join("icon.gif"), &source).unwrap();
+        let local = read_local(&paths, &m).unwrap().unwrap();
+        let (payload, file_name, mime) = temporary_payload(&local).unwrap();
+        assert_eq!(file_name, "instance-icon.gif");
+        assert_eq!(mime, "image/gif");
+        assert!(payload.len() as u64 <= MAX_FILE_BYTES);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
