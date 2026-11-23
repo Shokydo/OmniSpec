@@ -4,6 +4,7 @@
 //! Tauri-оболочка OmniSpec: тонкий слой команд поверх `omnispec-core`.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,6 +14,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
+use sha1::{Digest, Sha1};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -1272,6 +1274,16 @@ fn server_set_eula(state: State<'_, AppState>, instance_id: String, accepted: bo
 }
 
 #[tauri::command]
+fn server_write_icon(
+    state: State<'_, AppState>,
+    instance_id: String,
+    path: String,
+) -> Result<(), String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    server::write_server_icon(&state.paths, &instance_id, &path)
+}
+
+#[tauri::command]
 async fn server_start(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1502,6 +1514,115 @@ async fn server_addon_versions(
     state.modrinth.project_versions(&project_id, mc_version.as_deref(), loader.as_deref()).await.map_err(err)
 }
 
+fn verify_catalog_download(
+    path: &Path,
+    expected_size: u64,
+    expected_sha1: &str,
+) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("каталог не создал JAR: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        let _ = std::fs::remove_file(path);
+        return Err("каталог скачал не обычный файл".into());
+    }
+    if metadata.len() != expected_size {
+        let _ = std::fs::remove_file(path);
+        return Err(format!(
+            "размер JAR не совпал: ожидалось {expected_size}, получено {}",
+            metadata.len()
+        ));
+    }
+    let mut input = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut digest = Sha1::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = input.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    let actual = hex::encode(digest.finalize());
+    if !actual.eq_ignore_ascii_case(expected_sha1.trim()) {
+        let _ = std::fs::remove_file(path);
+        return Err("SHA-1 скачанного JAR не совпал с каталогом".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn server_install_catalog_addon(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    instance_id: String,
+    req: server::CatalogInstallRequest,
+) -> Result<server::ServerAddon, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    let config = server::load(&state.paths, &instance_id)?;
+    let folder = server::validate_catalog_request(&config, &req)?;
+
+    // The UI supplies a compact catalog record, but the backend verifies the
+    // project, version and exact file once more before downloading anything.
+    let project = state.modrinth.project(&req.project_id).await.map_err(err)?;
+    if project.id != req.project_id
+        || !project.project_type.eq_ignore_ascii_case(req.project_type.trim())
+    {
+        return Err("проект каталога не совпадает с запросом".into());
+    }
+    let versions = state
+        .modrinth
+        .project_versions(
+            &req.project_id,
+            Some(req.mc_version.trim()),
+            req.loader.as_deref().filter(|value| !value.trim().is_empty()),
+        )
+        .await
+        .map_err(err)?;
+    let version = versions
+        .iter()
+        .find(|version| version.id == req.version_id)
+        .ok_or_else(|| "версия каталога не совместима с сервером".to_string())?;
+    if !version.project_id.is_empty() && version.project_id != req.project_id {
+        return Err("версия каталога принадлежит другому проекту".into());
+    }
+    let file = version
+        .files
+        .iter()
+        .find(|file| file.url == req.url && file.filename == req.filename)
+        .ok_or_else(|| "JAR не принадлежит выбранной версии каталога".to_string())?;
+    let catalog_sha1 = file
+        .hashes
+        .get("sha1")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "у JAR каталога отсутствует SHA-1".to_string())?;
+    if file.size != req.size || !catalog_sha1.eq_ignore_ascii_case(&req.sha1) {
+        return Err("размер или SHA-1 JAR не совпадает с каталогом".into());
+    }
+
+    let destination = server::catalog_destination(&state.paths, &instance_id, folder, &req.filename)?;
+    let reporter = reporter_for(&app, &instance_id).with_op(format!("server-catalog:{}", instance_id));
+    state
+        .http
+        .download_tracked(
+            &req.url,
+            &destination,
+            Some(req.size),
+            Some(&req.sha1),
+            false,
+            &|done, total| reporter.emit_bytes("server-catalog", &req.filename, done, total),
+        )
+        .await
+        .map_err(err)?;
+    if let Err(error) = verify_catalog_download(&destination, req.size, &req.sha1) {
+        let _ = std::fs::remove_file(&destination);
+        return Err(error);
+    }
+    server::addons(&state.paths, &instance_id)?
+        .into_iter()
+        .find(|item| item.path == format!("{folder}/{}", req.filename))
+        .ok_or_else(|| "JAR скачан, но не найден среди аддонов".into())
+}
+
 #[tauri::command]
 async fn server_install_addon(
     app: AppHandle,
@@ -1514,7 +1635,10 @@ async fn server_install_addon(
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let config = server::load(&state.paths, &instance_id)?;
     let root = server::root(&state.paths, &meta);
-    let folder = if kind.as_deref() == Some("mod") || matches!(config.kernel.as_str(), "fabric" | "forge" | "neoforge") { "mods" } else { "plugins" };
+    let folder = server::addon_folder(
+        &config.kernel,
+        kind.as_deref().map(|value| if value == "mod" { "mods" } else if value == "plugin" { "plugins" } else { value }),
+    )?;
     let parsed = reqwest::Url::parse(url.trim()).map_err(|_| "недопустимая ссылка на аддон".to_string())?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() { return Err("разрешены только http(s)-ссылки".into()); }
     let raw_name = parsed.path_segments().and_then(|segments| segments.last()).filter(|name| !name.is_empty()).unwrap_or("addon.jar");
@@ -4432,6 +4556,7 @@ fn main() {
             server_get,
             server_save,
             server_set_eula,
+            server_write_icon,
             server_start,
             server_stop,
             server_command,
@@ -4443,6 +4568,7 @@ fn main() {
             server_delete_addon,
             server_search_addons,
             server_addon_versions,
+            server_install_catalog_addon,
             server_install_addon,
             server_backup_list,
             server_backup_create,
@@ -4929,6 +5055,24 @@ mod tests {
         assert_eq!(got[1].len(), 70_000 - 65_536);
         drop(got);
         assert!(writer.write_all(b"too late\n").await.is_err());
+    }
+
+    #[test]
+    fn catalog_download_validation_removes_wrong_size_and_hash() {
+        use super::verify_catalog_download;
+        use sha1::{Digest, Sha1};
+        let root = std::env::temp_dir().join(format!("omnispec-catalog-download-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("addon.jar");
+        let bytes = b"verified catalog bytes";
+        std::fs::write(&path, bytes).unwrap();
+        let hash = hex::encode(Sha1::digest(bytes));
+        verify_catalog_download(&path, bytes.len() as u64, &hash).unwrap();
+        std::fs::write(&path, b"tampered").unwrap();
+        assert!(verify_catalog_download(&path, bytes.len() as u64, &hash).is_err());
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 

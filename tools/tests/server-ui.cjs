@@ -58,6 +58,7 @@ const server = http.createServer((req, res) => {
             case 'server_get': return {...this.instance.server, stop_command: 'stop', tps_command: 'tps', jar: 'paper.jar'};
             case 'server_save': this.instance.server = {...args.config}; return this.instance.server;
             case 'server_set_eula': this.eula = Boolean(args.accepted); return null;
+            case 'server_write_icon': return null;
             case 'server_start': this.running = [{instance_id: 'srv', run_id: 'srv#server', account: 'server', started_at: 1700000000}]; return {instance_id: 'srv', run_id: 'srv#server', pid: 42, started_at: 1700000000};
             case 'server_stop': this.running = []; return null;
             case 'server_command': return null;
@@ -66,6 +67,9 @@ const server = http.createServer((req, res) => {
             case 'server_backup_restore': return null;
             case 'server_backup_delete': this.backups = this.backups.filter((item) => item.name !== args.name); return null;
             case 'search_modrinth': return {hits: [], total_hits: 0};
+            case 'server_search_addons': return {hits: [{project_id: 'luckperms', title: 'LuckPerms', description: 'Permissions plugin', downloads: 12345}], total_hits: 1};
+            case 'server_addon_versions': return [{id: 'luck-v1', project_id: 'luckperms', name: '5.4.0', version_number: '5.4.0', game_versions: ['1.21.4'], loaders: [], files: [{url: 'https://cdn.example.test/LuckPerms.jar', filename: 'LuckPerms.jar', primary: true, size: 40, hashes: {sha1: '0123456789abcdef0123456789abcdef01234567'}}]}];
+            case 'server_install_catalog_addon': return {name: args.req.filename, path: `plugins/${args.req.filename}`, size: args.req.size, kind: 'plugins', enabled: true};
             case 'server_kernels': return [{id: 'paper', label: 'Paper', group: 'Bukkit', supports_plugins: true, supports_mods: false}];
             case 'server_kernel_versions': return [{id: '1.21.4', label: '1.21.4', mc_version: '1.21.4'}];
             case 'server_scan': return [];
@@ -100,8 +104,22 @@ const server = http.createServer((req, res) => {
     await page.waitForSelector('#backup-create');
     await page.locator('#backup-create').click();
     await page.waitForFunction(() => window.__serverTest.calls.some((item) => item.command === 'server_backup_create'));
+    await page.locator('[data-tab="server"]').click();
+    await page.waitForSelector('#server-addon-catalog');
+    await page.locator('#server-addon-catalog').click();
+    await page.locator('#server-catalog-query').fill('LuckPerms');
+    await page.locator('[data-catalog-search]').first().click();
+    await page.waitForSelector('.server-addon-card');
+    await page.locator('[data-catalog-load]').click();
+    await page.waitForSelector('[data-catalog-install]');
+    await page.locator('[data-catalog-install]').click();
+    await page.waitForFunction(() => window.__serverTest.calls.some((item) => item.command === 'server_install_catalog_addon'));
+    const catalogCall = await page.evaluate(() => window.__serverTest.calls.find((item) => item.command === 'server_install_catalog_addon'));
+    assert.equal(catalogCall.args.req.project_id, 'luckperms');
+    assert.equal(catalogCall.args.req.filename, 'LuckPerms.jar');
+    assert.equal(catalogCall.args.req.project_type, 'plugin');
     assert.deepEqual(errors, []);
-    console.log('SERVER_UI: EULA, server launch, running category, guarded files, tabs and ZIP backup action — OK');
+    console.log('SERVER_UI: EULA, server launch, running category, guarded files, ZIP backup and validated catalog flow — OK');
   } finally {
     await browser.close();
     await new Promise((resolve) => server.close(resolve));

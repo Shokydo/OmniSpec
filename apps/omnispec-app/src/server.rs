@@ -7,9 +7,10 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Cursor, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,8 @@ const MAX_SCAN_DIRS: usize = 50_000;
 const MAX_SCAN_DEPTH: usize = 5;
 const MAX_BACKUP_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_BACKUP_ENTRIES: usize = 200_000;
+const MAX_SERVER_ICON_BYTES: u64 = 16 * 1024 * 1024;
+static ICON_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -222,6 +225,25 @@ pub struct ServerAddon {
     pub size: u64,
     pub kind: String,
     pub enabled: bool,
+}
+
+/// Данные, полученные из каталога перед установкой JAR.
+///
+/// UI не считается доверенным источником: backend повторно проверяет все
+/// отношения проекта, версии, файла и сервера перед записью на диск.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CatalogInstallRequest {
+    pub source: String,
+    pub project_id: String,
+    pub version_id: String,
+    pub project_type: String,
+    pub mc_version: String,
+    #[serde(default)]
+    pub loader: Option<String>,
+    pub url: String,
+    pub filename: String,
+    pub size: u64,
+    pub sha1: String,
 }
 
 fn now() -> u64 {
@@ -466,6 +488,157 @@ pub fn kernel_catalog() -> Vec<KernelInfo> {
 
 fn kernel_is(id: &str, names: &[&str]) -> bool {
     names.iter().any(|name| id.eq_ignore_ascii_case(name))
+}
+
+/// Выбрать единственную допустимую папку аддонов для ядра сервера.
+/// Для custom папка должна быть указана явно, а Vanilla аддоны запрещены.
+pub fn addon_folder(kernel: &str, requested: Option<&str>) -> Result<&'static str, String> {
+    let requested = requested.map(str::trim).filter(|value| !value.is_empty());
+    let requested = match requested {
+        Some("mods") => Some("mods"),
+        Some("plugins") => Some("plugins"),
+        Some(_) => return Err("папка аддонов должна быть mods или plugins".into()),
+        None => None,
+    };
+    let kernel = kernel.trim().to_ascii_lowercase();
+    if kernel_is(&kernel, &["fabric", "forge", "neoforge"]) {
+        if requested == Some("plugins") {
+            return Err("это ядро поддерживает аддоны только в mods".into());
+        }
+        return Ok("mods");
+    }
+    if kernel_is(
+        &kernel,
+        &[
+            "paper",
+            "spigot",
+            "purpur",
+            "folia",
+            "velocity",
+            "waterfall",
+            "bungeecord",
+        ],
+    ) {
+        if requested == Some("mods") {
+            return Err("это ядро поддерживает аддоны только в plugins".into());
+        }
+        return Ok("plugins");
+    }
+    if kernel == "vanilla" {
+        return Err("Vanilla не поддерживает аддоны".into());
+    }
+    requested.ok_or_else(|| "для custom-ядра нужно явно выбрать mods или plugins".into())
+}
+
+fn valid_catalog_token(value: &str, label: &str) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 200
+        || value
+            .chars()
+            .any(|ch| ch.is_control() || ch.is_whitespace())
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains("..")
+    {
+        return Err(format!("недопустимый {label}"));
+    }
+    Ok(())
+}
+
+/// Проверить поля каталога до обращения к сети и файловой системе.
+pub fn validate_catalog_request(
+    config: &ServerConfig,
+    request: &CatalogInstallRequest,
+) -> Result<&'static str, String> {
+    if !request.source.eq_ignore_ascii_case("modrinth") {
+        return Err("для серверного каталога разрешён только Modrinth".into());
+    }
+    valid_catalog_token(&request.project_id, "id проекта")?;
+    valid_catalog_token(&request.version_id, "id версии")?;
+    if !matches!(request.project_type.trim(), "mod" | "plugin") {
+        return Err("каталог сервера поддерживает только моды и плагины".into());
+    }
+    if request.mc_version.trim().is_empty() || request.mc_version.trim() != config.mc_version.trim()
+    {
+        return Err("версия Minecraft аддона не совпадает с сервером".into());
+    }
+    if let Some(loader) = request
+        .loader
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if !loader.eq_ignore_ascii_case(&config.kernel) {
+            return Err("загрузчик аддона не совпадает с ядром сервера".into());
+        }
+    }
+    let folder = addon_folder(
+        &config.kernel,
+        Some(if request.project_type == "mod" {
+            "mods"
+        } else {
+            "plugins"
+        }),
+    )?;
+    if request.project_type == "mod" && folder != "mods" {
+        return Err("мод нельзя установить в plugins".into());
+    }
+    if request.project_type == "plugin" && folder != "plugins" {
+        return Err("плагин нельзя установить в mods".into());
+    }
+    let parsed = reqwest::Url::parse(request.url.trim())
+        .map_err(|_| "недопустимая ссылка каталога".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err("разрешены только http(s)-ссылки каталога".into());
+    }
+    let url_name = parsed
+        .path_segments()
+        .and_then(|segments| segments.last())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "у ссылки каталога нет имени файла".to_string())?;
+    valid_catalog_token(&request.filename, "имя JAR")?;
+    if request.filename != url_name || !request.filename.to_ascii_lowercase().ends_with(".jar") {
+        return Err("имя JAR не совпадает со ссылкой каталога".into());
+    }
+    if request.size == 0 || request.size > 1024 * 1024 * 1024 {
+        return Err("недопустимый размер JAR".into());
+    }
+    if request.sha1.len() != 40 || !request.sha1.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("каталог не передал корректный SHA-1 JAR".into());
+    }
+    Ok(folder)
+}
+
+/// Подготовить безопасное место для JAR каталога. Папка и все её компоненты
+/// не могут быть symlink, а существующий файл никогда не перезаписывается.
+pub fn catalog_destination(
+    paths: &Paths,
+    id: &str,
+    folder: &str,
+    filename: &str,
+) -> Result<PathBuf, String> {
+    let meta = instances::load(paths, id).map_err(|e| e.to_string())?;
+    let base = root(paths, &meta);
+    ensure_directory(&base, "папка сервера")?;
+    let folder_path = safe_relative(&base, folder, "папки аддонов")?;
+    ensure_no_symlink_components(&base, &folder_path, "папки аддонов")?;
+    if !folder_path.exists() {
+        fs::create_dir(&folder_path)
+            .map_err(|e| format!("не удалось создать папку аддонов: {e}"))?;
+    }
+    ensure_directory(&folder_path, "папка аддонов")?;
+    let destination = safe_relative(&folder_path, filename, "имени JAR")?;
+    ensure_no_symlink_components(&base, &destination, "имени JAR")?;
+    if fs::symlink_metadata(&destination).is_ok() {
+        return Err(format!("аддон уже существует: {filename}"));
+    }
+    let canonical_base = base.canonicalize().map_err(|e| e.to_string())?;
+    let canonical_folder = folder_path.canonicalize().map_err(|e| e.to_string())?;
+    if !canonical_folder.starts_with(&canonical_base) {
+        return Err("папка аддонов выходит за пределы сервера".into());
+    }
+    Ok(destination)
 }
 
 pub async fn kernel_versions(http: &Http, kernel: &str) -> Result<Vec<KernelVersion>, String> {
@@ -812,6 +985,83 @@ fn parse_port(root: &Path) -> Option<u16> {
     })
 }
 
+fn atomic_replace_file(temp: &Path, target: &Path) -> Result<(), String> {
+    // Unix rename(2) replaces the old file atomically. Windows refuses that
+    // operation while the destination exists, so remove only the already
+    // checked regular destination immediately before the rename.
+    #[cfg(windows)]
+    if regular_file(target) {
+        fs::remove_file(target).map_err(|e| format!("не удалось заменить server-icon.png: {e}"))?;
+    }
+    fs::rename(temp, target).map_err(|e| format!("не удалось заменить server-icon.png: {e}"))
+}
+
+/// Преобразовать пользовательскую картинку в Minecraft server-icon.png.
+///
+/// Запись идёт в уникальный файл в той же папке, с `create_new`, `write_all`
+/// и `sync_all`, а затем заменяет готовый файл одним rename. Это исключает
+/// частично записанную иконку при одновременном открытии сервера или падении
+/// процесса; все компоненты source/target/temp проверяются на symlink.
+pub fn write_server_icon(paths: &Paths, id: &str, source_path: &str) -> Result<(), String> {
+    let meta = instances::load(paths, id).map_err(|e| e.to_string())?;
+    let root = root(paths, &meta);
+    ensure_directory(&root, "папка сервера")?;
+    ensure_no_symlink_components(&root, &root.join("server-icon.png"), "server-icon.png")?;
+
+    let source = PathBuf::from(source_path);
+    ensure_not_symlink(&source, "исходная иконка")?;
+    let source_meta = fs::symlink_metadata(&source)
+        .map_err(|e| format!("не удалось проверить исходную иконку: {e}"))?;
+    if !source_meta.is_file() {
+        return Err("исходная иконка не является обычным файлом".into());
+    }
+    if source_meta.len() == 0 || source_meta.len() > MAX_SERVER_ICON_BYTES {
+        return Err("исходная иконка слишком большая или пустая".into());
+    }
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+        return Err("подойдёт PNG, JPG или WebP".into());
+    }
+
+    let image =
+        image::open(&source).map_err(|e| format!("не удалось прочитать исходную иконку: {e}"))?;
+    let normalized = image.resize_to_fill(64, 64, image::imageops::FilterType::Lanczos3);
+    let mut encoded = Cursor::new(Vec::new());
+    normalized
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .map_err(|e| format!("не удалось подготовить PNG server-icon.png: {e}"))?;
+    let bytes = encoded.into_inner();
+
+    let sequence = ICON_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temp = root.join(format!(
+        ".server-icon-{}-{sequence}.tmp",
+        std::process::id()
+    ));
+    ensure_no_symlink_components(&root, &temp, "временного server-icon.png")?;
+    let mut output = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+    {
+        Ok(file) => file,
+        Err(error) => return Err(format!("не удалось создать временную иконку: {error}")),
+    };
+    if let Err(error) = output.write_all(&bytes).and_then(|_| output.sync_all()) {
+        let _ = fs::remove_file(&temp);
+        return Err(format!("не удалось записать server-icon.png: {error}"));
+    }
+    drop(output);
+    if let Err(error) = atomic_replace_file(&temp, &root.join("server-icon.png")) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    Ok(())
+}
+
 fn write_server_port(root: &Path, port: u16) -> Result<(), String> {
     ensure_directory(root, "папка сервера")?;
     let file = root.join("server.properties");
@@ -1083,7 +1333,7 @@ pub async fn create(
     }
     config.created = now();
     config.updated = now();
-    if !server_root.join("server-icon.png").is_file() {
+    if !regular_file(&server_root.join("server-icon.png")) {
         config.icon = None;
     }
 
@@ -2145,5 +2395,97 @@ mod tests {
             ..ServerConfig::default()
         };
         assert_eq!(command_line(&config).unwrap().0, "/custom/java");
+    }
+
+    #[test]
+    fn addon_folder_matches_kernel_and_rejects_ambiguous_servers() {
+        assert_eq!(addon_folder("fabric", None).unwrap(), "mods");
+        assert_eq!(addon_folder("paper", None).unwrap(), "plugins");
+        assert!(addon_folder("vanilla", Some("plugins")).is_err());
+        assert!(addon_folder("custom", None).is_err());
+        assert_eq!(addon_folder("custom", Some("mods")).unwrap(), "mods");
+    }
+
+    #[test]
+    fn server_icon_is_normalized_and_replaced_without_leftover_temp_files() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "omnispec-server-icon-{}-{}",
+            std::process::id(),
+            ICON_TEMP_SEQUENCE.load(Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&temp_root);
+        let paths = Paths::new(&temp_root).unwrap();
+        let meta = instances::create(
+            &paths,
+            CreateInstanceRequest {
+                name: "Icon server".into(),
+                mc_version: "1.21.4".into(),
+                loader: Loader::Vanilla,
+                icon: None,
+                notes: String::new(),
+                source: Some("server".into()),
+                source_url: None,
+                id: Some("icon-server".into()),
+                category: None,
+                memory_mb: None,
+                java_path: None,
+                game_dir: None,
+            },
+        )
+        .unwrap();
+        let server_root = root(&paths, &meta);
+        fs::create_dir_all(&server_root).unwrap();
+        fs::write(
+            marker(&paths, &meta.id),
+            serde_json::to_vec(&ServerConfig::default()).unwrap(),
+        )
+        .unwrap();
+        let source = temp_root.join("source.jpg");
+        image::RgbImage::from_pixel(20, 40, image::Rgb([12, 34, 56]))
+            .save(&source)
+            .unwrap();
+
+        write_server_icon(&paths, &meta.id, &source.to_string_lossy()).unwrap();
+        let output = image::open(server_root.join("server-icon.png")).unwrap();
+        assert_eq!((output.width(), output.height()), (64, 64));
+        assert!(!fs::read_dir(&server_root)
+            .unwrap()
+            .flatten()
+            .any(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".server-icon-")));
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn catalog_request_requires_server_version_and_safe_jar() {
+        let config = ServerConfig {
+            kernel: "paper".into(),
+            mc_version: "1.21.4".into(),
+            ..ServerConfig::default()
+        };
+        let request = CatalogInstallRequest {
+            source: "modrinth".into(),
+            project_id: "abc".into(),
+            version_id: "ver-1".into(),
+            project_type: "plugin".into(),
+            mc_version: "1.21.4".into(),
+            loader: None,
+            url: "https://cdn.example.test/plugin.jar".into(),
+            filename: "plugin.jar".into(),
+            size: 12,
+            sha1: "0123456789abcdef0123456789abcdef01234567".into(),
+        };
+        assert_eq!(
+            validate_catalog_request(&config, &request).unwrap(),
+            "plugins"
+        );
+        let mut wrong = request.clone();
+        wrong.mc_version = "1.20.1".into();
+        assert!(validate_catalog_request(&config, &wrong).is_err());
+        wrong = request;
+        wrong.filename = "../plugin.jar".into();
+        assert!(validate_catalog_request(&config, &wrong).is_err());
     }
 }

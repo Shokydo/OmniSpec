@@ -21,6 +21,7 @@ futures = { workspace = true }
 # Согласованная пользователем публикация локальной иконки для Discord RPC.
 reqwest = { workspace = true, features = ["multipart"] }
 sha2 = "0.10"
+sha1 = { workspace = true }
 hex = { workspace = true }
 omnispec-core = { path = "../../crates/omnispec-core" }
 # системные диалоги «проводника»: выбор файла/папки

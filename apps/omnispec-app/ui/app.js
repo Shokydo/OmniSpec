@@ -2283,6 +2283,7 @@
     serverGet: (instanceId) => invoke("server_get", { instanceId }),
     serverSave: (instanceId, config) => invoke("server_save", { instanceId, config }),
     serverSetEula: (instanceId, accepted) => invoke("server_set_eula", { instanceId, accepted }),
+    serverWriteIcon: (instanceId, path) => invoke("server_write_icon", { instanceId, path }),
     serverStart: (instanceId) => invoke("server_start", { instanceId }),
     serverStop: (instanceId) => invoke("server_stop", { instanceId }),
     serverCommand: (instanceId, command) => invoke("server_command", { instanceId, command }),
@@ -2294,6 +2295,7 @@
     serverDeleteAddon: (instanceId, path) => invoke("server_delete_addon", { instanceId, path }),
     serverSearchAddons: (query, projectType, mcVersion, loader) => invoke("server_search_addons", { query, projectType, mcVersion, loader }),
     serverAddonVersions: (projectId, mcVersion, loader) => invoke("server_addon_versions", { projectId, mcVersion, loader }),
+    serverInstallCatalogAddon: (instanceId, req) => invoke("server_install_catalog_addon", { instanceId, req }),
     serverInstallAddon: (instanceId, url, kind = null) => invoke("server_install_addon", { instanceId, url, kind }),
     serverBackupList: (instanceId) => invoke("server_backup_list", { instanceId }),
     serverBackupCreate: (instanceId, label, lean = true) => invoke("server_backup_create", { instanceId, label, lean }),
@@ -2636,6 +2638,7 @@
     serverGet: async () => ({ kernel: "paper", mc_version: "1.21.4", kernel_version: "1.21.4", memory_mb: 4096, port: 25565, stop_command: "stop", jar: "server.jar" }),
     serverSave: async (_, config) => config,
     serverSetEula: async () => null,
+    serverWriteIcon: async () => null,
     serverStart: async (id) => ({ instance_id: id, run_id: `${id}#server`, pid: 0, started_at: Math.floor(Date.now() / 1000) }),
     serverStop: async () => null,
     serverCommand: async () => null,
@@ -2647,6 +2650,7 @@
     serverDeleteAddon: async () => null,
     serverSearchAddons: async () => ({ hits: [] }),
     serverAddonVersions: async () => [],
+    serverInstallCatalogAddon: async () => null,
     serverInstallAddon: async () => null,
     serverBackupList: async () => [],
     serverBackupCreate: async () => null,
@@ -4717,11 +4721,12 @@
       return;
     }
     body.innerHTML = `<section class="server-view">
-      <div class="server-head"><div><div class="eyebrow">СЕРВЕР</div><h1 translate="no">${esc(meta.name)}</h1><p class="muted">${esc(serverLabel(meta))} · ${esc(snapshot.root || "")}</p></div><div class="server-actions"><button class="btn ${running ? "btn-stop" : "btn-primary"}" id="server-toggle">${running ? "Остановить" : "Запустить"}</button><button class="btn" id="server-settings">Настройки</button><button class="btn" id="server-sync">Синхронизация</button><button class="btn" id="server-folder">Папка</button></div></div>
+      <div class="server-head"><div><div class="eyebrow">СЕРВЕР</div><h1 translate="no">${esc(meta.name)}</h1><p class="muted">${esc(serverLabel(meta))} · ${esc(snapshot.root || "")}</p></div><div class="server-actions"><button class="btn ${running ? "btn-stop" : "btn-primary"}" id="server-toggle">${running ? "Остановить" : "Запустить"}</button><button class="btn" id="server-settings">Настройки</button><button class="btn" id="server-icon-pick">Иконка</button><button class="btn" id="server-sync">Синхронизация</button><button class="btn" id="server-folder">Папка</button></div></div>
       ${snapshot.eula_accepted === false ? `<div class="server-eula"><strong>Нужно принять EULA</strong><span>Для запуска Minecraft-сервера подтверди лицензионное соглашение Mojang в этом интерфейсе.</span><button class="btn btn-small btn-primary" id="server-eula">Принять EULA</button></div>` : ""}
       <div class="server-stat-grid"><div class="stat-card"><span>Состояние</span><strong>${running ? "Работает" : "Остановлен"}</strong></div><div class="stat-card"><span>TPS</span><strong>${snapshot.metrics?.tps == null ? "—" : Number(snapshot.metrics.tps).toFixed(1)}</strong></div><div class="stat-card"><span>Память</span><strong>${humanSize(snapshot.metrics?.memory_bytes || 0)}</strong></div><div class="stat-card"><span>Игроки</span><strong>${(snapshot.players || []).filter((item) => item.online).length}</strong></div></div>
       <div class="server-command"><input class="input grow" id="server-command-input" placeholder="Команда без /, например say Привет" ${running ? "" : "disabled"}><button class="btn" id="server-command-send" ${running ? "" : "disabled"}>Отправить</button></div>
       <div class="server-columns"><div class="panel"><div class="panel-head"><strong>Аддоны</strong><div class="flex-row"><button class="btn btn-small" id="server-addon-catalog">Каталог</button><button class="btn btn-small" id="server-addon-url">Установить по URL</button></div></div><div class="server-addon-list">${addons.length ? addons.map((item) => `<div class="server-addon"><span>${esc(item.name)}</span><small>${esc(item.kind)} · ${humanSize(item.size)}</small><button class="icon-btn" data-addon-toggle="${esc(item.path)}" title="Включить/выключить">${item.enabled ? "✓" : "○"}</button><button class="icon-btn danger" data-addon-delete="${esc(item.path)}" title="Удалить">×</button></div>`).join("") : `<div class="empty-state">Плагинов и модов пока нет.</div>`}</div></div><div class="panel"><div class="panel-head"><strong>Последние строки</strong><button class="btn btn-small" id="server-refresh">Обновить</button></div><div class="server-log-preview">${(snapshot.log_tail || []).slice(-80).map((line) => `<div>${esc(line)}</div>`).join("") || `<span class="muted">Лог появится после запуска.</span>`}</div></div></div>
+      <div id="server-addon-catalog-panel" class="server-addon-catalog-panel" hidden></div>
     </section>`;
     $("#server-toggle")?.addEventListener("click", async () => { try { if (running) await api.serverStop(meta.id); else await api.serverStart(meta.id); await refreshInstances(); renderSidebar(); renderTab(); } catch (error) { toast(String(error), "err"); } });
     $("#server-settings")?.addEventListener("click", async () => {
@@ -4733,6 +4738,16 @@
         if (memory == null) return;
         await api.serverSave(meta.id, { ...config, port: Number(port) || 25565, memory_mb: Number(memory) || 4096 });
         toast("Настройки сервера сохранены", "ok"); renderServerOverview();
+      } catch (error) { toast(String(error), "err"); }
+    });
+    $("#server-icon-pick")?.addEventListener("click", async () => {
+      const path = await api.pickFile("Выбери иконку сервера", ["png", "jpg", "jpeg", "webp"]).catch(() => null);
+      if (!path) return;
+      try {
+        await api.serverWriteIcon(meta.id, path);
+        await refreshInstances();
+        toast("server-icon.png записан (64×64)", "ok");
+        renderServerOverview();
       } catch (error) { toast(String(error), "err"); }
     });
     $("#server-sync")?.addEventListener("click", async () => {
@@ -4755,23 +4770,55 @@
     $("#server-command-input")?.addEventListener("keydown", (event) => { if (event.key === "Enter") $("#server-command-send")?.click(); });
     $("#server-addon-url")?.addEventListener("click", async () => { const url = window.prompt("Прямая ссылка на .jar аддона"); if (!url) return; try { await api.serverInstallAddon(meta.id, url, null); toast("Аддон установлен", "ok"); renderServerOverview(); } catch (error) { toast(String(error), "err"); } });
     $("#server-addon-catalog")?.addEventListener("click", async () => {
-      const query = window.prompt("Поиск плагина или мода в Modrinth");
-      if (!query) return;
-      try {
-        const type = window.confirm("Искать моды? Отмена — плагины") ? "mod" : "plugin";
-        const results = await api.serverSearchAddons(query, type, meta.server?.mc_version || meta.mc_version, type === "mod" ? (meta.server?.kernel || null) : null);
-        const hits = (results.hits || []).slice(0, 8);
-        if (!hits.length) return toast("Ничего не найдено", "");
-        const choice = window.prompt(`Найдено:\n${hits.map((item, index) => `${index + 1}. ${item.title} — ${item.project_id}`).join("\n")}\n\nВведи номер`);
-        const hit = hits[Number(choice) - 1];
-        if (!hit) return;
-        const versions = await api.serverAddonVersions(hit.project_id, meta.server?.mc_version || meta.mc_version, type === "mod" ? meta.server?.kernel : null);
-        const file = versions[0]?.files?.find((item) => item.primary) || versions[0]?.files?.[0];
-        if (!file?.url) return toast("У проекта нет совместимого jar", "err");
-        await api.serverInstallAddon(meta.id, file.url, type);
-        toast(`${hit.title} установлен`, "ok");
-        renderServerOverview();
-      } catch (error) { toast(String(error), "err"); }
+      const panel = $("#server-addon-catalog-panel");
+      if (!panel) return;
+      const defaultType = ["fabric", "forge", "neoforge"].includes(String(meta.server?.kernel || "").toLowerCase()) ? "mod" : "plugin";
+      panel.hidden = false;
+      panel.innerHTML = `<div class="panel-head"><strong>Каталог серверных аддонов</strong><div class="flex-row"><input class="input" id="server-catalog-query" placeholder="Название проекта"><button class="btn btn-small" data-catalog-search="${defaultType}">Найти ${defaultType === "mod" ? "моды" : "плагины"}</button><button class="btn btn-small" data-catalog-search="${defaultType === "mod" ? "plugin" : "mod"}">Искать ${defaultType === "mod" ? "плагины" : "моды"}</button></div></div><div id="server-catalog-results" class="server-addon-card-grid"><span class="muted">Введи название проекта и выбери тип.</span></div>`;
+      const results = $("#server-catalog-results", panel);
+      const queryInput = $("#server-catalog-query", panel);
+      const search = async (type) => {
+        const query = queryInput?.value.trim();
+        if (!query) { toast("Введи название проекта", "err"); return; }
+        results.innerHTML = `<div class="loading-line">Ищем в каталоге…</div>`;
+        try {
+          const response = await api.serverSearchAddons(query, type, meta.server?.mc_version || meta.mc_version, type === "mod" ? (meta.server?.kernel || null) : null);
+          const hits = (response?.hits || []).slice(0, 8);
+          results.innerHTML = hits.length ? hits.map((item) => `<article class="server-addon-card" data-catalog-project="${esc(item.project_id)}" data-catalog-type="${esc(type)}"><strong>${esc(item.title)}</strong><span>${esc(item.description || "")}</span><small>${Number(item.downloads || 0).toLocaleString()} загрузок · ${esc(item.project_id)}</small><button class="btn btn-small" data-catalog-load>Показать совместимые версии</button><div class="server-addon-card-versions" data-catalog-versions hidden></div></article>`).join("") : `<div class="empty-state">Ничего не найдено.</div>`;
+        } catch (error) { results.innerHTML = `<div class="error-text">${esc(String(error))}</div>`; }
+      };
+      panel.addEventListener("click", async (event) => {
+        const searchButton = event.target.closest("[data-catalog-search]");
+        if (searchButton) return search(searchButton.dataset.catalogSearch);
+        const loadButton = event.target.closest("[data-catalog-load]");
+        if (loadButton) {
+          const card = loadButton.closest(".server-addon-card");
+          const versionsBox = $("[data-catalog-versions]", card);
+          try {
+            const versions = await api.serverAddonVersions(card.dataset.catalogProject, meta.server?.mc_version || meta.mc_version, card.dataset.catalogType === "mod" ? meta.server?.kernel : null);
+            const compatible = versions.filter((version) => version.game_versions?.includes(meta.server?.mc_version || meta.mc_version) && version.files?.some((file) => file.url && file.filename?.toLowerCase().endsWith(".jar") && file.size > 0 && file.hashes?.sha1));
+            card._catalogVersions = compatible;
+            versionsBox.hidden = false;
+            versionsBox.innerHTML = compatible.length ? `<select class="input" data-catalog-version>${compatible.map((version, index) => `<option value="${index}">${esc(version.name || version.version_number || version.id)} · ${esc(version.primary_file?.filename || version.files?.[0]?.filename || "JAR")}</option>`).join("")}</select><button class="btn btn-small btn-primary" data-catalog-install>Установить выбранную версию</button>` : `<span class="muted">Нет JAR с размером и SHA-1 для этой версии.</span>`;
+          } catch (error) { versionsBox.hidden = false; versionsBox.innerHTML = `<span class="error-text">${esc(String(error))}</span>`; }
+          return;
+        }
+        const installButton = event.target.closest("[data-catalog-install]");
+        if (installButton) {
+          const card = installButton.closest(".server-addon-card");
+          const versions = card?._catalogVersions || [];
+          const index = Number($("[data-catalog-version]", card)?.value || 0);
+          const version = versions[index];
+          const file = version?.files?.find((item) => item.primary && item.filename?.toLowerCase().endsWith(".jar") && item.hashes?.sha1) || version?.files?.find((item) => item.filename?.toLowerCase().endsWith(".jar") && item.hashes?.sha1);
+          if (!version || !file) { toast("Выбери проверенную версию JAR", "err"); return; }
+          try {
+            await api.serverInstallCatalogAddon(meta.id, { source: "modrinth", project_id: card.dataset.catalogProject, version_id: version.id, project_type: card.dataset.catalogType, mc_version: meta.server?.mc_version || meta.mc_version, loader: card.dataset.catalogType === "mod" ? meta.server?.kernel : null, url: file.url, filename: file.filename, size: file.size, sha1: file.hashes.sha1 });
+            toast(`${$("strong", card)?.textContent || "Аддон"} установлен`, "ok");
+            renderServerOverview();
+          } catch (error) { toast(String(error), "err"); }
+        }
+      });
+      queryInput?.focus();
     });
     $$('[data-addon-toggle]').forEach((button) => button.addEventListener("click", async () => { try { await api.serverToggleAddon(meta.id, button.dataset.addonToggle); renderServerOverview(); } catch (error) { toast(String(error), "err"); } }));
     $$('[data-addon-delete]').forEach((button) => button.addEventListener("click", async () => { if (!window.confirm("Удалить аддон?")) return; try { await api.serverDeleteAddon(meta.id, button.dataset.addonDelete); renderServerOverview(); } catch (error) { toast(String(error), "err"); } }));
