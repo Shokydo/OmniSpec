@@ -1445,6 +1445,10 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
 .prefs-body { overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 16px; align-items: stretch; }
 /* флекс-колонка: секции всегда во всю высоту содержимого и не режутся */
 .prefs-body > * { flex: 0 0 auto; min-height: max-content; max-width: 100%; }
+.interface-launch-card { display: flex; flex-direction: column; gap: 9px; min-height: 220px; justify-content: center; }
+.interface-launch-card h3 { margin: 0; color: var(--text); font-size: 16px; }
+.interface-launch-card p { max-width: 560px; margin: 0 0 6px; line-height: 1.55; }
+.interface-launch-card .btn { align-self: flex-start; }
 .prefs-section {
   border: 1px solid var(--line-1);
   border-radius: var(--r);
