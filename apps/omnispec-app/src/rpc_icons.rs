@@ -11,6 +11,9 @@ use std::path::{Component, Path};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
+use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
+use image::metadata::LoopCount;
+use image::{AnimationDecoder, ImageDecoder};
 use omnispec_core::curseforge::CurseForge;
 use omnispec_core::instances::InstanceMeta;
 use omnispec_core::modrinth::{Modrinth, SearchQuery};
@@ -186,6 +189,65 @@ fn png_thumbnail(image: &LocalImage) -> Result<Vec<u8>, String> {
     Ok(data.into_inner())
 }
 
+/// Уменьшить GIF, не превращая его в статичный PNG. `GifDecoder` отдаёт уже
+/// собранные кадры, поэтому Discord получает полноценную анимацию и исходную
+/// задержку между кадрами.
+fn gif_thumbnail(image: &LocalImage) -> Result<Vec<u8>, String> {
+    let mut decoder = GifDecoder::new(Cursor::new(&image.bytes))
+        .map_err(|e| format!("не удалось открыть GIF: {e}"))?;
+    let (width, height) = decoder.dimensions();
+    if width == 0 || height == 0 {
+        return Err("у GIF некорректный размер".into());
+    }
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    decoder.set_limits(limits).map_err(|e| format!("не удалось проверить GIF: {e}"))?;
+
+    let max_side = width.max(height);
+    let target_width = ((u64::from(width) * 256) / u64::from(max_side)).max(1) as u32;
+    let target_height = ((u64::from(height) * 256) / u64::from(max_side)).max(1) as u32;
+    let repeat = match decoder.loop_count() {
+        LoopCount::Infinite => Repeat::Infinite,
+        LoopCount::Finite(count) => Repeat::Finite(count.get().min(u16::MAX as u32) as u16),
+    };
+    let frames = decoder.into_frames().map(move |frame| {
+        let frame = frame?;
+        let delay = frame.delay();
+        let buffer = frame.into_buffer();
+        let resized = image::imageops::resize(
+            &buffer,
+            target_width,
+            target_height,
+            image::imageops::FilterType::Triangle,
+        );
+        Ok(image::Frame::from_parts(resized, 0, 0, delay))
+    });
+    let mut output = Vec::new();
+    {
+        let mut encoder = GifEncoder::new(&mut output);
+        encoder.set_repeat(repeat).map_err(|e| format!("не удалось настроить GIF: {e}"))?;
+        encoder.try_encode_frames(frames).map_err(|e| format!("не удалось записать GIF: {e}"))?;
+    }
+    if output.is_empty() {
+        return Err("GIF не содержит кадров".into());
+    }
+    Ok(output)
+}
+
+fn is_gif(image: &LocalImage) -> bool {
+    matches!(image.bytes.get(..6), Some(b"GIF87a" | b"GIF89a"))
+}
+
+fn temporary_payload(image: &LocalImage) -> Result<(Vec<u8>, &'static str, &'static str), String> {
+    if is_gif(image) {
+        Ok((gif_thumbnail(image)?, "instance-icon.gif", "image/gif"))
+    } else {
+        Ok((png_thumbnail(image)?, "instance-icon.png", "image/png"))
+    }
+}
+
 /// Прерываем ещё незавершённую отправку при отзыве согласия. Данные, уже
 /// полученные сервером, отозвать нельзя — об этом предупреждаем в настройках.
 pub async fn until_revoked<F: std::future::Future>(
@@ -206,10 +268,10 @@ pub async fn until_revoked<F: std::future::Future>(
 
 /// Вызывается только после проверки актуального согласия пользователя.
 pub async fn upload_temporary(http: &Http, image: &LocalImage) -> Result<String, String> {
-    let png = png_thumbnail(image)?;
-    let part = reqwest::multipart::Part::bytes(png)
-        .file_name("instance-icon.png")
-        .mime_str("image/png").map_err(|e| e.to_string())?;
+    let (payload, file_name, mime) = temporary_payload(image)?;
+    let part = reqwest::multipart::Part::bytes(payload)
+        .file_name(file_name)
+        .mime_str(mime).map_err(|e| e.to_string())?;
     let form = reqwest::multipart::Form::new().part("file", part);
     let response = http.inner().post(TF_UPLOAD).multipart(form)
         .timeout(Duration::from_secs(25)).send().await
@@ -274,6 +336,34 @@ mod tests {
         let local = read_local(&paths, &m).unwrap().unwrap();
         assert_eq!(local.bytes, gif);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn gif_thumbnail_keeps_animation_for_discord_upload() {
+        let mut source = Vec::new();
+        {
+            let mut encoder = GifEncoder::new(&mut source);
+            encoder.set_repeat(Repeat::Infinite).unwrap();
+            for color in [[255, 0, 0, 255], [0, 0, 255, 255]] {
+                let frame = image::Frame::from_parts(
+                    image::RgbaImage::from_pixel(600, 400, image::Rgba(color)),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(80, 1),
+                );
+                encoder.encode_frame(frame).unwrap();
+            }
+        }
+        let local = LocalImage { bytes: source, hash: "gif-fixture".into() };
+        let (thumbnail, file_name, mime) = temporary_payload(&local).unwrap();
+        assert_eq!(file_name, "instance-icon.gif");
+        assert_eq!(mime, "image/gif");
+        assert!(thumbnail.starts_with(b"GIF"));
+        let decoder = GifDecoder::new(Cursor::new(thumbnail)).unwrap();
+        let frames = decoder.into_frames().collect_frames().unwrap();
+        assert_eq!(frames.len(), 2);
+        assert!(frames[0].buffer().width() <= 256);
+        assert!(frames[0].buffer().height() <= 256);
     }
 
     #[tokio::test]
