@@ -10376,15 +10376,15 @@
     const nav = $("#prefs-nav");
     const body = $("#prefs-body");
     if (!nav || !body) return;
-    if (!nav.children.length) {
+    if (!nav.querySelector("[data-pref]")) {
       nav.innerHTML = PREFS.map((item) => `
         <button class="prefs-tab" data-pref="${item.id}">${item.label}</button>`).join("");
-      $$(".prefs-tab", nav).forEach((tab) => tab.addEventListener("click", () => {
+      $$(".prefs-tab[data-pref]", nav).forEach((tab) => tab.addEventListener("click", () => {
         prefsCategory = tab.dataset.pref;
         renderPrefs();
       }));
     }
-    $$(".prefs-tab", nav).forEach((tab) => tab.classList.toggle("is-active", tab.dataset.pref === prefsCategory));
+    $$(".prefs-tab[data-pref]", nav).forEach((tab) => tab.classList.toggle("is-active", tab.dataset.pref === prefsCategory));
     const settings = state.settings || {};
     const previousCategory = body.dataset.prefCategory || "";
     if (previousCategory !== prefsCategory) animateView(body);
