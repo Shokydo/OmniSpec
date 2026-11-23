@@ -109,6 +109,9 @@ body[data-ui-preset="modrinth"] .sidebar, body[data-ui-preset="modrinth"] .toolb
 body[data-ui-preset="modrinth"] .card, body[data-ui-preset="modrinth"] .panel { border-radius: 14px; }
 body[data-ui-preset="custom"] .app { filter: saturate(1.08); }
 .customizer-box { width: min(1180px, 97vw); height: min(820px, 94vh); }
+.customizer-backdrop { place-items: stretch; padding: 12px; box-sizing: border-box; }
+.customizer-backdrop .customizer-box { width: 100%; max-width: none; height: 100%; max-height: none; min-height: 0; border-radius: var(--r-lg); }
+body[data-customizer-open="true"] { overflow: hidden; }
 .customizer-inline-root { display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .customizer-inline-root .customizer-body { min-height: 520px; }
 .customizer-head-copy { min-width: 0; flex: 1; }
@@ -209,6 +212,7 @@ body[data-ui-preset="custom"] .app { filter: saturate(1.08); }
   let saveTimer = 0;
   let statusTimer = 0;
   let dragId = null;
+  let layoutDragId = null;
   let started = false;
 
   const $ = (selector, root = document) => root?.querySelector?.(selector) || null;
@@ -378,11 +382,17 @@ body[data-ui-preset="custom"] .app { filter: saturate(1.08); }
     injectStyles(); applyLayout(); markUi();
   }
 
-  function queueSave(patch) {
+  function stageSettings(patch = {}) {
     const state = appState();
     const savedLayout = patch.ui_layout ? normalizeLayout(patch.ui_layout) : normalizeLayout(layout);
     const next = { ...currentSettings(), ...patch, ui_layout: savedLayout };
-    if (state) state.settings = next; settings = next;
+    if (state) state.settings = next;
+    settings = next;
+    return next;
+  }
+
+  function queueSave(patch) {
+    const next = stageSettings(patch);
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...readLocal(), custom_css: customCss, ui_layout: layout })); } catch { /* hardened webview */ }
     saveQueue = saveQueue.catch(() => {}).then(async () => {
       const invoke = window.__TAURI__?.core?.invoke; if (!invoke) return;
@@ -390,12 +400,16 @@ body[data-ui-preset="custom"] .app { filter: saturate(1.08); }
     }).then(() => setStatus("Сохранено", "saved"), (error) => setStatus(`Не удалось сохранить: ${error}`, "error"));
     return saveQueue;
   }
-  function queueSaveSoon(patch) { clearTimeout(saveTimer); saveTimer = setTimeout(() => { queueSave(patch); }, 500); }
+  function queueSaveSoon(patch) {
+    stageSettings(patch);
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { queueSave(patch); }, 500);
+  }
 
   function editorMarkup(inline = false) {
     return `<div class="customizer-inline-root" data-editor-root data-editor-inline="${inline ? "true" : "false"}">
       <header class="${inline ? "customizer-inline-head" : "modal-head"}">
-        <div class="customizer-head-copy"><div class="customizer-kicker">OmniSpec Studio · 0.52</div><h2>${inline ? "Визуальный редактор интерфейса" : "Тема и раскладка"}</h2></div>
+        <div class="customizer-head-copy"><div class="customizer-kicker">OmniSpec Studio · 0.52</div><h2 id="customizer-title">${inline ? "Визуальный редактор интерфейса" : "Тема и раскладка"}</h2></div>
         <div class="customizer-status" data-customizer-status>Изменения сохраняются автоматически</div>
         ${inline ? "" : '<button class="icon-btn" type="button" data-custom-close title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>'}
       </header>
@@ -411,7 +425,7 @@ body[data-ui-preset="custom"] .app { filter: saturate(1.08); }
 
   function createModal() {
     if (modal) return modal;
-    modal = document.createElement("div"); modal.className = "modal-backdrop"; modal.id = "modal-customizer"; modal.hidden = true;
+    modal = document.createElement("div"); modal.className = "modal-backdrop customizer-backdrop"; modal.id = "modal-customizer"; modal.hidden = true;
     modal.innerHTML = `<div class="modal customizer-box" role="dialog" aria-modal="true" aria-labelledby="customizer-title">${editorMarkup(false)}</div>`;
     document.body.appendChild(modal); bindEditorEvents($("[data-editor-root]", modal));
     modal.addEventListener("mousedown", (event) => { if (event.target === modal) closeCustomizer(); });
@@ -446,20 +460,70 @@ body[data-ui-preset="custom"] .app { filter: saturate(1.08); }
       if (target.dataset.elementSelect) updateElement(target.dataset.elementSelect, target.value);
     });
     root.addEventListener("dragstart", (event) => {
-      const item = event.target.closest?.("[data-visual-id]");
-      if (!item || !root.contains(item)) return;
-      dragId = item.dataset.visualId; item.classList.add("is-dragging");
-      event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", dragId);
+      const visual = event.target.closest?.(".visual-canvas-item[data-visual-id]");
+      if (visual && root.contains(visual)) {
+        dragId = visual.dataset.visualId;
+        selectedElementId = dragId;
+        visual.classList.add("is-dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", dragId);
+        return;
+      }
+      const layoutItem = event.target.closest?.(".layout-item[data-layout-id]");
+      if (layoutItem && root.contains(layoutItem)) {
+        layoutDragId = layoutItem.dataset.layoutId;
+        layoutItem.classList.add("is-dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", `layout:${layoutDragId}`);
+      }
     });
-    root.addEventListener("dragend", (event) => event.target.closest?.("[data-visual-id]")?.classList.remove("is-dragging"));
-    root.addEventListener("dragover", (event) => { if (event.target.closest?.(".visual-stage-inner") && dragId) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } });
+    root.addEventListener("dragend", (event) => {
+      event.target.closest?.(".visual-canvas-item[data-visual-id]")?.classList.remove("is-dragging");
+      event.target.closest?.(".layout-item[data-layout-id]")?.classList.remove("is-dragging");
+      dragId = null;
+      layoutDragId = null;
+    });
+    root.addEventListener("dragover", (event) => {
+      const stage = event.target.closest?.(".visual-stage-inner");
+      const order = event.target.closest?.(".layout-order");
+      if ((stage && dragId) || (order && layoutDragId)) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+      }
+    });
     root.addEventListener("drop", (event) => {
       const stage = event.target.closest?.(".visual-stage-inner");
-      if (!stage || !dragId) return;
+      if (stage && dragId) {
+        event.preventDefault();
+        const rect = stage.getBoundingClientRect();
+        const spec = ELEMENTS.find((item) => item.id === dragId) || ELEMENTS[0];
+        const value = {
+          ...elementState(dragId),
+          mode: "free",
+          x: Math.round(event.clientX - rect.left - spec.previewX),
+          y: Math.round(event.clientY - rect.top - spec.previewY)
+        };
+        updateElementValues(dragId, value, true);
+        dragId = null;
+        return;
+      }
+      const order = event.target.closest?.(".layout-order");
+      if (!order || !layoutDragId) return;
       event.preventDefault();
-      const rect = stage.getBoundingClientRect();
-      const value = { ...elementState(dragId), mode: "free", x: Math.round(event.clientX - rect.left - 8), y: Math.round(event.clientY - rect.top - 12) };
-      updateElementValues(dragId, value, true); dragId = null;
+      const target = event.target.closest?.(".layout-item[data-layout-id]");
+      const sourceIndex = layout.main_order.indexOf(layoutDragId);
+      if (sourceIndex < 0) { layoutDragId = null; return; }
+      const nextOrder = layout.main_order.filter((id) => id !== layoutDragId);
+      const targetId = target?.dataset.layoutId;
+      let targetIndex = targetId ? nextOrder.indexOf(targetId) : nextOrder.length;
+      if (targetIndex < 0) targetIndex = nextOrder.length;
+      if (target && event.clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2) targetIndex += 1;
+      nextOrder.splice(Math.min(targetIndex, nextOrder.length), 0, layoutDragId);
+      layout = normalizeLayout({ ...layout, main_order: nextOrder });
+      layoutDragId = null;
+      applyLayout();
+      queueSave({ ui_layout: layout });
+      renderEditor();
     });
   }
 
@@ -558,7 +622,7 @@ body[data-ui-preset="custom"] .app { filter: saturate(1.08); }
   }
   function renderLayout() {
     const hidden = layout.hidden.includes("sidebar");
-    return `<section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-grid"/></svg><div><h3>Крупные области лаунчера</h3><p>Порядок меняется перетаскиванием, а результат применяется сразу.</p></div></div><div class="layout-order">${layout.main_order.map((id) => ORDER_ITEMS.find((item) => item[0] === id)).filter(Boolean).map(layoutItemHtml).join("")}</div></section><section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-sliders"/></svg><div><h3>Размеры и плотность</h3><p>Ограничения сохраняют адаптивность окна на разных мониторах.</p></div></div><div class="customizer-grid">${rangeControl("sidebar_width", "Ширина сайдбара", "Список сборок и быстрые действия", layout.sidebar_width, 190, 420)}${rangeControl("main_padding", "Отступ рабочей области", "Свободное пространство вокруг контента", layout.main_padding, 0, 28)}${rangeControl("main_gap", "Расстояние блоков", "Промежуток между панелью, вкладками и контентом", layout.main_gap, 0, 24)}<label class="customizer-control"><span><strong>Боковая панель</strong><small>С какой стороны закрепить список сборок</small></span><select data-layout-select="sidebar_side"><option value="left" ${layout.sidebar_side === "left" ? "selected" : ""}>Слева</option><option value="right" ${layout.sidebar_side === "right" ? "selected" : ""}>Справа</option></select></label><label class="customizer-control"><span><strong>Плотность карточек</strong><small>Размеры сборок и панелей</small></span><select data-layout-select="density">${Object.entries(DENSITIES).map(([id, item]) => `<option value="${id}" ${layout.density === id ? "selected" : ""}>${item.label}</option>`).join("")}</select></label><label class="customizer-control"><span><strong>Сайдбар на экране</strong><small>${hidden ? "Скрыт" : "Виден и доступен"}</small></span><button class="switch ${hidden ? "" : "on"}" type="button" data-layout-action="toggle" data-layout-id="sidebar" aria-pressed="${!hidden}"></button></label></div><div class="customizer-actions"><button class="btn btn-small" type="button" data-layout-action="preset-default">Стандарт</button><button class="btn btn-small" type="button" data-layout-action="preset-focus">Фокус на контенте</button><button class="btn btn-small" type="button" data-layout-action="preset-right">Сайдбар справа</button></div></section>`;
+    return `<section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-grid"/></svg><div><h3>Крупные области лаунчера</h3><p>Порядок меняется перетаскиванием, а результат применяется сразу.</p></div></div><div class="layout-order">${layout.main_order.map((id) => ORDER_ITEMS.find((item) => item[0] === id)).filter(Boolean).map(layoutItemHtml).join("")}</div></section><section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-sliders"/></svg><div><h3>Размеры и плотность</h3><p>Ограничения сохраняют адаптивность окна на разных мониторах.</p></div></div><div class="customizer-grid">${rangeControl("sidebar_width", "Ширина сайдбара", "Список сборок и быстрые действия", layout.sidebar_width, 190, 420)}${rangeControl("main_padding", "Отступ рабочей области", "Свободное пространство вокруг контента", layout.main_padding, 0, 28)}${rangeControl("main_gap", "Расстояние блоков", "Промежуток между панелью, вкладками и контентом", layout.main_gap, 0, 24)}<label class="customizer-control"><span><strong>Боковая панель</strong><small>С какой стороны закрепить список сборок</small></span><select class="select" data-layout-select="sidebar_side"><option value="left" ${layout.sidebar_side === "left" ? "selected" : ""}>Слева</option><option value="right" ${layout.sidebar_side === "right" ? "selected" : ""}>Справа</option></select></label><label class="customizer-control"><span><strong>Плотность карточек</strong><small>Размеры сборок и панелей</small></span><select class="select" data-layout-select="density">${Object.entries(DENSITIES).map(([id, item]) => `<option value="${id}" ${layout.density === id ? "selected" : ""}>${item.label}</option>`).join("")}</select></label><label class="customizer-control"><span><strong>Сайдбар на экране</strong><small>${hidden ? "Скрыт" : "Виден и доступен"}</small></span><button class="switch ${hidden ? "" : "on"}" type="button" data-layout-action="toggle" data-layout-id="sidebar" aria-pressed="${!hidden}"></button></label></div><div class="customizer-actions"><button class="btn btn-small" type="button" data-layout-action="preset-default">Стандарт</button><button class="btn btn-small" type="button" data-layout-action="preset-focus">Фокус на контенте</button><button class="btn btn-small" type="button" data-layout-action="preset-right">Сайдбар справа</button></div></section>`;
   }
 
   function renderVisualEditor() {
@@ -566,18 +630,21 @@ body[data-ui-preset="custom"] .app { filter: saturate(1.08); }
     selectedElementId = selected.id;
     const value = elementState(selected.id);
     const controls = (key, title, description, min, max, unit = "px", raw = value[key] ?? 0) => `<label class="customizer-control"><span><strong>${title}</strong><small>${description}</small></span><input type="range" min="${min}" max="${max}" value="${raw || 0}" data-element-control="${key}"><output id="element-value-${key}">${key === "width" || key === "height" ? (raw ? `${raw}${unit}` : "auto") : `${raw || 0}${unit}`}</output></label>`;
-    return `<section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-sliders"/></svg><div><h3>Собери интерфейс как в OmniSpec, Prism Launcher, Modrinth или полностью по-своему</h3><p>Выбери пресет, затем перетащи отдельные элементы на холсте. Для каждого элемента доступны свободная позиция, размер, отступы, радиус, стиль и видимость.</p></div></div><div class="ui-preset-grid">${UI_PRESETS.map(([id, label, description]) => `<button type="button" class="ui-preset ${layout.preset === id ? "is-active" : ""}" data-ui-preset="${id}"><strong>${label}</strong><small>${description}</small></button>`).join("")}</div></section><section class="customizer-section"><div class="visual-editor"><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-list"/></svg>Элементы</div><div class="visual-element-list">${ELEMENTS.map((item) => { const state = elementState(item.id); return `<button type="button" class="visual-element ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}"><svg class="ic"><use href="#i-dots"/></svg><span class="visual-element-copy"><strong>${item.label}</strong><small>${state.visible ? item.description : "скрыт"}</small></span></button>`; }).join("")}</div></div><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-grid"/></svg>Холст · перетащи блоки</div><div class="visual-stage"><div class="visual-stage-inner">${ELEMENTS.map((item) => { const state = elementState(item.id); const left = Math.max(3, item.previewX + state.x); const top = Math.max(3, item.previewY + state.y); const width = state.width || item.previewWidth; const height = state.height || item.previewHeight; return `<div class="visual-canvas-item ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" draggable="true" data-visual-id="${item.id}" style="left:${left}px;top:${top}px;width:${width}px;min-height:${height}px"><svg class="ic"><use href="#i-dots"/></svg>${item.label}</div>`; }).join("")}</div><div class="visual-stage-help">Перетаскивание переводит элемент в режим «Свободно» и записывает координаты в профиль. Это не пользовательский JavaScript.</div></div></div><div class="visual-panel visual-properties"><div class="visual-panel-title"><svg class="ic"><use href="#i-pencil"/></svg>Свойства</div><div class="customizer-note"><strong>${selected.label}</strong><br>${selected.description}</div><label class="customizer-control"><span><strong>Видимость</strong><small>Показывать элемент в лаунчере</small></span><button class="switch ${value.visible ? "on" : ""}" type="button" data-element-visibility="${value.visible ? "hide" : "show"}" aria-pressed="${value.visible}"></button></label><label class="customizer-control"><span><strong>Режим расположения</strong><small>Адаптивный поток или свободные координаты</small></span><select data-element-select="mode"><option value="flow" ${value.mode === "flow" ? "selected" : ""}>В потоке</option><option value="free" ${value.mode === "free" ? "selected" : ""}>Свободно</option></select></label><label class="customizer-control"><span><strong>Вариант</strong><small>Размер и визуальный акцент</small></span><select data-element-select="variant">${ELEMENT_VARIANTS.map(([id, label]) => `<option value="${id}" ${value.variant === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>${controls("x", "X", "Горизонтальное смещение", -240, 720)}${controls("y", "Y", "Вертикальное смещение", -180, 480)}${controls("width", "Ширина", "0 — автоматически", 0, 900)}${controls("height", "Высота", "0 — автоматически", 0, 420)}${controls("margin", "Отступ снаружи", "Свободное пространство", 0, 40)}${controls("padding", "Внутренний отступ", "Пространство внутри", 0, 40)}${controls("radius", "Закругление", "Радиус углов", 0, 40)}</div></div></section>`;
+    return `<section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-sliders"/></svg><div><h3>Собери интерфейс как в OmniSpec, Prism Launcher, Modrinth или полностью по-своему</h3><p>Выбери пресет, затем перетащи отдельные элементы на холсте. Для каждого элемента доступны свободная позиция, размер, отступы, радиус, стиль и видимость.</p></div></div><div class="ui-preset-grid">${UI_PRESETS.map(([id, label, description]) => `<button type="button" class="ui-preset ${layout.preset === id ? "is-active" : ""}" data-ui-preset="${id}"><strong>${label}</strong><small>${description}</small></button>`).join("")}</div></section><section class="customizer-section"><div class="visual-editor"><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-list"/></svg>Элементы</div><div class="visual-element-list">${ELEMENTS.map((item) => { const state = elementState(item.id); return `<button type="button" class="visual-element ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}"><svg class="ic"><use href="#i-dots"/></svg><span class="visual-element-copy"><strong>${item.label}</strong><small>${state.visible ? item.description : "скрыт"}</small></span></button>`; }).join("")}</div></div><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-grid"/></svg>Холст · перетащи блоки</div><div class="visual-stage"><div class="visual-stage-inner">${ELEMENTS.map((item) => { const state = elementState(item.id); const left = Math.max(3, item.previewX + state.x); const top = Math.max(3, item.previewY + state.y); const width = state.width || item.previewWidth; const height = state.height || item.previewHeight; return `<div class="visual-canvas-item ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" draggable="true" data-visual-id="${item.id}" style="left:${left}px;top:${top}px;width:${width}px;min-height:${height}px"><svg class="ic"><use href="#i-dots"/></svg>${item.label}</div>`; }).join("")}</div><div class="visual-stage-help">Перетаскивание переводит элемент в режим «Свободно» и записывает координаты в профиль. Это не пользовательский JavaScript.</div></div></div><div class="visual-panel visual-properties"><div class="visual-panel-title"><svg class="ic"><use href="#i-pencil"/></svg>Свойства</div><div class="customizer-note"><strong>${selected.label}</strong><br>${selected.description}</div><label class="customizer-control"><span><strong>Видимость</strong><small>Показывать элемент в лаунчере</small></span><button class="switch ${value.visible ? "on" : ""}" type="button" data-element-visibility="${value.visible ? "hide" : "show"}" aria-pressed="${value.visible}"></button></label><label class="customizer-control"><span><strong>Режим расположения</strong><small>Адаптивный поток или свободные координаты</small></span><select class="select" data-element-select="mode"><option value="flow" ${value.mode === "flow" ? "selected" : ""}>В потоке</option><option value="free" ${value.mode === "free" ? "selected" : ""}>Свободно</option></select></label><label class="customizer-control"><span><strong>Вариант</strong><small>Размер и визуальный акцент</small></span><select class="select" data-element-select="variant">${ELEMENT_VARIANTS.map(([id, label]) => `<option value="${id}" ${value.variant === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>${controls("x", "X", "Горизонтальное смещение", -240, 720)}${controls("y", "Y", "Вертикальное смещение", -180, 480)}${controls("width", "Ширина", "0 — автоматически", 0, 900)}${controls("height", "Высота", "0 — автоматически", 0, 420)}${controls("margin", "Отступ снаружи", "Свободное пространство", 0, 40)}${controls("padding", "Внутренний отступ", "Пространство внутри", 0, 40)}${controls("radius", "Закругление", "Радиус углов", 0, 40)}</div></div></section>`;
   }
 
   function renderCss() {
-    return `<section class="customizer-section customizer-code-wrap"><div class="customizer-section-head"><svg class="ic"><use href="#i-code"/></svg><div><h3>CSS-код темы</h3><p>Пиши обычный CSS. Предпросмотр живой, сохранение автоматическое. JavaScript и @import отключены.</p></div></div><textarea id="custom-css-editor" class="customizer-code" spellcheck="false" autocomplete="off" aria-label="CSS-код темы">${esc(customCss)}</textarea><div class="customizer-preset-row"><span class="label">Пресеты:</span>${Object.entries(CSS_PRESETS).map(([id, item]) => `<button class="btn btn-small" type="button" data-css-preset="${id}">${item.label}</button>`).join("")}</div><div class="customizer-code-help"><code>[data-os="sidebar"]</code><code>[data-os-element="toolbar"]</code><code>[data-os="tabs"]</code><code>[data-os="build-card"]</code><code>--accent</code><code>--r</code></div><div class="customizer-actions"><button class="btn btn-small" type="button" data-css-action="export">Экспорт темы</button><button class="btn btn-small" type="button" data-css-action="import">Импорт темы</button><button class="btn btn-small btn-ghost" type="button" data-css-action="copy">Скопировать CSS</button><span class="hint">Файл темы содержит CSS и раскладку — им можно делиться.</span></div><input id="custom-theme-file" type="file" accept=".json,.omtheme,application/json" hidden></section>`;
+    return `<section class="customizer-section customizer-code-wrap"><div class="customizer-section-head"><svg class="ic"><use href="#i-code"/></svg><div><h3>Базовый CSS и переопределения</h3><p>Редактируй CSS прямо здесь: изменения применяются живьём и сохраняются автоматически. JavaScript и @import отключены.</p></div></div><textarea id="custom-css-editor" class="customizer-code" spellcheck="false" autocomplete="off" aria-label="Базовый CSS и переопределения">${esc(customCss)}</textarea><div class="customizer-preset-row"><span class="label">Пресеты:</span>${Object.entries(CSS_PRESETS).map(([id, item]) => `<button class="btn btn-small" type="button" data-css-preset="${id}">${item.label}</button>`).join("")}</div><div class="customizer-code-help"><code>[data-os="sidebar"]</code><code>[data-os-element="toolbar"]</code><code>[data-os="tabs"]</code><code>[data-os="build-card"]</code><code>--accent</code><code>--r</code></div><div class="customizer-actions"><button class="btn btn-small" type="button" data-css-action="export">Экспорт темы</button><button class="btn btn-small" type="button" data-css-action="import">Импорт темы</button><button class="btn btn-small btn-ghost" type="button" data-css-action="copy">Скопировать CSS</button><span class="hint">Файл темы содержит CSS и раскладку — им можно делиться.</span></div><input id="custom-theme-file" type="file" accept=".json,.omtheme,application/json" hidden></section>`;
   }
 
   function openCustomizer() {
     inlineHost = null; createModal();
+    const prefs = document.getElementById("modal-prefs");
+    if (prefs) prefs.hidden = true;
     const current = currentSettings(); layout = normalizeLayout(current.ui_layout || layout); customCss = String(current.custom_css ?? customCss ?? "");
     injectStyles(); applyLayout(); currentTab = "editor"; renderEditor(); bindFileImport(editorRoot());
     modal.hidden = false; document.body.dataset.customizerOpen = "true"; setStatus("Изменения сохраняются автоматически");
+    setTimeout(() => $("[data-custom-tab='editor']", editorRoot())?.focus(), 0);
   }
   function closeCustomizer() { if (!modal) return; modal.hidden = true; document.body.dataset.customizerOpen = "false"; }
   function renderInline(host) {

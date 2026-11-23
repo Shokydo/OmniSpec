@@ -1564,6 +1564,10 @@
       <button class="ctx-item" data-act="folder"><svg class="ic"><use href="#i-folder"/></svg>Открыть папку сборки</button>
       <button class="ctx-item" data-act="refresh"><svg class="ic"><use href="#i-download"/></svg>Обновить файлы игры</button>
       <div class="ctx-sep"></div>
+      <div class="ctx-caption">Экспортировать в…</div>
+      <button class="ctx-item" data-act="export:mrpack"><svg class="ic"><use href="#i-download"/></svg><span>.mrpack</span></button>
+      <button class="ctx-item" data-act="export:zip"><svg class="ic"><use href="#i-download"/></svg><span>.zip</span></button>
+      <div class="ctx-sep"></div>
       <button class="ctx-item danger" data-act="delete"><svg class="ic"><use href="#i-trash"/></svg>Удалить сборку</button>`;
     el.hidden = false;
     positionCtxMenu(el, x, y);
@@ -1604,6 +1608,10 @@
       selectInstance(fresh.id);
       state.tab = "settings";
       renderTab();
+      return;
+    }
+    if (action === "export:mrpack" || action === "export:zip") {
+      openExportModal(fresh, action.slice("export:".length));
       return;
     }
     if (action === "icon") {
@@ -10595,6 +10603,25 @@
     return Boolean(modal && !modal.hidden && (prefsCategory === "profile" || prefsCategory === "avatar"));
   }
 
+  // Редактор интерфейса занимает отдельный полноэкранный режим: узкая
+  // двухколоночная модалка настроек больше не пытается вместить холст и
+  // свойства одновременно.
+  function openInterfaceCustomizer() {
+    const prefs = $("#modal-prefs");
+    if (prefs) prefs.hidden = true;
+    if (window.omnispecCustomizer?.open) {
+      window.omnispecCustomizer.open();
+      return;
+    }
+    // Скрипт конструктора загружается следом за app.js. Если пользователь
+    // успел нажать кнопку в самый первый кадр, оставляем понятный fallback.
+    if (prefs) {
+      prefs.hidden = false;
+      prefsCategory = "interface";
+      renderPrefs();
+    }
+  }
+
   function openPrefs(category) {
     const modal = $("#modal-prefs");
     if (!modal) return;
@@ -10634,6 +10661,10 @@
         <button class="prefs-tab" data-pref="${item.id}"><span class="prefs-tab-icon"><svg class="ic"><use href="#${item.icon}"/></svg></span><span>${item.label}</span></button>`).join("");
       $$(".prefs-tab[data-pref]", nav).forEach((tab) => tab.addEventListener("click", () => {
         prefsCategory = tab.dataset.pref;
+        if (prefsCategory === "interface") {
+          openInterfaceCustomizer();
+          return;
+        }
         renderPrefs();
       }));
     }
@@ -10668,8 +10699,7 @@
     if (prefsCategory === "profile") body.innerHTML = prefsProfile();
     if (prefsCategory === "avatar") body.innerHTML = prefsAvatar();
     if (prefsCategory === "interface") {
-      if (window.omnispecCustomizer?.renderInline) window.omnispecCustomizer.renderInline(body);
-      else body.innerHTML = `<div class="empty-state">Загружаю визуальный редактор…</div>`;
+      body.innerHTML = `<section class="prefs-section interface-launch-card"><div class="prefs-label">Визуальный редактор</div><h3>Настрой интерфейс в отдельном полноэкранном режиме</h3><p class="muted">Холст, свойства элементов, пресеты и редактируемый базовый CSS открываются в большом окне, чтобы ничего не сжималось и не перекрывало друг друга.</p><button class="btn btn-primary" data-open-customizer><svg class="ic"><use href="#i-sliders"/></svg>Открыть визуальный редактор</button></section>`;
     }
     if (prefsCategory === "look") body.innerHTML = prefsLook(settings);
     if (prefsCategory === "wall") body.innerHTML = prefsWall(settings);
@@ -10679,6 +10709,7 @@
     if (prefsCategory === "discord") body.innerHTML = prefsDiscord(settings);
     if (prefsCategory === "sound") body.innerHTML = prefsSound(settings);
     bindPrefs();
+    if (prefsCategory === "interface") $("[data-open-customizer]", body)?.addEventListener("click", openInterfaceCustomizer);
     if (prefsCategory === "profile") bindPrefsProfile();
     if (prefsCategory === "avatar") {
       bindCapes();
@@ -14365,6 +14396,10 @@
       if (IS_APP) api.openUrl(href).catch((error) => toast(String(error), "err"));
       else window.open(href, "_blank");
     }, true);
+    // В webview не оставляем ни одного системного меню (Обновить,
+    // Сохранить как, Копировать и т. п.): каждый ПКМ обрабатывается самим
+    // лаунчером или намеренно остаётся без меню.
+    document.addEventListener("contextmenu", (event) => event.preventDefault(), true);
 
   /** Привязка, которая не падает, если элемента нет (часть кнопок живёт в модалках). */
   function on(selector, event, handler) {
