@@ -209,6 +209,13 @@ async function setRange(page,selector,value){
         : ['discord','sound'];
       for(const pref of prefs){
         await page.locator(`[data-pref="${pref}"]`).click();
+        if(pref==='interface'){
+          await page.waitForSelector('#modal-customizer:not([hidden]) [data-editor-root]');
+          assert.equal(await page.locator('#modal-prefs:not([hidden]) [data-editor-root]').count(),0,`${label}: customizer must not render inside the narrow preferences pane`);
+          await page.locator('#modal-customizer [data-custom-close]').last().click();
+          await page.locator('#btn-quick-settings').click();
+          await page.waitForSelector('#modal-prefs:not([hidden])');
+        }
         assert.equal(await page.locator('#prefs-body').getAttribute('data-pref-category'),pref);
         const nav=await page.locator('#prefs-nav').evaluate(el=>({client:el.clientWidth,scroll:el.scrollWidth}));
         assert.equal(nav.scroll,nav.client,`${label}: nav overflows after choosing ${pref}: ${JSON.stringify(nav)}`);
