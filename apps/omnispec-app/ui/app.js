@@ -2286,6 +2286,7 @@
     serverWriteIcon: (instanceId, path) => invoke("server_write_icon", { instanceId, path }),
     serverStart: (instanceId) => invoke("server_start", { instanceId }),
     serverStop: (instanceId) => invoke("server_stop", { instanceId }),
+    serverKill: (instanceId) => invoke("server_kill", { instanceId }),
     serverCommand: (instanceId, command) => invoke("server_command", { instanceId, command }),
     serverSnapshot: (instanceId) => invoke("server_snapshot", { instanceId }),
     serverFiles: (instanceId, sub = null) => invoke("server_files", { instanceId, sub }),
@@ -2641,6 +2642,7 @@
     serverWriteIcon: async () => null,
     serverStart: async (id) => ({ instance_id: id, run_id: `${id}#server`, pid: 0, started_at: Math.floor(Date.now() / 1000) }),
     serverStop: async () => null,
+    serverKill: async () => null,
     serverCommand: async () => null,
     serverSnapshot: async (id) => ({ id, config: await DEMO.settings, root: "demo/server", eula_accepted: true, running: false, metrics: { pid: null, memory_bytes: 0, cpu_percent: 0, uptime_secs: 0, tps: null }, players: [], files: [], log_tail: [] }),
     serverFiles: async () => [],
@@ -3575,7 +3577,7 @@
 
 
   function catGroupHtml({ id, name, items, open, running }) {
-    return `<div class="cat ${open ? "is-open" : ""}" data-cat="${esc(id || "")}">
+    return `<div class="cat ${open ? "is-open" : ""} ${running ? "cat-running" : ""}" data-cat="${esc(id || "")}">
       <div class="cat-head ${running ? "cat-run" : ""}" data-cat-head="${esc(id || "")}">
         <svg class="ic cat-chev"><use href="#i-chev"/></svg>
         <span class="cat-name" ${id && id !== "__running" ? 'translate="no"' : ""}>${esc(name)}</span>
@@ -4656,13 +4658,13 @@
   /** Какие вкладки показывать: без сборки — только лента, со сборкой — всё остальное. */
   function applyTabs(meta) {
     const server = isServer(meta);
-    const serverTabs = new Set(["server", "players", "metrics", "backups"]);
-    const serverAllowed = new Set(["server", "console", "files", "players", "metrics", "backups", "settings"]);
+    const serverOnlyTabs = new Set(["server", "players", "metrics", "backups"]);
+    const serverAllowed = new Set(["server", "console", "files", "players", "metrics", "backups", "download", "settings"]);
     $$(".tab").forEach((tab) => {
       const id = tab.dataset.tab;
       if (!meta) tab.hidden = !["discover", "servers"].includes(id);
       else if (server) tab.hidden = !serverAllowed.has(id);
-      else tab.hidden = id === "discover" || serverTabs.has(id) || id === "servers";
+      else tab.hidden = id === "discover" || serverOnlyTabs.has(id) || id === "servers";
     });
   }
 
@@ -4674,21 +4676,97 @@
     return h ? `${h} ч ${m} мин` : m ? `${m} мин ${s} с` : `${s} с`;
   }
 
+  const SERVER_ACTIONS = {
+    start: { label: "Запуск", icon: "i-play", title: "Запустить сервер" },
+    restart: { label: "Перезапуск", icon: "i-restart", title: "Перезапустить сервер" },
+    stop: { label: "Стоп", icon: "i-stop", title: "Остановить сервер штатно" },
+    kill: { label: "Килл", icon: "i-close", title: "Немедленно завершить процесс" }
+  };
+
+  function serverControlsHtml(instanceId, running) {
+    return `<div class="server-controls" data-server-controls="${esc(instanceId)}">${Object.entries(SERVER_ACTIONS).map(([action, info]) => {
+      const disabled = action === "start" ? running : !running;
+      const danger = action === "kill" ? " btn-danger" : "";
+      return `<button type="button" class="btn btn-small server-action${danger}" data-server-action="${action}" title="${info.title}"${disabled ? " disabled" : ""}><svg class="ic"><use href="#${info.icon}"/></svg><span>${info.label}</span></button>`;
+    }).join("")}</div>`;
+  }
+
+  async function waitServerStopped(instanceId, timeout = 20000) {
+    const deadline = Date.now() + timeout;
+    while (state.running.has(instanceId) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await refreshInstances();
+    }
+    return !state.running.has(instanceId);
+  }
+
+  async function performServerAction(instanceId, action) {
+    const meta = state.instances.find((item) => item.id === instanceId);
+    if (!meta || !isServer(meta)) return;
+    if (action === "kill" && !window.confirm("Немедленно завершить процесс сервера? Несохранённые данные могут потеряться.")) return;
+    try {
+      if (action === "start") {
+        await api.serverStart(instanceId);
+        toast("Сервер запускается", "ok");
+      } else if (action === "stop") {
+        await api.serverStop(instanceId);
+        toast("Сервер останавливается");
+      } else if (action === "kill") {
+        await api.serverKill(instanceId);
+        toast("Процесс сервера завершён", "ok");
+      } else if (action === "restart") {
+        if (state.running.has(instanceId)) {
+          await api.serverStop(instanceId);
+          if (!await waitServerStopped(instanceId)) {
+            throw new Error("сервер не завершился вовремя; используй «Килл»");
+          }
+        }
+        await api.serverStart(instanceId);
+        toast("Сервер перезапускается", "ok");
+      }
+      await refreshInstances();
+      renderSidebar();
+      if (state.selectedId === instanceId) renderTab();
+      else if (state.tab === "servers") renderServerList();
+    } catch (error) {
+      toast(String(error), "err");
+    }
+  }
+
+  function bindServerControls(root = document) {
+    $$('[data-server-action]', root).forEach((button) => button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const controls = button.closest("[data-server-controls]");
+      performServerAction(controls?.dataset.serverControls, button.dataset.serverAction);
+    }));
+  }
+
   function renderServerList() {
     const body = $("#tab-body");
     const servers = state.instances.filter(isServer);
     body.innerHTML = `
-      <section class="discover-wrap">
-        <div class="discover-head"><div><div class="eyebrow">ОМНИПАНЕЛЬ</div><h1>Сервера</h1><p class="muted">Создание, импорт, запуск и обслуживание локальных серверов в одном списке.</p></div>
+      <section class="discover-wrap server-list-view">
+        <div class="discover-head"><div><div class="eyebrow">ОМНИПАНЕЛЬ</div><h1>Сервера</h1><p class="muted">Иконка, информация о сборке и управление локальным процессом в одной карточке.</p></div>
           <button class="btn btn-primary" id="server-new"><svg class="ic"><use href="#i-plus"/></svg>Создать сервер</button></div>
-        <div class="card-grid server-grid">
-          ${servers.length ? servers.map((item) => `<article class="build-tile ${state.running.has(item.id) ? "is-running" : ""}" data-server-open="${esc(item.id)}"><div class="build-tile-icon">${instanceIconHtml(item)}</div><div class="build-tile-body"><strong translate="no">${esc(item.name)}</strong><span>${esc(serverLabel(item))}</span><small>${state.running.has(item.id) ? "запущен" : "остановлен"} · порт ${esc(item.server?.port || 25565)}</small></div><span class="build-tile-arrow">›</span></article>`).join("") : `<div class="empty-state">Серверов пока нет.<br><span class="muted">Создай новый сервер или импортируй готовую папку.</span></div>`}
+        <div class="server-card-grid">
+          ${servers.length ? servers.map((item) => {
+            const running = state.running.has(item.id);
+            return `<article class="server-card ${running ? "is-running" : ""}">
+              <button type="button" class="server-card-main" data-server-open="${esc(item.id)}">
+                <span class="server-card-icon">${instanceIconHtml(item)}</span>
+                <span class="server-card-info"><span class="server-card-status"><span class="dot ${running ? "on" : ""}"></span>${running ? "Запущен" : "Остановлен"}</span><strong translate="no">${esc(item.name)}</strong><span>${esc(serverLabel(item))} · порт ${esc(item.server?.port || 25565)}</span><small>Ядро ${esc(item.server?.kernel || "custom")} · ${esc(item.server?.kernel_version || item.server?.mc_version || "версия не указана")}</small></span>
+                <span class="server-card-arrow">›</span>
+              </button>
+              ${serverControlsHtml(item.id, running)}
+            </article>`;
+          }).join("") : `<div class="empty-state">Серверов пока нет.<br><span class="muted">Создай новый сервер или импортируй готовую папку.</span></div>`}
         </div>
         <div class="server-list-actions"><button class="btn" id="server-scan"><svg class="ic"><use href="#i-search"/></svg>Сканировать папки</button><span class="muted">Найденные серверы можно импортировать без потери ядра, модов и плагинов.</span></div>
         <div id="server-scan-result"></div>
       </section>`;
     $("#server-new")?.addEventListener("click", () => openCreate({ mode: "server" }));
-    $$("[data-server-open]").forEach((item) => item.addEventListener("click", () => openInstance(item.dataset.serverOpen)));
+    $$('[data-server-open]').forEach((item) => item.addEventListener("click", () => openInstance(item.dataset.serverOpen)));
+    bindServerControls(body);
     $("#server-scan")?.addEventListener("click", async () => {
       const result = $("#server-scan-result");
       result.innerHTML = `<div class="loading-line">Ищем серверные папки…</div>`;
@@ -4715,20 +4793,23 @@
     state.serverSnapshot = snapshot;
     if (snapshot.error) { body.innerHTML = `<section class="server-view"><div class="error-text">${esc(snapshot.error)}</div></section>`; return; }
     const running = state.running.has(meta.id) || snapshot.running;
+    const config = snapshot.config || meta.server || {};
     const addons = await api.serverAddons(meta.id).catch(() => []);
     if (state.windowHidden) {
       state.uiRefreshPending = true;
       return;
     }
     body.innerHTML = `<section class="server-view">
-      <div class="server-head"><div><div class="eyebrow">СЕРВЕР</div><h1 translate="no">${esc(meta.name)}</h1><p class="muted">${esc(serverLabel(meta))} · ${esc(snapshot.root || "")}</p></div><div class="server-actions"><button class="btn ${running ? "btn-stop" : "btn-primary"}" id="server-toggle">${running ? "Остановить" : "Запустить"}</button><button class="btn" id="server-settings">Настройки</button><button class="btn" id="server-icon-pick">Иконка</button><button class="btn" id="server-sync">Синхронизация</button><button class="btn" id="server-folder">Папка</button></div></div>
+      <div class="server-overview-hero">
+        <div class="server-overview-identity"><div class="server-overview-icon">${instanceIconHtml(meta)}</div><div><div class="eyebrow">ЛОКАЛЬНЫЙ СЕРВЕР</div><h1 translate="no">${esc(meta.name)}</h1><p class="muted">${esc(serverLabel(meta))} · ${esc(snapshot.root || "")}</p></div></div>
+        <div class="server-overview-controls">${serverControlsHtml(meta.id, running)}<div class="server-secondary-actions"><button class="btn btn-small" id="server-settings">Настройки</button><button class="btn btn-small" id="server-icon-pick">Иконка</button><button class="btn btn-small" id="server-sync">Синхронизация</button><button class="btn btn-small" id="server-folder">Папка</button></div></div>
+      </div>
       ${snapshot.eula_accepted === false ? `<div class="server-eula"><strong>Нужно принять EULA</strong><span>Для запуска Minecraft-сервера подтверди лицензионное соглашение Mojang в этом интерфейсе.</span><button class="btn btn-small btn-primary" id="server-eula">Принять EULA</button></div>` : ""}
-      <div class="server-stat-grid"><div class="stat-card"><span>Состояние</span><strong>${running ? "Работает" : "Остановлен"}</strong></div><div class="stat-card"><span>TPS</span><strong>${snapshot.metrics?.tps == null ? "—" : Number(snapshot.metrics.tps).toFixed(1)}</strong></div><div class="stat-card"><span>Память</span><strong>${humanSize(snapshot.metrics?.memory_bytes || 0)}</strong></div><div class="stat-card"><span>Игроки</span><strong>${(snapshot.players || []).filter((item) => item.online).length}</strong></div></div>
+      <div class="server-info-grid"><div class="stat-card"><span>Состояние</span><strong>${running ? "Работает" : "Остановлен"}</strong></div><div class="stat-card"><span>Сборка / ядро</span><strong>${esc(config.kernel || "custom")}</strong></div><div class="stat-card"><span>Minecraft</span><strong>${esc(config.mc_version || meta.server?.mc_version || "—")}</strong></div><div class="stat-card"><span>Порт</span><strong>${esc(config.port || 25565)}</strong></div><div class="stat-card"><span>Игроки</span><strong>${(snapshot.players || []).filter((item) => item.online).length}</strong></div><div class="stat-card"><span>Память</span><strong>${esc(config.memory_mb || 4096)} МБ</strong></div></div>
       <div class="server-command"><input class="input grow" id="server-command-input" placeholder="Команда без /, например say Привет" ${running ? "" : "disabled"}><button class="btn" id="server-command-send" ${running ? "" : "disabled"}>Отправить</button></div>
-      <div class="server-columns"><div class="panel"><div class="panel-head"><strong>Аддоны</strong><div class="flex-row"><button class="btn btn-small" id="server-addon-catalog">Каталог</button><button class="btn btn-small" id="server-addon-url">Установить по URL</button></div></div><div class="server-addon-list">${addons.length ? addons.map((item) => `<div class="server-addon"><span>${esc(item.name)}</span><small>${esc(item.kind)} · ${humanSize(item.size)}</small><button class="icon-btn" data-addon-toggle="${esc(item.path)}" title="Включить/выключить">${item.enabled ? "✓" : "○"}</button><button class="icon-btn danger" data-addon-delete="${esc(item.path)}" title="Удалить">×</button></div>`).join("") : `<div class="empty-state">Плагинов и модов пока нет.</div>`}</div></div><div class="panel"><div class="panel-head"><strong>Последние строки</strong><button class="btn btn-small" id="server-refresh">Обновить</button></div><div class="server-log-preview">${(snapshot.log_tail || []).slice(-80).map((line) => `<div>${esc(line)}</div>`).join("") || `<span class="muted">Лог появится после запуска.</span>`}</div></div></div>
-      <div id="server-addon-catalog-panel" class="server-addon-catalog-panel" hidden></div>
+      <div class="server-columns"><div class="panel"><div class="panel-head"><strong>Аддоны сервера</strong><div class="flex-row"><button class="btn btn-small btn-primary" id="server-addon-download"><svg class="ic"><use href="#i-download"/></svg>Загрузить</button><button class="btn btn-small" id="server-addon-url">Установить по URL</button></div></div><div class="server-addon-list">${addons.length ? addons.map((item) => `<div class="server-addon"><span>${esc(item.name)}</span><small>${esc(item.kind)} · ${humanSize(item.size)}</small><button class="icon-btn" data-addon-toggle="${esc(item.path)}" title="Включить/выключить">${item.enabled ? "✓" : "○"}</button><button class="icon-btn danger" data-addon-delete="${esc(item.path)}" title="Удалить">×</button></div>`).join("") : `<div class="empty-state">Плагинов и модов пока нет. Открой «Загрузить», чтобы найти плагин на Modrinth.</div>`}</div></div><div class="panel"><div class="panel-head"><strong>Последние строки</strong><button class="btn btn-small" id="server-refresh">Обновить</button></div><div class="server-log-preview">${(snapshot.log_tail || []).slice(-80).map((line) => `<div>${esc(line)}</div>`).join("") || `<span class="muted">Лог появится после запуска.</span>`}</div></div></div>
     </section>`;
-    $("#server-toggle")?.addEventListener("click", async () => { try { if (running) await api.serverStop(meta.id); else await api.serverStart(meta.id); await refreshInstances(); renderSidebar(); renderTab(); } catch (error) { toast(String(error), "err"); } });
+    bindServerControls(body);
     $("#server-settings")?.addEventListener("click", async () => {
       try {
         const config = await api.serverGet(meta.id);
@@ -4768,60 +4849,73 @@
     $("#server-refresh")?.addEventListener("click", () => renderServerOverview());
     $("#server-command-send")?.addEventListener("click", async () => { const input = $("#server-command-input"); try { await api.serverCommand(meta.id, input.value); input.value = ""; toast("Команда отправлена", "ok"); } catch (error) { toast(String(error), "err"); } });
     $("#server-command-input")?.addEventListener("keydown", (event) => { if (event.key === "Enter") $("#server-command-send")?.click(); });
+    $("#server-addon-download")?.addEventListener("click", () => { state.tab = "download"; renderTab(); });
     $("#server-addon-url")?.addEventListener("click", async () => { const url = window.prompt("Прямая ссылка на .jar аддона"); if (!url) return; try { await api.serverInstallAddon(meta.id, url, null); toast("Аддон установлен", "ok"); renderServerOverview(); } catch (error) { toast(String(error), "err"); } });
-    $("#server-addon-catalog")?.addEventListener("click", async () => {
-      const panel = $("#server-addon-catalog-panel");
-      if (!panel) return;
-      const defaultType = ["fabric", "forge", "neoforge"].includes(String(meta.server?.kernel || "").toLowerCase()) ? "mod" : "plugin";
-      panel.hidden = false;
-      panel.innerHTML = `<div class="panel-head"><strong>Каталог серверных аддонов</strong><div class="flex-row"><input class="input" id="server-catalog-query" placeholder="Название проекта"><button class="btn btn-small" data-catalog-search="${defaultType}">Найти ${defaultType === "mod" ? "моды" : "плагины"}</button><button class="btn btn-small" data-catalog-search="${defaultType === "mod" ? "plugin" : "mod"}">Искать ${defaultType === "mod" ? "плагины" : "моды"}</button></div></div><div id="server-catalog-results" class="server-addon-card-grid"><span class="muted">Введи название проекта и выбери тип.</span></div>`;
-      const results = $("#server-catalog-results", panel);
-      const queryInput = $("#server-catalog-query", panel);
-      const search = async (type) => {
-        const query = queryInput?.value.trim();
-        if (!query) { toast("Введи название проекта", "err"); return; }
-        results.innerHTML = `<div class="loading-line">Ищем в каталоге…</div>`;
-        try {
-          const response = await api.serverSearchAddons(query, type, meta.server?.mc_version || meta.mc_version, type === "mod" ? (meta.server?.kernel || null) : null);
-          const hits = (response?.hits || []).slice(0, 8);
-          results.innerHTML = hits.length ? hits.map((item) => `<article class="server-addon-card" data-catalog-project="${esc(item.project_id)}" data-catalog-type="${esc(type)}"><strong>${esc(item.title)}</strong><span>${esc(item.description || "")}</span><small>${Number(item.downloads || 0).toLocaleString()} загрузок · ${esc(item.project_id)}</small><button class="btn btn-small" data-catalog-load>Показать совместимые версии</button><div class="server-addon-card-versions" data-catalog-versions hidden></div></article>`).join("") : `<div class="empty-state">Ничего не найдено.</div>`;
-        } catch (error) { results.innerHTML = `<div class="error-text">${esc(String(error))}</div>`; }
-      };
-      panel.addEventListener("click", async (event) => {
-        const searchButton = event.target.closest("[data-catalog-search]");
-        if (searchButton) return search(searchButton.dataset.catalogSearch);
-        const loadButton = event.target.closest("[data-catalog-load]");
-        if (loadButton) {
-          const card = loadButton.closest(".server-addon-card");
-          const versionsBox = $("[data-catalog-versions]", card);
-          try {
-            const versions = await api.serverAddonVersions(card.dataset.catalogProject, meta.server?.mc_version || meta.mc_version, card.dataset.catalogType === "mod" ? meta.server?.kernel : null);
-            const compatible = versions.filter((version) => version.game_versions?.includes(meta.server?.mc_version || meta.mc_version) && version.files?.some((file) => file.url && file.filename?.toLowerCase().endsWith(".jar") && file.size > 0 && file.hashes?.sha1));
-            card._catalogVersions = compatible;
-            versionsBox.hidden = false;
-            versionsBox.innerHTML = compatible.length ? `<select class="input" data-catalog-version>${compatible.map((version, index) => `<option value="${index}">${esc(version.name || version.version_number || version.id)} · ${esc(version.primary_file?.filename || version.files?.[0]?.filename || "JAR")}</option>`).join("")}</select><button class="btn btn-small btn-primary" data-catalog-install>Установить выбранную версию</button>` : `<span class="muted">Нет JAR с размером и SHA-1 для этой версии.</span>`;
-          } catch (error) { versionsBox.hidden = false; versionsBox.innerHTML = `<span class="error-text">${esc(String(error))}</span>`; }
-          return;
-        }
-        const installButton = event.target.closest("[data-catalog-install]");
-        if (installButton) {
-          const card = installButton.closest(".server-addon-card");
-          const versions = card?._catalogVersions || [];
-          const index = Number($("[data-catalog-version]", card)?.value || 0);
-          const version = versions[index];
-          const file = version?.files?.find((item) => item.primary && item.filename?.toLowerCase().endsWith(".jar") && item.hashes?.sha1) || version?.files?.find((item) => item.filename?.toLowerCase().endsWith(".jar") && item.hashes?.sha1);
-          if (!version || !file) { toast("Выбери проверенную версию JAR", "err"); return; }
-          try {
-            await api.serverInstallCatalogAddon(meta.id, { source: "modrinth", project_id: card.dataset.catalogProject, version_id: version.id, project_type: card.dataset.catalogType, mc_version: meta.server?.mc_version || meta.mc_version, loader: card.dataset.catalogType === "mod" ? meta.server?.kernel : null, url: file.url, filename: file.filename, size: file.size, sha1: file.hashes.sha1 });
-            toast(`${$("strong", card)?.textContent || "Аддон"} установлен`, "ok");
-            renderServerOverview();
-          } catch (error) { toast(String(error), "err"); }
-        }
-      });
-      queryInput?.focus();
-    });
     $$('[data-addon-toggle]').forEach((button) => button.addEventListener("click", async () => { try { await api.serverToggleAddon(meta.id, button.dataset.addonToggle); renderServerOverview(); } catch (error) { toast(String(error), "err"); } }));
     $$('[data-addon-delete]').forEach((button) => button.addEventListener("click", async () => { if (!window.confirm("Удалить аддон?")) return; try { await api.serverDeleteAddon(meta.id, button.dataset.addonDelete); renderServerOverview(); } catch (error) { toast(String(error), "err"); } }));
+  }
+
+  async function renderServerDownloads() {
+    const meta = selected();
+    if (!meta) return;
+    const mcVersion = meta.server?.mc_version || meta.mc_version || "";
+    const body = $("#tab-body");
+    body.innerHTML = `<section class="server-view server-download-view"><div class="server-download-head"><div><div class="eyebrow"><svg class="ic"><use href="#i-modrinth"/></svg>MODRINTH</div><h1>Загрузить</h1><p class="muted">Плагины для ${esc(meta.name)} · Minecraft ${esc(mcVersion || "версия не указана")}. Скачивание проходит через проверку проекта, версии, размера и SHA-1.</p></div><button class="btn" id="server-download-back">Сервер</button></div><div class="server-download-search"><svg class="ic"><use href="#i-search"/></svg><input class="input grow" id="server-download-query" placeholder="Найти плагин на Modrinth" spellcheck="false"><button class="btn btn-primary" id="server-download-search"><svg class="ic"><use href="#i-search"/></svg>Найти плагины</button></div><div class="server-download-hint">Ищутся только проекты типа <strong>plugin</strong>, совместимые с версией этого сервера.</div><div id="server-download-results" class="server-addon-card-grid"><div class="empty-state">Введи название плагина и нажми «Найти плагины».</div></div></section>`;
+    const input = $("#server-download-query");
+    const results = $("#server-download-results");
+    const search = async () => {
+      const query = input?.value.trim();
+      if (!query) { toast("Введи название плагина", "err"); input?.focus(); return; }
+      results.innerHTML = `<div class="loading-line">Ищем плагины на Modrinth…</div>`;
+      try {
+        const response = await api.serverSearchAddons(query, "plugin", mcVersion, null);
+        const hits = (response?.hits || []).slice(0, 12);
+        results.innerHTML = hits.length ? hits.map((item) => `<article class="server-addon-card server-download-card" data-server-download-project="${esc(item.project_id)}"><div class="server-download-card-title"><strong>${esc(item.title)}</strong><span class="server-source-badge">Modrinth</span></div><span>${esc(item.description || "Описание не указано")}</span><small>${Number(item.downloads || 0).toLocaleString()} загрузок · ${esc(item.project_id)}</small><button class="btn btn-small" data-server-download-load>Показать версии</button><div class="server-download-versions" data-server-download-versions hidden></div></article>`).join("") : `<div class="empty-state">Плагины не найдены.</div>`;
+      } catch (error) {
+        results.innerHTML = `<div class="error-text">${esc(String(error))}</div>`;
+      }
+    };
+    $("#server-download-search")?.addEventListener("click", search);
+    input?.addEventListener("keydown", (event) => { if (event.key === "Enter") search(); });
+    $("#server-download-back")?.addEventListener("click", () => { state.tab = "server"; renderTab(); });
+    results.addEventListener("click", async (event) => {
+      const loadButton = event.target.closest("[data-server-download-load]");
+      if (loadButton) {
+        const card = loadButton.closest(".server-download-card");
+        const box = $("[data-server-download-versions]", card);
+        loadButton.disabled = true;
+        try {
+          const versions = await api.serverAddonVersions(card.dataset.serverDownloadProject, mcVersion, null);
+          const compatible = versions.filter((version) => version.game_versions?.includes(mcVersion) && version.files?.some((file) => file.url && file.filename?.toLowerCase().endsWith(".jar") && file.size > 0 && file.hashes?.sha1));
+          card._serverDownloadVersions = compatible;
+          box.hidden = false;
+          box.innerHTML = compatible.length ? `<select class="input" data-server-download-version>${compatible.map((version, index) => `<option value="${index}">${esc(version.name || version.version_number || version.id)} · ${esc(version.files?.find((file) => file.primary && file.filename?.toLowerCase().endsWith(".jar"))?.filename || version.files?.[0]?.filename || "JAR")}</option>`).join("")}</select><button class="btn btn-small btn-primary" data-server-download-install><svg class="ic"><use href="#i-download"/></svg>Установить</button>` : `<span class="muted">Нет проверенного JAR для Minecraft ${esc(mcVersion)}.</span>`;
+        } catch (error) {
+          box.hidden = false;
+          box.innerHTML = `<span class="error-text">${esc(String(error))}</span>`;
+        } finally {
+          loadButton.disabled = false;
+        }
+        return;
+      }
+      const installButton = event.target.closest("[data-server-download-install]");
+      if (!installButton) return;
+      const card = installButton.closest(".server-download-card");
+      const versions = card?._serverDownloadVersions || [];
+      const index = Number($("[data-server-download-version]", card)?.value || 0);
+      const version = versions[index];
+      const file = version?.files?.find((item) => item.primary && item.filename?.toLowerCase().endsWith(".jar") && item.hashes?.sha1) || version?.files?.find((item) => item.filename?.toLowerCase().endsWith(".jar") && item.hashes?.sha1);
+      if (!version || !file) { toast("Выбери проверенную версию JAR", "err"); return; }
+      installButton.disabled = true;
+      try {
+        await api.serverInstallCatalogAddon(meta.id, { source: "modrinth", project_id: card.dataset.serverDownloadProject, version_id: version.id, project_type: "plugin", mc_version: mcVersion, loader: null, url: file.url, filename: file.filename, size: file.size, sha1: file.hashes.sha1 });
+        installButton.textContent = "Установлено";
+        toast(`${$("strong", card)?.textContent || "Плагин"} установлен`, "ok");
+      } catch (error) {
+        installButton.disabled = false;
+        toast(String(error), "err");
+      }
+    });
   }
 
   async function renderServerPlayers() {
@@ -4876,7 +4970,7 @@
     // вкладки Minecraft-сборки.
     if (!meta && !["discover", "servers"].includes(state.tab)) state.tab = "discover";
     else if (meta && state.tab === "discover") state.tab = isServer(meta) ? "server" : "console";
-    else if (meta && isServer(meta) && !["server", "console", "files", "players", "metrics", "backups", "settings"].includes(state.tab)) state.tab = "server";
+    else if (meta && isServer(meta) && !["server", "console", "files", "players", "metrics", "backups", "download", "settings"].includes(state.tab)) state.tab = "server";
     else if (meta && !isServer(meta) && ["server", "players", "metrics", "backups", "servers"].includes(state.tab)) state.tab = "console";
     $$(".tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.tab));
     const viewKey = `${state.selectedId || "home"}:${state.tab}`;
@@ -4904,7 +4998,7 @@
       case "shaders": return renderContent("shader");
       case "worlds": return renderWorlds();
       case "screenshots": return renderScreenshots();
-      case "download": return renderDownload();
+      case "download": return isServer(meta) ? renderServerDownloads() : renderDownload();
       case "settings": return renderSettings();
     }
   }

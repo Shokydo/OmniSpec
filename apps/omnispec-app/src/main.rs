@@ -1432,6 +1432,22 @@ async fn server_stop(
     Ok(())
 }
 
+/// Немедленно завершить процесс сервера, не отправляя команду в stdin.
+/// Используется отдельной кнопкой «Килл», когда graceful stop завис.
+#[tauri::command]
+async fn server_kill(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<(), String> {
+    let handle = state.server_running.lock().await.get(&instance_id).cloned().ok_or("сервер не запущен")?;
+    let mut child = handle.child.lock().await;
+    if let Some(process) = child.as_mut() {
+        process.start_kill().map_err(err)?;
+    }
+    handle.stop_requested.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
 #[tauri::command]
 async fn server_command(
     state: State<'_, AppState>,
@@ -4559,6 +4575,7 @@ fn main() {
             server_write_icon,
             server_start,
             server_stop,
+            server_kill,
             server_command,
             server_snapshot,
             server_files,
