@@ -19,6 +19,10 @@ replaceOnce('    saveSettings: async (s) => { DEMO.settings = { ...s, launcher_i
 replaceOnce('    resolvePresenceIcon: async () => null,', '    resolvePresenceIcon: async (id) => window.__rpcTest ? window.__rpcTest.resolve(id) : null,');
 replaceOnce('icon: null, created: now - 86400 * 9', 'icon: window.__rpcTest ? "icon.png" : null, created: now - 86400 * 9');
 replaceOnce('icon: null, created: now - 86400 * 20', 'icon: window.__rpcTest ? "icon.png" : null, created: now - 86400 * 20');
+// GIF remains an image icon through the picker and native drag-and-drop path.
+assert.match(app, /pickFile\("Иконка сборки", \["png", "jpg", "jpeg", "webp", "gif"\]\)/);
+assert(app.includes("png|jpe?g|webp|gif"), 'drag-and-drop must accept GIF icons');
+assert.match(app, /function isImageIcon[\s\S]*gif/, 'GIF must remain a first-class image icon in rendered <img> elements');
 
 const server = http.createServer((req,res) => {
   const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);

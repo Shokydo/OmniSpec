@@ -108,11 +108,12 @@ impl Modrinth {
                 "quilt" => vec!["quilt".into()],
                 "forge" => vec!["forge".into()],
                 "neoforge" => vec!["neoforge".into()],
-                _ => vec![],
+                // У vanilla нет мод-loader. Нельзя отдавать сюда latest-версии
+                // Fabric/Forge: это и было причиной чужих обновлений.
+                "vanilla" => return Ok(Vec::new()),
+                _ => return Ok(Vec::new()),
             };
-            if !loaders.is_empty() {
-                params.push(("loaders", serde_json::to_string(&loaders)?));
-            }
+            params.push(("loaders", serde_json::to_string(&loaders)?));
         }
         let response = self
             .http
@@ -128,7 +129,8 @@ impl Modrinth {
                 "Modrinth /project/{id_or_slug}/version → HTTP {status}"
             )));
         }
-        Ok(response.json::<Vec<Version>>().await?)
+        let versions = response.json::<Vec<Version>>().await?;
+        Ok(filter_project_versions(versions, game_version, loader))
     }
 
     /// Последние версии для фактических SHA-1 файлов, с фильтром сборки.
@@ -197,6 +199,22 @@ impl Modrinth {
     pub async fn modpack_versions(&self, id_or_slug: &str) -> Result<Vec<Version>> {
         self.project_versions(id_or_slug, None, None).await
     }
+}
+
+/// Защита на клиенте от неполных/игнорирующих query ответов API: latest
+/// должен явно содержать и текущий Minecraft, и нужный loader.
+fn filter_project_versions(
+    mut versions: Vec<Version>,
+    game_version: Option<&str>,
+    loader: Option<&str>,
+) -> Vec<Version> {
+    if let Some(game_version) = game_version.filter(|value| !value.trim().is_empty()) {
+        versions.retain(|version| version.game_versions.iter().any(|item| item == game_version));
+    }
+    if let Some(loader) = loader {
+        versions.retain(|version| version.loaders.iter().any(|item| item.eq_ignore_ascii_case(loader)));
+    }
+    versions
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -381,4 +399,49 @@ pub struct Dependency {
     /// "required" | "optional" | "incompatible" | "embedded"
     #[serde(default)]
     pub dependency_type: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{filter_project_versions, Version};
+
+    fn version(id: &str, game: &str, loader: &str) -> Version {
+        Version {
+            id: id.into(),
+            project_id: "project".into(),
+            name: id.into(),
+            version_number: id.into(),
+            version_type: "release".into(),
+            game_versions: vec![game.into()],
+            loaders: vec![loader.into()],
+            date_published: None,
+            downloads: 0,
+            files: Vec::new(),
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn project_versions_require_exact_game_and_loader() {
+        let versions = vec![
+            version("target", "1.21.1", "fabric"),
+            version("wrong-game", "1.20.1", "fabric"),
+            version("wrong-loader", "1.21.1", "forge"),
+            version("case-insensitive-loader", "1.21.1", "Fabric"),
+        ];
+        let filtered = filter_project_versions(versions, Some("1.21.1"), Some("fabric"));
+        assert_eq!(filtered.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
+            vec!["target", "case-insensitive-loader"]);
+    }
+
+    #[test]
+    fn project_versions_without_loader_filter_only_game_version() {
+        let versions = vec![
+            version("resource-target", "1.21.1", "vanilla"),
+            version("old-game", "1.20.1", "vanilla"),
+        ];
+        let filtered = filter_project_versions(versions, Some("1.21.1"), None);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "resource-target");
+    }
 }

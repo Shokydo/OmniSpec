@@ -119,7 +119,7 @@ async function setRange(page,selector,value){
       await setup(page,{fresh:true});
       await page.waitForSelector('#modal-onboard:not([hidden])');
       assert.equal(await page.locator('[data-onboard-language]').count(),5);
-      assert.equal(await page.locator('#onboard-count').innerText(),'1 / 6');
+      assert.equal(await page.locator('#onboard-count').innerText(),'1 / 7');
       await page.evaluate(()=>window.__v0500.failLanguage=true);
       await page.locator('[data-onboard-language="en"]').click();
       await page.waitForFunction(()=>!document.querySelector('#onboard-next').disabled);
@@ -129,12 +129,12 @@ async function setRange(page,selector,value){
       await page.waitForFunction(()=>window.__v0500.settings.language==='en' && document.documentElement.lang==='en');
       await page.waitForFunction(()=>document.querySelector('#onboard-body').textContent.includes('Choose a language'));
       await page.locator('#onboard-next').click();
-      assert.equal(await page.locator('#onboard-count').innerText(),'2 / 6');
+      assert.equal(await page.locator('#onboard-count').innerText(),'2 / 7');
       await page.reload();
       await page.waitForSelector('#modal-onboard:not([hidden])');
       assert.equal(await page.evaluate(()=>document.documentElement.lang),'en');
       assert.equal(await page.locator('[data-onboard-language="en"]').getAttribute('aria-pressed'),'true');
-      for(let i=0;i<6;i++) await page.locator('#onboard-next').click();
+      for(let i=0;i<7;i++) await page.locator('#onboard-next').click();
       await page.waitForFunction(()=>window.__v0500.settings.onboarded===true);
       await page.reload(); await page.waitForFunction(()=>window.omnispecDebug?.state?.settings?.onboarded===true);
       assert(await page.locator('#modal-onboard').isHidden());

@@ -2516,6 +2516,22 @@ body.has-wall .home-import { background: var(--bg-2a); }
 
 /* ── категории сборок ── */
 .cat { display: flex; flex-direction: column; gap: 2px; }
+/* Запущенные всегда остаются доступными при прокрутке длинного списка. */
+.instance-list > .cat.cat-running {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  margin: -2px 0 2px;
+  padding: 2px 0 4px;
+  background: var(--bg-2);
+  box-shadow: 0 8px 12px -12px rgba(0, 0, 0, .95);
+}
+.instance-list > .cat.cat-running > .cat-head {
+  background: var(--bg-2);
+}
+.instance-list > .cat.cat-running > .cat-head:hover {
+  background: var(--bg-3);
+}
 .cat-head {
   display: flex; align-items: center; gap: 6px;
   height: var(--h-sm); padding: 0 6px;
@@ -2593,6 +2609,7 @@ body.has-wall .home-import { background: var(--bg-2a); }
 }
 .skin-stage canvas {
   display: block; width: 100%; height: 100%;
+  image-rendering: pixelated;
   cursor: grab; touch-action: none;
 }
 .skin-stage canvas.is-dragging { cursor: grabbing; }
@@ -3176,6 +3193,8 @@ body.has-wall .modal-head { background: transparent; }
 /* --- поиск в заголовке панели модов/шейдеров/ресурспаков --- */
 .content-search { width: 220px; height: var(--h-sm); margin: 0; }
 .content-search input { font-size: 11.5px; }
+.content-count { flex: 0 0 auto; min-width: max-content; white-space: nowrap; }
+.content-update-error { color: var(--danger, #e06c75); white-space: normal; }
 .content-row { align-items: center; }
 .content-row.is-off .item-title,
 .content-row.is-off .item-sub,
@@ -3319,12 +3338,13 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 /* Пока результаты меняются, строка управления не прыгает из-за сжатия прокрутки. */
 .home-catalog-layout { display: flex; align-items: flex-start; gap: 10px; padding: 10px var(--pad) 0; min-width: 0; min-height: 100%; }
 .home-catalog-sidebar {
-  position: sticky; z-index: 2; top: 6px; flex: 0 0 190px; min-width: 0;
+  position: sticky; z-index: 2; top: 6px; flex: 0 0 220px; min-width: 0;
   max-height: calc(88vh / var(--ui-zoom, 1)); overflow: visible;
-  padding: 12px; border: 1px solid var(--line-2); border-radius: var(--r-lg); background: var(--bg-2);
+  padding: 14px; border: 1px solid var(--line-2); border-radius: var(--r-lg); background: var(--bg-2);
+  box-shadow: 0 10px 24px rgba(0,0,0,.18);
 }
 .home-catalog-sidebar.is-collapsed { flex-basis: 40px; padding: 7px; }
-.home-filter-head { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
+.home-filter-head { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
 .home-catalog-sidebar.is-collapsed .home-filter-head { margin: 0; }
 .home-catalog-sidebar.is-collapsed .home-filter-label { display: none; }
 .home-filters-toggle {
@@ -3336,26 +3356,28 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 .home-filters-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .home-filters-toggle .ic { width: 14px; height: 14px; transform: rotate(90deg); }
 .home-catalog-sidebar.is-collapsed .home-filters-toggle .ic { transform: rotate(-90deg); }
-.home-filter-group { display: flex; flex-direction: column; gap: 7px; }
-.home-filter-label, .home-category-group summary { font-size: 12px; font-weight: 650; color: var(--text); }
+.home-filter-group { display: flex; flex-direction: column; gap: 8px; }
+.home-filter-label, .home-category-group summary { font-size: 12.5px; font-weight: 700; color: var(--text); }
 .home-filter-group .select { width: 100%; min-width: 0; }
-.home-category-group { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
-.home-category-group summary { display: flex; align-items: center; justify-content: space-between; cursor: pointer; list-style: none; }
+.home-version-filter { margin-top: 9px; }
+.home-category-group { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 13px; }
+.home-category-group summary { display: flex; align-items: center; justify-content: space-between; min-height: 24px; cursor: pointer; list-style: none; }
 .home-category-group summary::-webkit-details-marker { display: none; }
-.home-category-group summary .ic { width: 14px; height: 14px; transform: rotate(-90deg); color: var(--dim-2); }
+.home-category-group summary .ic { width: 15px; height: 15px; transform: rotate(-90deg); color: var(--dim-2); transition: transform .15s; }
 .home-category-group[open] summary .ic { transform: rotate(180deg); }
-.home-category-list { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; max-height: calc(65vh / var(--ui-zoom, 1)); overflow-y: auto; overscroll-behavior: contain; }
+.home-category-list { display: flex; flex-direction: column; gap: 3px; margin-top: 9px; max-height: calc(62vh / var(--ui-zoom, 1)); overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
 .home-category {
-  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 4px 6px;
-  border: 1px solid transparent; border-radius: var(--r-sm); color: var(--dim-2); text-align: left; font-size: 11.5px;
+  display: flex; align-items: center; gap: 9px; width: 100%; min-height: 30px; padding: 5px 8px;
+  border: 1px solid transparent; border-radius: var(--r-sm); color: var(--dim); text-align: left; font-size: 12px;
 }
-.home-category .ic { width: 14px; height: 14px; flex: none; }
+.home-category .ic { width: 15px; height: 15px; flex: none; color: var(--dim); }
 .home-category:hover { background: var(--bg-3); color: var(--text); }
+.home-category:hover .ic, .home-category.is-active .ic { color: var(--text); }
 .home-category.is-active { color: var(--text); background: var(--bg-4); border-color: var(--line-2); }
 .home-filter-note { margin-top: 12px; color: var(--dim-2); font-size: 11px; line-height: 1.5; }
 .home .home-catalog-layout .modrinth-results { flex: 1 1 0; min-width: 0; padding: 0 0 28px; }
 @media (max-width: 1100px) {
-  .home-catalog-sidebar { flex-basis: 155px; padding: 10px; }
+  .home-catalog-sidebar { flex-basis: 180px; padding: 11px; }
 }
 
 /* Все изображения проекта доступны во вкладке и открываются поверх описания. */
@@ -3498,6 +3520,37 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 .home-loader-option .ic { width: 14px; height: 14px; opacity: 0; }
 .home-loader-option.is-active .ic { opacity: 1; }
 .home-loader-trigger:focus-visible, .home-loader-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Меню версий не использует системный select: так выпадающее окно одинаково
+   выглядит в Windows WebView, Linux WebKit и демо-браузере. */
+.home-version-select { position: relative; width: 100%; }
+.home-version-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; min-height: 34px; padding: 0 10px; border: 1px solid var(--line-2);
+  border-radius: var(--r-sm); background: var(--bg-3); color: var(--text);
+  font-size: 12px; text-align: left; transition: border-color .15s, background .15s;
+}
+.home-version-trigger:hover, .home-version-trigger[aria-expanded="true"] { border-color: var(--accent); background: var(--bg-4); }
+.home-version-trigger .ic { width: 14px; height: 14px; color: var(--dim-2); transition: transform .15s; }
+.home-version-trigger[aria-expanded="true"] .ic { transform: rotate(180deg); }
+.home-version-menu {
+  position: absolute; z-index: 21; top: calc(100% + 5px); left: 0; right: 0;
+  overflow-y: auto; overscroll-behavior: contain; max-height: min(360px, calc(62vh / var(--ui-zoom, 1)));
+  padding: 5px; border: 1px solid var(--line-2); border-radius: var(--r-md);
+  background: var(--bg-2); box-shadow: 0 12px 28px rgba(0,0,0,.38);
+}
+.home-version-menu.is-up { top: auto; bottom: calc(100% + 5px); }
+.home-version-menu[hidden] { display: none; }
+.home-version-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; min-height: 31px; padding: 5px 8px; border-radius: var(--r-sm);
+  color: var(--dim); font-size: 12px; text-align: left;
+}
+.home-version-option:hover, .home-version-option:focus { background: var(--bg-4); color: var(--text); outline: none; }
+.home-version-option.is-active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.home-version-option .ic { width: 14px; height: 14px; opacity: 0; }
+.home-version-option.is-active .ic { opacity: 1; }
+.home-version-trigger:focus-visible, .home-version-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* Аватар: всё основное видно при масштабе 100%; длинные коллекции скроллятся внутри. */
 .prefs-body.is-avatar { min-height: 0; gap: 0; padding: 10px; overflow: auto; }
@@ -3675,3 +3728,148 @@ body.has-wall .home .home-feed-head { background: var(--bg-2); }
 .wall-history-remove { position: absolute; right: 4px; top: 4px; z-index: 2; width: 23px; height: 23px; background: rgba(0,0,0,.7); color: #fff; border-radius: var(--r-xs); }
 .wall-history-remove:hover { background: var(--red); color: #fff; }
 .wall-history-remove .ic { width: 13px; height: 13px; }
+
+/* Вкладка «Загрузить»: фильтры и выпадающие списки в общей теме OmniSpec. */
+.download-source-view {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+}
+.download-catalog-layout {
+  display: flex; align-items: stretch; gap: 10px;
+  flex: 1 1 auto; min-height: 0; min-width: 0;
+  padding: 10px var(--pad) 0;
+}
+.download-catalog-sidebar {
+  position: relative; z-index: 4; flex: 0 0 214px; min-width: 0;
+  min-height: 0; padding: 12px;
+  border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  background: var(--bg-2); box-shadow: 0 10px 24px rgba(0,0,0,.18);
+}
+body.has-wall .download-catalog-sidebar { background: var(--bg-2); }
+.download-filter-head {
+  display: flex; align-items: center; gap: 8px; min-height: 24px;
+  margin-bottom: 10px; color: var(--text); font-size: 12.5px; font-weight: 700;
+}
+.download-filter-source {
+  margin-left: auto; color: var(--dim-2); font-size: 10px; font-weight: 500;
+}
+.download-filter-fields { display: flex; flex-direction: column; gap: 9px; }
+.download-catalog-sidebar .catalog-filter-field { gap: 4px; }
+.download-catalog-sidebar .catalog-filter-field > label {
+  height: 13px; line-height: 13px; color: var(--dim-2);
+  font-size: 10px; letter-spacing: .5px; text-transform: uppercase;
+}
+.catalog-listbox { position: relative; width: 100%; }
+.catalog-listbox-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; min-height: 34px; padding: 0 10px;
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--bg-3); color: var(--text); font-size: 12px; text-align: left;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.catalog-listbox-trigger:hover,
+.catalog-listbox-trigger[aria-expanded="true"] {
+  border-color: var(--accent); background: var(--bg-4); color: var(--text);
+}
+.catalog-listbox-trigger .ic {
+  width: 14px; height: 14px; flex: none; color: var(--dim-2);
+  transition: transform .15s;
+}
+.catalog-listbox-trigger[aria-expanded="true"] .ic { transform: rotate(180deg); }
+.catalog-listbox-menu {
+  position: absolute; z-index: 50; top: calc(100% + 5px); left: 0; right: 0;
+  overflow-y: auto; overscroll-behavior: contain;
+  max-height: min(360px, calc(62vh / var(--ui-zoom, 1)));
+  padding: 5px; border: 1px solid var(--line-2); border-radius: var(--r-md);
+  background: var(--bg-2); box-shadow: 0 12px 28px rgba(0,0,0,.42);
+}
+.catalog-listbox-menu.is-up { top: auto; bottom: calc(100% + 5px); }
+.catalog-listbox-menu[hidden] { display: none; }
+.catalog-listbox-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; min-height: 31px; padding: 5px 8px;
+  border-radius: var(--r-sm); color: var(--dim); font-size: 12px; text-align: left;
+}
+.catalog-listbox-option:hover,
+.catalog-listbox-option:focus { outline: none; background: var(--bg-4); color: var(--text); }
+.catalog-listbox-option.is-active {
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.catalog-listbox-option .ic { width: 14px; height: 14px; opacity: 0; }
+.catalog-listbox-option.is-active .ic { opacity: 1; }
+.catalog-listbox-trigger:focus-visible,
+.catalog-listbox-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.download-category-group {
+  margin-top: 14px; border-top: 1px solid var(--line); padding-top: 11px;
+}
+.download-category-group summary {
+  display: flex; align-items: center; justify-content: space-between;
+  min-height: 24px; cursor: pointer; list-style: none;
+  color: var(--text); font-size: 12.5px; font-weight: 700;
+}
+.download-category-group summary::-webkit-details-marker { display: none; }
+.download-category-group summary .ic {
+  width: 15px; height: 15px; color: var(--dim-2);
+  transform: rotate(180deg); transition: transform .15s;
+}
+.download-category-group:not([open]) summary .ic { transform: rotate(-90deg); }
+.download-category-list {
+  display: flex; flex-direction: column; gap: 3px; margin-top: 8px;
+  max-height: min(380px, calc(56vh / var(--ui-zoom, 1)));
+  overflow-y: auto; overscroll-behavior: contain; padding-right: 2px;
+}
+.download-category-list .home-category { min-height: 29px; }
+.download-catalog-layout > .modrinth-results {
+  flex: 1 1 0; width: 0; min-width: 0; min-height: 0; padding: 0 0 28px;
+}
+@media (max-width: 760px) {
+  .download-catalog-layout { flex-direction: column; overflow: visible; }
+  .download-catalog-sidebar { flex: none; width: 100%; }
+  .download-filter-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .download-catalog-layout > .modrinth-results { width: 100%; min-height: 300px; }
+}
+@media (max-width: 460px) {
+  .download-filter-fields { grid-template-columns: 1fr; }
+}
+
+/* ==================== 0.52: иконки настроек и динамические категории ==================== */
+.prefs-tab { display: flex; align-items: center; gap: 8px; }
+.prefs-tab-icon { width: 20px; height: 20px; flex: 0 0 20px; display: grid; place-items: center; }
+.prefs-tab-icon .ic { width: 15px; height: 15px; color: var(--dim-2); }
+.prefs-tab:hover .prefs-tab-icon .ic, .prefs-tab.is-active .prefs-tab-icon .ic { color: var(--accent); }
+.cat-dynamic-icon { width: 11px; height: 11px; flex: none; color: var(--accent); }
+.cat-dynamic > .cat-head { border-style: solid; border-color: color-mix(in srgb, var(--accent) 26%, transparent); }
+.cat-dynamic > .cat-head .cat-count { color: var(--accent); }
+
+/* «Запущенные» — единый закреплённый блок со скруглением со всех сторон. */
+.instance-list > .cat.cat-running {
+  border: 1px solid color-mix(in srgb, var(--green) 35%, var(--line-2));
+  border-radius: var(--r);
+  overflow: hidden;
+  padding: 2px 3px 4px;
+  background: var(--bg-2);
+  box-shadow: 0 8px 16px -12px rgba(0, 0, 0, .95);
+}
+.instance-list > .cat.cat-running > .cat-head { border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.instance-list > .cat.cat-running > .cat-items { padding: 0 1px 1px 1px; border-radius: 0 0 var(--r-sm) var(--r-sm); }
+
+/* редактор условий динамической категории */
+.category-editor-box { width: min(720px, 94vw); max-height: min(720px, 92vh); }
+.category-editor-body { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.category-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.category-editor-body .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.category-editor-body .field > label, .category-editor-body .field > span { color: var(--dim); font-size: 11px; }
+.category-editor-body .field small { color: var(--dim-2); font-size: 10px; line-height: 1.35; }
+.category-editor-preview { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 8px 10px; border: 1px dashed var(--line-2); border-radius: var(--r-sm); color: var(--dim); font-size: 10.5px; line-height: 1.4; }
+.category-editor-preview .ic { width: 16px; height: 16px; flex: none; color: var(--accent); }
+.category-editor-preview strong { color: var(--text); }
+
+/* автоподгрузка серверного каталога */
+.server-download-sentinel { grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 8px; color: var(--muted, var(--dim-2)); font-size: 11px; text-align: center; }
+.server-download-sentinel.is-error { flex-wrap: wrap; color: var(--red, #ef7777); }
+.server-download-error { display: flex; flex-direction: column; align-items: center; gap: 10px; grid-column: 1 / -1; }
+.mr-more-spinner { width: 13px; height: 13px; border: 2px solid color-mix(in srgb, var(--accent) 28%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: os-spin .8s linear infinite; }
+@keyframes os-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 620px) {
+  .category-editor-grid { grid-template-columns: 1fr; }
+}

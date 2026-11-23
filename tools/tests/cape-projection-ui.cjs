@@ -40,6 +40,7 @@ const server = http.createServer((req, res) => {
       const ctx=canvas.getContext('2d');
       const pixel=(x,y)=>Array.from(ctx.getImageData(x,y,1,1).data);
       window.__capeTest.drawSkinModel(canvas,skin,'classic',180,0,cape);
+      const smoothing=ctx.imageSmoothingEnabled;
       const outside=[pixel(85,145),pixel(155,145),pixel(85,225),pixel(155,225)];
       window.__capeTest.drawSkinModel(canvas,skin,'classic',0,0,cape);
       const inside=[pixel(85,145),pixel(155,145)];
@@ -61,8 +62,9 @@ const server = http.createServer((req, res) => {
       const miniCtx=mini.getContext('2d');
       const miniPixel=(x,y)=>Array.from(miniCtx.getImageData(x,y,1,1).data);
       const opaqueMini=[[58,50],[60,65],[62,80],[66,92]].map(([x,y])=>miniPixel(x,y));
-      return {outside,inside,opaquePreview,opaqueMini,uv:window.__capeTest.SKIN_CAPE.uv, bounds:window.__capeTest.SKIN_CAPE.b};
+      return {smoothing,outside,inside,opaquePreview,opaqueMini,uv:window.__capeTest.SKIN_CAPE.uv, bounds:window.__capeTest.SKIN_CAPE.b};
     });
+    assert.equal(result.smoothing, false, 'skin canvas keeps pixel-art edges sharp');
     assert.deepEqual(result.outside, [[255,0,0,255],[0,255,0,255],[0,0,255,255],[255,255,0,255]], 'outer cape is upright and not mirrored');
     assert.deepEqual(result.inside, [[255,0,255,255],[0,255,255,255]], 'inside uses the other face in correct direction');
     for (const pixel of [...result.opaquePreview, ...result.opaqueMini]) {

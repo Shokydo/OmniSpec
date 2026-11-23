@@ -98,6 +98,16 @@ async function switchSource(page, scope, source) {
   const other = source === 'modrinth' ? 'curseforge' : 'modrinth';
   assert.equal(await page.locator(`[data-${scope}-source="${other}"]`).getAttribute('aria-pressed'),'false');
 }
+async function chooseFilter(page, selector, value) {
+  await page.locator(selector).click();
+  await page.locator(`${selector}-options [data-dl-filter-value="${value}"]`).click();
+}
+async function filterValue(page, selector) {
+  return page.locator(selector).getAttribute('data-dl-filter-value');
+}
+async function chooseCategory(page, source, type, value) {
+  await page.locator(`[data-dl-category-source="${source}"][data-dl-category-type="${type}"][data-dl-category="${value}"]`).click();
+}
 
 (async () => {
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
@@ -141,42 +151,53 @@ async function switchSource(page, scope, source) {
     // Особенный тип «модпаки» и сортировка сохраняются только на CurseForge.
     await page.locator('#dl-query').fill('filter-check');
     await waitQuery(page,'modrinth','filter-check','#mr-results');
-    await page.locator('#mr-mc').selectOption('1.20.1');
-    await page.locator('#mr-loader').selectOption('forge');
-    await page.locator('#mr-type').selectOption('resourcepack');
+    assert(await page.locator('[data-dl-category-source="modrinth"][data-dl-category-type="mod"]').count() > 10);
+    await chooseCategory(page,'modrinth','mod','optimization');
+    await waitQuery(page,'modrinth','filter-check','#mr-results');
+    let last = await page.evaluate(() => window.__liveCatalog.calls.filter(c => c.source === 'modrinth').at(-1));
+    assert.deepEqual(last.categories,['optimization']);
+    await chooseFilter(page,'#mr-mc','1.20.1');
+    await chooseFilter(page,'#mr-loader','forge');
+    await chooseFilter(page,'#mr-type','resourcepack');
     await switchSource(page,'dl','curseforge');
     await waitQuery(page,'curseforge','filter-check','#cf-results');
-    assert.equal(await page.locator('#cf-type').inputValue(),'resourcepack');
-    assert.equal(await page.locator('#cf-mc').inputValue(),'1.20.1');
-    let last = await page.evaluate(() => window.__liveCatalog.calls.filter(c => c.source === 'curseforge').at(-1));
+    assert.equal(await filterValue(page,'#cf-type'),'resourcepack');
+    assert.equal(await filterValue(page,'#cf-mc'),'1.20.1');
+    last = await page.evaluate(() => window.__liveCatalog.calls.filter(c => c.source === 'curseforge').at(-1));
     assert.equal(last.projectType,'resourcepack'); assert.equal(last.mcVersion,'1.20.1'); assert.equal(last.loader,null);
-    await page.locator('#cf-sort').selectOption('newest');
-    await page.locator('#cf-type').selectOption('mod');
-    assert.equal(await page.locator('#cf-loader').inputValue(),'forge');
-    await page.locator('#cf-loader').selectOption('fabric');
+    await chooseFilter(page,'#cf-sort','newest');
+    await chooseFilter(page,'#cf-type','mod');
+    await waitQuery(page,'curseforge','filter-check','#cf-results');
+    assert(await page.locator('[data-dl-category-source="curseforge"][data-dl-category-type="mod"]').count() > 10);
+    await chooseCategory(page,'curseforge','mod','6814');
+    await waitQuery(page,'curseforge','filter-check','#cf-results');
+    last = await page.evaluate(() => window.__liveCatalog.calls.filter(c => c.source === 'curseforge').at(-1));
+    assert.deepEqual(last.categories,['6814']);
+    assert.equal(await filterValue(page,'#cf-loader'),'forge');
+    await chooseFilter(page,'#cf-loader','fabric');
     await switchSource(page,'dl','modrinth');
     await waitQuery(page,'modrinth','filter-check','#mr-results');
-    assert.equal(await page.locator('#mr-type').inputValue(),'mod');
-    assert.equal(await page.locator('#mr-mc').inputValue(),'1.20.1');
-    assert.equal(await page.locator('#mr-loader').inputValue(),'fabric');
+    assert.equal(await filterValue(page,'#mr-type'),'mod');
+    assert.equal(await filterValue(page,'#mr-mc'),'1.20.1');
+    assert.equal(await filterValue(page,'#mr-loader'),'fabric');
     last = await page.evaluate(() => window.__liveCatalog.calls.filter(c => c.source === 'modrinth').at(-1));
     assert.equal(last.projectType,'mod'); assert.equal(last.mcVersion,'1.20.1'); assert.equal(last.loader,'fabric');
     await switchSource(page,'dl','curseforge');
-    assert.equal(await page.locator('#cf-sort').inputValue(),'newest');
-    await page.locator('#cf-type').selectOption('modpack');
+    assert.equal(await filterValue(page,'#cf-sort'),'newest');
+    await chooseFilter(page,'#cf-type','modpack');
     await switchSource(page,'dl','modrinth');
-    assert.equal(await page.locator('#mr-type').inputValue(),'mod','тип, которого нет в Modrinth, не должен его ломать');
+    assert.equal(await filterValue(page,'#mr-type'),'mod','тип, которого нет в Modrinth, не должен его ломать');
     await switchSource(page,'dl','curseforge');
-    assert.equal(await page.locator('#cf-type').inputValue(),'modpack','особенный тип CurseForge сохраняется при возврате');
+    assert.equal(await filterValue(page,'#cf-type'),'modpack','особенный тип CurseForge сохраняется при возврате');
     await switchSource(page,'dl','modrinth');
-    await page.locator('#mr-type').selectOption('shader');
+    await chooseFilter(page,'#mr-type','shader');
     await switchSource(page,'dl','curseforge');
-    assert.equal(await page.locator('#cf-type').inputValue(),'shader','явно изменённый общий тип синхронизируется');
-    assert.equal(await page.locator('#cf-sort').inputValue(),'newest');
-    await page.locator('#cf-type').selectOption('mod');
-    await page.locator('#cf-mc').selectOption('');
-    await page.locator('#cf-loader').selectOption('');
-    await page.locator('#cf-sort').selectOption('downloads');
+    assert.equal(await filterValue(page,'#cf-type'),'shader','явно изменённый общий тип синхронизируется');
+    assert.equal(await filterValue(page,'#cf-sort'),'newest');
+    await chooseFilter(page,'#cf-type','mod');
+    await chooseFilter(page,'#cf-mc','');
+    await chooseFilter(page,'#cf-loader','');
+    await chooseFilter(page,'#cf-sort','downloads');
     await switchSource(page,'dl','modrinth');
     await waitQuery(page,'modrinth','filter-check','#mr-results');
 

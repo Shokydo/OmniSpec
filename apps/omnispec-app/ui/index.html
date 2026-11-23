@@ -6,6 +6,7 @@
 <title>OmniSpec</title>
 <link rel="icon" href="favicon.png" />
 <link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="server.css" />
 </head>
 <body data-theme="dark">
 <svg style="display:none" aria-hidden="true">
@@ -26,6 +27,7 @@
   <symbol id="i-curseforge" viewBox="0 0 24 24"><path d="M18.326 9.2145S23.2261 8.4418 24 6.1882h-7.5066V4.4H0l2.0318 2.3576V9.173s5.1267-.2665 7.1098 1.2372c2.7146 2.516-3.053 5.917-3.053 5.917L5.0995 19.6c1.5465-1.4726 4.494-3.3775 9.8983-3.2857-2.0565.65-4.1245 1.6651-5.7344 3.2857h10.9248l-1.0288-3.2726s-7.918-4.6688-.8336-7.1127z"/></symbol>
   <symbol id="i-grid" viewBox="0 0 24 24"><path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z"/></symbol>
   <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h9v2H4V6Zm12 0h4v2h-4V6Zm-2-2h2v6h-2V4ZM4 12h4v2H4v-2Zm7 0h9v2h-9v-2Zm3-2h2v6h-2v-6ZM4 18h11v2H4v-2Zm14 0h2v2h-2v-2Zm-4-2h2v6h-2v-6Z"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="m8.7 5.3-6 6 6 6 1.4-1.4-4.6-4.6 4.6-4.6-1.4-1.4Zm6.6 0-1.4 1.4 4.6 4.6-4.6 4.6 1.4 1.4 6-6-6-6ZM13.1 3.7l-4 16.6 1.9.5 4-16.6-1.9-.5Z"/></symbol>
   <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 16.6 15.3 5.3l3.4 3.4L7.4 20H4v-3.4Zm13.1-12.9 1.4-1.4a2 2 0 0 1 2.8 0l.4.4a2 2 0 0 1 0 2.8l-1.4 1.4-3.2-3.2Z"/></symbol>
   <symbol id="i-copy" viewBox="0 0 24 24"><path d="M9 3h9a2 2 0 0 1 2 2v9h-2V5H9V3ZM5 7h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Zm0 2v10h10V9H5Z"/></symbol>
   <symbol id="i-image" viewBox="0 0 24 24"><path d="M3 5h18v14H3V5Zm2 2v7.6l4.2-4.2 3.3 3.3 2.2-2.2L19 15.7V7H5Zm3.2 2a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2Z"/></symbol>
@@ -100,7 +102,7 @@
     </div>
 
     <button class="btn btn-small sidebar-new" id="btn-new-build">
-      <svg class="ic"><use href="#i-plus"/></svg><span>Создать сборку</span>
+      <svg class="ic"><use href="#i-plus"/></svg><span>Создать</span>
     </button>
 
     <label class="search">
@@ -151,7 +153,12 @@
 
     <nav class="tabs" id="tabs">
       <button class="tab" data-tab="discover">Главная</button>
+      <button class="tab" data-tab="servers">Сервера</button>
       <button class="tab is-active" data-tab="console">Консоль</button>
+      <button class="tab" data-tab="server">Сервер</button>
+      <button class="tab" data-tab="players">Игроки</button>
+      <button class="tab" data-tab="metrics">Метрики</button>
+      <button class="tab" data-tab="backups">Бэкапы</button>
       <button class="tab" data-tab="errors">Ошибки <span class="tab-badge errors-badge" id="badge-errors" hidden></span></button>
       <button class="tab" data-tab="files">Файлы</button>
       <button class="tab" data-tab="mods">Моды <span class="tab-badge" id="badge-mods" hidden>0</span></button>
@@ -199,7 +206,7 @@
 <div class="modal-backdrop" id="modal-create" hidden>
   <div class="modal">
     <header class="modal-head">
-      <h2>Создание сборки</h2>
+      <h2>Создание</h2>
       <button class="icon-btn" data-close-modal><svg class="ic"><use href="#i-close"/></svg></button>
     </header>
     <div class="modal-body" id="create-body"></div>
@@ -236,7 +243,7 @@
         <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="saves" checked><span class="ext-main"><span class="ext-name">Миры</span><span class="ext-sub">папка saves</span></span></label>
         <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="screenshots" checked><span class="ext-main"><span class="ext-name">Скриншоты</span><span class="ext-sub">папка screenshots</span></span></label>
         <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="options" checked><span class="ext-main"><span class="ext-name">Настройки и сервера</span><span class="ext-sub">options.txt, servers.dat</span></span></label>
-        <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="icon" checked><span class="ext-main"><span class="ext-name">Иконка сборки</span><span class="ext-sub">icon.png</span></span></label>
+        <label class="imp-item is-picked"><input type="checkbox" class="imp-check" data-exp-key="icon" checked><span class="ext-main"><span class="ext-name">Иконка сборки</span><span class="ext-sub">icon.png, icon.gif и другие картинки</span></span></label>
       </div>
       <div class="prefs-label" style="margin-top:14px">Куда сохранить</div>
       <div class="flex-row">
@@ -554,10 +561,43 @@
   </div>
 </div>
 
+<!-- Условия вычисляемой категории сборок. Все фильтры сохраняются в settings.json. -->
+<div class="modal-backdrop" id="modal-category-editor" hidden>
+  <div class="modal category-editor-box" role="dialog" aria-modal="true" aria-labelledby="category-editor-title">
+    <header class="modal-head">
+      <div>
+        <div class="eyebrow"><svg class="ic"><use href="#i-bolt"/></svg>ДИНАМИЧЕСКАЯ КАТЕГОРИЯ</div>
+        <h2 id="category-editor-title">Новая категория</h2>
+      </div>
+      <div class="spacer"></div>
+      <button class="icon-btn" data-close-category-editor title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="modal-body category-editor-body">
+      <div class="field"><label for="category-editor-name">Название</label><input class="input" id="category-editor-name" spellcheck="false" placeholder="Например, Серверы 1.21"></div>
+      <div class="category-editor-grid">
+        <div class="field"><label for="category-editor-versions">Версии Minecraft</label><input class="input" id="category-editor-versions" spellcheck="false" placeholder="1.21.1, 1.21.4"><small>Несколько значений через запятую. Пусто — любая версия.</small></div>
+        <div class="field"><label for="category-editor-loaders">Ядро / loader</label><input class="input" id="category-editor-loaders" spellcheck="false" placeholder="fabric, neoforge, paper"><small>Для серверов используются Paper, Fabric, Vanilla и другие ядра.</small></div>
+        <label class="field"><span>Тип сборки</span><select class="select" id="category-editor-kind"><option value="any">Любая</option><option value="server">Только серверные</option><option value="client">Только клиентские</option></select></label>
+        <label class="field"><span>Иконка</span><select class="select" id="category-editor-icon"><option value="any">Любая</option><option value="with_icon">Только с иконкой</option><option value="without_icon">Без иконки</option></select></label>
+        <div class="field"><label for="category-editor-sources">Источник</label><input class="input" id="category-editor-sources" spellcheck="false" placeholder="manual, modrinth, import"><small>Метаданные источника сборки.</small></div>
+        <div class="field"><label for="category-editor-name-filter">Фильтр названия</label><input class="input" id="category-editor-name-filter" spellcheck="false" placeholder="например, vanilla"><small>Часть названия без учёта регистра.</small></div>
+      </div>
+      <div class="field"><label for="category-editor-notes">Фильтр заметки</label><input class="input" id="category-editor-notes" spellcheck="false" placeholder="например, шейдеры"><small>Можно использовать любые заметки сборок как дополнительный признак.</small></div>
+      <div class="category-editor-preview" id="category-editor-preview"></div>
+    </div>
+    <footer class="modal-foot">
+      <button class="btn btn-ghost" data-close-category-editor>Отмена</button>
+      <div class="spacer"></div>
+      <button class="btn btn-primary" id="category-editor-save">Сохранить категорию</button>
+    </footer>
+  </div>
+</div>
+
 <script src="i18n-data.js"></script>
 <script src="i18n.js"></script>
 <script src="diagnostics.js"></script>
 <script src="app.js"></script>
+<script src="customization.js"></script>
 
 </body>
 </html>

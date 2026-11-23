@@ -9,7 +9,8 @@ license.workspace = true
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+# Tray icon and PNG decoding are used by the optional minimize-to-tray mode.
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-png"] }
 dirs = { workspace = true }
 getrandom = "0.3"
 serde = { workspace = true }
@@ -20,6 +21,7 @@ futures = { workspace = true }
 # Согласованная пользователем публикация локальной иконки для Discord RPC.
 reqwest = { workspace = true, features = ["multipart"] }
 sha2 = "0.10"
+sha1 = { workspace = true }
 hex = { workspace = true }
 omnispec-core = { path = "../../crates/omnispec-core" }
 # системные диалоги «проводника»: выбор файла/папки

@@ -282,6 +282,24 @@ pub struct ContentUpdate {
     pub size: u64,
 }
 
+/// Файл, для которого каталог не нашёл ни одной версии под целевой профиль.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentCompatibilityIssue {
+    pub filename: String,
+    pub title: String,
+    pub current: String,
+    pub reason: String,
+}
+
+/// Результат проверки содержимого под конкретную версию Minecraft и загрузчик.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ContentCompatibilityReport {
+    pub checked: u64,
+    pub compatible: u64,
+    pub updates: Vec<ContentUpdate>,
+    pub incompatible: Vec<ContentCompatibilityIssue>,
+}
+
 fn project_page(slug_or_id: &str, kind: &str) -> String {
     let path = match kind {
         "resourcepack" => "resourcepack",
@@ -292,9 +310,19 @@ fn project_page(slug_or_id: &str, kind: &str) -> String {
 }
 
 /// Загрузчик, под который ищем обновления: у ресурспаков и шейдеров его нет.
+fn loader_name(instance: &InstanceMeta) -> &'static str {
+    match &instance.loader {
+        crate::instances::Loader::Vanilla => "vanilla",
+        crate::instances::Loader::Fabric { .. } => "fabric",
+        crate::instances::Loader::Quilt { .. } => "quilt",
+        crate::instances::Loader::Forge { .. } => "forge",
+        crate::instances::Loader::NeoForge { .. } => "neoforge",
+    }
+}
+
 fn loader_for<'a>(instance: &'a InstanceMeta, kind: &str) -> Option<&'a str> {
     if kind == "mod" {
-        Some(instance.loader.kind())
+        Some(loader_name(instance))
     } else {
         None
     }
@@ -328,32 +356,81 @@ async fn resolve_record(
     Some(record)
 }
 
-/// Проверить обновления всех файлов вида `kind` под эту версию игры и загрузчик.
-pub async fn check_updates(
+/// Проверить совместимость и обновления всех файлов вида `kind` под эту
+/// версию игры и загрузчик. Целевой профиль передаётся уже в `instance`,
+/// поэтому смена версии может быть проверена до сохранения новой меты.
+pub async fn check_compatibility(
     modrinth: &Modrinth,
     paths: &Paths,
     instance: &InstanceMeta,
     kind: &str,
-) -> Result<Vec<ContentUpdate>> {
+    reporter: Option<&Reporter>,
+) -> Result<ContentCompatibilityReport> {
     let entries = list(paths, instance, kind);
+    let total = entries.len() as u64;
     let dir = dir_of(paths, instance, kind);
     let mut store = load_store(paths, instance);
     let mut projects: HashMap<String, crate::modrinth::Project> = HashMap::new();
-    let mut result = Vec::new();
+    let mut report = ContentCompatibilityReport::default();
+    if let Some(reporter) = reporter {
+        reporter.emit("check", 0, total, "проверяем содержимое");
+    }
 
-    for entry in entries {
+    for (index, entry) in entries.into_iter().enumerate() {
+        report.checked += 1;
+        if let Some(reporter) = reporter {
+            reporter.emit(
+                "check",
+                index as u64,
+                total,
+                format!("проверяем {}", entry.filename),
+            );
+        }
+        let current = {
+            let record = store.files.get(&entry.filename);
+            record
+                .and_then(|item| {
+                    if item.version_number.is_empty() {
+                        None
+                    } else {
+                        Some(item.version_number.clone())
+                    }
+                })
+                .unwrap_or_else(|| "неизвестная версия".into())
+        };
         let Some(record) = resolve_record(modrinth, &entry, &dir, &mut store).await else {
+            report.incompatible.push(ContentCompatibilityIssue {
+                filename: entry.filename.clone(),
+                title: entry.filename.clone(),
+                current,
+                reason: "не удалось определить проект и версию файла".into(),
+            });
             continue;
         };
         let Some(project_id) = record.project_id.clone() else {
+            report.incompatible.push(ContentCompatibilityIssue {
+                filename: entry.filename.clone(),
+                title: record.title.clone(),
+                current,
+                reason: "у файла нет записи проекта Modrinth".into(),
+            });
             continue;
         };
+        // CurseForge-id нельзя отправлять в Modrinth: десятичный id иногда
+        // случайно совпадал с допустимым slug и давал чужую latest-версию.
+        if record.known_source() != Some("modrinth") {
+            report.incompatible.push(ContentCompatibilityIssue {
+                filename: entry.filename.clone(),
+                title: record.title.clone(),
+                current,
+                reason: "для этого файла нет проверки совместимости через Modrinth".into(),
+            });
+            continue;
+        }
         let project = if let Some(project) = projects.get(&project_id) {
             project.clone()
         } else {
-            let Ok(project) = modrinth.project(&project_id).await else {
-                continue;
-            };
+            let project = modrinth.project(&project_id).await?;
             projects.insert(project_id.clone(), project.clone());
             project
         };
@@ -363,38 +440,56 @@ pub async fn check_updates(
                 Some(&instance.mc_version),
                 loader_for(instance, kind),
             )
-            .await
-            .unwrap_or_default();
+            .await?;
         let Some(latest) = versions.first() else {
+            report.incompatible.push(ContentCompatibilityIssue {
+                filename: entry.filename.clone(),
+                title: if project.title.is_empty() { record.title.clone() } else { project.title.clone() },
+                current,
+                reason: format!(
+                    "нет версии для Minecraft {}{}",
+                    instance.mc_version,
+                    if kind == "mod" {
+                        format!(" и загрузчика {}", loader_name(instance))
+                    } else {
+                        String::new()
+                    }
+                ),
+            });
             continue;
         };
-        // уже последняя версия — обновлять нечего
-        if Some(latest.id.as_str()) == record.version_id.as_deref() {
-            continue;
-        }
-        if latest.version_number == record.version_number && !record.version_number.is_empty() {
+        report.compatible += 1;
+        // Уже последняя версия под ЦЕЛЕВОЙ профиль — обновлять нечего.
+        // Одинаковый номер версии на другой ветке Minecraft не считается
+        // совпадением: сравниваем id только среди отфильтрованных версий.
+        let current_is_target = versions
+            .iter()
+            .any(|version| Some(version.id.as_str()) == record.version_id.as_deref());
+        if Some(latest.id.as_str()) == record.version_id.as_deref()
+            || (current_is_target
+                && latest.version_number == record.version_number
+                && !record.version_number.is_empty())
+        {
             continue;
         }
         let Some(file) = latest.primary_file() else {
+            report.incompatible.push(ContentCompatibilityIssue {
+                filename: entry.filename.clone(),
+                title: project.title.clone(),
+                current,
+                reason: "у совместимой версии нет файла для скачивания".into(),
+            });
             continue;
         };
-        result.push(ContentUpdate {
+        report.updates.push(ContentUpdate {
             filename: entry.filename.clone(),
             kind: kind.to_string(),
             enabled: entry.enabled,
-            title: if project.title.is_empty() {
-                record.title.clone()
-            } else {
-                project.title.clone()
-            },
+            title: if project.title.is_empty() { record.title.clone() } else { project.title.clone() },
             page_url: project_page(&project.slug, kind),
             project_id,
             version_id: latest.id.clone(),
-            current: if record.version_number.is_empty() {
-                record.title.clone()
-            } else {
-                record.version_number.clone()
-            },
+            current: if record.version_number.is_empty() { record.title.clone() } else { record.version_number.clone() },
             latest: latest.version_number.clone(),
             download_url: file.url.clone(),
             new_filename: file.filename.clone(),
@@ -403,7 +498,28 @@ pub async fn check_updates(
     }
 
     let _ = save_store(paths, instance, &store);
-    Ok(result)
+    if let Some(reporter) = reporter {
+        reporter.emit(
+            "check",
+            total,
+            total,
+            format!("проверено файлов: {total}"),
+        );
+        reporter.emit_state("check", "done", "проверка завершена");
+    }
+    Ok(report)
+}
+
+/// Проверить обновления всех файлов вида `kind` под текущий профиль.
+pub async fn check_updates(
+    modrinth: &Modrinth,
+    paths: &Paths,
+    instance: &InstanceMeta,
+    kind: &str,
+) -> Result<Vec<ContentUpdate>> {
+    Ok(check_compatibility(modrinth, paths, instance, kind, None)
+        .await?
+        .updates)
 }
 
 /// Поставить обновление одного файла: скачать новый, убрать старый.
@@ -437,6 +553,19 @@ pub async fn apply_update_with(
     let dir = dir_of(paths, instance, kind);
     crate::instances::create_dir_beneath(&game, &dir)?;
     let dest = dir.join(&update.new_filename);
+    let disabled_dest = dir.join(format!("{}.disabled", update.new_filename));
+    let old_dest = dir.join(&update.filename);
+    let old_disabled = dir.join(format!("{}.disabled", update.filename));
+    // Не затираем другой пользовательский файл, если каталог внезапно
+    // вернул имя уже существующего мода. Совпадение с самим обновляемым
+    // файлом допустимо — это обычная замена версии.
+    let same_file = update.new_filename == update.filename;
+    if !same_file && (dest.exists() || disabled_dest.exists()) {
+        return Err(Error::other(format!(
+            "новый файл «{}» уже существует; старые пользовательские файлы не изменены",
+            update.new_filename
+        )));
+    }
     if let Some(reporter) = reporter {
         reporter.emit("update", 0, 0, format!("обновляем {}", update.new_filename));
         let reporter_progress = reporter.clone();
@@ -461,12 +590,22 @@ pub async fn apply_update_with(
             .await?;
     }
 
-    // старый файл мог быть выключен — убираем оба варианта
-    for candidate in [
-        dir.join(&update.filename),
-        dir.join(format!("{}.disabled", update.filename)),
-    ] {
-        if candidate.exists() && candidate != dest {
+    // Сохраняем выключенное состояние старого файла: обновление не должно
+    // неожиданно включать мод в игре.
+    let final_dest = if update.enabled {
+        dest.clone()
+    } else {
+        // После успешной загрузки старый .disabled уже можно заменить новой
+        // версией; до этого момента он оставался нетронутым.
+        if disabled_dest.exists() {
+            let _ = std::fs::remove_file(&disabled_dest);
+        }
+        std::fs::rename(&dest, &disabled_dest)?;
+        disabled_dest.clone()
+    };
+    // старый файл мог быть выключен — убираем оба варианта, но не новый.
+    for candidate in [old_dest, old_disabled] {
+        if candidate.exists() && candidate != final_dest {
             let _ = std::fs::remove_file(candidate);
         }
     }
@@ -483,7 +622,7 @@ pub async fn apply_update_with(
             version_number: update.latest.clone(),
             title: update.title.clone(),
             kind: kind.to_string(),
-            sha1: file_sha1(&dest).unwrap_or_default(),
+            sha1: file_sha1(&final_dest).unwrap_or_default(),
         },
     );
     save_store(paths, instance, &store)?;

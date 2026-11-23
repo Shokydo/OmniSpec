@@ -4,7 +4,9 @@
 //! Tauri-оболочка OmniSpec: тонкий слой команд поверх `omnispec-core`.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -12,6 +14,9 @@ use std::time::Duration;
 use futures::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
+use sha1::{Digest, Sha1};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::sync::Mutex;
@@ -22,7 +27,7 @@ use omnispec_core::auth::Account;
 use omnispec_core::game;
 use omnispec_core::game::java::JavaInstall;
 use omnispec_core::game::launch::LaunchPlan;
-use omnispec_core::instances::{self, CreateInstanceRequest, InstanceMeta};
+use omnispec_core::instances::{self, CreateInstanceRequest, InstanceMeta, Loader};
 use omnispec_core::loaders::{self, LoaderOption};
 use omnispec_core::modrinth::{install as modrinth_install, mrpack, Modrinth, SearchQuery};
 use omnispec_core::curseforge::{install as curseforge_install, modpack as curseforge_modpack, CurseForge};
@@ -49,6 +54,9 @@ mod video_stream;
 mod game_sessions;
 /// Проверенные ответы профиля Minecraft и ограниченная загрузка текстур.
 mod profile_service;
+/// Серверные ядра, импорт, бэкапы, аддоны и диагностика локальных процессов.
+mod server;
+
 struct RunningChild {
     /// После перезапуска Child недоступен; работаем с проверенным PID/временем.
     child: Mutex<Option<tokio::process::Child>>,
@@ -62,6 +70,16 @@ struct RunningChild {
 }
 type ChildHandle = Arc<RunningChild>;
 
+/// Отдельный runtime-контейнер сервера. Серверы не используют игровые
+/// session-records: их процесс управляется stdin-командами и имеет собственный
+/// журнал, но события намеренно совместимы с консолью OmniSpec.
+struct ServerChild {
+    child: Mutex<Option<tokio::process::Child>>,
+    stdin: Mutex<Option<tokio::process::ChildStdin>>,
+    started_at: u64,
+    stop_requested: AtomicBool,
+}
+type ServerHandle = Arc<ServerChild>;
 
 /// Резервируем попытку до асинхронной подготовки. Иначе два быстрых нажатия
 /// «Играть» могут одновременно увидеть пустой `running` и запустить два окна.
@@ -204,6 +222,8 @@ struct AppState {
     /// Потоковый сервер запускается только при выборе видеообоев.
     video_server: StdMutex<Option<video_stream::VideoServer>>,
     running: Arc<Mutex<HashMap<String, ChildHandle>>>,
+    /// Запущенные серверные процессы: id сервера → runtime.
+    server_running: Arc<Mutex<HashMap<String, ServerHandle>>>,
     /// Попытки, которые ещё готовятся; дубликаты с аккаунтом разрешены.
     launching: Arc<StdMutex<HashMap<String, usize>>>,
     content_access: Arc<StdMutex<ContentAccess>>,
@@ -250,7 +270,7 @@ fn reporter_for(app: &AppHandle, instance_id: &str) -> Reporter {
 fn reporter_for_content(app: &AppHandle, instance_id: &str, op_id: Option<String>) -> Reporter {
     let reporter = reporter_for(app, instance_id);
     match op_id.filter(|id| {
-        id.starts_with("install:")
+        (id.starts_with("install:") || id.starts_with("check:"))
             && id.len() <= 100
             && id
                 .bytes()
@@ -370,7 +390,11 @@ async fn set_language(state: State<'_, AppState>, language: String) -> Result<()
 }
 
 #[tauri::command]
-async fn save_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<(), String> {
+async fn save_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mut settings: Settings,
+) -> Result<(), String> {
     // Записи settings.json не должны обгонять друг друга или видеть частичный файл.
     let mut current = state.settings.lock().await;
     // Снимок настроек мог попасть в очередь ещё до переноса id сборки.
@@ -399,10 +423,14 @@ async fn save_settings(state: State<'_, AppState>, mut settings: Settings) -> Re
     } else { None };
     settings.save(&state.paths).map_err(err)?;
     state.presence.configure(settings.discord_rpc);
+    let minimize_to_tray = settings.minimize_to_tray;
     *current = settings;
     state.rpc_upload_allowed.send_replace(
         current.discord_rpc && current.discord_instance_icon && current.discord_upload_local_icon
     );
+    // Значок уже создан в setup; переключатель применяется сразу, но только
+    // после успешной атомарной записи settings.json.
+    set_tray_visible(&app, minimize_to_tray);
     Ok(())
 }
 
@@ -513,15 +541,17 @@ async fn resolve_presence_icon(
 /* ==================== СБОРКИ ==================== */
 
 #[tauri::command]
-async fn list_instances(state: State<'_, AppState>) -> Result<Vec<InstanceMeta>, String> {
+async fn list_instances(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
     // Не переназначаем id процесса или незаконченной установки. Тот же порядок
-    // блокировок, что у запуска: running → content → launching.
+    // блокировок, что у запуска: running → server_running → content → launching.
     let list = {
         let running = state.running.lock().await;
+        let server_running = state.server_running.lock().await;
         let content = state.content_access.lock().unwrap_or_else(|e| e.into_inner());
         let launching = state.launching.lock().unwrap_or_else(|e| e.into_inner());
         let mut blocked: HashSet<String> = running.keys()
             .map(|key| run_instance_id(key).to_string()).collect();
+        blocked.extend(server_running.keys().cloned());
         blocked.extend(launching.keys().cloned());
         blocked.extend(content.writers.keys().cloned());
         blocked.extend(content.repairing.iter().cloned());
@@ -542,7 +572,10 @@ async fn list_instances(state: State<'_, AppState>) -> Result<Vec<InstanceMeta>,
             }
         }
     }
-    Ok(list)
+    // `InstanceMeta` остаётся совместимым с существующим ядром сборок, а
+    // серверные поля добавляются только в публичный JSON списка. Поэтому старые
+    // профили не требуют миграции, но UI видит `is_server`, `server` и root.
+    Ok(server::decorate_all(&state.paths, list))
 }
 
 #[derive(serde::Deserialize)]
@@ -660,7 +693,14 @@ async fn create_instance_for_mod(
 }
 
 #[tauri::command]
-fn delete_instance(state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
+async fn delete_instance(state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
+    // Тот же порядок, что у list_instances/running_*: running → server_running.
+    let running = state.running.lock().await;
+    let server_running = state.server_running.lock().await;
+    if server_running.contains_key(&instance_id) { return Err("сначала останови сервер".into()); }
+    if running.keys().any(|key| run_instance_id(key) == instance_id) { return Err("сначала останови запущенную игру".into()); }
+    drop(server_running);
+    drop(running);
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
     instances::delete(&state.paths, &instance_id).map_err(err)
 }
@@ -1142,12 +1182,14 @@ async fn request_stop(child: &ChildHandle) -> Result<(), String> {
 #[tauri::command]
 async fn running_instances(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let running = state.running.lock().await;
+    let server_running = state.server_running.lock().await;
     let mut result: Vec<String> = Vec::new();
     for key in running.keys() {
         let id = run_instance_id(key).to_string();
-        if !result.contains(&id) {
-            result.push(id);
-        }
+        if !result.contains(&id) { result.push(id); }
+    }
+    for id in server_running.keys() {
+        if !result.contains(id) { result.push(id.clone()); }
     }
     Ok(result)
 }
@@ -1163,12 +1205,512 @@ struct RunningSessionInfo {
 #[tauri::command]
 async fn running_sessions(state: State<'_, AppState>) -> Result<Vec<RunningSessionInfo>, String> {
     let running = state.running.lock().await;
+    let server_running = state.server_running.lock().await;
     let mut result: Vec<_> = running.iter().map(|(key, child)| RunningSessionInfo {
         instance_id: run_instance_id(key).to_string(), run_id: key.clone(),
         account: child.account.clone(), started_at: child.started_at,
     }).collect();
+    result.extend(server_running.iter().map(|(id, child)| RunningSessionInfo {
+        instance_id: id.clone(), run_id: server_run_id(id), account: "server".into(), started_at: child.started_at,
+    }));
     result.sort_by(|a, b| (a.started_at, &a.run_id).cmp(&(b.started_at, &b.run_id)));
     Ok(result)
+}
+
+/* ==================== СЕРВЕРЫ ==================== */
+
+fn server_run_id(id: &str) -> String {
+    format!("{id}#server")
+}
+
+#[tauri::command]
+async fn server_kernels() -> Result<Vec<server::KernelInfo>, String> {
+    Ok(server::kernel_catalog())
+}
+
+#[tauri::command]
+async fn server_kernel_versions(
+    state: State<'_, AppState>,
+    kernel: String,
+) -> Result<Vec<server::KernelVersion>, String> {
+    server::kernel_versions(&state.http, &kernel).await
+}
+
+#[tauri::command]
+async fn server_create(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: server::CreateServerRequest,
+) -> Result<Value, String> {
+    let _write = reserve_content_write("__create__", &state.content_access)?;
+    let id = req.name.trim().to_string();
+    let reporter = reporter_for(&app, &format!("server-create-{}", id));
+    let meta = server::create(&state.http, &state.paths, req, &reporter).await?;
+    Ok(server::decorate(&state.paths, &meta))
+}
+
+#[tauri::command]
+fn server_get(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<server::ServerConfig, String> {
+    server::load(&state.paths, &instance_id)
+}
+
+#[tauri::command]
+fn server_save(
+    state: State<'_, AppState>,
+    instance_id: String,
+    config: server::ServerConfig,
+) -> Result<server::ServerConfig, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    server::save(&state.paths, &instance_id, config)
+}
+
+#[tauri::command]
+fn server_set_eula(state: State<'_, AppState>, instance_id: String, accepted: bool) -> Result<(), String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    server::set_eula(&state.paths, &instance_id, accepted)
+}
+
+#[tauri::command]
+fn server_write_icon(
+    state: State<'_, AppState>,
+    instance_id: String,
+    path: String,
+) -> Result<(), String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    server::write_server_icon(&state.paths, &instance_id, &path)
+}
+
+#[tauri::command]
+async fn server_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<Value, String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    if !server::is_server(&state.paths, &instance_id) {
+        return Err("эта запись не является сервером".into());
+    }
+    let config = server::load(&state.paths, &instance_id)?;
+    let root = server::root(&state.paths, &meta);
+    let root_meta = std::fs::symlink_metadata(&root).map_err(err)?;
+    if root_meta.file_type().is_symlink() || !root_meta.is_dir() { return Err("папка сервера не найдена".into()); }
+    if root.join("eula.txt").is_file() && !server::eula_accepted(&root) { return Err("сначала прими EULA в настройках сервера".into()); }
+    let mut running_guard = state.server_running.lock().await;
+    if running_guard.contains_key(&instance_id) { return Err("сервер уже запущен".into()); }
+    let (program, args) = server::command_line(&config)?;
+    let lower = program.to_ascii_lowercase();
+    let mut command = tokio::process::Command::new(&program);
+    if lower.ends_with(".sh") {
+        command = tokio::process::Command::new("sh");
+        command.arg(&program);
+    }
+    #[cfg(windows)]
+    if lower.ends_with(".bat") || lower.ends_with(".cmd") {
+        command = tokio::process::Command::new("cmd");
+        command.arg("/C").arg(&program);
+    }
+    command
+        .args(&args)
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in &config.env {
+        if !key.trim().is_empty() { command.env(key, value); }
+    }
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut process = command.spawn().map_err(|e| format!("не удалось запустить сервер: {e}"))?;
+    let stdin = process.stdin.take();
+    let stdout = process.stdout.take();
+    let stderr = process.stderr.take();
+    let pid = process.id();
+    let started_at = game_sessions::now();
+    let handle = Arc::new(ServerChild {
+        child: Mutex::new(Some(process)), stdin: Mutex::new(stdin), started_at,
+        stop_requested: AtomicBool::new(false),
+    });
+    running_guard.insert(instance_id.clone(), handle.clone());
+    drop(running_guard);
+    let run_id = server_run_id(&instance_id);
+    emit_game_log(&app, &instance_id, &run_id, None, format!("[omnispec] сервер запущен (PID {})", pid.unwrap_or(0)));
+    let mut pumps = Vec::new();
+    if let Some(stdout) = stdout {
+        pumps.push(spawn_server_pump(app.clone(), state.paths.clone(), instance_id.clone(), run_id.clone(), stdout));
+    }
+    if let Some(stderr) = stderr {
+        pumps.push(spawn_server_pump(app.clone(), state.paths.clone(), instance_id.clone(), run_id.clone(), stderr));
+    }
+    monitor_server(app.clone(), instance_id.clone(), handle, state.server_running.clone(), pumps, config.tps_command.clone());
+    Ok(json!({"instance_id": instance_id, "run_id": run_id, "pid": pid, "started_at": started_at, "command": format!("{} {}", program, args.join(" "))}))
+}
+
+fn spawn_server_pump<R>(
+    app: AppHandle,
+    paths: Paths,
+    instance_id: String,
+    run_id: String,
+    reader: R,
+) -> tokio::task::JoinHandle<()>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        pump_lines(reader, |line| {
+            server::append_log(&paths, &instance_id, &line);
+            emit_game_log(&app, &instance_id, &run_id, None, line);
+        }).await;
+    })
+}
+
+fn monitor_server(
+    app: AppHandle,
+    instance_id: String,
+    handle: ServerHandle,
+    running: Arc<Mutex<HashMap<String, ServerHandle>>>,
+    pumps: Vec<tokio::task::JoinHandle<()>>,
+    tps_command: Option<String>,
+) {
+    tauri::async_runtime::spawn(async move {
+        let mut last_probe = std::time::Instant::now();
+        loop {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            if last_probe.elapsed() >= Duration::from_secs(10) {
+                if let Some(command) = tps_command.as_deref().filter(|value| !value.trim().is_empty()) {
+                    let mut stdin = handle.stdin.lock().await;
+                    if let Some(input) = stdin.as_mut() { let _ = server::send_command(input, command).await; }
+                }
+                last_probe = std::time::Instant::now();
+            }
+            let (finished, code, stopped) = {
+                let mut guard = handle.child.lock().await;
+                let stopped = handle.stop_requested.load(Ordering::Relaxed);
+                match guard.as_mut() {
+                    Some(child) => match child.try_wait() {
+                        Ok(Some(status)) => (true, status.code().unwrap_or(-1), stopped),
+                        _ => (false, 0, stopped),
+                    },
+                    None => (true, -1, stopped),
+                }
+            };
+            if finished {
+                let run_id = server_run_id(&instance_id);
+                running.lock().await.remove(&instance_id);
+                let _ = finish_pumps(pumps, Duration::from_secs(3)).await;
+                let _ = app.emit("game-exit", json!({"instance": instance_id, "run_id": run_id, "code": code, "stopped": stopped, "server": true}));
+                break;
+            }
+        }
+    });
+}
+
+#[tauri::command]
+async fn server_stop(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<(), String> {
+    let handle = state.server_running.lock().await.get(&instance_id).cloned().ok_or("сервер не запущен")?;
+    let config = server::load(&state.paths, &instance_id)?;
+    let mut graceful = false;
+    if !config.stop_command.trim().is_empty() {
+        let mut stdin = handle.stdin.lock().await;
+        if let Some(input) = stdin.as_mut() {
+            if server::send_command(input, &config.stop_command).await.is_ok() { graceful = true; }
+        }
+    }
+    if !graceful {
+        let mut child = handle.child.lock().await;
+        if let Some(process) = child.as_mut() { process.start_kill().map_err(err)?; }
+    }
+    handle.stop_requested.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Немедленно завершить процесс сервера, не отправляя команду в stdin.
+/// Используется отдельной кнопкой «Килл», когда graceful stop завис.
+#[tauri::command]
+async fn server_kill(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<(), String> {
+    let handle = state.server_running.lock().await.get(&instance_id).cloned().ok_or("сервер не запущен")?;
+    let mut child = handle.child.lock().await;
+    if let Some(process) = child.as_mut() {
+        process.start_kill().map_err(err)?;
+    }
+    handle.stop_requested.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+async fn server_command(
+    state: State<'_, AppState>,
+    instance_id: String,
+    command: String,
+) -> Result<(), String> {
+    if command.trim().is_empty() { return Err("команда пуста".into()); }
+    let handle = state.server_running.lock().await.get(&instance_id).cloned().ok_or("сервер не запущен")?;
+    let mut stdin = handle.stdin.lock().await;
+    let input = stdin.as_mut().ok_or("сервер не принимает команды через stdin")?;
+    server::send_command(input, &command).await
+}
+
+#[tauri::command]
+async fn server_snapshot(
+    state: State<'_, AppState>,
+    instance_id: String,
+) -> Result<server::ServerSnapshot, String> {
+    let handle = state.server_running.lock().await.get(&instance_id).cloned();
+    let (pid, started) = if let Some(handle) = handle {
+        let mut child = handle.child.lock().await;
+        (child.as_mut().and_then(|process| process.id()), Some(handle.started_at))
+    } else { (None, None) };
+    server::snapshot(&state.paths, &instance_id, pid, started, pid.is_some())
+}
+
+#[tauri::command]
+fn server_files(state: State<'_, AppState>, instance_id: String, sub: Option<String>) -> Result<Vec<server::ServerFile>, String> {
+    server::files(&state.paths, &instance_id, sub.as_deref())
+}
+
+#[tauri::command]
+fn server_players(state: State<'_, AppState>, instance_id: String) -> Result<Vec<server::ServerPlayer>, String> {
+    server::list_players(&state.paths, &instance_id)
+}
+
+#[tauri::command]
+fn server_addons(state: State<'_, AppState>, instance_id: String) -> Result<Vec<server::ServerAddon>, String> {
+    server::addons(&state.paths, &instance_id)
+}
+
+#[tauri::command]
+fn server_toggle_addon(state: State<'_, AppState>, instance_id: String, path: String) -> Result<server::ServerAddon, String> {
+    server::toggle_addon(&state.paths, &instance_id, &path)
+}
+
+#[tauri::command]
+fn server_delete_addon(state: State<'_, AppState>, instance_id: String, path: String) -> Result<(), String> {
+    server::delete_addon(&state.paths, &instance_id, &path)
+}
+
+#[tauri::command]
+async fn server_search_addons(
+    state: State<'_, AppState>,
+    query: String,
+    project_type: String,
+    mc_version: Option<String>,
+    loader: Option<String>,
+    offset: Option<u32>,
+    limit: Option<u32>,
+) -> Result<omnispec_core::modrinth::SearchResults, String> {
+    let project_type = if project_type == "plugin" || project_type == "mod" { project_type } else { "plugin".into() };
+    state.modrinth.search(&SearchQuery {
+        query,
+        project_type,
+        game_version: mc_version,
+        loader,
+        categories: Vec::new(),
+        limit: limit.unwrap_or(24).min(100),
+        offset: offset.unwrap_or(0),
+        sort: "downloads".into(),
+    }).await.map_err(err)
+}
+
+#[tauri::command]
+async fn server_addon_versions(
+    state: State<'_, AppState>,
+    project_id: String,
+    mc_version: Option<String>,
+    loader: Option<String>,
+) -> Result<Vec<omnispec_core::modrinth::Version>, String> {
+    state.modrinth.project_versions(&project_id, mc_version.as_deref(), loader.as_deref()).await.map_err(err)
+}
+
+fn verify_catalog_download(
+    path: &Path,
+    expected_size: u64,
+    expected_sha1: &str,
+) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("каталог не создал JAR: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        let _ = std::fs::remove_file(path);
+        return Err("каталог скачал не обычный файл".into());
+    }
+    if metadata.len() != expected_size {
+        let _ = std::fs::remove_file(path);
+        return Err(format!(
+            "размер JAR не совпал: ожидалось {expected_size}, получено {}",
+            metadata.len()
+        ));
+    }
+    let mut input = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut digest = Sha1::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = input.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    let actual = hex::encode(digest.finalize());
+    if !actual.eq_ignore_ascii_case(expected_sha1.trim()) {
+        let _ = std::fs::remove_file(path);
+        return Err("SHA-1 скачанного JAR не совпал с каталогом".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn server_install_catalog_addon(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    instance_id: String,
+    req: server::CatalogInstallRequest,
+) -> Result<server::ServerAddon, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    let config = server::load(&state.paths, &instance_id)?;
+    let folder = server::validate_catalog_request(&config, &req)?;
+
+    // The UI supplies a compact catalog record, but the backend verifies the
+    // project, version and exact file once more before downloading anything.
+    let project = state.modrinth.project(&req.project_id).await.map_err(err)?;
+    if project.id != req.project_id
+        || !project.project_type.eq_ignore_ascii_case(req.project_type.trim())
+    {
+        return Err("проект каталога не совпадает с запросом".into());
+    }
+    let versions = state
+        .modrinth
+        .project_versions(
+            &req.project_id,
+            Some(req.mc_version.trim()),
+            req.loader.as_deref().filter(|value| !value.trim().is_empty()),
+        )
+        .await
+        .map_err(err)?;
+    let version = versions
+        .iter()
+        .find(|version| version.id == req.version_id)
+        .ok_or_else(|| "версия каталога не совместима с сервером".to_string())?;
+    if !version.project_id.is_empty() && version.project_id != req.project_id {
+        return Err("версия каталога принадлежит другому проекту".into());
+    }
+    let file = version
+        .files
+        .iter()
+        .find(|file| file.url == req.url && file.filename == req.filename)
+        .ok_or_else(|| "JAR не принадлежит выбранной версии каталога".to_string())?;
+    let catalog_sha1 = file
+        .hashes
+        .get("sha1")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "у JAR каталога отсутствует SHA-1".to_string())?;
+    if file.size != req.size || !catalog_sha1.eq_ignore_ascii_case(&req.sha1) {
+        return Err("размер или SHA-1 JAR не совпадает с каталогом".into());
+    }
+
+    let destination = server::catalog_destination(&state.paths, &instance_id, folder, &req.filename)?;
+    let reporter = reporter_for(&app, &instance_id).with_op(format!("server-catalog:{}", instance_id));
+    state
+        .http
+        .download_tracked(
+            &req.url,
+            &destination,
+            Some(req.size),
+            Some(&req.sha1),
+            false,
+            &|done, total| reporter.emit_bytes("server-catalog", &req.filename, done, total),
+        )
+        .await
+        .map_err(err)?;
+    if let Err(error) = verify_catalog_download(&destination, req.size, &req.sha1) {
+        let _ = std::fs::remove_file(&destination);
+        return Err(error);
+    }
+    server::addons(&state.paths, &instance_id)?
+        .into_iter()
+        .find(|item| item.path == format!("{folder}/{}", req.filename))
+        .ok_or_else(|| "JAR скачан, но не найден среди аддонов".into())
+}
+
+#[tauri::command]
+async fn server_install_addon(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    instance_id: String,
+    url: String,
+    kind: Option<String>,
+) -> Result<server::ServerAddon, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let config = server::load(&state.paths, &instance_id)?;
+    let root = server::root(&state.paths, &meta);
+    let folder = server::addon_folder(
+        &config.kernel,
+        kind.as_deref().map(|value| if value == "mod" { "mods" } else if value == "plugin" { "plugins" } else { value }),
+    )?;
+    let parsed = reqwest::Url::parse(url.trim()).map_err(|_| "недопустимая ссылка на аддон".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() { return Err("разрешены только http(s)-ссылки".into()); }
+    let raw_name = parsed.path_segments().and_then(|segments| segments.last()).filter(|name| !name.is_empty()).unwrap_or("addon.jar");
+    if raw_name.chars().any(char::is_control) || raw_name.contains('/') || raw_name.contains('\\') || raw_name.contains("..") { return Err("недопустимое имя аддона".into()); }
+    let name = if raw_name.to_ascii_lowercase().ends_with(".jar") { raw_name.to_string() } else { format!("{raw_name}.jar") };
+    if name.len() > 180 { return Err("имя аддона слишком длинное".into()); }
+    let root_meta = std::fs::symlink_metadata(&root).map_err(err)?;
+    if root_meta.file_type().is_symlink() || !root_meta.is_dir() { return Err("папка сервера недоступна".into()); }
+    let dest_dir = root.join(folder);
+    if std::fs::symlink_metadata(&dest_dir).map(|meta| meta.file_type().is_symlink()).unwrap_or(false) { return Err("папка аддонов не может быть символической ссылкой".into()); }
+    std::fs::create_dir_all(&dest_dir).map_err(err)?;
+    let canonical_root = root.canonicalize().map_err(err)?;
+    let canonical_dest_dir = dest_dir.canonicalize().map_err(err)?;
+    if !canonical_dest_dir.starts_with(&canonical_root) { return Err("папка аддонов выходит за пределы сервера".into()); }
+    let dest = dest_dir.join(&name);
+    if std::fs::symlink_metadata(&dest).map(|meta| meta.file_type().is_symlink()).unwrap_or(false) { return Err("файл аддона не может быть символической ссылкой".into()); }
+    if dest.exists() { return Err(format!("аддон уже существует: {name}")); }
+    let reporter = reporter_for(&app, &instance_id).with_op(format!("server-addon:{}", instance_id));
+    state.http.download_tracked(parsed.as_str(), &dest, None, None, false, &|done, total| reporter.emit_bytes("server-addon", &name, done, total)).await.map_err(err)?;
+    Ok(server::addons(&state.paths, &instance_id)?.into_iter().find(|item| item.path == format!("{folder}/{name}")).ok_or("аддон скачан, но не найден")?)
+}
+
+#[tauri::command]
+fn server_backup_list(state: State<'_, AppState>, instance_id: String) -> Result<Vec<server::BackupInfo>, String> {
+    server::list_backups(&state.paths, &instance_id)
+}
+
+#[tauri::command]
+fn server_backup_create(state: State<'_, AppState>, instance_id: String, label: Option<String>, lean: Option<bool>) -> Result<server::BackupInfo, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    server::create_backup(&state.paths, &instance_id, label.as_deref(), lean.unwrap_or(true))
+}
+
+#[tauri::command]
+fn server_backup_delete(state: State<'_, AppState>, instance_id: String, name: String) -> Result<(), String> {
+    server::delete_backup(&state.paths, &instance_id, &name)
+}
+
+#[tauri::command]
+async fn server_backup_restore(state: State<'_, AppState>, instance_id: String, name: String) -> Result<(), String> {
+    if state.server_running.lock().await.contains_key(&instance_id) { return Err("сначала останови сервер перед восстановлением".into()); }
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    server::restore_backup(&state.paths, &instance_id, &name)
+}
+
+#[tauri::command]
+fn server_sync(state: State<'_, AppState>, instance_id: String, destination: String, direction: Option<String>) -> Result<Value, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    server::sync_to(&state.paths, &instance_id, &destination, direction.as_deref().unwrap_or("push"))
+}
+
+#[tauri::command]
+async fn server_scan(roots: Vec<String>) -> Result<Vec<server::ServerCandidate>, String> {
+    server::scan(roots).await
 }
 
 /* ==================== MODRINTH ==================== */
@@ -2511,19 +3053,71 @@ fn content_delete(
     omnispec_core::content::remove(&state.paths, &meta, &kind, &name).map_err(err)
 }
 
+fn target_instance(
+    mut meta: InstanceMeta,
+    mc_version: Option<String>,
+    loader: Option<Loader>,
+) -> InstanceMeta {
+    if let Some(version) = mc_version.filter(|value| !value.trim().is_empty()) {
+        meta.mc_version = version;
+    }
+    if let Some(loader) = loader {
+        meta.loader = loader;
+    }
+    meta
+}
+
 /// Проверить обновления под эту версию игры и загрузчик.
 #[tauri::command]
 async fn content_updates(
+    app: AppHandle,
     state: State<'_, AppState>,
     instance_id: String,
     kind: String,
+    mc_version: Option<String>,
+    loader: Option<Loader>,
+    op_id: Option<String>,
 ) -> Result<Value, String> {
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    let updates =
-        omnispec_core::content::check_updates(&state.modrinth, &state.paths, &meta, &kind)
-            .await
-            .map_err(err)?;
-    Ok(json!(updates))
+    let target = target_instance(meta, mc_version, loader);
+    let reporter = reporter_for_content(&app, &target.id, op_id);
+    let report = omnispec_core::content::check_compatibility(
+        &state.modrinth,
+        &state.paths,
+        &target,
+        &kind,
+        Some(&reporter),
+    )
+    .await
+    .map_err(err)?;
+    Ok(json!(report.updates))
+}
+
+/// Полный результат проверки нужен перед сменой Minecraft-версии: кроме
+/// обновлений UI получает файлы, для которых под выбранный профиль версий нет.
+#[tauri::command]
+async fn content_compatibility(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    instance_id: String,
+    kind: String,
+    mc_version: Option<String>,
+    loader: Option<Loader>,
+    op_id: Option<String>,
+) -> Result<Value, String> {
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let target = target_instance(meta, mc_version, loader);
+    let reporter = reporter_for_content(&app, &target.id, op_id);
+    omnispec_core::content::check_compatibility(
+        &state.modrinth,
+        &state.paths,
+        &target,
+        &kind,
+        Some(&reporter),
+    )
+    .await
+    .map(|report| json!(report))
+    .map_err(err)
 }
 
 /// Поставить обновление одного файла. Данные обновления приходят из UI
@@ -2536,10 +3130,11 @@ async fn content_update(
     kind: String,
     name: String,
     update: Option<Value>,
+    op_id: Option<String>,
 ) -> Result<Value, String> {
     let _write = reserve_content_write(&instance_id, &state.content_access)?;
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    let reporter = reporter_for(&app, &meta.id);
+    let reporter = reporter_for_content(&app, &meta.id, op_id);
     let update = match update {
         Some(value) => {
             let parsed: omnispec_core::content::ContentUpdate =
@@ -3333,8 +3928,8 @@ fn set_instance_icon_file(
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_lowercase();
-    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp") {
-        return Err("подойдёт PNG, JPG или WebP".into());
+    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif") {
+        return Err("подойдёт PNG, JPG, WebP или GIF".into());
     }
     let mut meta = instances::load(&state.paths, &instance_id).map_err(err)?;
     let dir = state.paths.instance_dir(&instance_id);
@@ -3354,13 +3949,17 @@ fn instance_icon(
     instance_id: String,
 ) -> Result<Option<String>, String> {
     let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
-    let Some(icon) = meta.icon else {
-        return Ok(None);
+    let (icon, base) = if let Ok(config) = server::load(&state.paths, &instance_id) {
+        (config.icon.unwrap_or_else(|| "server-icon.png".into()), server::root(&state.paths, &meta))
+    } else {
+        let Some(icon) = meta.icon else { return Ok(None); };
+        (icon, state.paths.instance_dir(&instance_id))
     };
+    let icon = Path::new(&icon).file_name().and_then(|value| value.to_str()).unwrap_or("server-icon.png").to_string();
     if !icon.contains('.') {
         return Ok(None); // встроенная иконка, рисуется из спрайта
     }
-    let path = state.paths.instance_dir(&instance_id).join(&icon);
+    let path = base.join(&icon);
     let Ok(bytes) = std::fs::read(&path) else {
         return Ok(None);
     };
@@ -3707,15 +4306,98 @@ async fn wallpaper_source(app: AppHandle, state: State<'_, AppState>, source: St
 /// Где лежит сборка — строка «папка: …» в главном окне.
 #[tauri::command]
 fn instance_path(state: State<'_, AppState>, instance_id: String) -> Result<String, String> {
-    instances::load(&state.paths, &instance_id).map_err(err)?;
-    Ok(state.paths.instance_dir(&instance_id).display().to_string())
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let path = if server::is_server(&state.paths, &instance_id) { server::root(&state.paths, &meta) } else { state.paths.instance_dir(&instance_id) };
+    Ok(path.display().to_string())
+}
+
+const TRAY_ID: &str = "omnispec-tray";
+const TRAY_SHOW_ID: &str = "tray-show";
+const TRAY_QUIT_ID: &str = "tray-quit";
+
+/// Обновляет WebView только для смены видимости. Само скрытие окна не
+/// затрагивает нативный Discord worker или запущенные игровые/серверные процессы.
+fn emit_window_visibility(app: &AppHandle, hidden: bool) {
+    let _ = app.emit(
+        "window-visibility",
+        json!({ "hidden": hidden, "visible": !hidden }),
+    );
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        emit_window_visibility(app, false);
+    }
+}
+
+fn set_tray_visible(app: &AppHandle, visible: bool) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        if let Err(error) = tray.set_visible(visible) {
+            eprintln!("[omnispec] не удалось изменить видимость значка в трее: {error}");
+        }
+    }
+}
+
+/// Значок создаётся один раз даже при выключенной настройке: это позволяет
+/// включить функцию без перезапуска. В выключенном состоянии сам значок скрыт.
+fn setup_tray(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let show = MenuItem::with_id(app, TRAY_SHOW_ID, "Показать OmniSpec", true, None::<&str>).map_err(err)?;
+    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "Выйти", true, None::<&str>).map_err(err)?;
+    let menu = Menu::with_items(app, &[&show, &quit]).map_err(err)?;
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).map_err(err)?;
+
+    TrayIconBuilder::with_id(TRAY_ID)
+        .icon(icon)
+        .menu(&menu)
+        .tooltip("OmniSpec")
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| {
+            if event.id() == TRAY_SHOW_ID {
+                show_main_window(app);
+            } else if event.id() == TRAY_QUIT_ID {
+                // Пункт «Выйти» — явное завершение, как кнопка X.
+                app.exit(0);
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        })
+        .build(app)
+        .map_err(err)?;
+
+    set_tray_visible(app, enabled);
+    Ok(())
 }
 
 #[tauri::command]
-fn window_action(window: tauri::WebviewWindow, action: String) -> Result<(), String> {
+async fn window_action(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    window: tauri::WebviewWindow,
+    action: String,
+) -> Result<(), String> {
+    let to_tray = action == "minimize"
+        && state.settings.lock().await.minimize_to_tray
+        && app.tray_by_id(TRAY_ID).is_some();
     match action.as_str() {
         "drag" => window.start_dragging(),
-        "minimize" => window.minimize(),
+        "minimize" => {
+            if to_tray {
+                window.hide()
+            } else {
+                window.minimize()
+            }
+        }
         "maximize" => {
             if window.is_maximized().unwrap_or(false) {
                 window.unmaximize()
@@ -3730,7 +4412,12 @@ fn window_action(window: tauri::WebviewWindow, action: String) -> Result<(), Str
         }
         other => return Err(format!("неизвестное действие окна: {other}")),
     }
-    .map_err(err)
+    .map_err(err)?;
+
+    if to_tray {
+        emit_window_visibility(&app, true);
+    }
+    Ok(())
 }
 
 fn main() {
@@ -3762,6 +4449,7 @@ fn main() {
     }
     let settings = Settings::load(&paths).unwrap_or_default();
     let initial_launcher_icon = settings.launcher_icon;
+    let initial_minimize_to_tray = settings.minimize_to_tray;
     // Чистим хвосты прошлых обновлений (скачанные копии, помощники).
     update::cleanup(&paths, None);
     let http = Http::with_proxy(settings.proxy.as_deref());
@@ -3818,6 +4506,7 @@ fn main() {
         native_launcher_icon: launcher_icon::NativeIconState::default(),
         video_server: StdMutex::new(None),
         running: Arc::new(Mutex::new(restored_map)),
+        server_running: Arc::new(Mutex::new(HashMap::new())),
         launching: Arc::new(StdMutex::new(HashMap::new())),
         content_access: Arc::new(StdMutex::new(ContentAccess::default())),
         diagnostic_launches: StdMutex::new(HashMap::new()),
@@ -3829,6 +4518,11 @@ fn main() {
     tauri::Builder::default()
         .manage(state)
         .setup(move |app| {
+            if let Err(error) = setup_tray(app.handle(), initial_minimize_to_tray) {
+                // Без системного tray backend сворачиваем обычным способом,
+                // не ломая запуск лаунчера и не скрывая окно без пути возврата.
+                eprintln!("[omnispec] системный трей недоступен: {error}");
+            }
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(error) = launcher_icon::apply(&window, &app.state::<AppState>().native_launcher_icon, initial_launcher_icon) {
                     eprintln!("[omnispec] не удалось восстановить иконку окна: {error}");
@@ -3874,6 +4568,33 @@ fn main() {
             stop_instance,
             running_instances,
             running_sessions,
+            server_kernels,
+            server_kernel_versions,
+            server_create,
+            server_get,
+            server_save,
+            server_set_eula,
+            server_write_icon,
+            server_start,
+            server_stop,
+            server_kill,
+            server_command,
+            server_snapshot,
+            server_files,
+            server_players,
+            server_addons,
+            server_toggle_addon,
+            server_delete_addon,
+            server_search_addons,
+            server_addon_versions,
+            server_install_catalog_addon,
+            server_install_addon,
+            server_backup_list,
+            server_backup_create,
+            server_backup_delete,
+            server_backup_restore,
+            server_sync,
+            server_scan,
             search_modrinth,
             modrinth_versions,
             modrinth_project,
@@ -3934,6 +4655,7 @@ fn main() {
             content_toggle,
             content_delete,
             content_updates,
+            content_compatibility,
             content_update,
             content_replace_version,
             mods_ensure_dependencies,
@@ -4352,6 +5074,24 @@ mod tests {
         assert_eq!(got[1].len(), 70_000 - 65_536);
         drop(got);
         assert!(writer.write_all(b"too late\n").await.is_err());
+    }
+
+    #[test]
+    fn catalog_download_validation_removes_wrong_size_and_hash() {
+        use super::verify_catalog_download;
+        use sha1::{Digest, Sha1};
+        let root = std::env::temp_dir().join(format!("omnispec-catalog-download-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("addon.jar");
+        let bytes = b"verified catalog bytes";
+        std::fs::write(&path, bytes).unwrap();
+        let hash = hex::encode(Sha1::digest(bytes));
+        verify_catalog_download(&path, bytes.len() as u64, &hash).unwrap();
+        std::fs::write(&path, b"tampered").unwrap();
+        assert!(verify_catalog_download(&path, bytes.len() as u64, &hash).is_err());
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 
