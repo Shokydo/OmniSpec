@@ -101,6 +101,47 @@ const server = http.createServer((req, res) => {
     const groupOrder = await page.locator('#instance-list > .cat').evaluateAll((groups) => groups.map((group) => group.dataset.cat));
     assert.equal(groupOrder[0], '__running', 'running servers stay in the pinned category');
     assert.equal(await page.locator('#instance-list > .cat.cat-running').count(), 1, 'running category has sticky marker');
+    // Открытая длинная категория не должна сжимать закреплённые запуски.
+    await page.evaluate(() => {
+      const state = window.omnispecDebug.state;
+      window.__runningLayoutOriginal = { instances: state.instances, categories: state.settings.categories };
+      state.settings.categories = [{ id: 'many', name: 'Избранное', collapsed: false }];
+      state.instances = [...state.instances, ...Array.from({ length: 35 }, (_, n) => ({
+        id: `extra-${n}`, name: `Pack ${n}`, category: 'many', mc_version: '1.20.1', loader: { type: 'vanilla' }
+      }))];
+      document.querySelector('#instance-search').dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const geometry = await page.locator('#instance-list').evaluate((list) => {
+      const pinned = list.querySelector('.cat-running'), row = pinned.querySelector('.instance');
+      const before = { list: list.getBoundingClientRect().top, pinned: pinned.getBoundingClientRect().top,
+        pinnedHeight: pinned.getBoundingClientRect().height, rowHeight: row.getBoundingClientRect().height,
+        itemHeight: pinned.querySelector('.cat-items').getBoundingClientRect().height,
+        scrollHeight: list.scrollHeight, height: list.clientHeight };
+      list.scrollTop = 500;
+      return { ...before, stickyTop: pinned.getBoundingClientRect().top };
+    });
+    assert(geometry.scrollHeight > geometry.height, 'open category overflows and scrolls');
+    assert(geometry.pinnedHeight >= geometry.rowHeight + 20 && geometry.itemHeight >= geometry.rowHeight,
+      'running row is not collapsed or clipped by other expanded categories');
+    assert(Math.abs(geometry.stickyTop - geometry.list) < 5, 'running category remains pinned during scroll');
+    await page.evaluate(() => {
+      const state = window.omnispecDebug.state;
+      window.__runningLayoutOriginal.running = new Set(state.running);
+      for (let n = 0; n < 20; n++) state.running.add(`extra-${n}`);
+      document.querySelector('#instance-search').dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const manyRunning = await page.locator('#instance-list').evaluate(list => {
+      const pinned = list.querySelector('.cat-running'), items = pinned.querySelector('.cat-items');
+      return { pinnedHeight: pinned.getBoundingClientRect().height, listHeight: list.clientHeight,
+        scrollHeight: items.scrollHeight, itemsHeight: items.clientHeight };
+    });
+    assert(manyRunning.pinnedHeight <= manyRunning.listHeight * .5 + 2, 'many running instances leave space for other categories');
+    assert(manyRunning.scrollHeight > manyRunning.itemsHeight, 'many running instances scroll inside the pinned block');
+    await page.evaluate(() => {
+      const state = window.omnispecDebug.state, saved = window.__runningLayoutOriginal;
+      state.instances = saved.instances; state.settings.categories = saved.categories; state.running = saved.running;
+      document.querySelector('#instance-search').dispatchEvent(new Event('input', { bubbles: true }));
+    });
     await page.locator('[data-tab="server"]').click();
     await page.waitForSelector('.server-overview-hero');
     assert.equal(await page.locator('[data-server-action="start"]').count(), 1);

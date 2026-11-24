@@ -327,21 +327,10 @@ async fn probe_candidate(path: PathBuf, source: String) -> (Option<JavaInstall>,
     (probe(&path).await, source)
 }
 
-/// Выбрать Java под требуемую мажорную версию.
-/// Приоритет: точное совпадение → ближайшая старшая. Младшая не подходит никогда
-/// (иначе игра просто не запустится), в этом случае нужно скачать рантайм.
-pub fn pick_best(mut installs: Vec<JavaInstall>, required: u32) -> Option<JavaInstall> {
-    if installs.is_empty() {
-        return None;
-    }
-    installs.sort_by_key(|install| install.major);
-    if let Some(exact) = installs.iter().find(|install| install.major == required) {
-        return Some(exact.clone());
-    }
-    installs
-        .into_iter()
-        .filter(|install| install.major >= required)
-        .min_by_key(|install| install.major)
+/// Используем рекомендованную версию профиля: более новая Java не обязательно
+/// совместима со старыми загрузчиками и модами (например, Forge 1.16.5).
+pub fn pick_best(installs: Vec<JavaInstall>, required: u32) -> Option<JavaInstall> {
+    installs.into_iter().find(|install| install.major == required)
 }
 
 /// Найти подходящую Java: настройки → система → скачивание рантайма Mojang.
@@ -355,6 +344,12 @@ pub async fn find_java(
     if let Some(custom) = settings.java_path() {
         let path = PathBuf::from(custom);
         if let Some(mut install) = probe(&path).await {
+            if install.major != required_major {
+                return Err(Error::Java(format!(
+                    "выбранная Java {} несовместима с профилем, для которого нужна Java {}. Укажите Java {} в настройках сборки или уберите переопределение и включите автозагрузку",
+                    install.major, required_major, required_major
+                )));
+            }
             install.source = "settings".into();
             return Ok(install);
         }
@@ -385,7 +380,7 @@ pub async fn find_java(
     }
 
     Err(Error::Java(format!(
-        "нужна Java {required_major} (или новее), а подходящей не найдено. \
+        "нужна Java {required_major}, а подходящей не найдено. \
          Установите её, укажите путь в настройках или включите автозагрузку рантайма Mojang"
     )))
 }
@@ -509,19 +504,13 @@ pub async fn install_mojang_runtime(
         ));
     }
 
-    candidates.sort_by_key(|(major, _, _, _)| *major);
     let chosen = candidates
         .iter()
         .find(|(major, _, _, _)| *major == required_major)
-        .or_else(|| {
-            candidates
-                .iter()
-                .filter(|(major, _, _, _)| *major >= required_major)
-                .min_by_key(|(major, _, _, _)| *major)
-        })
-        .or_else(|| candidates.last())
         .cloned()
-        .unwrap();
+        .ok_or_else(|| Error::Java(format!(
+            "рантайм Mojang для Java {required_major} недоступен на этой платформе. Установите Java {required_major} и укажите её путь в настройках"
+        )))?;
 
     let (major, component, version, manifest_url) = chosen;
     let target = paths.java_dir().join(&component).join(&version);
@@ -586,6 +575,12 @@ pub async fn install_mojang_runtime(
     let install = probe(&binary)
         .await
         .ok_or_else(|| Error::Java(format!("скачанный рантайм не запускается: {}", binary.display())))?;
+    if install.major != required_major {
+        return Err(Error::Java(format!(
+            "скачанный рантайм оказался Java {}, а требуется Java {}. Укажите корректный путь к Java {} в настройках",
+            install.major, required_major, required_major
+        )));
+    }
     reporter.emit("java", 1, 1, format!("Java {major} готова"));
     reporter.emit_state("java", "done", "готово");
     Ok(JavaInstall {
@@ -621,7 +616,9 @@ mod tests {
             source: "system".into(),
         };
         assert_eq!(pick_best(vec![make(17), make(21)], 17).unwrap().major, 17);
-        assert_eq!(pick_best(vec![make(21), make(8)], 17).unwrap().major, 21);
+        assert!(pick_best(vec![make(21), make(8)], 17).is_none());
+        assert!(pick_best(vec![make(25)], 8).is_none());
+        assert_eq!(pick_best(vec![make(25), make(8)], 8).unwrap().major, 8);
         assert!(pick_best(vec![make(8)], 17).is_none());
     }
 }

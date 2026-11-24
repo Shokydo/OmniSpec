@@ -2519,7 +2519,7 @@ body.has-wall .home-import { background: var(--bg-2a); }
 .sidebar-foot { padding-top: 8px; margin-top: 8px; }
 
 /* ── категории сборок ── */
-.cat { display: flex; flex-direction: column; gap: 2px; }
+.cat { display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; }
 /* Запущенные всегда остаются доступными при прокрутке длинного списка. */
 .instance-list > .cat.cat-running {
   position: sticky;
@@ -3849,12 +3849,13 @@ body.has-wall .download-catalog-sidebar { background: var(--bg-2); }
   border: 1px solid color-mix(in srgb, var(--green) 35%, var(--line-2));
   border-radius: var(--r);
   overflow: hidden;
+  max-height: min(50%, 320px);
   padding: 2px 3px 4px;
   background: var(--bg-2);
   box-shadow: 0 8px 16px -12px rgba(0, 0, 0, .95);
 }
-.instance-list > .cat.cat-running > .cat-head { border-radius: var(--r-sm) var(--r-sm) 0 0; }
-.instance-list > .cat.cat-running > .cat-items { padding: 0 1px 1px 1px; border-radius: 0 0 var(--r-sm) var(--r-sm); }
+.instance-list > .cat.cat-running > .cat-head { flex: 0 0 auto; border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.instance-list > .cat.cat-running > .cat-items { min-height: 0; overflow-y: auto; padding: 0 1px 1px 1px; border-radius: 0 0 var(--r-sm) var(--r-sm); }
 
 /* редактор условий динамической категории */
 .category-editor-box { width: min(720px, 94vw); max-height: min(720px, 92vh); }

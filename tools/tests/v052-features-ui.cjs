@@ -26,6 +26,7 @@ const server = http.createServer((req, res) => {
     await page.addInitScript(() => {
       const calls = [];
       const settings = { onboarded: true, onboarding_pending: false, update_enabled: false, discord_rpc: false, discord_instance_icon: false, theme: 'dark', click_fx: 'off', ambient: 'off', trail: false, ui_scale: 100, categories: [] };
+      try { Object.assign(settings, JSON.parse(sessionStorage.getItem('v052-settings') || '{}')); } catch {}
       const instances = [
         { id: 'fabric', name: 'Fabric Pack', mc_version: '1.21.1', loader: { type: 'fabric', version: '0.16.9' }, source: 'manual', notes: '' },
         { id: 'paper', name: 'Paper Server', mc_version: '1.21.1', loader: { type: 'vanilla' }, source: 'manual', notes: '', is_server: true, kind: 'server', server: { kernel: 'paper', mc_version: '1.21.1', kernel_version: '1.21.1', memory_mb: 4096, port: 25565 } },
@@ -34,7 +35,7 @@ const server = http.createServer((req, res) => {
       const invoke = async (command, args = {}) => {
         calls.push({ command, args });
         if (command === 'get_settings') return JSON.parse(JSON.stringify(settings));
-        if (command === 'save_settings') { Object.assign(settings, JSON.parse(JSON.stringify(args.settings))); return null; }
+        if (command === 'save_settings') { Object.assign(settings, JSON.parse(JSON.stringify(args.settings))); sessionStorage.setItem('v052-settings', JSON.stringify(settings)); return null; }
         if (command === 'list_instances') return instances.map((item) => ({ ...item }));
         if (command === 'accounts_info') return { accounts: [], active: null };
         if (command === 'app_info') return { home: '/test', version: '0.52.1', demo: false };
@@ -118,15 +119,29 @@ const server = http.createServer((req, res) => {
 
     // Живой редактируемый базовый CSS применён к документу и сохранён.
     await page.locator('[data-custom-tab="css"]').click();
+    await page.waitForFunction(() => !document.querySelector('#custom-css-editor')?.readOnly);
+    const original = await page.locator('#custom-css-editor').inputValue();
+    assert(original.length > 120000 && original.includes('.sidebar {'), 'editor loads the complete original styles.css');
     const css = '[data-os="sidebar"] { outline: 2px solid rgb(1, 2, 3); }';
-    await page.locator('#custom-css-editor').fill(css);
-    await page.waitForFunction((expected) => window.__v052.settings.custom_css === expected, css);
-    assert((await page.locator('#omnispec-custom-css').textContent()).includes(css), 'custom CSS is applied live');
+    // Full mode replaces the base sheet at its original cascade position; do not
+    // remove the complete CSS here, otherwise the editor itself has no layout.
+    await page.locator('#custom-css-editor').evaluate((el, value) => { el.value += '\n' + value; el.dispatchEvent(new Event('input', { bubbles: true })); }, css);
+    await page.waitForFunction((expected) => window.__v052.settings.custom_css.includes(expected), css);
+    assert((await page.locator('#omnispec-replacement-base-css').textContent()).includes(css), 'edited base CSS is applied live');
+    assert(await page.locator('link[href="styles.css"]').evaluate(node => node.disabled), 'original stylesheet is replaced, not layered on top');
 
     // Отдельный drag-and-drop на холсте записывает координаты и режим.
     await page.locator('[data-custom-tab="editor"]').click();
     const canvasItem = page.locator('.visual-canvas-item[data-visual-id="toolbar"]');
-    await canvasItem.dragTo(page.locator('.visual-stage-inner'), { targetPosition: { x: 520, y: 210 } });
+    assert(await canvasItem.locator('.visual-snapshot .toolbar').count(), 'canvas previews the actual toolbar contents');
+    const box = await canvasItem.boundingBox();
+    await page.mouse.move(box.x + 20, box.y + 20);
+    await page.mouse.down();
+    const before = await canvasItem.evaluate(node => node.offsetLeft);
+    await page.mouse.move(box.x + 100, box.y + 60, { steps: 5 });
+    const during = await canvasItem.evaluate(node => node.offsetLeft);
+    assert(during > before + 50, 'the visible block follows the pointer before release');
+    await page.mouse.up();
     await page.waitForFunction(() => {
       const item = window.__v052.settings.ui_layout?.elements?.find((entry) => entry.id === 'toolbar');
       return item?.mode === 'free' && item?.x !== 0 && item?.y !== 0;
@@ -181,6 +196,30 @@ const server = http.createServer((req, res) => {
     await page.locator('.server-download-sentinel').scrollIntoViewIfNeeded();
     await page.waitForFunction(() => document.querySelectorAll('.server-download-card').length === 48);
     assert.equal(await page.locator('.server-download-sentinel').textContent(), 'Показано всё: 48');
+    // Полный файл переживает перезапуск и может быть безопасно отключён.
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('link[href="styles.css"]')?.disabled === true);
+    assert((await page.locator('#omnispec-replacement-base-css').textContent()).includes(css), 'edited base restored after reload');
+    await page.evaluate(() => window.omnispecCustomizer.open());
+    await page.locator('[data-custom-tab="css"]').click();
+    assert((await page.locator('#custom-css-editor').inputValue()).includes(css), 'full stylesheet remains editable after reload');
+    await page.locator('#custom-css-find').fill('sidebar');
+    await page.locator('[data-css-action="find"]').click();
+    const found = await page.locator('#custom-css-editor').evaluate(el => el.value.slice(el.selectionStart, el.selectionEnd));
+    assert.equal(found.toLowerCase(), 'sidebar', 'find selects a match in the CSS editor');
+    page.once('dialog', dialog => dialog.accept());
+    await page.keyboard.press('Control+Shift+Backspace');
+    await page.waitForFunction(() => !document.querySelector('link[href="styles.css"]').disabled && window.__v052.settings.custom_css === '');
+    // Plain CSS remains an override; saved old themes must not disable the base.
+    await page.locator('#custom-theme-file').setInputFiles({ name: 'legacy.css', mimeType: 'text/css', buffer: Buffer.from(css) });
+    await page.waitForFunction(expected => window.__v052.settings.custom_css === expected, css);
+    assert.equal(await page.locator('link[href="styles.css"]').evaluate(el => el.disabled), false, 'plain CSS import keeps the original stylesheet');
+    assert((await page.locator('#omnispec-custom-css').textContent()).includes(css));
+    // Explicit full-sheet import replaces the original and keeps its identity.
+    const fullCss = '/* OmniSpec: full base stylesheet */\n' + original + '\n' + css;
+    await page.locator('#custom-theme-file').setInputFiles({ name: 'full.css', mimeType: 'text/css', buffer: Buffer.from(fullCss) });
+    await page.waitForFunction(() => document.querySelector('link[href="styles.css"]').disabled);
+    assert((await page.locator('#omnispec-replacement-base-css').textContent()).includes(css));
     assert.equal(errors.length, 0, errors.join('\n'));
     console.log('V052_UI: fullscreen editor, CSS persistence, drag/properties, custom context menus, export actions, dynamic categories and server infinite scroll — OK');
   } finally {

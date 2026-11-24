@@ -8,7 +8,8 @@
   "use strict";
 
   const STORAGE_KEY = "omnispec-customizer-v2";
-  const MAX_CSS = 120000;
+  const MAX_CSS = 1000000;
+  const FULL_CSS_MARKER = "/* OmniSpec: full base stylesheet */\n";
   const DEFAULT_LAYOUT = {
     sidebar_width: 264,
     sidebar_side: "left",
@@ -162,9 +163,12 @@ body[data-customizer-open="true"] { overflow: hidden; }
 .visual-element-copy small { margin-top: 2px; color: var(--dim-2); font-size: 9px; }
 .visual-stage { position: relative; min-height: 430px; overflow: auto; padding: 8px; border: 1px solid var(--line-2); border-radius: var(--r); background: linear-gradient(145deg, color-mix(in srgb, var(--bg-4) 90%, var(--accent) 10%), var(--bg-2)); }
 .visual-stage-inner { position: relative; min-width: 720px; min-height: 410px; border: 1px dashed var(--line-2); border-radius: var(--r-sm); background: color-mix(in srgb, var(--bg-2) 86%, transparent); }
-.visual-canvas-item { position: absolute; display: flex; align-items: center; gap: 6px; min-width: 60px; min-height: 24px; padding: 5px 8px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: var(--r-sm); background: color-mix(in srgb, var(--bg-3) 88%, var(--accent) 12%); color: var(--text); font-size: 10px; cursor: grab; user-select: none; }
+.visual-canvas-item { overflow: hidden; touch-action: none; position: absolute; display: flex; align-items: center; gap: 6px; min-width: 60px; min-height: 24px; padding: 5px 8px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: var(--r-sm); background: color-mix(in srgb, var(--bg-3) 88%, var(--accent) 12%); color: var(--text); font-size: 10px; cursor: grab; user-select: none; }
 .visual-canvas-item:hover, .visual-canvas-item.is-selected { z-index: 20; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
 .visual-canvas-item:active { cursor: grabbing; }
+.visual-canvas-item .visual-snapshot { flex: 1; min-width: 0; max-height: 100%; overflow: hidden; pointer-events: none; }
+.visual-canvas-item .visual-snapshot > * { max-width: 100%; }
+.visual-canvas-item .visual-label { position: absolute; bottom: 0; right: 0; font-size: 9px; background: var(--bg-2); padding: 2px 4px; opacity: .8; }
 .visual-canvas-item.is-hidden { opacity: .3; border-style: dashed; }
 .visual-canvas-item .ic { width: 13px; height: 13px; flex: none; }
 .visual-stage-help { margin-top: 6px; color: var(--dim-2); font-size: 9.5px; line-height: 1.4; }
@@ -201,6 +205,10 @@ body[data-customizer-open="true"] { overflow: hidden; }
 
   let styleEl = null;
   let userStyleEl = null;
+  let replacementStyleEl = null;
+  let originalCss = null;
+  let originalCssPromise = null;
+  let cssFullMode = false;
   let modal = null;
   let inlineHost = null;
   let currentTab = "editor";
@@ -212,6 +220,8 @@ body[data-customizer-open="true"] { overflow: hidden; }
   let saveTimer = 0;
   let statusTimer = 0;
   let dragId = null;
+  let pointerDrag = null;
+  let suppressClick = false;
   let layoutDragId = null;
   let started = false;
 
@@ -295,11 +305,33 @@ body[data-customizer-open="true"] { overflow: hidden; }
     if (kind === "saved") statusTimer = setTimeout(() => { if (el.isConnected) el.textContent = "Изменения сохраняются автоматически"; }, 2600);
   }
 
+  function isFullCss(css) { return css.startsWith(FULL_CSS_MARKER); }
+  async function getOriginalCss() {
+    if (originalCss !== null) return originalCss;
+    if (!originalCssPromise) originalCssPromise = fetch("styles.css").then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.text();
+    }).then((text) => { originalCss = text; return text; }).catch((error) => {
+      originalCssPromise = null; throw error;
+    });
+    return originalCssPromise;
+  }
   function injectStyles() {
     if (!styleEl) { styleEl = document.createElement("style"); styleEl.id = "omnispec-customizer-base-style"; document.head.appendChild(styleEl); }
     styleEl.textContent = BASE_CSS;
     if (!userStyleEl) { userStyleEl = document.createElement("style"); userStyleEl.id = "omnispec-custom-css"; document.head.appendChild(userStyleEl); }
-    userStyleEl.textContent = sanitizeCss(customCss);
+    const baseLink = document.querySelector('link[rel="stylesheet"][href="styles.css"]');
+    if (baseLink && !replacementStyleEl) {
+      replacementStyleEl = document.createElement("style");
+      replacementStyleEl.id = "omnispec-replacement-base-css";
+      baseLink.after(replacementStyleEl);
+    }
+    const full = isFullCss(customCss);
+    if (baseLink && replacementStyleEl) {
+      replacementStyleEl.textContent = full ? sanitizeCss(customCss.slice(FULL_CSS_MARKER.length)) : "";
+      baseLink.disabled = full;
+    }
+    userStyleEl.textContent = full ? "" : sanitizeCss(customCss);
   }
 
   function markElement(selector, name) {
@@ -392,6 +424,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
   }
 
   function queueSave(patch) {
+    clearTimeout(saveTimer);
     const next = stageSettings(patch);
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...readLocal(), custom_css: customCss, ui_layout: layout })); } catch { /* hardened webview */ }
     saveQueue = saveQueue.catch(() => {}).then(async () => {
@@ -403,13 +436,13 @@ body[data-customizer-open="true"] { overflow: hidden; }
   function queueSaveSoon(patch) {
     stageSettings(patch);
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { queueSave(patch); }, 500);
+    saveTimer = setTimeout(() => { queueSave({ custom_css: customCss, ui_layout: layout }); }, 500);
   }
 
   function editorMarkup(inline = false) {
     return `<div class="customizer-inline-root" data-editor-root data-editor-inline="${inline ? "true" : "false"}">
       <header class="${inline ? "customizer-inline-head" : "modal-head"}">
-        <div class="customizer-head-copy"><div class="customizer-kicker">OmniSpec Studio · 0.52</div><h2 id="customizer-title">${inline ? "Визуальный редактор интерфейса" : "Тема и раскладка"}</h2></div>
+        <div class="customizer-head-copy"><div class="customizer-kicker">OmniSpec Studio · 0.53</div><h2 id="customizer-title">${inline ? "Визуальный редактор интерфейса" : "Тема и раскладка"}</h2></div>
         <div class="customizer-status" data-customizer-status>Изменения сохраняются автоматически</div>
         ${inline ? "" : '<button class="icon-btn" type="button" data-custom-close title="Закрыть"><svg class="ic"><use href="#i-close"/></svg></button>'}
       </header>
@@ -438,6 +471,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
     root.addEventListener("click", (event) => {
       const target = event.target.closest?.("[data-custom-tab], [data-custom-close], [data-custom-reset], [data-layout-action], [data-css-action], [data-css-preset], [data-ui-preset], [data-visual-id], [data-element-visibility]");
       if (!target || !root.contains(target)) return;
+      if (suppressClick) { suppressClick = false; event.preventDefault(); return; }
       if (target.dataset.customTab) { currentTab = target.dataset.customTab; renderEditor(); return; }
       if (target.dataset.customClose !== undefined) { closeCustomizer(); return; }
       if (target.dataset.customReset !== undefined) { resetCustomizer(); return; }
@@ -450,15 +484,68 @@ body[data-customizer-open="true"] { overflow: hidden; }
     });
     root.addEventListener("input", (event) => {
       const target = event.target;
-      if (target.id === "custom-css-editor") { customCss = target.value.slice(0, MAX_CSS); injectStyles(); layout.preset = "custom"; applyLayout(); setStatus("Предпросмотр…"); queueSaveSoon({ custom_css: customCss, ui_layout: layout }); return; }
+      if (target.id === "custom-css-editor") {
+        customCss = (cssFullMode ? FULL_CSS_MARKER : "") + target.value.slice(0, MAX_CSS - FULL_CSS_MARKER.length);
+        injectStyles(); layout.preset = "custom"; applyLayout(); setStatus("Предпросмотр…");
+        queueSaveSoon({ custom_css: customCss, ui_layout: layout }); return;
+      }
       if (target.dataset.layoutControl) { updateLayoutControl(target.dataset.layoutControl, target.value); return; }
       if (target.dataset.elementControl) updateElement(target.dataset.elementControl, target.value);
+    });
+    root.addEventListener("keydown", (event) => {
+      if (event.target.id === "custom-css-find" && event.key === "Enter") { event.preventDefault(); findCss(root); return; }
+      if (event.target.id !== "custom-css-editor") return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault(); $("#custom-css-find", root)?.focus();
+      } else if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+        event.preventDefault();
+        const input = event.target;
+        input.setRangeText("  ", input.selectionStart, input.selectionEnd, "end");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault(); clearTimeout(saveTimer); queueSave({ custom_css: customCss, ui_layout: layout });
+      }
     });
     root.addEventListener("change", (event) => {
       const target = event.target;
       if (target.dataset.layoutSelect) updateLayoutControl(target.dataset.layoutSelect, target.value);
       if (target.dataset.elementSelect) updateElement(target.dataset.elementSelect, target.value);
     });
+    root.addEventListener("pointerdown", (event) => {
+      const item = event.target.closest?.(".visual-canvas-item[data-visual-id]");
+      if (!item || event.button !== 0) return;
+      event.preventDefault();
+      const value = elementState(item.dataset.visualId);
+      selectedElementId = item.dataset.visualId;
+      pointerDrag = { item, id: selectedElementId, pointer: event.pointerId,
+        startX: event.clientX, startY: event.clientY, x: value.x, y: value.y, moved: false };
+      item.setPointerCapture(event.pointerId);
+      item.classList.add("is-dragging");
+    });
+    root.addEventListener("pointermove", (event) => {
+      if (!pointerDrag || pointerDrag.pointer !== event.pointerId) return;
+      const drag = pointerDrag;
+      const dx = Math.round(event.clientX - drag.startX), dy = Math.round(event.clientY - drag.startY);
+      if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
+      if (!drag.moved) return;
+      const spec = ELEMENTS.find((item) => item.id === drag.id);
+      const x = Math.max(-240, Math.min(720, drag.x + dx));
+      const y = Math.max(-180, Math.min(480, drag.y + dy));
+      drag.item.style.left = `${Math.max(3, spec.previewX + x)}px`;
+      drag.item.style.top = `${Math.max(3, spec.previewY + y)}px`;
+      updateElementValues(drag.id, { mode: "free", x, y });
+    });
+    const finishPointer = (event) => {
+      if (!pointerDrag || pointerDrag.pointer !== event.pointerId) return;
+      const drag = pointerDrag; pointerDrag = null;
+      drag.item.classList.remove("is-dragging");
+      if (drag.moved) { clearTimeout(saveTimer); queueSave({ ui_layout: layout }); }
+      suppressClick = drag.moved;
+      renderEditor();
+      setTimeout(() => { suppressClick = false; }, 0);
+    };
+    root.addEventListener("pointerup", finishPointer);
+    root.addEventListener("pointercancel", finishPointer);
     root.addEventListener("dragstart", (event) => {
       const visual = event.target.closest?.(".visual-canvas-item[data-visual-id]");
       if (visual && root.contains(visual)) {
@@ -532,7 +619,45 @@ body[data-customizer-open="true"] { overflow: hidden; }
     $$("[data-custom-tab]", root).forEach((tab) => { tab.classList.toggle("is-active", tab.dataset.customTab === currentTab); tab.setAttribute("aria-selected", String(tab.dataset.customTab === currentTab)); });
     const body = $("[data-customizer-body]", root); if (!body) return;
     body.innerHTML = currentTab === "editor" ? renderVisualEditor() : currentTab === "layout" ? renderLayout() : renderCss();
+    if (currentTab === "editor") populateSnapshots(root);
+    if (currentTab === "css") { bindFileImport(root); loadCssEditor(root); }
     if (currentTab === "editor") setTimeout(() => $("[data-visual-id='${selectedElementId}']", root)?.scrollIntoView?.({ block: "nearest" }), 0);
+  }
+
+  async function loadCssEditor(root) {
+    const input = $("#custom-css-editor", root);
+    if (!input) return;
+    cssFullMode = !customCss || isFullCss(customCss);
+    if (isFullCss(customCss)) { input.value = customCss.slice(FULL_CSS_MARKER.length); return; }
+    if (customCss) { input.value = customCss; return; }
+    input.value = "Загрузка исходного styles.css…"; input.readOnly = true;
+    try {
+      const source = await getOriginalCss();
+      if (!input.isConnected) return;
+      if (customCss) { cssFullMode = isFullCss(customCss); input.value = cssFullMode ? customCss.slice(FULL_CSS_MARKER.length) : customCss; input.readOnly = false; return; }
+      input.value = source; input.readOnly = false;
+      setStatus("Исходный styles.css загружен");
+    } catch (error) {
+      if (!input.isConnected) return;
+      input.value = ""; input.readOnly = false; cssFullMode = false;
+      setStatus(`Не удалось загрузить styles.css: ${error.message || error}`, "error");
+    }
+  }
+
+  // Показываем содержимое реальных областей, не копируя идентификаторы и обработчики.
+  function populateSnapshots(root) {
+    $$(".visual-canvas-item[data-visual-id]", root).forEach((item) => {
+      const spec = ELEMENTS.find((entry) => entry.id === item.dataset.visualId);
+      const original = spec && elementNodes(spec)[0];
+      if (!original) return;
+      const copy = original.cloneNode(true);
+      copy.removeAttribute("id");
+      copy.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+      copy.querySelectorAll("[autofocus]").forEach((node) => node.removeAttribute("autofocus"));
+      copy.removeAttribute("style");
+      const snapshot = document.createElement("div"); snapshot.className = "visual-snapshot";
+      snapshot.appendChild(copy); item.prepend(snapshot);
+    });
   }
 
   function updateLayoutControl(key, rawValue) {
@@ -590,11 +715,43 @@ body[data-customizer-open="true"] { overflow: hidden; }
 
   function applyCssPreset(id) {
     const preset = CSS_PRESETS[id]; if (!preset) return;
-    customCss = preset.css; layout.preset = "custom"; injectStyles(); applyLayout(); queueSave({ custom_css: customCss, ui_layout: layout }); renderEditor(); setStatus(`Применена тема «${preset.label}»`, "saved");
+    clearTimeout(saveTimer); cssFullMode = false; customCss = preset.css; layout.preset = "custom"; injectStyles(); applyLayout(); queueSave({ custom_css: customCss, ui_layout: layout }); renderEditor(); setStatus(`Применена тема «${preset.label}»`, "saved");
+  }
+  function findCss(root) {
+    const input = $("#custom-css-editor", root), search = $("#custom-css-find", root);
+    if (!input || !search || !search.value) return;
+    const haystack = input.value.toLocaleLowerCase(), needle = search.value.toLocaleLowerCase();
+    let index = haystack.indexOf(needle, input.selectionEnd);
+    if (index < 0) index = haystack.indexOf(needle);
+    if (index < 0) { setStatus("Совпадений нет"); return; }
+    input.focus(); input.setSelectionRange(index, index + search.value.length);
+    const line = input.value.slice(0, index).split("\n").length;
+    input.scrollTop = Math.max(0, (line - 4) * parseFloat(getComputedStyle(input).lineHeight));
+    setStatus(`Найдено: строка ${line}`);
   }
   async function handleCssAction(action) {
-    if (action === "clear") { customCss = ""; injectStyles(); queueSave({ custom_css: "" }); renderEditor(); return; }
-    if (action === "copy") { try { await navigator.clipboard.writeText(customCss); setStatus("CSS скопирован", "saved"); } catch { setStatus("Не удалось скопировать CSS", "error"); } return; }
+    if (action === "find") { findCss(editorRoot()); return; }
+    if (action === "clear") {
+      if (!window.confirm("Удалить изменения CSS и восстановить исходный стиль?")) return;
+      clearTimeout(saveTimer); customCss = ""; cssFullMode = true; injectStyles(); queueSave({ custom_css: "" }); renderEditor(); return;
+    }
+    if (action === "base") {
+      if (customCss && !window.confirm("Заменить текущий CSS исходным styles.css? Сначала экспортируйте тему, если хотите сохранить изменения.")) return;
+      try {
+        const text = await getOriginalCss();
+        clearTimeout(saveTimer); cssFullMode = true; customCss = FULL_CSS_MARKER + text;
+        injectStyles(); queueSave({ custom_css: customCss }); renderEditor();
+      } catch (error) { setStatus(`Не удалось загрузить styles.css: ${error.message || error}`, "error"); }
+      return;
+    }
+    if (action === "download-css") {
+      const contents = $("#custom-css-editor", editorRoot())?.value || "";
+      const text = cssFullMode ? FULL_CSS_MARKER + contents : contents;
+      const url = URL.createObjectURL(new Blob([text], { type: "text/css;charset=utf-8" }));
+      const link = document.createElement("a"); link.href = url; link.download = "omnispec-theme.css"; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000); return;
+    }
+    if (action === "copy") { try { await navigator.clipboard.writeText($("#custom-css-editor", editorRoot())?.value || ""); setStatus("CSS скопирован", "saved"); } catch { setStatus("Не удалось скопировать CSS", "error"); } return; }
     if (action === "export") {
       const payload = { format: "omnispec-theme", version: 2, name: "Моя тема OmniSpec", css: customCss, layout };
       const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })); const link = document.createElement("a"); link.href = url; link.download = "omnispec-theme.omtheme"; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); setStatus("Тема экспортирована", "saved"); return;
@@ -607,8 +764,14 @@ body[data-customizer-open="true"] { overflow: hidden; }
     input.addEventListener("change", async () => {
       const file = input.files?.[0]; input.value = ""; if (!file) return;
       try {
-        const data = JSON.parse(await file.text());
-        customCss = sanitizeCss(data.css || data.custom_css || ""); layout = normalizeLayout(data.layout || data.ui_layout || DEFAULT_LAYOUT); injectStyles(); applyLayout(); queueSave({ custom_css: customCss, ui_layout: layout }); renderEditor(); setStatus(`Тема «${data.name || file.name}» импортирована`, "saved");
+        const text = await file.text();
+        if (text.length > MAX_CSS * 2) throw new Error("файл слишком большой");
+        const isCss = /\.css$/i.test(file.name);
+        const data = isCss ? { css: text, layout } : JSON.parse(text);
+        const incoming = String(data.css ?? data.custom_css ?? "");
+        if (incoming.length > MAX_CSS) throw new Error("CSS превышает допустимый размер");
+        clearTimeout(saveTimer); customCss = sanitizeCss(incoming); cssFullMode = isFullCss(customCss);
+        layout = normalizeLayout(data.layout || data.ui_layout || DEFAULT_LAYOUT); injectStyles(); applyLayout(); queueSave({ custom_css: customCss, ui_layout: layout }); renderEditor(); setStatus(`Тема «${data.name || file.name}» импортирована`, "saved");
       } catch (error) { setStatus(`Не удалось импортировать тему: ${error.message || error}`, "error"); }
     });
   }
@@ -630,11 +793,11 @@ body[data-customizer-open="true"] { overflow: hidden; }
     selectedElementId = selected.id;
     const value = elementState(selected.id);
     const controls = (key, title, description, min, max, unit = "px", raw = value[key] ?? 0) => `<label class="customizer-control"><span><strong>${title}</strong><small>${description}</small></span><input type="range" min="${min}" max="${max}" value="${raw || 0}" data-element-control="${key}"><output id="element-value-${key}">${key === "width" || key === "height" ? (raw ? `${raw}${unit}` : "auto") : `${raw || 0}${unit}`}</output></label>`;
-    return `<section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-sliders"/></svg><div><h3>Собери интерфейс как в OmniSpec, Prism Launcher, Modrinth или полностью по-своему</h3><p>Выбери пресет, затем перетащи отдельные элементы на холсте. Для каждого элемента доступны свободная позиция, размер, отступы, радиус, стиль и видимость.</p></div></div><div class="ui-preset-grid">${UI_PRESETS.map(([id, label, description]) => `<button type="button" class="ui-preset ${layout.preset === id ? "is-active" : ""}" data-ui-preset="${id}"><strong>${label}</strong><small>${description}</small></button>`).join("")}</div></section><section class="customizer-section"><div class="visual-editor"><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-list"/></svg>Элементы</div><div class="visual-element-list">${ELEMENTS.map((item) => { const state = elementState(item.id); return `<button type="button" class="visual-element ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}"><svg class="ic"><use href="#i-dots"/></svg><span class="visual-element-copy"><strong>${item.label}</strong><small>${state.visible ? item.description : "скрыт"}</small></span></button>`; }).join("")}</div></div><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-grid"/></svg>Холст · перетащи блоки</div><div class="visual-stage"><div class="visual-stage-inner">${ELEMENTS.map((item) => { const state = elementState(item.id); const left = Math.max(3, item.previewX + state.x); const top = Math.max(3, item.previewY + state.y); const width = state.width || item.previewWidth; const height = state.height || item.previewHeight; return `<div class="visual-canvas-item ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" draggable="true" data-visual-id="${item.id}" style="left:${left}px;top:${top}px;width:${width}px;min-height:${height}px"><svg class="ic"><use href="#i-dots"/></svg>${item.label}</div>`; }).join("")}</div><div class="visual-stage-help">Перетаскивание переводит элемент в режим «Свободно» и записывает координаты в профиль. Это не пользовательский JavaScript.</div></div></div><div class="visual-panel visual-properties"><div class="visual-panel-title"><svg class="ic"><use href="#i-pencil"/></svg>Свойства</div><div class="customizer-note"><strong>${selected.label}</strong><br>${selected.description}</div><label class="customizer-control"><span><strong>Видимость</strong><small>Показывать элемент в лаунчере</small></span><button class="switch ${value.visible ? "on" : ""}" type="button" data-element-visibility="${value.visible ? "hide" : "show"}" aria-pressed="${value.visible}"></button></label><label class="customizer-control"><span><strong>Режим расположения</strong><small>Адаптивный поток или свободные координаты</small></span><select class="select" data-element-select="mode"><option value="flow" ${value.mode === "flow" ? "selected" : ""}>В потоке</option><option value="free" ${value.mode === "free" ? "selected" : ""}>Свободно</option></select></label><label class="customizer-control"><span><strong>Вариант</strong><small>Размер и визуальный акцент</small></span><select class="select" data-element-select="variant">${ELEMENT_VARIANTS.map(([id, label]) => `<option value="${id}" ${value.variant === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>${controls("x", "X", "Горизонтальное смещение", -240, 720)}${controls("y", "Y", "Вертикальное смещение", -180, 480)}${controls("width", "Ширина", "0 — автоматически", 0, 900)}${controls("height", "Высота", "0 — автоматически", 0, 420)}${controls("margin", "Отступ снаружи", "Свободное пространство", 0, 40)}${controls("padding", "Внутренний отступ", "Пространство внутри", 0, 40)}${controls("radius", "Закругление", "Радиус углов", 0, 40)}</div></div></section>`;
+    return `<section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-sliders"/></svg><div><h3>Собери интерфейс как в OmniSpec, Prism Launcher, Modrinth или полностью по-своему</h3><p>Выбери пресет, затем перетащи отдельные элементы на холсте. Для каждого элемента доступны свободная позиция, размер, отступы, радиус, стиль и видимость.</p></div></div><div class="ui-preset-grid">${UI_PRESETS.map(([id, label, description]) => `<button type="button" class="ui-preset ${layout.preset === id ? "is-active" : ""}" data-ui-preset="${id}"><strong>${label}</strong><small>${description}</small></button>`).join("")}</div></section><section class="customizer-section"><div class="visual-editor"><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-list"/></svg>Элементы</div><div class="visual-element-list">${ELEMENTS.map((item) => { const state = elementState(item.id); return `<button type="button" class="visual-element ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}"><svg class="ic"><use href="#i-dots"/></svg><span class="visual-element-copy"><strong>${item.label}</strong><small>${state.visible ? item.description : "скрыт"}</small></span></button>`; }).join("")}</div></div><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-grid"/></svg>Холст · перетащи блоки</div><div class="visual-stage"><div class="visual-stage-inner">${ELEMENTS.map((item) => { const state = elementState(item.id); const left = Math.max(3, item.previewX + state.x); const top = Math.max(3, item.previewY + state.y); const width = state.width || item.previewWidth; const height = state.height || item.previewHeight; return `<div class="visual-canvas-item ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}" style="left:${left}px;top:${top}px;width:${width}px;min-height:${height}px"><span class="visual-label">${item.label}</span></div>`; }).join("")}</div><div class="visual-stage-help">Перетаскивание переводит элемент в режим «Свободно» и записывает координаты в профиль. Это не пользовательский JavaScript.</div></div></div><div class="visual-panel visual-properties"><div class="visual-panel-title"><svg class="ic"><use href="#i-pencil"/></svg>Свойства</div><div class="customizer-note"><strong>${selected.label}</strong><br>${selected.description}</div><label class="customizer-control"><span><strong>Видимость</strong><small>Показывать элемент в лаунчере</small></span><button class="switch ${value.visible ? "on" : ""}" type="button" data-element-visibility="${value.visible ? "hide" : "show"}" aria-pressed="${value.visible}"></button></label><label class="customizer-control"><span><strong>Режим расположения</strong><small>Адаптивный поток или свободные координаты</small></span><select class="select" data-element-select="mode"><option value="flow" ${value.mode === "flow" ? "selected" : ""}>В потоке</option><option value="free" ${value.mode === "free" ? "selected" : ""}>Свободно</option></select></label><label class="customizer-control"><span><strong>Вариант</strong><small>Размер и визуальный акцент</small></span><select class="select" data-element-select="variant">${ELEMENT_VARIANTS.map(([id, label]) => `<option value="${id}" ${value.variant === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>${controls("x", "X", "Горизонтальное смещение", -240, 720)}${controls("y", "Y", "Вертикальное смещение", -180, 480)}${controls("width", "Ширина", "0 — автоматически", 0, 900)}${controls("height", "Высота", "0 — автоматически", 0, 420)}${controls("margin", "Отступ снаружи", "Свободное пространство", 0, 40)}${controls("padding", "Внутренний отступ", "Пространство внутри", 0, 40)}${controls("radius", "Закругление", "Радиус углов", 0, 40)}</div></div></section>`;
   }
 
   function renderCss() {
-    return `<section class="customizer-section customizer-code-wrap"><div class="customizer-section-head"><svg class="ic"><use href="#i-code"/></svg><div><h3>Базовый CSS и переопределения</h3><p>Редактируй CSS прямо здесь: изменения применяются живьём и сохраняются автоматически. JavaScript и @import отключены.</p></div></div><textarea id="custom-css-editor" class="customizer-code" spellcheck="false" autocomplete="off" aria-label="Базовый CSS и переопределения">${esc(customCss)}</textarea><div class="customizer-preset-row"><span class="label">Пресеты:</span>${Object.entries(CSS_PRESETS).map(([id, item]) => `<button class="btn btn-small" type="button" data-css-preset="${id}">${item.label}</button>`).join("")}</div><div class="customizer-code-help"><code>[data-os="sidebar"]</code><code>[data-os-element="toolbar"]</code><code>[data-os="tabs"]</code><code>[data-os="build-card"]</code><code>--accent</code><code>--r</code></div><div class="customizer-actions"><button class="btn btn-small" type="button" data-css-action="export">Экспорт темы</button><button class="btn btn-small" type="button" data-css-action="import">Импорт темы</button><button class="btn btn-small btn-ghost" type="button" data-css-action="copy">Скопировать CSS</button><span class="hint">Файл темы содержит CSS и раскладку — им можно делиться.</span></div><input id="custom-theme-file" type="file" accept=".json,.omtheme,application/json" hidden></section>`;
+    return `<section class="customizer-section customizer-code-wrap"><div class="customizer-section-head"><svg class="ic"><use href="#i-code"/></svg><div><h3>Базовый CSS и переопределения</h3><p>Исходный styles.css или ранее сохранённые переопределения. Изменения применяются и сохраняются автоматически. Tab — отступ, Ctrl+S — сохранить. @import отключён.</p></div></div><div class="customizer-actions"><input id="custom-css-find" class="input" type="search" placeholder="Найти в CSS" aria-label="Поиск в CSS"><button class="btn btn-small" type="button" data-css-action="find">Найти далее</button><span class="hint">Ctrl+F — поиск · Ctrl+Shift+Backspace — восстановить стандартный CSS</span></div><textarea id="custom-css-editor" class="customizer-code" maxlength="${MAX_CSS - FULL_CSS_MARKER.length}" spellcheck="false" autocomplete="off" aria-label="Базовый CSS и переопределения">${esc(isFullCss(customCss) ? customCss.slice(FULL_CSS_MARKER.length) : customCss)}</textarea><div class="customizer-preset-row"><button class="btn btn-small" type="button" data-css-action="base">Загрузить исходный CSS</button><button class="btn btn-small" type="button" data-css-action="clear">Восстановить стиль</button><button class="btn btn-small" type="button" data-css-action="download-css">Скачать .css</button><span class="label">Пресеты:</span>${Object.entries(CSS_PRESETS).map(([id, item]) => `<button class="btn btn-small" type="button" data-css-preset="${id}">${item.label}</button>`).join("")}</div><div class="customizer-code-help"><code>[data-os="sidebar"]</code><code>[data-os-element="toolbar"]</code><code>[data-os="tabs"]</code><code>[data-os="build-card"]</code><code>--accent</code><code>--r</code></div><div class="customizer-actions"><button class="btn btn-small" type="button" data-css-action="export">Экспорт темы</button><button class="btn btn-small" type="button" data-css-action="import">Импорт темы / CSS</button><button class="btn btn-small btn-ghost" type="button" data-css-action="copy">Скопировать CSS</button><span class="hint">Файл темы содержит CSS и раскладку — им можно делиться.</span></div><input id="custom-theme-file" type="file" accept=".json,.omtheme,.css,application/json,text/css" hidden></section>`;
   }
 
   function openCustomizer() {
@@ -656,7 +819,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
   }
   async function resetCustomizer() {
     if (!window.confirm("Вернуть стандартную раскладку и удалить пользовательский CSS?")) return;
-    layout = normalizeLayout(DEFAULT_LAYOUT); customCss = ""; injectStyles(); applyLayout(); queueSave({ custom_css: "", ui_layout: layout }); renderEditor(); setStatus("Конструктор сброшен", "saved");
+    clearTimeout(saveTimer); layout = normalizeLayout(DEFAULT_LAYOUT); customCss = ""; injectStyles(); applyLayout(); queueSave({ custom_css: "", ui_layout: layout }); renderEditor(); setStatus("Конструктор сброшен", "saved");
   }
 
   function observeUi() {
@@ -682,6 +845,14 @@ body[data-customizer-open="true"] { overflow: hidden; }
       if (attempts > 30) clearInterval(wait);
     }, 250);
     document.addEventListener("keydown", (event) => {
+      if (event.ctrlKey && event.shiftKey && event.key === "Backspace") {
+        event.preventDefault();
+        if (window.confirm("Отключить пользовательский CSS и восстановить стандартный стиль?")) {
+          clearTimeout(saveTimer); customCss = ""; injectStyles(); queueSave({ custom_css: "" });
+          if (editorRoot()) renderEditor();
+        }
+        return;
+      }
       if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "e") { event.preventDefault(); if (modal?.hidden === false) closeCustomizer(); else openCustomizer(); }
       if (event.key === "Escape" && modal && !modal.hidden) closeCustomizer();
     });
