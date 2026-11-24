@@ -209,7 +209,7 @@ pub struct UiElement {
     pub surface_radius: Option<u8>,
     /// Размер карточек установленных сборок, None — размер темы.
     pub build_card_size: Option<u16>,
-    /// Направление панели страниц: horizontal | vertical.
+    /// Направление панели страниц: horizontal | vertical | vertical-right.
     pub tabs_orientation: String,
     /// Список сборок в рабочей области вместо боковой панели.
     pub merged_workspace: bool,
@@ -774,7 +774,7 @@ mod discord_tests {
             width: Some(640),
             padding: 8,
             variant: "prominent".into(),
-            surface_opacity: Some(0), backdrop_blur: Some(12), surface_radius: Some(20), build_card_size: Some(100), tabs_orientation: "vertical".into(), merged_workspace: true, list_view: "grid".into(),
+            surface_opacity: Some(0), backdrop_blur: Some(12), surface_radius: Some(20), build_card_size: Some(100), tabs_orientation: "vertical-right".into(), merged_workspace: true, list_view: "grid".into(),
             ..UiElement::default()
         });
         let mut category = Category { id: "servers".into(), name: "Серверы".into(), dynamic: true, ..Category::default() };
@@ -792,7 +792,7 @@ mod discord_tests {
         assert_eq!(restored.ui_layout.elements[0].backdrop_blur, Some(12));
         assert_eq!(restored.ui_layout.elements[0].surface_radius, Some(20));
         assert_eq!(restored.ui_layout.elements[0].build_card_size, Some(100));
-        assert_eq!(restored.ui_layout.elements[0].tabs_orientation, "vertical");
+        assert_eq!(restored.ui_layout.elements[0].tabs_orientation, "vertical-right");
         assert!(restored.ui_layout.elements[0].merged_workspace);
         assert_eq!(restored.ui_layout.elements[0].list_view, "grid");
         assert_eq!(restored.categories[0].rules.kind, "server");

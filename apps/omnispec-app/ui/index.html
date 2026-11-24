@@ -157,22 +157,22 @@
     </div>
 
     <nav class="tabs" id="tabs">
-      <button class="tab" data-tab="discover">Главная</button>
-      <button class="tab" data-tab="servers">Сервера</button>
-      <button class="tab is-active" data-tab="console">Консоль</button>
-      <button class="tab" data-tab="server">Сервер</button>
-      <button class="tab" data-tab="players">Игроки</button>
-      <button class="tab" data-tab="metrics">Метрики</button>
-      <button class="tab" data-tab="backups">Бэкапы</button>
-      <button class="tab" data-tab="errors">Ошибки <span class="tab-badge errors-badge" id="badge-errors" hidden></span></button>
-      <button class="tab" data-tab="files">Файлы</button>
-      <button class="tab" data-tab="mods">Моды <span class="tab-badge" id="badge-mods" hidden>0</span></button>
-      <button class="tab" data-tab="resourcepacks">Ресурспаки</button>
-      <button class="tab" data-tab="shaders">Шейдеры</button>
-      <button class="tab" data-tab="worlds">Миры</button>
-      <button class="tab" data-tab="screenshots">Скриншоты</button>
-      <button class="tab" data-tab="download">Загрузить</button>
-      <button class="tab" data-tab="settings">Сборка</button>
+      <button class="tab" data-tab="discover" title="Главная" aria-label="Главная"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-house"/></svg><span class="tab-label">Главная</span></button>
+      <button class="tab" data-tab="servers" title="Сервера" aria-label="Сервера"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-globe"/></svg><span class="tab-label">Сервера</span></button>
+      <button class="tab is-active" data-tab="console" title="Консоль" aria-label="Консоль"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-terminal"/></svg><span class="tab-label">Консоль</span></button>
+      <button class="tab" data-tab="server" title="Сервер" aria-label="Сервер"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-cube"/></svg><span class="tab-label">Сервер</span></button>
+      <button class="tab" data-tab="players" title="Игроки" aria-label="Игроки"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-user"/></svg><span class="tab-label">Игроки</span></button>
+      <button class="tab" data-tab="metrics" title="Метрики" aria-label="Метрики"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-bolt"/></svg><span class="tab-label">Метрики</span></button>
+      <button class="tab" data-tab="backups" title="Бэкапы" aria-label="Бэкапы"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-copy"/></svg><span class="tab-label">Бэкапы</span></button>
+      <button class="tab" data-tab="errors" title="Ошибки" aria-label="Ошибки"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-alert"/></svg><span class="tab-label">Ошибки</span><span class="tab-badge errors-badge" id="badge-errors" hidden></span></button>
+      <button class="tab" data-tab="files" title="Файлы" aria-label="Файлы"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-folder"/></svg><span class="tab-label">Файлы</span></button>
+      <button class="tab" data-tab="mods" title="Моды" aria-label="Моды"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-mod"/></svg><span class="tab-label">Моды</span><span class="tab-badge" id="badge-mods" hidden>0</span></button>
+      <button class="tab" data-tab="resourcepacks" title="Ресурспаки" aria-label="Ресурспаки"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-image"/></svg><span class="tab-label">Ресурспаки</span></button>
+      <button class="tab" data-tab="shaders" title="Шейдеры" aria-label="Шейдеры"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-star"/></svg><span class="tab-label">Шейдеры</span></button>
+      <button class="tab" data-tab="worlds" title="Миры" aria-label="Миры"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-globe"/></svg><span class="tab-label">Миры</span></button>
+      <button class="tab" data-tab="screenshots" title="Скриншоты" aria-label="Скриншоты"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-image"/></svg><span class="tab-label">Скриншоты</span></button>
+      <button class="tab" data-tab="download" title="Загрузить" aria-label="Загрузить"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-download"/></svg><span class="tab-label">Загрузить</span></button>
+      <button class="tab" data-tab="settings" title="Сборка" aria-label="Сборка"><svg class="ic tab-icon" aria-hidden="true"><use href="#i-settings"/></svg><span class="tab-label">Сборка</span></button>
       <div class="tabs-fill"></div>
       <div class="progress" id="progress" hidden>
         <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
@@ -525,7 +525,7 @@
 </div>
 
 <!-- ============ ПОДТВЕРЖДЕНИЕ В ДИЗАЙНЕ ЛАУНЧЕРА ============ -->
-<div class="modal-backdrop" id="modal-confirm" hidden>
+<div class="modal-backdrop" id="modal-confirm" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text" hidden>
   <div class="modal confirm-box">
     <header class="modal-head">
       <h2 id="confirm-title">Подтверждение</h2>
@@ -547,7 +547,7 @@
 
 <div class="ctx-menu" id="ctx-menu" hidden></div>
 
-<div class="modal-backdrop" id="modal-prompt" hidden>
+<div class="modal-backdrop" id="modal-prompt" role="dialog" aria-modal="true" aria-labelledby="prompt-title" hidden>
   <div class="modal" style="width:min(460px,92vw)">
     <header class="modal-head">
       <h2 id="prompt-title">Ввод</h2>

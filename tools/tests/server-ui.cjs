@@ -23,7 +23,7 @@ const server = http.createServer((req, res) => {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}});
     const errors = [];
     page.on('pageerror', (error) => errors.push(String(error)));
-    page.on('dialog', (dialog) => dialog.accept());
+    page.on('dialog', (dialog) => { errors.push('Unexpected native dialog: ' + dialog.type()); dialog.dismiss(); });
     await page.addInitScript(() => {
       const test = window.__serverTest = {
         calls: [],
@@ -100,8 +100,28 @@ const server = http.createServer((req, res) => {
     });
     assert(radii.square.every(r => r === '0px'), `all server panels and build icon square: ${JSON.stringify(radii)}`);
     assert(radii.rounded.every(r => r !== '0px'), `round shape restored: ${JSON.stringify(radii)}`);
+    await page.locator('#server-settings').click();
+    await page.waitForSelector('#modal-prompt:not([hidden])');
+    assert.equal(await page.locator('#prompt-label').innerText(), 'Порт сервера');
+    await page.locator('#prompt-input').fill('25570');
+    await page.locator('#prompt-ok').click();
+    await page.waitForFunction(() => document.querySelector('#prompt-label').textContent.includes('ОЗУ'));
+    await page.locator('#prompt-input').fill('6144');
+    await page.locator('#prompt-ok').click();
+    await page.waitForFunction(() => window.__serverTest.calls.some(c => c.command === 'server_save' && c.args.config.port === 25570 && c.args.config.memory_mb === 6144));
+    await page.waitForSelector('#server-eula');
+    await page.locator('#server-settings').click();
+    await page.waitForSelector('#modal-prompt:not([hidden])');
+    const savesBeforeCancel = await page.evaluate(() => window.__serverTest.calls.filter(c => c.command === 'server_save').length);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#modal-prompt[hidden]', {state:'attached'});
+    assert.equal(await page.evaluate(() => window.__serverTest.calls.filter(c => c.command === 'server_save').length), savesBeforeCancel, 'cancel input never saves');
     assert.equal(await page.locator('#server-eula').count(), 1, 'new/imported servers expose an EULA action');
     await page.locator('#server-eula').click();
+    await page.locator('#modal-confirm:not([hidden]) #confirm-cancel').click();
+    assert.equal(await page.evaluate(() => window.__serverTest.eula), false, 'cancelling EULA performs no action');
+    await page.locator('#server-eula').click();
+    await page.locator('#modal-confirm:not([hidden]) #confirm-ok').click();
     await page.waitForFunction(() => window.__serverTest.eula === true);
     await page.waitForFunction(() => document.querySelector('#server-eula') === null);
     await page.locator('#btn-play').click();
@@ -189,6 +209,7 @@ const server = http.createServer((req, res) => {
     await page.locator('[data-tab="server"]').click();
     await page.waitForSelector('.server-overview-hero');
     await page.locator('[data-server-action="kill"]').click();
+    await page.locator('#modal-confirm:not([hidden]) #confirm-ok').click();
     await page.waitForFunction(() => window.__serverTest.calls.some((item) => item.command === 'server_kill'));
     await page.waitForFunction(() => window.omnispecDebug.state.running.has('srv') === false);
     await page.locator('[data-tab="files"]').click();

@@ -1840,35 +1840,50 @@
 
   /* ==================== ОКНО ПОДТВЕРЖДЕНИЯ ==================== */
   /** confirm в стиле лаунчера: без системного «Сообщение с tauri.localhost». */
-  function askConfirm({ title = "Подтверждение", text = "", ok = "Удалить", danger = true } = {}) {
+  let confirmQueue = Promise.resolve();
+  function askConfirm(options = {}) {
+    const result = confirmQueue.then(() => showConfirm(options));
+    confirmQueue = result.catch(() => false);
+    return result;
+  }
+  function showConfirm({ title = "Подтверждение", text = "", ok = "Удалить", danger = true } = {}) {
     return new Promise((resolve) => {
       const modal = $("#modal-confirm");
-      if (!modal) { resolve(window.confirm(text)); return; }
+      if (!modal) { resolve(false); return; }
       $("#confirm-title").textContent = title;
       $("#confirm-text").textContent = text;
       const okBtn = $("#confirm-ok");
       okBtn.textContent = ok;
       okBtn.className = `btn confirm-ok ${danger ? "btn-danger" : "btn-primary"}`;
+      const previousFocus = document.activeElement;
       modal.hidden = false;
-      setTimeout(() => okBtn.focus(), 30);
+      setTimeout(() => { if (!modal.hidden) $("#confirm-cancel").focus(); }, 30);
       const finish = (result) => {
         modal.hidden = true;
         okBtn.onclick = null;
         $("#confirm-cancel").onclick = null;
-        document.removeEventListener("keydown", onKey);
+        document.removeEventListener("keydown", onKey, true);
+        if (previousFocus?.isConnected) previousFocus.focus();
         resolve(result);
       };
       const onKey = (event) => {
-        if (event.key === "Escape") finish(false);
-        if (event.key === "Enter") finish(true);
+        if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); finish(false); }
+        if (event.key === "Tab") {
+          const buttons = Array.from(modal.querySelectorAll("button:not([disabled])"));
+          if (!buttons.length) return;
+          const index = buttons.indexOf(document.activeElement);
+          if (index < 0 || (!event.shiftKey && index === buttons.length - 1) || (event.shiftKey && index === 0)) { event.preventDefault(); buttons[event.shiftKey ? buttons.length - 1 : 0].focus(); }
+        }
       };
-      document.addEventListener("keydown", onKey);
+      document.addEventListener("keydown", onKey, true);
       okBtn.onclick = () => finish(true);
       $("#confirm-cancel").onclick = () => finish(false);
       $$("[data-close-confirm]", modal).forEach((btn) => { btn.onclick = () => finish(false); });
       modal.onmousedown = (event) => { if (event.target.id === "modal-confirm") finish(false); };
     });
   }
+
+  window.omnispecDialogs = { confirm: askConfirm };
 
   /* ==================== ОКНО ВВОДА ==================== */
   function promptModal({ title, label, value = "" }) {
@@ -1879,19 +1894,22 @@
       $("#prompt-label").textContent = label || "Значение";
       const input = $("#prompt-input");
       input.value = value;
+      const previousFocus = document.activeElement;
       modal.hidden = false;
-      setTimeout(() => { input.focus(); input.select(); }, 30);
+      setTimeout(() => { if (!modal.hidden) { input.focus(); input.select(); } }, 30);
       const finish = (result) => {
         modal.hidden = true;
         $("#prompt-ok").onclick = null;
         input.onkeydown = null;
+        document.removeEventListener("keydown", onKey, true);
+        if (previousFocus?.isConnected) previousFocus.focus();
         resolve(result);
       };
+      const onKey = (event) => { if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); finish(null); } };
+      document.addEventListener("keydown", onKey, true);
       $("#prompt-ok").onclick = () => finish(input.value.trim());
-      input.onkeydown = (event) => {
-        if (event.key === "Enter") finish(input.value.trim());
-        if (event.key === "Escape") finish(null);
-      };
+      input.onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); finish(input.value.trim()); } };
+      modal.onmousedown = event => { if (event.target === modal) finish(null); };
       $$("[data-close-prompt]", modal).forEach((btn) => { btn.onclick = () => finish(null); });
     });
   }
@@ -3228,6 +3246,7 @@
     else if (kind === "err") semanticSound("error");
     const box = document.createElement("div");
     box.className = `toast ${kind}`;
+    box.setAttribute("role", kind === "err" ? "alert" : "status");
     box.textContent = message;
     $("#toasts").appendChild(box);
     setTimeout(() => { box.style.opacity = "0"; box.style.transition = "opacity .3s"; }, 3600);
@@ -4910,7 +4929,7 @@
   async function performServerAction(instanceId, action) {
     const meta = state.instances.find((item) => item.id === instanceId);
     if (!meta || !isServer(meta)) return;
-    if (action === "kill" && !window.confirm("Немедленно завершить процесс сервера? Несохранённые данные могут потеряться.")) return;
+    if (action === "kill" && !(await askConfirm({ title: "Завершить сервер?", text: "Немедленно завершить процесс сервера? Несохранённые данные могут потеряться.", ok: "Завершить", danger: true }))) return;
     try {
       if (action === "start") {
         await api.serverStart(instanceId);
@@ -5020,9 +5039,9 @@
     $("#server-settings")?.addEventListener("click", async () => {
       try {
         const config = await api.serverGet(meta.id);
-        const port = window.prompt("Порт сервера", String(config.port || 25565));
+        const port = await promptModal({ title: "Настройки сервера", label: "Порт сервера", value: String(config.port || 25565) });
         if (port == null) return;
-        const memory = window.prompt("ОЗУ сервера, МБ", String(config.memory_mb || 4096));
+        const memory = await promptModal({ title: "Настройки сервера", label: "ОЗУ сервера, МБ", value: String(config.memory_mb || 4096) });
         if (memory == null) return;
         await api.serverSave(meta.id, { ...config, port: Number(port) || 25565, memory_mb: Number(memory) || 4096 });
         toast("Настройки сервера сохранены", "ok"); renderServerOverview();
@@ -5041,14 +5060,16 @@
     $("#server-sync")?.addEventListener("click", async () => {
       const destination = await api.pickDir("Папка синхронизации").catch(() => null);
       if (!destination) return;
-      const direction = String(window.prompt("Направление: push — из сервера в папку, pull — из папки в сервер", "push") || "push").toLowerCase();
+      const directionInput = await promptModal({ title: "Синхронизация", label: "Направление: push — из сервера в папку, pull — из папки в сервер", value: "push" });
+      if (directionInput === null) return;
+      const direction = directionInput.toLowerCase();
       if (!["push", "pull"].includes(direction)) return toast("Нужно указать push или pull", "err");
-      if (!window.confirm(`${direction === "push" ? "Скопировать файлы сервера в выбранную папку" : "Скопировать файлы выбранной папки в сервер"}?`)) return;
+      if (!(await askConfirm({ title: "Синхронизация файлов", text: `${direction === "push" ? "Скопировать файлы сервера в выбранную папку" : "Скопировать файлы выбранной папки в сервер"}?`, ok: "Скопировать", danger: true }))) return;
       try { await api.serverSync(meta.id, destination, direction); toast("Синхронизация завершена", "ok"); renderServerOverview(); }
       catch (error) { toast(String(error), "err"); }
     });
     $("#server-eula")?.addEventListener("click", async () => {
-      if (!window.confirm("Я принимаю EULA Minecraft и разрешаю запуск этого сервера.")) return;
+      if (!(await askConfirm({ title: "Принять EULA?", text: "Я принимаю EULA Minecraft и разрешаю запуск этого сервера.", ok: "Принять", danger: false }))) return;
       try { await api.serverSetEula(meta.id, true); toast("EULA принята", "ok"); renderServerOverview(); }
       catch (error) { toast(String(error), "err"); }
     });
@@ -5057,9 +5078,9 @@
     $("#server-command-send")?.addEventListener("click", async () => { const input = $("#server-command-input"); try { await api.serverCommand(meta.id, input.value); input.value = ""; toast("Команда отправлена", "ok"); } catch (error) { toast(String(error), "err"); } });
     $("#server-command-input")?.addEventListener("keydown", (event) => { if (event.key === "Enter") $("#server-command-send")?.click(); });
     $("#server-addon-download")?.addEventListener("click", () => { state.tab = "download"; renderTab(); });
-    $("#server-addon-url")?.addEventListener("click", async () => { const url = window.prompt("Прямая ссылка на .jar аддона"); if (!url) return; try { await api.serverInstallAddon(meta.id, url, null); toast("Аддон установлен", "ok"); renderServerOverview(); } catch (error) { toast(String(error), "err"); } });
+    $("#server-addon-url")?.addEventListener("click", async () => { const url = await promptModal({ title: "Установить аддон", label: "Прямая ссылка на .jar аддона" }); if (!url) return; try { await api.serverInstallAddon(meta.id, url, null); toast("Аддон установлен", "ok"); renderServerOverview(); } catch (error) { toast(String(error), "err"); } });
     $$('[data-addon-toggle]').forEach((button) => button.addEventListener("click", async () => { try { await api.serverToggleAddon(meta.id, button.dataset.addonToggle); renderServerOverview(); } catch (error) { toast(String(error), "err"); } }));
-    $$('[data-addon-delete]').forEach((button) => button.addEventListener("click", async () => { if (!window.confirm("Удалить аддон?")) return; try { await api.serverDeleteAddon(meta.id, button.dataset.addonDelete); renderServerOverview(); } catch (error) { toast(String(error), "err"); } }));
+    $$('[data-addon-delete]').forEach((button) => button.addEventListener("click", async () => { if (!(await askConfirm({ title: "Удалить аддон?", text: "Файл аддона будет удалён.", ok: "Удалить", danger: true }))) return; try { await api.serverDeleteAddon(meta.id, button.dataset.addonDelete); renderServerOverview(); } catch (error) { toast(String(error), "err"); } }));
   }
 
   async function renderServerDownloads() {
@@ -5261,8 +5282,8 @@
     }
     $("#tab-body").innerHTML = `<section class="server-view"><div class="server-head"><div><div class="eyebrow">ДАННЫЕ</div><h1>Бэкапы</h1><p class="muted">Архивируются ядро, конфиги, плагины, моды и миры. Логи и кэши исключаются из лёгкого бэкапа.</p></div><button class="btn btn-primary" id="backup-create">Создать бэкап</button></div><div class="backup-list">${backups.length ? backups.map((item) => `<div class="backup-row"><div><strong>${esc(item.name)}</strong><span>${humanSize(item.size)} · ${new Date(Number(item.created) * 1000).toLocaleString()}</span></div><button class="btn btn-small" data-backup-restore="${esc(item.name)}">Восстановить</button><button class="icon-btn danger" data-backup-delete="${esc(item.name)}">×</button></div>`).join("") : `<div class="empty-state">Бэкапов пока нет.</div>`}</div></section>`;
     $("#backup-create")?.addEventListener("click", async () => { try { await api.serverBackupCreate(meta.id, "manual", true); toast("Бэкап создан", "ok"); renderServerBackups(); } catch (error) { toast(String(error), "err"); } });
-    $$('[data-backup-restore]').forEach((button) => button.addEventListener("click", async () => { if (!window.confirm("Восстановить архив поверх файлов сервера?")) return; try { await api.serverBackupRestore(meta.id, button.dataset.backupRestore); toast("Сервер восстановлен", "ok"); } catch (error) { toast(String(error), "err"); } }));
-    $$('[data-backup-delete]').forEach((button) => button.addEventListener("click", async () => { if (!window.confirm("Удалить бэкап?")) return; try { await api.serverBackupDelete(meta.id, button.dataset.backupDelete); renderServerBackups(); } catch (error) { toast(String(error), "err"); } }));
+    $$('[data-backup-restore]').forEach((button) => button.addEventListener("click", async () => { if (!(await askConfirm({ title: "Восстановить бэкап?", text: "Архив будет восстановлен поверх файлов сервера.", ok: "Восстановить", danger: true }))) return; try { await api.serverBackupRestore(meta.id, button.dataset.backupRestore); toast("Сервер восстановлен", "ok"); } catch (error) { toast(String(error), "err"); } }));
+    $$('[data-backup-delete]').forEach((button) => button.addEventListener("click", async () => { if (!(await askConfirm({ title: "Удалить бэкап?", text: "Архив будет удалён.", ok: "Удалить", danger: true }))) return; try { await api.serverBackupDelete(meta.id, button.dataset.backupDelete); renderServerBackups(); } catch (error) { toast(String(error), "err"); } }));
   }
 
   // История принадлежит выбранной сборке и не смешивается с главной страницей.
@@ -5287,6 +5308,7 @@
   function navigateTabHistory(direction) {
     const index = tabHistoryIndex + direction;
     if (!selected() || index < 0 || index >= tabHistory.length) return;
+    if (mergedLibraryVisible()) showWorkspaceLibrary(false);
     tabHistoryIndex = index; state.tab = tabHistory[index];
     if (state.tab === "download") refreshInstalledProjects();
     renderTab();
@@ -14557,6 +14579,7 @@
     document.addEventListener("click", () => requestAnimationFrame(refreshActiveIndicators), true);
     window.addEventListener("resize", refreshActiveIndicators);
     $$(".tab").forEach((tab) => tab.addEventListener("click", () => {
+      if (mergedLibraryVisible()) showWorkspaceLibrary(false);
       state.tab = tab.dataset.tab;
       if (state.tab === "download") refreshInstalledProjects();
       rememberTab();
