@@ -4131,6 +4131,8 @@ body.has-wall .download-catalog-sidebar { background: var(--bg-2); }
             <span id="tb-status">сборка не выбрана</span>
             <span class="sep" id="tb-version-sep" hidden>·</span>
             <span class="muted" id="tb-version" hidden></span>
+            <span class="sep" id="tb-playtime-sep" hidden>·</span>
+            <span class="muted" id="tb-playtime" title="Общее время игры" hidden></span>
           </div>
         </div>
         <button class="icon-btn" id="btn-build-menu" title="Ещё" hidden><svg class="ic"><use href="#i-dots"/></svg></button>
@@ -14905,7 +14907,7 @@ window.OMNISPEC_LOCALES = {
           </div>`).join("")}</div>`
       : "";
     return `<div class="instance-wrap">
-      <div class="instance ${item.id === state.selectedId ? "is-active" : ""}" data-id="${esc(item.id)}">
+      <div class="instance ${item.id === state.selectedId ? "is-active" : ""}" data-id="${esc(item.id)}" title="${esc(item.name)}" aria-label="${esc(item.name)}">
         <div class="instance-icon" translate="no">${instanceIconHtml(item)}</div>
         <div class="instance-body">
           <div class="instance-name" translate="no">${esc(item.name)}</div>
@@ -14923,7 +14925,7 @@ window.OMNISPEC_LOCALES = {
     const dynamic = Boolean(category?.dynamic);
     const canDrop = Boolean(id && id !== "__running" && !dynamic);
     return `<div class="cat ${open ? "is-open" : ""} ${running ? "cat-running" : ""} ${dynamic ? "cat-dynamic" : ""}" data-cat="${esc(id || "")}" ${canDrop ? `data-drop-cat="${esc(id)}"` : ""}>
-      <div class="cat-head ${running ? "cat-run" : ""}" data-cat-head="${esc(id || "")}" title="${dynamic ? "Динамическая категория: содержимое определяется условиями" : ""}">
+      <div class="cat-head ${running ? "cat-run" : ""}" data-cat-head="${esc(id || "")}" title="${esc(name)}${dynamic ? " · Динамическая категория: содержимое определяется условиями" : ""}">
         <svg class="ic cat-chev"><use href="#i-chev"/></svg>
         ${dynamic ? '<svg class="ic cat-dynamic-icon"><use href="#i-bolt"/></svg>' : ""}
         <span class="cat-name" ${id && id !== "__running" ? 'translate="no"' : ""}>${esc(name)}</span>
@@ -15620,6 +15622,9 @@ window.OMNISPEC_LOCALES = {
     const status = running ? (isServer(meta) ? "сервер запущен" : "запущена") : preparing ? "подготавливается" : (meta && isServer(meta) ? "сервер остановлен" : "остановлена");
     $("#tb-dot").className = `dot ${running ? "on" : ""}`;
     $("#tb-status").textContent = meta ? status : "сборка не выбрана";
+    const playtime = $("#tb-playtime"), playtimeSep = $("#tb-playtime-sep");
+    if (playtime) { playtime.hidden = !meta; playtime.textContent = meta ? `Время игры: ${playtimeLabel(meta.playtime_secs)}` : ""; }
+    if (playtimeSep) playtimeSep.hidden = !meta;
     $("#tb-center").textContent = meta ? `${meta.name} — ${status}` : "OmniSpec — лаунчер Minecraft";
     const playButton = $("#btn-play");
     playButton.querySelector("span").textContent = isServer(meta) ? (running ? "Перезапустить сервер" : "Запустить сервер") : (running ? "Играть снова" : "Играть");
@@ -25036,6 +25041,7 @@ window.OMNISPEC_LOCALES = {
       else {
         renderSidebar();
         renderBuildIcon(selected());
+        updateStatus();
         syncPresence();
       }
     })().finally(() => { instancesRefreshPending = null; });
@@ -25879,6 +25885,10 @@ window.OMNISPEC_LOCALES = {
       });
       [sidebar, ...buttons, ...buttons.map(button => button.parentElement)].filter(Boolean).forEach(node => observer.observe(node));
     }
+    const buildList = $("#instance-list");
+    if (buildList && "ResizeObserver" in window) {
+      new ResizeObserver(() => buildList.classList.toggle("is-narrow", buildList.clientWidth < 120)).observe(buildList);
+    }
     const initialTabModal = $("#modal-initial-tab");
     if (initialTabModal) {
       $("[data-close-initial-tab]", initialTabModal)?.addEventListener("click", closeInitialTabDialog);
@@ -25945,7 +25955,11 @@ window.OMNISPEC_LOCALES = {
         if (!$("#modal-project-image").hidden) { event.preventDefault(); closeProjectImage(); return; }
         if (!$("#modal-mod-target").hidden) { event.preventDefault(); closeModTarget(); return; }
         if (!$("#modal-project").hidden) { event.preventDefault(); closeProjectModal(); return; }
-        const initialTabModal = $("#modal-initial-tab");
+        const buildList = $("#instance-list");
+    if (buildList && "ResizeObserver" in window) {
+      new ResizeObserver(() => buildList.classList.toggle("is-narrow", buildList.clientWidth < 120)).observe(buildList);
+    }
+    const initialTabModal = $("#modal-initial-tab");
         if (initialTabModal && !initialTabModal.hidden) {
           event.preventDefault();
           closeInitialTabDialog();
@@ -26718,6 +26732,19 @@ body[data-customizer-open="true"] { overflow: hidden; }
 .visual-stage-help { margin-top: 6px; color: var(--dim-2); font-size: 9.5px; line-height: 1.4; }
 .visual-properties { display: flex; flex-direction: column; gap: 7px; }
 .visual-properties .customizer-control { display: grid; grid-template-columns: 1fr 82px; gap: 6px; padding: 7px; }
+/* Компактный список учитывает ширину именно списка, в том числе отдельно от сайдбара. */
+.instance-list.is-narrow .instance-body, .instance-list.is-narrow .instance-time { display: none; }
+.instance-list.is-narrow .instance { justify-content: center; align-items: center; gap: 0; padding: 4px; min-width: 0; }
+.instance-list.is-narrow .instance-icon { margin: 0; }
+.instance-list.is-narrow .instance-running { position: absolute; right: 4px; bottom: 4px; }
+.instance-list.is-narrow .cat-name, .instance-list.is-narrow .cat-head .spacer, .instance-list.is-narrow .cat-head .cat-act, .instance-list.is-narrow .cat-dynamic-icon { display: none; }
+.instance-list.is-narrow .cat-head { justify-content: center; gap: 4px; padding-inline: 1px; }
+.instance-list.is-narrow .cat-items { padding-left: 0; }
+body .instance-list.is-narrow .cat.is-open:not(.cat-running) > .cat-items { display: flex; flex-direction: column; }
+body .instance-list.is-narrow .cat:not(.cat-running) .instance { flex-direction: row; }
+body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28px; height: 28px; }
+.instance-list.is-narrow .instance-dup { overflow: hidden; }
+.instance-list.is-narrow .dup-name, .instance-list.is-narrow .dup-sep, .instance-list.is-narrow .dup-account { display: none; }
 .visual-properties .customizer-control.visual-select-control { grid-template-columns: minmax(0, 1fr); }
 .visual-properties .customizer-control.visual-select-control select { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
 .visual-properties .customizer-control strong { font-size: 10.5px; }
@@ -27269,6 +27296,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
       Object.assign(item.dataset, { logicalLeft: left, logicalTop: top, logicalWidth: width, logicalHeight: height, screenFactor, stageScale: scale });
       Object.assign(item.style, { left: `${left * scale}px`, top: `${top * scale}px`, width: `${width * scale}px`, height: `${height * scale}px` });
       const copy = original.cloneNode(true);
+      if (spec.id === "build-list") copy.classList.toggle("is-narrow", original.clientWidth < 120);
       const originals = original.matches(".sidebar-quick, .sidebar-new") ? [original] : [...original.querySelectorAll(".sidebar-quick, .sidebar-new")];
       const copies = copy.matches(".sidebar-quick, .sidebar-new") ? [copy] : [...copy.querySelectorAll(".sidebar-quick, .sidebar-new")];
       copies.forEach((button, index) => button.classList.toggle("is-icon-only", originals[index].clientWidth < 105));
