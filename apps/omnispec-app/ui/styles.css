@@ -1000,6 +1000,10 @@ body.has-wall .discover-head { background: transparent; }
 .settings-note.warn { color: var(--yellow); }
 
 .range { display: flex; align-items: center; gap: 10px; }
+.memory-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.memory-preset { flex: 0 0 auto; min-width: 64px; justify-content: center; }
+.memory-preset.is-active { border-color: var(--accent); color: var(--text); background: var(--bg-4); }
+.memory-preset:disabled { opacity: .4; cursor: not-allowed; }
 .memory-hint { margin-top: 6px; color: var(--dim-2); font-size: 10.5px; line-height: 1.5; }
 input[type="range"] {
   flex: 1; height: 3px; border-radius: var(--r-pill);

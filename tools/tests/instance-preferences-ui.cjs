@@ -272,12 +272,30 @@ async function setRange(page, selector, value) {
     await page.waitForSelector('#inst-memory');
     assert.equal(await page.locator('#inst-memory').getAttribute('max'),'16384');
     assert.equal((await page.locator('#inst-memory-value').innerText()).trim(),'32768 МБ');
+    assert.deepEqual(await page.locator('#inst-memory-presets button').allTextContents(), ['4 ГБ','8 ГБ','12 ГБ','16 ГБ']);
+    assert.equal(await page.locator('#inst-memory-presets [aria-pressed="true"]').count(), 0, 'сохранённое значение вне диапазона не выделяет неверный пресет');
+    for (const gb of [4,8,12,16]) {
+      await page.locator(`#inst-memory-presets [data-memory-preset="${gb * 1024}"]`).click();
+      assert.equal(await page.locator('#inst-memory').inputValue(), String(gb*1024));
+      assert.equal(await page.locator('#inst-memory-value').innerText(), `${gb*1024} МБ`);
+      assert.equal(await page.locator(`#inst-memory-presets [data-memory-preset="${gb * 1024}"]`).getAttribute('aria-pressed'), 'true');
+    }
+    await setRange(page,'#inst-memory',6144);
+    assert.equal(await page.locator('#inst-memory-presets [aria-pressed="true"]').count(), 0, 'ручное значение снимает выделение пресета');
+    // Повторный показ проверяет, что несохранённый выбор не меняет данные сборки.
+    await page.locator('[data-tab="mods"]').click();
+    await page.locator('[data-tab="settings"]').click();
+    assert.equal((await page.locator('#inst-memory-value').innerText()).trim(),'32768 МБ');
+
     await page.locator('#inst-save').click();
     await page.waitForFunction(() => window.__instancePrefsTest.calls.some(x => x.command === 'update_instance'));
     assert.equal(await page.evaluate(() => window.__instancePrefsTest.instances.find(x => x.id === 'alpha').memory_mb),32768,'сохранение других полей не обрезает память');
-    await setRange(page,'#inst-memory',8192);
+    await page.locator('#inst-memory-presets [data-memory-preset="8192"]').click();
     await page.locator('#inst-save').click();
     await page.waitForFunction(() => window.__instancePrefsTest.instances.find(x => x.id === 'alpha').memory_mb === 8192);
+    await page.locator('[data-tab="mods"]').click();
+    await page.locator('[data-tab="settings"]').click();
+    assert.equal(await page.locator('#inst-memory-presets [aria-pressed="true"]').innerText(), '8 ГБ', 'выбор сохранён в настройках сборки');
     await page.evaluate(() => {
       window.__instancePrefsTest.instances.find(x => x.id === 'beta').memory_mb=256;
       window.omnispecDebug.state.instances.find(x => x.id === 'beta').memory_mb=256;
@@ -293,16 +311,21 @@ async function setRange(page, selector, value) {
     await page.waitForSelector('#c-memory');
     assert.equal(await page.locator('#c-memory').getAttribute('max'),'16384');
     assert.equal(await page.locator('#c-memory').inputValue(),'16384','новая сборка не наследует значение выше ОЗУ ПК');
+    await page.locator('#c-memory-presets [data-memory-preset="12288"]').click();
+    assert.equal(await page.locator('#c-memory').inputValue(),'12288', 'пресет меняет память создаваемой сборки');
+    assert.equal(await page.locator('#c-memory-presets [aria-pressed="true"]').innerText(), '12 ГБ');
     await page.locator('#modal-create [data-close-modal]').first().click();
     await prefs(page,'game');
     for (const [total,max] of [[512,512],[768,768],[4096,4096],[8192,8192],[16000,15872],[16384,16384],[32768,32768],[65536,65536],[131072,65536]]) {
       await page.evaluate(total => {window.omnispecDebug.state.systemMemory={total_mb:total};},total);
       await page.locator('[data-pref="game"]').click();
       assert.equal(Number(await page.locator('#set-memory').getAttribute('max')),max,`неверный предел при ОЗУ ${total}`);
+      for (const gb of [4,8,12,16]) assert.equal(await page.locator(`#set-memory-presets [data-memory-preset="${gb*1024}"]`).isDisabled(), gb*1024 > max, `ограничение ${gb} ГБ при ${total} МБ`);
     }
     await page.evaluate(() => {window.omnispecDebug.state.systemMemory={total_mb:384};});
     await page.locator('[data-pref="game"]').click();
     assert(await page.locator('#set-memory').isDisabled(),'при ОЗУ ниже минимума ядра ползунок недоступен');
+    assert.equal(await page.locator('#set-memory-presets button:disabled').count(),4,'все пресеты недоступны при недостатке ОЗУ');
     assert((await page.locator('#set-memory-hint').innerText()).includes('ОЗУ, доступная системе: 384 МБ'));
     assert((await page.locator('#set-memory-hint').innerText()).includes('не менее 512 МБ'));
     await page.evaluate(() => {window.omnispecDebug.state.systemMemory=null;});
@@ -310,6 +333,9 @@ async function setRange(page, selector, value) {
     assert((await page.locator('#set-memory-hint').innerText()).includes('Не удалось определить ОЗУ'));
     await page.evaluate(() => {window.omnispecDebug.state.systemMemory={total_mb:16384};});
     await page.locator('[data-pref="game"]').click();
+    await page.locator('#set-memory-presets [data-memory-preset="8192"]').click();
+    await page.waitForFunction(() => window.__instancePrefsTest.settings.memory_mb === 8192);
+    assert.equal(await page.locator('#set-memory-presets [aria-pressed="true"]').innerText(), '8 ГБ');
     await setRange(page,'#set-memory',6144);
     await page.waitForFunction(() => window.__instancePrefsTest.settings.memory_mb === 6144);
     assert(!(await page.locator('#set-memory-hint').innerText()).includes('запас меньше рекомендуемого'));

@@ -3258,6 +3258,8 @@
     return `<div class="range">
       <input type="range" id="${id}" min="${MEMORY_MIN}" max="${max}" step="${MEMORY_STEP}" value="${Math.min(saved, max)}" data-memory-dirty="false" aria-label="${esc(label)}"${disabled ? " disabled" : ""}>
       <span class="tag" id="${id}-value">${saved} МБ</span>
+    </div><div class="memory-presets" id="${id}-presets" role="group" aria-label="${esc(label)}">
+      ${[4, 8, 12, 16].map(gb => { const mb = gb * 1024; return `<button type="button" class="btn btn-small memory-preset ${saved === mb ? "is-active" : ""}" data-memory-preset="${mb}" aria-pressed="${saved === mb}"${disabled || mb > max ? " disabled" : ""}>${gb} ГБ</button>`; }).join("")}
     </div><div class="hint memory-hint" id="${id}-hint">${esc(memoryHint(saved))}</div>`;
   }
   function updateMemoryRange(input) {
@@ -3267,6 +3269,20 @@
     const hint = $(`#${input.id}-hint`);
     if (label) label.textContent = `${value} МБ`;
     if (hint) hint.textContent = memoryHint(value);
+    $$(`[data-memory-preset]`, $(`#${input.id}-presets`)).forEach(button => {
+      const selected = Number(button.dataset.memoryPreset) === value;
+      button.classList.toggle("is-active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+  }
+  function bindMemoryPresets(input) {
+    if (!input) return;
+    $$(`[data-memory-preset]`, $(`#${input.id}-presets`)).forEach(button => button.addEventListener("click", () => {
+      if (input.disabled || button.disabled) return;
+      input.value = button.dataset.memoryPreset;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }));
   }
 
   // Анализирует только новые строки. Храним результаты отдельных попыток в
@@ -12097,6 +12113,7 @@
 
     const memory = $("#set-memory");
     if (memory) memory.addEventListener("input", () => updateMemoryRange(memory));
+    bindMemoryPresets(memory);
     const autoJava = $("#set-auto-java");
     if (autoJava) autoJava.addEventListener("click", () => autoJava.classList.toggle("on"));
     [$("#set-discord-rpc"), $("#set-discord-icon"), $("#set-discord-upload"), $("#set-minimize-to-tray")].forEach((control) => {
@@ -13667,6 +13684,7 @@
     }));
     const memorySlider = $("#inst-memory");
     if (memorySlider) memorySlider.addEventListener("input", () => updateMemoryRange(memorySlider));
+    bindMemoryPresets(memorySlider);
     const javaPick = $("#inst-java-pick");
     if (javaPick) javaPick.addEventListener("click", async () => {
       const picked = await api.pickFile("Java для сборки", ["exe", ""]).catch(() => null);
@@ -14571,6 +14589,7 @@
       updateMemoryRange(memory);
       updateCreateHint();
     });
+    bindMemoryPresets(memory);
     $$("#c-install-mode .chip").forEach((chip) => chip.addEventListener("click", () => {
       cfg.installMode = chip.dataset.installMode === "custom" ? "custom" : "default";
       renderCreateModal();
