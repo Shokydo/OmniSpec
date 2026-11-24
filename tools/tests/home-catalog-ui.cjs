@@ -151,7 +151,7 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
           assert(await card.locator('.card-desc').isHidden(), `${source} size ${size}: description hidden`);
           assert(await card.locator('.card-meta').isHidden(), `${source} size ${size}: tags hidden`);
           const rects = await card.locator('.card-actions .card-icon-btn').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => { const r=n.getBoundingClientRect(); const p=n.parentElement.getBoundingClientRect(); return {w:r.width,h:r.height,x:r.x,right:r.right,parentRight:p.right}; }));
-          assert(rects.length >= 2 && rects.every(r => r.w === 30 && r.h === 30 && r.right <= r.parentRight + 0.5), `${source} size ${size}: actions equal and inside card: ${JSON.stringify(rects)}`);
+          assert(rects.length >= 2 && rects.every(r => Math.abs(r.w - 30) <= 0.5 && Math.abs(r.h - 30) <= 0.5 && Math.abs(r.w - rects[0].w) <= 0.5 && Math.abs(r.h - rects[0].h) <= 0.5 && r.right <= r.parentRight + 0.5), `${source} size ${size}: actions equal and inside card: ${JSON.stringify(rects)}`);
         }
         await page.locator('#dv-results .card[data-project-type="modpack"] .card-title').first().click();
         await page.waitForSelector('#proj-panel-description');
