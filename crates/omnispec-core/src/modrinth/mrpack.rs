@@ -294,7 +294,7 @@ pub async fn install_archive(
             name,
             mc_version,
             loader,
-            icon: None,
+            icon: None, icon_background: None,
             notes: index.summary.clone().unwrap_or_default(),
             source: Some("modrinth".into()),
             source_url,

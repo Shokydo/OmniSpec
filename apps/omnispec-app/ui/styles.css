@@ -3980,3 +3980,29 @@ body, body * { cursor: crosshair !important; }
   to { opacity: .9; transform: translateX(3%); }
 }
 */
+
+/* Создание значка сборки: отдельно фон и изображение поверх него. */
+.build-icon-editor { display: flex; align-items: center; gap: 14px; margin: 6px 0 10px; }
+.build-icon-preview { width: 60px; height: 60px; flex: none; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--line-2); border-radius: var(--r); background: var(--bg-4); color: var(--text); font-size: 25px; font-weight: 700; }
+.build-icon-preview .ic { width: 29px; height: 29px; }
+.build-icon-preview img { width: 100%; height: 100%; object-fit: cover; }
+.build-icon-options { min-width: 0; }
+.icon-color-label { color: var(--dim); font-size: 11px; margin-bottom: 6px; }
+.icon-palette { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.icon-color, .icon-color-none, .icon-custom-color { width: 25px; height: 25px; border-radius: 50%; border: 1px solid var(--line-2); flex: none; }
+.icon-color, .icon-color-none { padding: 0; cursor: pointer; }
+.icon-color-none { background: var(--bg-3); color: var(--text); }
+.icon-color.is-active, .icon-color-none.is-active { outline: 2px solid var(--text); outline-offset: 2px; }
+.icon-custom-color { position: relative; display: grid; place-items: center; background: var(--bg-4); color: var(--text); overflow: hidden; }
+.icon-custom-color input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.icon-custom-color:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.has-icon-background img { width: 72% !important; height: 72% !important; object-fit: contain !important; border-radius: 0 !important; }
+.build-head .tb-icon.has-icon-background .ic,
+.build-head .tb-icon.has-icon-background .tb-letter,
+.build-tile-shot.has-icon-background .build-tile-icon.is-symbol .ic,
+.build-tile-shot.has-icon-background .build-tile-icon.is-letter { color: inherit; }
+
+/* Поиск занимает свободное место, при узком окне управление переносится. */
+.content-panel-head { height: auto; min-height: 36px; padding-block: 5px; flex-wrap: wrap; }
+.content-panel-head > .content-search { flex: 1 1 220px; min-width: 140px; width: auto; }
+.content-panel-head > button { flex: 0 0 auto; }

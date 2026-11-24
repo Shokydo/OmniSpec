@@ -425,7 +425,7 @@ mod tests {
         let paths = Paths::new(&root).unwrap();
         instances::create(&paths, CreateInstanceRequest {
             name:"Test".into(), mc_version:"1.21.1".into(), loader:Loader::Vanilla,
-            icon:None, notes:String::new(), source:None, source_url:None,
+            icon:None, icon_background: None, notes:String::new(), source:None, source_url:None,
             id:Some("fabric".into()), category:None, memory_mb:None, java_path:None, game_dir:None,
         }).unwrap();
         let id = new_run_id("fabric").unwrap();
@@ -470,7 +470,7 @@ mod tests {
         let paths = Paths::new(&root).unwrap();
         instances::create(&paths, CreateInstanceRequest {
             name:"Test".into(), mc_version:"1.21.1".into(), loader:Loader::Vanilla,
-            icon:None, notes:String::new(), source:None, source_url:None,
+            icon:None, icon_background: None, notes:String::new(), source:None, source_url:None,
             id:Some("fabric".into()), category:None, memory_mb:None, java_path:None, game_dir:None,
         }).unwrap();
         let id = new_run_id("fabric").unwrap();

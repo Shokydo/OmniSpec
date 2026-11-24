@@ -261,7 +261,7 @@ pub async fn install(
             name,
             mc_version,
             loader,
-            icon: None,
+            icon: None, icon_background: None,
             notes: project.description.clone(),
             source: Some("curseforge".into()),
             source_url,

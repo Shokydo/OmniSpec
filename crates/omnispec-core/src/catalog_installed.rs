@@ -244,7 +244,7 @@ mod tests {
         let meta = crate::instances::create(&paths, crate::instances::CreateInstanceRequest {
             name: "Imported".into(), mc_version: "1.21.1".into(),
             loader: crate::instances::Loader::Fabric { version: "0.16.10".into() },
-            icon: None, notes: String::new(), source: Some("import".into()), source_url: None,
+            icon: None, icon_background: None, notes: String::new(), source: Some("import".into()), source_url: None,
             id: None, category: None, memory_mb: None, java_path: None, game_dir: None,
         }).unwrap();
         let http = crate::net::Http::new();

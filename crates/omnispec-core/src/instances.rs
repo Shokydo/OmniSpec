@@ -100,6 +100,9 @@ pub struct InstanceMeta {
     /// либо имя встроенной иконки.
     #[serde(default)]
     pub icon: Option<String>,
+    /// Цвет фона иконки в формате #RRGGBB; None — прежнее оформление.
+    #[serde(default)]
+    pub icon_background: Option<String>,
     /// Описание/заметка.
     #[serde(default)]
     pub notes: String,
@@ -118,6 +121,10 @@ pub struct InstanceMeta {
     /// Своя папка игры (место установки). Пусто — папка лаунчера.
     #[serde(default)]
     pub game_dir: Option<String>,
+}
+
+fn valid_icon_background(value: &str) -> bool {
+    value.len() == 7 && value.starts_with('#') && value.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
 }
 
 impl InstanceMeta {
@@ -153,6 +160,9 @@ pub struct CreateInstanceRequest {
     pub loader: Loader,
     #[serde(default)]
     pub icon: Option<String>,
+    /// Цвет фона иконки в формате #RRGGBB; None — прежнее оформление.
+    #[serde(default)]
+    pub icon_background: Option<String>,
     #[serde(default)]
     pub notes: String,
     #[serde(default)]
@@ -445,6 +455,7 @@ pub fn create(paths: &Paths, request: CreateInstanceRequest) -> Result<InstanceM
             .filter(|value| !value.is_empty()),
         jvm_args: None,
         icon: request.icon,
+        icon_background: request.icon_background.filter(|value| valid_icon_background(value)),
         version_override: None,
         notes: request.notes,
         source: request.source.unwrap_or_else(|| "manual".into()),
@@ -780,7 +791,7 @@ mod tests {
             memory_mb: None,
             java_path: None,
             jvm_args: None,
-            icon: None,
+            icon: None, icon_background: None,
             version_override: None,
             notes: String::new(),
             source: "manual".into(),
@@ -879,13 +890,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn icon_background_roundtrips_and_legacy_defaults_to_none() {
+        let legacy: InstanceMeta = serde_json::from_str(r#"{"id":"old","name":"Old","mc_version":"1.21"}"#).unwrap();
+        assert!(legacy.icon_background.is_none());
+        let (root, paths, mut meta) = rename_fixture("icon-bg");
+        meta.icon = Some("i-star".into()); meta.icon_background = Some("#3b82f6".into());
+        save(&paths, &meta).unwrap();
+        let loaded = load(&paths, &meta.id).unwrap();
+        assert_eq!(loaded.icon_background.as_deref(), Some("#3b82f6"));
+        assert_eq!(loaded.icon.as_deref(), Some("i-star"));
+        assert!(valid_icon_background("#1a2B3c"));
+        assert!(!valid_icon_background("red;display:none"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn rename_fixture(label: &str) -> (PathBuf, Paths, InstanceMeta) {
         let root = std::env::temp_dir().join(format!("omnispec-rename-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::new(&root).unwrap();
         let meta = create(&paths, CreateInstanceRequest {
             name: "Сборка".into(), mc_version: "1.21.1".into(), loader: Loader::Vanilla,
-            icon: None, notes: "не терять".into(), source: None, source_url: None,
+            icon: None, icon_background: None, notes: "не терять".into(), source: None, source_url: None,
             id: Some("old".into()), category: Some("cat".into()), memory_mb: Some(4096),
             java_path: None, game_dir: None,
         }).unwrap();
@@ -1090,7 +1116,7 @@ mod tests {
             memory_mb: None,
             java_path: None,
             jvm_args: None,
-            icon: None,
+            icon: None, icon_background: None,
             version_override: None,
             notes: String::new(),
             source: "manual".into(),
@@ -1112,7 +1138,7 @@ mod tests {
                 name: "С категорией".into(),
                 mc_version: "1.21.4".into(),
                 loader: Loader::Vanilla,
-                icon: None,
+                icon: None, icon_background: None,
                 notes: String::new(),
                 source: None,
                 source_url: None,
@@ -1142,7 +1168,7 @@ mod tests {
                 name: "Моя сборка".into(),
                 mc_version: "1.21.4".into(),
                 loader: Loader::Vanilla,
-                icon: None,
+                icon: None, icon_background: None,
                 notes: String::new(),
                 source: None,
                 source_url: None,
@@ -1176,7 +1202,7 @@ mod tests {
                 name: "Своя папка".into(),
                 mc_version: "1.21.4".into(),
                 loader: Loader::Vanilla,
-                icon: Some("i-gem".into()),
+                icon: Some("i-gem".into()), icon_background: None,
                 notes: String::new(),
                 source: None,
                 source_url: None,

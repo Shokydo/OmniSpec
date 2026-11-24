@@ -199,7 +199,7 @@ async fn run(command: &str, args: Args) -> omnispec_core::Result<()> {
                     name,
                     mc_version,
                     loader,
-                    icon: None,
+                    icon: None, icon_background: None,
                     notes: String::new(),
                     source: None,
                     source_url: None,

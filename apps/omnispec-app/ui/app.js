@@ -1528,6 +1528,23 @@
     "i-crown", "i-house", "i-globe", "i-grid", "i-mod", "i-terminal", "i-folder", "i-download"
   ];
 
+  const ICON_COLORS = ["#1bd96a", "#16a6a1", "#3b82f6", "#8057e7", "#db4d97", "#e65757", "#f59e0b", "#d4b84b", "#64748b"];
+  function iconColor(value) { return /^#[0-9a-f]{6}$/i.test(String(value || "")) ? String(value).toLowerCase() : ""; }
+  function iconColorStyle(value) {
+    const color = iconColor(value); if (!color) return "";
+    const n = parseInt(color.slice(1), 16);
+    const light = ((n >> 16) * .299 + ((n >> 8) & 255) * .587 + (n & 255) * .114) > 160;
+    return `style="background-color:${color};color:${light ? "#142019" : "#ffffff"}"`;
+  }
+  function iconPalette(prefix, color, preview) {
+    const chosen = iconColor(color);
+    return `<div class="build-icon-editor"><div class="build-icon-preview ${chosen ? "has-icon-background" : ""}" id="${prefix}-icon-preview" ${iconColorStyle(chosen)}>${preview}</div><div class="build-icon-options"><div class="icon-color-label">Цвет фона</div><div class="icon-palette" id="${prefix}-icon-palette"><button type="button" class="icon-color-none ${!chosen ? "is-active" : ""}" data-icon-background="" title="Без цвета" aria-label="Без цвета" aria-pressed="${!chosen}">◌</button>${ICON_COLORS.map(c => `<button type="button" class="icon-color ${chosen === c ? "is-active" : ""}" style="background:${c}" data-icon-background="${c}" title="${c}" aria-label="${c}" aria-pressed="${chosen === c}"></button>`).join("")}<label class="icon-custom-color" title="Свой цвет"><input id="${prefix}-icon-color" type="color" value="${chosen || "#1bd96a"}" aria-label="Свой цвет фона"><span>+</span></label></div></div></div>`;
+  }
+  function bindIconPalette(prefix, onChange) {
+    $$(`#${prefix}-icon-palette [data-icon-background]`).forEach(button => button.addEventListener("click", () => onChange(iconColor(button.dataset.iconBackground))));
+    $(`#${prefix}-icon-color`)?.addEventListener("change", event => onChange(iconColor(event.target.value)));
+  }
+
   function isImageIcon(icon) {
     return Boolean(icon) && String(icon).includes(".") && /\.(png|jpe?g|webp|gif)$/i.test(String(icon));
   }
@@ -1550,7 +1567,7 @@
     const box = $("#tb-icon");
     if (!box) return;
     if (!meta) {
-      box.classList.remove("is-letter");
+      box.classList.remove("is-letter", "has-icon-background"); box.style.backgroundColor = ""; box.style.color = "";
       box.innerHTML = `<img src="assets/logo.png" alt="" draggable="false">`;
       return;
     }
@@ -1558,6 +1575,10 @@
     const imageIcon = isImageIcon(isServer(meta) ? "server-icon.png" : meta.icon);
     const letter = !imageIcon && !(meta.icon && INSTANCE_ICONS.includes(meta.icon));
     box.classList.toggle("is-letter", letter);
+    const color = iconColor(meta.icon_background);
+    box.classList.toggle("has-icon-background", !!color);
+    box.style.backgroundColor = color;
+    box.style.color = color ? (((parseInt(color.slice(1,3),16)*.299 + parseInt(color.slice(3,5),16)*.587 + parseInt(color.slice(5,7),16)*.114)>160) ? "#142019" : "#fff") : "";
     box.innerHTML = letter ? `<span class="tb-letter" translate="no">${esc(html)}</span>` : html;
   }
 
@@ -1812,10 +1833,11 @@
   }
 
   /** Своя иконка сборки из файла-картинки. */
-  async function setIconFromFile(meta, path) {
+  async function setIconFromFile(meta, path, background = undefined) {
     invalidatePresenceIcon();
     try {
-      await api.setInstanceIconFile(meta.id, path);
+      const updated = await api.setInstanceIconFile(meta.id, path);
+      if (background !== undefined && updated) await api.updateInstance({ ...updated, icon_background: iconColor(background) || null });
       const data = await api.instanceIcon(meta.id).catch(() => null);
       if (data) state.iconCache[meta.id] = data;
       await refreshInstances();
@@ -1870,7 +1892,7 @@
     const version = isServer(item) ? serverLabel(item) : [item.mc_version, loaderLabel(item.loader)].filter(Boolean).join(" · ");
     return `
       <button class="build-tile ${running ? "is-running" : ""}" data-build-tile="${esc(item.id)}" title="${esc(item.name)}">
-        <span class="build-tile-shot">${icon}</span>
+        <span class="build-tile-shot ${iconColor(item.icon_background) ? "has-icon-background" : ""}" ${iconColorStyle(item.icon_background)}>${icon}</span>
         <span class="build-tile-name" translate="no">${esc(item.name)}</span>
         <span class="build-tile-sub mono">${esc(version || "—")}</span>
         ${running ? `<span class="build-tile-flag">${sessions > 1 ? `${sessions} окна` : "запущена"}</span>` : ""}
@@ -2490,6 +2512,7 @@
     setInstanceIconFile: (instanceId, path) => invoke("set_instance_icon_file", { instanceId, path }),
     instanceIcon: (instanceId) => invoke("instance_icon", { instanceId }),
     copyInstanceFile: (instanceId, path, sub) => invoke("copy_instance_file", { instanceId, path, sub }),
+    importModFile: (instanceId, path) => invoke("import_mod_file", { instanceId, path }),
     startupFile: () => invoke("startup_file"),
     setCustomWallpaper: (path) => invoke("set_custom_wallpaper", { path }),
     downloadWallpaper: (url) => invoke("download_custom_wallpaper", { url }),
@@ -2573,7 +2596,7 @@
     instances: async () => DEMO.instances.map((i) => ({ ...i })),
     acknowledgeInstanceRenames: async () => null,
     createInstance: async (req) => {
-      const meta = { ...DEMO.instances[0], id: "demo-" + Date.now(), name: req.name, mc_version: req.mc_version, loader: req.loader || { type: "vanilla" }, last_played: null };
+      const meta = { ...DEMO.instances[0], id: "demo-" + Date.now(), name: req.name, mc_version: req.mc_version, loader: req.loader || { type: "vanilla" }, icon: req.icon || null, icon_background: req.icon_background || null, last_played: null };
       DEMO.instances.unshift(meta);
       return meta;
     },
@@ -3004,6 +3027,7 @@
     },
     instanceIcon: async () => null,
     copyInstanceFile: async (_id, path) => String(path).split(/[\\/]/).pop(),
+    importModFile: async (_id, path) => String(path).split(/[\\/]/).pop(),
     startupFile: async () => null,
     setCustomWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
     downloadWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
@@ -3758,7 +3782,7 @@
       : "";
     return `<div class="instance-wrap">
       <div class="instance ${item.id === state.selectedId ? "is-active" : ""}" data-id="${esc(item.id)}" title="${esc(item.name)}" aria-label="${esc(item.name)}">
-        <div class="instance-icon" translate="no">${instanceIconHtml(item)}</div>
+        <div class="instance-icon ${iconColor(item.icon_background) ? "has-icon-background" : ""}" ${iconColorStyle(item.icon_background)} translate="no">${instanceIconHtml(item)}</div>
         <div class="instance-body">
           <div class="instance-name" translate="no">${esc(item.name)}</div>
           <div class="instance-sub">${isServer(item) ? esc(serverLabel(item)) : `MC ${esc(item.mc_version)} · ${esc(loaderLabel(item.loader))}`}${sessions.length > 1 ? ` · <span class="dup-count">${sessions.length} окна</span>` : ""}</div>
@@ -6801,10 +6825,9 @@
     $("#tab-body").innerHTML = `
       <div class="list-wrap">
         <div class="panel">
-          <div class="panel-head">
+          <div class="panel-head content-panel-head">
             <strong>${cfg.title}</strong>
             <span class="badge content-count" title="Включено файлов: ${enabled}">${enabled} вкл.</span>
-            <div class="spacer"></div>
             <label class="search content-search">
               <svg class="ic"><use href="#i-search"/></svg>
               <input id="content-query" placeholder="${cfg.search}" spellcheck="false" autocomplete="off" value="${esc(state.contentQuery[kind] || "")}">
@@ -6813,6 +6836,7 @@
               <svg class="ic"><use href="#i-refresh"/></svg>${checkLabel}
             </button>
             ${cfg.deps ? `<button class="btn btn-small" id="content-deps" title="Докачать недостающие зависимости модов"><svg class="ic"><use href="#i-download"/></svg>Зависимости</button>` : ""}
+            ${kind === "mod" ? `<button class="btn btn-small" id="content-import"><svg class="ic"><use href="#i-download"/></svg>Импорт</button>` : ""}
             <button class="btn btn-small" id="content-open">Открыть папку</button>
             <button class="btn btn-small btn-primary" id="content-add">${cfg.addLabel}</button>
           </div>
@@ -6832,6 +6856,22 @@
       state.tab = "download";
       refreshInstalledProjects();
       renderTab();
+    });
+    $("#content-import")?.addEventListener("click", async event => {
+      const button = event.currentTarget; button.disabled = true;
+      try {
+        const paths = await api.pickFiles("Выбери файлы модов", ["jar"]);
+        if (!Array.isArray(paths) || !paths.length) return;
+        let added = 0; const errors = [];
+        for (const path of paths) {
+          try { await api.importModFile(meta.id, path); added++; }
+          catch (error) { errors.push(`${String(path).split(/[\\/]/).pop()}: ${String(error)}`); }
+        }
+        if (added) toast(`Импортировано модов: ${added}`, "ok");
+        if (errors.length) toast(`Не удалось импортировать: ${errors.join("; ")}`, "err");
+        if (state.selectedId === meta.id && state.tab === "mods") await renderContent("mod");
+      } catch (error) { toast(`Не удалось выбрать моды: ${String(error)}`, "err"); }
+      finally { if (button.isConnected) button.disabled = false; }
     });
     $("#content-open").addEventListener("click", () => api.openPath(`/instances/${meta.id}/minecraft/${cfg.folder}`).catch((err) => toast(String(err), "err")));
     const input = $("#content-query");
@@ -7908,7 +7948,7 @@
     const letter = !isImageIcon(meta.icon) && !(meta.icon && INSTANCE_ICONS.includes(meta.icon));
     const detail = `MC ${meta.mc_version} · ${loaderLabel(meta.loader)}`;
     return `<button class="home-card ${meta.id === state.selectedId ? "is-active" : ""}" data-home-id="${esc(meta.id)}">
-      <span class="home-card-icon ${letter ? "is-letter" : ""}">${letter ? `<span class="card-letter" translate="no">${esc(icon)}</span>` : icon}</span>
+      <span class="home-card-icon ${letter ? "is-letter" : ""} ${iconColor(meta.icon_background) ? "has-icon-background" : ""}" ${iconColorStyle(meta.icon_background)}>${letter ? `<span class="card-letter" translate="no">${esc(icon)}</span>` : icon}</span>
       <span class="home-card-body">
         <span class="home-card-top">
           <span class="home-card-name" translate="no" title="${esc(meta.name)}">${esc(meta.name)}</span>
@@ -13616,6 +13656,7 @@
               <div class="settings-row is-wide">
                 <div class="label">Иконка</div>
                 <div class="settings-cell">
+                ${iconPalette("inst", meta.icon_background, instanceIconHtml(meta))}
                 <div class="icon-grid" id="inst-icons">
                   <button class="icon-chip letter ${!meta.icon ? "is-active" : ""}" data-icon="" title="Первая буква">${esc(String(meta.name).trim().charAt(0).toUpperCase())}</button>
                   ${isImageIcon(meta.icon) && state.iconCache[meta.id] ? `<button class="icon-chip img is-active" data-icon="${esc(meta.icon)}" title="Своя картинка"><img src="${state.iconCache[meta.id]}" alt=""></button>` : ""}
@@ -13679,8 +13720,21 @@
         </div>
       </div>`;
 
+    let selectedIconBackground = iconColor(meta.icon_background);
+    const updateIconPreview = () => {
+      const active = $("#inst-icons .icon-chip.is-active");
+      const icon = active?.dataset.icon || "";
+      const preview = $("#inst-icon-preview"); if (!preview) return;
+      preview.innerHTML = instanceIconHtml({ ...meta, icon: icon || null });
+      preview.classList.toggle("has-icon-background", !!selectedIconBackground);
+      preview.style.backgroundColor = selectedIconBackground;
+      const style = iconColorStyle(selectedIconBackground); preview.style.color = style.includes("#142019") ? "#142019" : selectedIconBackground ? "#fff" : "";
+      $$("#inst-icon-palette [data-icon-background]").forEach(button => { const on = button.dataset.iconBackground === selectedIconBackground; button.classList.toggle("is-active", on); button.setAttribute("aria-pressed", String(on)); });
+    };
+    bindIconPalette("inst", color => { selectedIconBackground = color; updateIconPreview(); });
     $$("#inst-icons .icon-chip").forEach((chip) => chip.addEventListener("click", () => {
       $$("#inst-icons .icon-chip").forEach((el) => el.classList.toggle("is-active", el === chip));
+      updateIconPreview();
     }));
     const memorySlider = $("#inst-memory");
     if (memorySlider) memorySlider.addEventListener("input", () => updateMemoryRange(memorySlider));
@@ -13700,7 +13754,7 @@
     const iconFile = $("#inst-icon-file");
     if (iconFile) iconFile.addEventListener("click", async () => {
       const path = await api.pickFile("Иконка сборки", ["png", "jpg", "jpeg", "webp", "gif"]).catch(() => null);
-      if (path) await setIconFromFile(meta, path);
+      if (path) await setIconFromFile(meta, path, selectedIconBackground);
     });
     const iconReset = $("#inst-icon-reset");
     if (iconReset) iconReset.addEventListener("click", async () => {
@@ -13718,6 +13772,7 @@
         ...meta,
         name: $("#inst-name").value.trim() || meta.name,
         icon: chip && chip.dataset.icon ? chip.dataset.icon : null,
+        icon_background: selectedIconBackground || null,
         memory_mb: memorySlider?.dataset.memoryDirty === "true" ? Number(memorySlider.value) : (meta.memory_mb ?? null),
         java_path: $("#inst-java").value.trim() || null,
         jvm_args: $("#inst-jvm").value.trim() || null,
@@ -14347,6 +14402,7 @@
       icon: "",
       iconFile: "",
       iconPreview: "",
+      iconBackground: "",
       memory: Math.min(memoryLimits().max, Math.max(MEMORY_MIN, Math.round(memoryValue(settings.memory_mb) / MEMORY_STEP) * MEMORY_STEP)),
       installMode: "default",
       customDir: "",
@@ -14487,6 +14543,7 @@
 
         <div class="field is-wide">
           <label>Иконка</label>
+          ${iconPalette("c", cfg.iconBackground, createIconHtml(cfg))}
           <div class="icon-grid create-icons" id="c-icons">
             <button class="icon-chip letter ${!cfg.icon && !cfg.iconFile ? "is-active" : ""}" data-icon="" title="Первая буква">${esc(String(cfg.name || "?").trim().charAt(0).toUpperCase() || "?")}</button>
             ${cfg.iconFile ? `<button class="icon-chip img is-active" data-icon-file="1" title="Своя картинка">${createIconHtml(cfg)}</button>` : ""}
@@ -14548,6 +14605,7 @@
     });
     $("#c-name").addEventListener("input", (event) => {
       cfg.name = event.target.value;
+      if (!cfg.icon && !cfg.iconFile) { const preview = $("#c-icon-preview"); if (preview) preview.textContent = String(cfg.name || "?").trim().charAt(0).toUpperCase() || "?"; }
       const chips = $("#c-icons");
       if (chips && chips.firstElementChild) chips.firstElementChild.textContent = String(cfg.name || "?").trim().charAt(0).toUpperCase() || "?";
       updateCreateHint();
@@ -14558,6 +14616,7 @@
       await loadLoaderVersions();
       renderCreateModal();
     });
+    bindIconPalette("c", color => { cfg.iconBackground = color; renderCreateModal(); });
     $$("#c-icons .icon-chip").forEach((chip) => chip.addEventListener("click", () => {
       if (chip.dataset.iconFile) return;
       cfg.icon = chip.dataset.icon || "";
@@ -14678,6 +14737,7 @@
         mc_version: cfg.mc,
         loader,
         icon: cfg.iconFile ? null : (cfg.icon || null),
+        icon_background: iconColor(cfg.iconBackground) || null,
         memory_mb: cfg.memory,
         java_path: cfg.javaPath || null,
         game_dir: customDir || null

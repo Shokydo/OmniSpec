@@ -4022,6 +4022,34 @@ fn copy_instance_file(
     Ok(name)
 }
 
+/// Импорт локального JAR без перезаписи уже установленного мода.
+#[tauri::command]
+fn import_mod_file(state: State<'_, AppState>, instance_id: String, path: String) -> Result<String, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let game = instances::ensure_game_dir(&state.paths, &meta).map_err(err)?;
+    let target = game.join("mods");
+    instances::create_dir_beneath(&game, &target).map_err(err)?;
+    import_mod_file_to(&target, Path::new(&path))
+}
+
+fn import_mod_file_to(target_dir: &Path, source: &Path) -> Result<String, String> {
+    use std::io::Write;
+    let name = source.file_name().and_then(|v| v.to_str()).ok_or("у файла нет имени")?;
+    if !name.to_ascii_lowercase().ends_with(".jar") || name.len() <= 4 {
+        return Err("для импорта модов выбери файл .jar".into());
+    }
+    let mut source_file = std::fs::File::open(source).map_err(|e| format!("не удалось открыть файл: {e}"))?;
+    if !source_file.metadata().map_err(err)?.is_file() { return Err("источник должен быть файлом".into()); }
+    let target = target_dir.join(name);
+    let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&target)
+        .map_err(|e| if e.kind() == std::io::ErrorKind::AlreadyExists { format!("мод «{name}» уже существует; файл не заменён") } else { format!("не удалось создать файл: {e}") })?;
+    if let Err(e) = std::io::copy(&mut source_file, &mut output).and_then(|_| output.flush()) {
+        drop(output); let _ = std::fs::remove_file(&target); return Err(format!("не удалось скопировать мод: {e}"));
+    }
+    Ok(name.to_string())
+}
+
 /// Файл, с которым лаунчер запустили (например, `.mrpack` двойным щелчком).
 #[tauri::command]
 fn startup_file(state: State<'_, AppState>) -> Option<String> {
@@ -4691,6 +4719,7 @@ fn main() {
             set_instance_icon_file,
             instance_icon,
             copy_instance_file,
+            import_mod_file,
             startup_file,
             install_update,
             open_url,
@@ -5141,5 +5170,25 @@ mod skin_library_tests {
         assert_eq!(std::fs::read(a).unwrap(), good);
         assert_eq!(std::fs::read(b).unwrap(), legacy);
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod import_local_mod_tests {
+    use super::import_mod_file_to;
+    #[test]
+    fn jar_import_does_not_replace_or_accept_other_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let target = tmp.path().join("mods");
+        std::fs::create_dir(&source).unwrap(); std::fs::create_dir(&target).unwrap();
+        let jar = source.join("test.jar"); std::fs::write(&jar, b"new").unwrap();
+        assert_eq!(import_mod_file_to(&target, &jar).unwrap(), "test.jar");
+        std::fs::write(&jar, b"modified").unwrap();
+        assert!(import_mod_file_to(&target, &jar).is_err());
+        assert_eq!(std::fs::read(target.join("test.jar")).unwrap(), b"new");
+        let invalid = source.join("bad.zip"); std::fs::write(&invalid, b"x").unwrap();
+        assert!(import_mod_file_to(&target, &invalid).is_err());
+        assert!(!target.join("bad.zip").exists());
     }
 }
