@@ -175,11 +175,17 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
           await card.waitFor();
           assert(await card.locator('.card-desc').isHidden(), `${source} size ${size}: mod description hidden`);
           assert.equal(await card.locator('.card-desc').evaluate(el => el.getBoundingClientRect().height),0, 'hidden description occupies no space');
+          assert(await card.locator('.card-meta').isHidden(), `${source} size ${size}: tags and downloads hidden`);
+          await card.evaluate(el => { el.classList.add('is-installed'); el.querySelector('.card-meta').insertAdjacentHTML('afterbegin', '<span data-project-status="installed">установлен</span>'); });
+          assert(await card.locator('[data-project-status="installed"]').isVisible(), `${source} size ${size}: installation status remains visible`);
+          assert.equal(await card.locator('.card-meta > :not([data-project-status])').first().isHidden(), true, 'other tags remain hidden even when installed');
+          await card.evaluate(el => { el.classList.remove('is-installed'); el.querySelector('[data-project-status]').remove(); });
           const buttons=await card.locator('.card-actions .card-icon-btn').evaluateAll(nodes => nodes.filter(n=>getComputedStyle(n).display!=='none').map(n=>{const r=n.getBoundingClientRect(),p=n.parentElement.getBoundingClientRect();return {width:r.width,height:r.height,right:r.right,parentRight:p.right}}));
           assert(buttons.length>=2 && buttons.every(x=>Math.abs(x.width-30)<.6 && Math.abs(x.height-30)<.6 && x.right<=x.parentRight+.6), `${source} size ${size}: buttons visible and aligned`);
         }
         await page.locator('[data-dv-view="list"]').click();
         assert(await page.locator('#dv-results .card[data-project-type="mod"] .card-desc').first().isVisible(), `${source}: list keeps description`);
+        assert(await page.locator('#dv-results .card[data-project-type="mod"] .card-meta').first().isVisible(), `${source}: list keeps tags`);
         await page.locator('#dv-results .card[data-project-type="mod"] .card-title').first().click();
         await page.waitForSelector('#proj-panel-description');
         assert((await page.locator('#proj-body').innerText()).includes('Описание сборки'), `${source}: project details keep full description`);

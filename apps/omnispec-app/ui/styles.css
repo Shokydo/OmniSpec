@@ -3895,16 +3895,17 @@ body.has-wall .download-catalog-sidebar { background: var(--bg-2); }
 /* Модпаки в каталоге: как компактная плитка — описание читается в окне
    проекта, а не занимает место на карточке при изменении её размера. */
 .modrinth-results .card[data-project-type="modpack"] .card-desc { display: none; }
-.modrinth-results.is-grid .card[data-project-type="modpack"] .card-meta { display: none; }
-.modrinth-results.is-grid .card[data-project-type="modpack"].is-installed,
-.modrinth-results.is-grid .card[data-project-type="modpack"].is-downloading { position: relative; }
-.modrinth-results.is-grid .card[data-project-type="modpack"].is-installed .card-meta,
-.modrinth-results.is-grid .card[data-project-type="modpack"].is-downloading .card-meta {
+/* В плитках скрываем категории и число скачиваний, оставляя статус установки. */
+.modrinth-results.is-grid .card .card-meta { display: none; }
+.modrinth-results.is-grid .card.is-installed,
+.modrinth-results.is-grid .card.is-downloading { position: relative; }
+.modrinth-results.is-grid .card.is-installed .card-meta,
+.modrinth-results.is-grid .card.is-downloading .card-meta {
   display: flex; position: absolute; z-index: 1; top: 8px; left: 8px; right: 8px;
   height: auto; margin: 0; pointer-events: none;
 }
-.modrinth-results.is-grid .card[data-project-type="modpack"] .card-meta > :not([data-project-status]) { display: none; }
-.modrinth-results.is-grid .card[data-project-type="modpack"] .card-meta [data-project-status] {
+.modrinth-results.is-grid .card .card-meta > :not([data-project-status]) { display: none; }
+.modrinth-results.is-grid .card .card-meta [data-project-status] {
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   background: var(--bg-2);
 }
