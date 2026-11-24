@@ -138,6 +138,30 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
   const browser = await chromium.launch({headless:true});
   try {
+    // Compact modpack cards retain two equal, clickable actions at every size;
+    // the full description is available in the project details for both sources.
+    {
+      const {page, errors} = await newPage(browser);
+      for (const source of ['modrinth', 'curseforge']) {
+        if (source === 'curseforge') { await page.locator('[data-dv-source="curseforge"]').click(); await waitHome(page, source, 'modpack'); }
+        for (const size of [1, 2, 3, 4, 5, 6]) {
+          await page.locator('#feed-size').fill(String(size));
+          const card = page.locator('#dv-results .card[data-project-type="modpack"]').first();
+          await card.waitFor();
+          assert(await card.locator('.card-desc').isHidden(), `${source} size ${size}: description hidden`);
+          assert(await card.locator('.card-meta').isHidden(), `${source} size ${size}: tags hidden`);
+          const rects = await card.locator('.card-actions .card-icon-btn').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => { const r=n.getBoundingClientRect(); const p=n.parentElement.getBoundingClientRect(); return {w:r.width,h:r.height,x:r.x,right:r.right,parentRight:p.right}; }));
+          assert(rects.length >= 2 && rects.every(r => r.w === 30 && r.h === 30 && r.right <= r.parentRight + 0.5), `${source} size ${size}: actions equal and inside card: ${JSON.stringify(rects)}`);
+        }
+        await page.locator('#dv-results .card[data-project-type="modpack"] .card-title').first().click();
+        await page.waitForSelector('#proj-panel-description');
+        assert((await page.locator('#proj-body').innerText()).includes('Описание сборки'), `${source}: full description available on opening`);
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('#modal-project[hidden]', {state:'attached'});
+      }
+      assert.deepEqual(errors, []); await page.close();
+    }
+
     // Фильтры передаются серверу, сохраняются между страницами, типами и источниками.
     {
       const {page,errors} = await newPage(browser);
@@ -380,7 +404,7 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
       const {page,errors} = await newPage(browser);
       if (source === 'curseforge') { await page.locator('[data-dv-source="curseforge"]').click(); await waitHome(page,'curseforge','modpack'); }
       const card = source === 'modrinth' ? '#dv-results [data-project="mr-pack"]' : '#dv-results [data-cf-project="cf-pack"]';
-      await page.locator(`${card} .card-body`).click();
+      await page.locator(`${card} .card-title`).click();
       await page.waitForSelector('#proj-panel-description .proj-shot');
       assert.equal(await page.locator('#proj-panel-description .proj-shot').count(),6);
       await page.locator('#proj-panel-description [data-project-image="0"]').click();
@@ -421,7 +445,7 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
       await checkBounds(page,'.mod-target-box');
       await page.locator('#mod-target-cancel').click();
       await page.locator('[data-dv-type="modpack"]').click(); await waitHome(page,'modrinth','modpack');
-      await page.locator('#dv-results [data-project="mr-pack"] .card-body').click();
+      await page.locator('#dv-results [data-project="mr-pack"] .card-title').click();
       await page.waitForSelector('#proj-panel-description .proj-shot');
       await checkBounds(page,'.proj-box');
       await page.locator('#proj-panel-description [data-project-image="0"]').click();

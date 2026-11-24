@@ -22,7 +22,7 @@ const server = http.createServer((req, res) => {
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     const errors = [];
-    page.on('pageerror', (error) => errors.push(String(error)));
+    page.on('pageerror', (error) => errors.push(error.stack || String(error)));
     await page.addInitScript(() => {
       const calls = [];
       const settings = { onboarded: true, onboarding_pending: false, update_enabled: false, discord_rpc: false, discord_instance_icon: false, theme: 'dark', click_fx: 'off', ambient: 'off', trail: false, ui_scale: 100, categories: [] };
@@ -44,7 +44,8 @@ const server = http.createServer((req, res) => {
         if (command === 'list_java') return [];
         if (command === 'running_instances' || command === 'running_sessions') return [];
         if (command === 'server_snapshot') return { id: 'paper', config: instances[1].server, root: '/test/paper/server', eula_accepted: true, running: false, metrics: { pid: null, memory_bytes: 0, cpu_percent: 0, uptime_secs: 0, tps: null }, players: [], files: [], log_tail: [] };
-        if (command === 'server_addons') return [];
+        if (['server_addons', 'list_mods', 'list_dir', 'content_list'].includes(command)) return [];
+        if (command === 'mod_icons') return {};
         if (command === 'server_search_addons') {
           const all = Array.from({ length: 48 }, (_, index) => ({ project_id: `plugin-${index}`, title: `Plugin ${index}`, description: 'Test plugin', downloads: 1000 - index }));
           const offset = Number(args.offset || 0); const limit = Number(args.limit || 24);
@@ -75,12 +76,17 @@ const server = http.createServer((req, res) => {
     assert(iconSizes.length > 0 && iconSizes.every((size) => size[0] === iconSizes[0][0] && size[1] === iconSizes[0][1]), 'settings icons have equal dimensions');
     await page.locator('[data-pref="interface"]').click();
     assert.equal(await page.locator('[data-theme-toggle]').count(), 3, 'built-in CSS themes are listed in interface settings');
-    await page.locator('[data-theme-toggle="builtin-glass"]').check();
+    assert.equal(await page.locator('.preset-preview-grid [data-theme-layout]').count(), 3);
+    await page.locator('.preset-preview-grid img').first().scrollIntoViewIfNeeded();
+    await page.waitForFunction(() => [...document.querySelectorAll('.preset-preview-grid img')].every(img => img.complete && img.naturalWidth > 0));
+    await page.locator('[data-theme-toggle="builtin-glass"]').click();
+    assert.equal(await page.locator('[data-theme-toggle="builtin-glass"]').getAttribute('aria-checked'), 'true');
     assert(await page.locator('#omnispec-theme-modules').textContent().then(s => s.includes('backdrop-filter')), 'switch applies theme CSS');
-    await page.locator('[data-theme-toggle="builtin-glass"]').uncheck();
+    await page.locator('[data-theme-toggle="builtin-glass"]').click();
+    assert.equal(await page.locator('[data-theme-toggle="builtin-glass"]').getAttribute('aria-checked'), 'false');
     await page.locator('[data-theme-file]').setInputFiles({ name: 'custom-test.css', mimeType: 'text/css', buffer: Buffer.from('body { --theme-test: yes; }') });
     await page.waitForSelector('[data-theme-row]:has-text("custom-test.css")');
-    await page.locator('[data-theme-row]:has-text("custom-test.css") input').check();
+    await page.locator('[data-theme-row]:has-text("custom-test.css") [data-theme-toggle]').click();
     assert((await page.locator('#omnispec-theme-modules').textContent()).includes('--theme-test'), 'imported CSS can be enabled');
     await page.waitForFunction(() => window.__v052.settings.ui_theme_modules?.some(m => m.name === 'custom-test.css' && m.enabled));
     await page.locator('[data-open-customizer]').click();
@@ -233,6 +239,22 @@ const server = http.createServer((req, res) => {
       return item?.mode === 'free' && item?.variant === 'prominent' && item?.x === 120 && item?.y === 44
         && item?.width === 510 && item?.height === 80 && item?.margin === 6 && item?.padding === 8 && item?.radius === 18 && item?.visible === true;
     });
+    await page.locator('[data-ui-preset="omnispec"]').click();
+    await page.locator('.visual-element[data-visual-id="tabs"]').click();
+    await page.locator('[data-element-select="tabs_orientation"]').selectOption('vertical');
+    await page.waitForFunction(() => window.__v052.settings.ui_layout?.elements?.find(e => e.id === 'tabs')?.tabs_orientation === 'vertical');
+    const navLayout = await page.evaluate(() => { const nav = document.querySelector('.app .tabs'), content = document.querySelector('.app .tab-body'); const a=nav.getBoundingClientRect(), b=content.getBoundingClientRect(); return { direction:getComputedStyle(nav).flexDirection, navRight:a.right, bodyLeft:b.left, navHeight:a.height, bodyHeight:b.height }; });
+    assert.equal(navLayout.direction, 'column');
+    assert(navLayout.navRight <= navLayout.bodyLeft + 1 && navLayout.navHeight > 100 && navLayout.bodyHeight > 100, 'vertical navigation sits beside independent workspace');
+    await page.locator('#modal-customizer [data-custom-close]').last().click();
+    await page.locator('.app .tabs [data-tab="errors"]').click();
+    await page.waitForFunction(() => window.omnispecDebug.state.tab === 'errors');
+    await page.locator('.app .tabs [data-tab="console"]').click();
+    await page.waitForFunction(() => window.omnispecDebug.state.tab === 'console');
+    await page.evaluate(() => window.omnispecCustomizer.open());
+    await page.locator('.visual-element[data-visual-id="tabs"]').click();
+    await page.locator('[data-element-select="tabs_orientation"]').selectOption('horizontal');
+    assert.equal(await page.locator('.app .tabs').evaluate(el => getComputedStyle(el).flexDirection), 'row', 'horizontal navigation restored');
     await page.locator('[data-ui-preset="prism"]').click();
     await page.waitForFunction(() => window.__v052.settings.ui_layout?.preset === 'prism');
     const prism = await page.evaluate(() => {
@@ -241,10 +263,13 @@ const server = http.createServer((req, res) => {
       const group = document.querySelector('.app .cat:not(.cat-running) .cat-items');
       return { sidebarWidth: sidebar.width, mainWidth: main.width, grid: getComputedStyle(group).display };
     });
-    assert(prism.sidebarWidth > prism.mainWidth && prism.grid === 'grid', 'Prism preset rearranges real panels and uses a grid');
+    assert(prism.sidebarWidth > 250 && prism.mainWidth > 250 && prism.grid === 'grid', 'Prism preset rearranges real panels and uses a grid');
+    assert.equal(await page.locator('.app .main').getAttribute('data-tabs-orientation'), 'vertical', 'Prism uses sidebar navigation');
     await page.locator('[data-ui-preset="modrinth"]').click();
     await page.waitForFunction(() => window.__v052.settings.ui_layout?.preset === 'modrinth');
-    assert.equal(await page.locator('.app .cat:not(.cat-running) .cat-items').first().evaluate(el => getComputedStyle(el).display), 'grid', 'Modrinth preset uses real grid layout');
+    assert.equal(await page.locator('.app .main').getAttribute('data-tabs-orientation'), 'horizontal', 'Modrinth restores horizontal pages');
+    const modrinth = await page.evaluate(() => ({sidebar:document.querySelector('.app .sidebar').getBoundingClientRect().width, main:document.querySelector('.app .main').getBoundingClientRect().width}));
+    assert(modrinth.main > modrinth.sidebar, 'Modrinth gives main content more space than its sidebar');
 
     // Живой редактируемый базовый CSS применён к документу и сохранён.
     await page.locator('[data-custom-tab="css"]').click();
@@ -372,6 +397,8 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.locator('.server-download-sentinel').textContent(), 'Показано всё: 48');
     // Скрытый элемент восстанавливает состояние после перезапуска.
     await page.evaluate(() => window.omnispecCustomizer.open());
+    await page.locator('.visual-element[data-visual-id="tabs"]').click();
+    await page.locator('[data-element-select="tabs_orientation"]').selectOption('vertical');
     await page.locator('[data-visual-toggle="build-search"]').click();
     await page.locator('.visual-element[data-visual-id="build-list"]').click();
     await page.locator('[data-element-select="list_view"]').selectOption('grid');
@@ -379,15 +406,24 @@ const server = http.createServer((req, res) => {
     await page.locator('[data-element-control="surface_opacity"]').dispatchEvent('input');
     await page.locator('[data-element-control="backdrop_blur"]').fill('8');
     await page.locator('[data-element-control="backdrop_blur"]').dispatchEvent('input');
-    await page.waitForFunction(() => {const es=window.__v052.settings.ui_layout?.elements || []; const e=es.find(x=>x.id==='build-list'); return es.some(x=>x.id==='build-search'&&!x.visible) && e?.list_view==='grid' && e?.surface_opacity===20 && e?.backdrop_blur===8;});
+    await page.locator('[data-element-control="surface_radius"]').fill('24');
+    await page.locator('[data-element-control="surface_radius"]').dispatchEvent('input');
+    await page.locator('[data-element-control="build_card_size"]').fill('130');
+    await page.locator('[data-element-control="build_card_size"]').dispatchEvent('input');
+    assert.equal(await page.locator('#instance-list').evaluate(el => getComputedStyle(el).borderRadius), '24px');
+    assert.equal(await page.locator('#instance-list').evaluate(el => el.style.getPropertyValue('--os-build-card-size')), '130px');
+    await page.waitForFunction(() => {const es=window.__v052.settings.ui_layout?.elements || []; const e=es.find(x=>x.id==='build-list'); return es.some(x=>x.id==='build-search'&&!x.visible) && e?.list_view==='grid' && e?.surface_opacity===20 && e?.backdrop_blur===8 && e?.surface_radius===24 && e?.build_card_size===130;});
     // Полный файл переживает перезапуск и может быть безопасно отключён.
     await page.reload();
     await page.waitForFunction(() => document.querySelector('link[href="styles.css"]')?.disabled === true);
     assert((await page.locator('#omnispec-replacement-base-css').textContent()).includes(css), 'edited base restored after reload');
     await page.waitForFunction(() => document.querySelector('#omnispec-theme-modules')?.textContent.includes('--theme-test'));
     await page.evaluate(() => window.omnispecCustomizer.open());
+    assert.equal(await page.locator('.app .main').getAttribute('data-tabs-orientation'), 'vertical', 'vertical orientation survives reload');
     assert.equal(await page.locator('#instance-search').isVisible(), false, 'hidden search stays hidden after reload');
     assert.equal(await page.locator('#instance-list').getAttribute('data-build-view'), 'grid', 'chosen grid survives reload');
+    assert.equal(await page.locator('#instance-list').evaluate(el => getComputedStyle(el).borderRadius), '24px', 'background rounding survives reload');
+    assert.equal(await page.locator('#instance-list').evaluate(el => el.style.getPropertyValue('--os-build-card-size')), '130px', 'build card size survives reload');
     assert.equal(await page.locator('#instance-list').evaluate(el => getComputedStyle(el).backdropFilter), 'blur(8px)', 'blur survives reload');
     assert.equal((await page.locator('#instance-list').evaluate(el => el.style.getPropertyValue('background-color'))).includes('20%'), true, 'background opacity survives reload');
     await page.locator('[data-visual-toggle="build-search"]').click();
@@ -411,6 +447,40 @@ const server = http.createServer((req, res) => {
     await page.locator('#custom-theme-file').setInputFiles({ name: 'full.css', mimeType: 'text/css', buffer: Buffer.from(fullCss) });
     await page.waitForFunction(() => document.querySelector('link[href="styles.css"]').disabled);
     assert((await page.locator('#omnispec-replacement-base-css').textContent()).includes(css));
+    // Реальный список переезжает в рабочую область, а не дублируется.
+    await page.locator('[data-custom-tab="editor"]').click();
+    await page.locator('[data-ui-preset="omnispec"]').click();
+    await page.locator('.visual-element[data-visual-id="build-list"]').click();
+    await page.locator('[data-element-select="merged_workspace"]').selectOption('true');
+    await page.waitForFunction(() => window.__v052.settings.ui_layout?.elements?.find(e => e.id === 'build-list')?.merged_workspace === true);
+    assert.equal(await page.locator('#workspace-library-body #instance-list').count(), 1);
+    await page.evaluate(() => window.omnispecCustomizer.close());
+    await page.locator('#instance-list .instance[data-id="fabric"]').first().click();
+    assert.equal(await page.locator('#workspace-library-body').isVisible(), true, 'single click selects without leaving the library');
+    assert.equal(await page.locator('#tb-name').innerText(), 'Fabric Pack');
+    assert.equal(await page.locator('#workspace-open').isEnabled(), true);
+    await page.locator('#workspace-open').click();
+    assert.equal(await page.locator('#workspace-library-body').isVisible(), false);
+    await page.locator('.tab[data-tab="files"]').click();
+    await page.locator('.tab[data-tab="mods"]').click();
+    await page.locator('#tab-back').click();
+    assert.equal(await page.locator('.tab[data-tab="files"]').evaluate(el => el.classList.contains('is-active')), true);
+    await page.locator('#tab-forward').click();
+    assert.equal(await page.locator('.tab[data-tab="mods"]').evaluate(el => el.classList.contains('is-active')), true);
+    await page.locator('#workspace-library').click();
+    assert.equal(await page.locator('#workspace-library-body').isVisible(), true);
+    await page.locator('#instance-list .instance[data-id="paper"]').first().dblclick();
+    assert.equal(await page.locator('#workspace-library-body').isVisible(), false, 'double click opens selected build');
+    assert.equal(await page.locator('#tb-name').innerText(), 'Paper Server');
+    assert.equal(await page.locator('#tab-back').isDisabled(), true, 'history resets for another build');
+    await page.locator('#workspace-library').click();
+    await page.reload();
+    await page.waitForSelector('#workspace-library-body #instance-list');
+    assert.equal(await page.locator('#workspace-library-body').isVisible(), true, 'merged layout survives reload');
+    await page.evaluate(() => window.omnispecCustomizer.open());
+    await page.locator('.visual-element[data-visual-id="build-list"]').click();
+    await page.locator('[data-element-select="merged_workspace"]').selectOption('false');
+    assert.equal(await page.locator('.sidebar > #instance-list').count(), 1, 'separate layout is restored');
     assert.equal(errors.length, 0, errors.join('\n'));
     console.log('V052_UI: fullscreen editor, CSS persistence, drag/properties, custom context menus, export actions, dynamic categories and server infinite scroll — OK');
   } finally {

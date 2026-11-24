@@ -563,13 +563,18 @@ pub fn validate_catalog_request(
     {
         return Err("версия Minecraft аддона не совпадает с сервером".into());
     }
+    if request.loader.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return Err("не указано ядро для проверки совместимости аддона".into());
+    }
     if let Some(loader) = request
         .loader
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        if !loader.eq_ignore_ascii_case(&config.kernel) {
+        let kernel = config.kernel.trim().to_ascii_lowercase();
+        let catalog_loader = match kernel.as_str() { "purpur" => "paper", "waterfall" => "bungeecord", _ => kernel.as_str() };
+        if !loader.eq_ignore_ascii_case(catalog_loader) {
             return Err("загрузчик аддона не совпадает с ядром сервера".into());
         }
     }
@@ -2471,7 +2476,7 @@ mod tests {
             version_id: "ver-1".into(),
             project_type: "plugin".into(),
             mc_version: "1.21.4".into(),
-            loader: None,
+            loader: Some("paper".into()),
             url: "https://cdn.example.test/plugin.jar".into(),
             filename: "plugin.jar".into(),
             size: 12,

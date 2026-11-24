@@ -1583,7 +1583,8 @@ async fn server_install_catalog_addon(
     // project, version and exact file once more before downloading anything.
     let project = state.modrinth.project(&req.project_id).await.map_err(err)?;
     if project.id != req.project_id
-        || !project.project_type.eq_ignore_ascii_case(req.project_type.trim())
+        || !(project.project_type.eq_ignore_ascii_case(req.project_type.trim())
+            || (req.project_type.trim() == "plugin" && project.project_type.eq_ignore_ascii_case("mod")))
     {
         return Err("проект каталога не совпадает с запросом".into());
     }
@@ -1600,6 +1601,14 @@ async fn server_install_catalog_addon(
         .iter()
         .find(|version| version.id == req.version_id)
         .ok_or_else(|| "версия каталога не совместима с сервером".to_string())?;
+    if !version.game_versions.iter().any(|v| v == req.mc_version.trim()) {
+        return Err("версия каталога не поддерживает Minecraft этого сервера".into());
+    }
+    if let Some(loader) = req.loader.as_deref().filter(|v| !v.trim().is_empty()) {
+        if !version.loaders.iter().any(|v| v.eq_ignore_ascii_case(loader)) {
+            return Err("версия каталога не поддерживает ядро сервера".into());
+        }
+    }
     if !version.project_id.is_empty() && version.project_id != req.project_id {
         return Err("версия каталога принадлежит другому проекту".into());
     }

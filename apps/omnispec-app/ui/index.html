@@ -125,6 +125,7 @@
   <!-- ============ MAIN ============ -->
   <main class="main">
     <div class="toolbar">
+      <div class="history-controls" aria-label="История вкладок"><button type="button" class="icon-btn" id="tab-back" title="Назад по вкладкам" aria-label="Назад по вкладкам" disabled>←</button><button type="button" class="icon-btn" id="tab-forward" title="Вперёд по вкладкам" aria-label="Вперёд по вкладкам" disabled>→</button></div>
       <div class="build-head">
         <div class="tb-icon" id="tb-icon"><img src="assets/logo.png" alt="" draggable="false" /></div>
         <div class="tb-titles">
@@ -141,6 +142,8 @@
         <button class="icon-btn" id="btn-build-menu" title="Ещё" hidden><svg class="ic"><use href="#i-dots"/></svg></button>
       </div>
       <div class="toolbar-right">
+        <button class="btn btn-small" id="workspace-library" type="button" hidden>Сборки</button>
+        <button class="btn btn-small" id="workspace-open" type="button" hidden disabled>Открыть сборку</button>
         <button class="icon-btn lg" id="btn-folder" title="Открыть папку сборки"><svg class="ic"><use href="#i-folder"/></svg></button>
         <button class="icon-btn lg" id="btn-restart" title="Перезапустить"><svg class="ic"><use href="#i-restart"/></svg></button>
         <button class="btn btn-play" id="btn-play"><svg class="ic"><use href="#i-play"/></svg><span>Играть</span></button>
@@ -177,6 +180,7 @@
       </div>
     </nav>
 
+    <section class="workspace-library" id="workspace-library-body" aria-label="Список сборок" hidden></section>
     <section class="tab-body" id="tab-body"></section>
   </main>
   </div>

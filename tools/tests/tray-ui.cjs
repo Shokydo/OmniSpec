@@ -92,7 +92,8 @@ async function openPage(browser, fresh) {
     {
       const { page, errors } = await openPage(browser, true);
       await page.waitForSelector('#modal-onboard:not([hidden])');
-      assert.equal(await page.locator('#onboard-count').innerText(), '1 / 7');
+      assert.equal(await page.locator('#onboard-count').innerText(), '1 / 8');
+      await page.locator('#onboard-next').click();
       await page.locator('#onboard-next').click();
       await page.locator('#onboard-next').click();
       await page.locator('#onboard-next').click();

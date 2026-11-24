@@ -205,6 +205,14 @@ pub struct UiElement {
     pub surface_opacity: Option<u8>,
     /// None — стиль темы, Some(0..=40) — размытие фона под элементом.
     pub backdrop_blur: Option<u8>,
+    /// Скругление подложки, None восстанавливает стиль темы.
+    pub surface_radius: Option<u8>,
+    /// Размер карточек установленных сборок, None — размер темы.
+    pub build_card_size: Option<u16>,
+    /// Направление панели страниц: horizontal | vertical.
+    pub tabs_orientation: String,
+    /// Список сборок в рабочей области вместо боковой панели.
+    pub merged_workspace: bool,
     /// Для списка сборок: default | list | grid.
     pub list_view: String,
 }
@@ -225,6 +233,10 @@ impl Default for UiElement {
             variant: "default".to_string(),
             surface_opacity: None,
             backdrop_blur: None,
+            surface_radius: None,
+            build_card_size: None,
+            tabs_orientation: "horizontal".into(),
+            merged_workspace: false,
             list_view: "default".to_string(),
         }
     }
@@ -762,7 +774,7 @@ mod discord_tests {
             width: Some(640),
             padding: 8,
             variant: "prominent".into(),
-            surface_opacity: Some(0), backdrop_blur: Some(12), list_view: "grid".into(),
+            surface_opacity: Some(0), backdrop_blur: Some(12), surface_radius: Some(20), build_card_size: Some(100), tabs_orientation: "vertical".into(), merged_workspace: true, list_view: "grid".into(),
             ..UiElement::default()
         });
         let mut category = Category { id: "servers".into(), name: "Серверы".into(), dynamic: true, ..Category::default() };
@@ -778,6 +790,10 @@ mod discord_tests {
         assert_eq!(restored.ui_layout.elements[0].x, 12);
         assert_eq!(restored.ui_layout.elements[0].surface_opacity, Some(0));
         assert_eq!(restored.ui_layout.elements[0].backdrop_blur, Some(12));
+        assert_eq!(restored.ui_layout.elements[0].surface_radius, Some(20));
+        assert_eq!(restored.ui_layout.elements[0].build_card_size, Some(100));
+        assert_eq!(restored.ui_layout.elements[0].tabs_orientation, "vertical");
+        assert!(restored.ui_layout.elements[0].merged_workspace);
         assert_eq!(restored.ui_layout.elements[0].list_view, "grid");
         assert_eq!(restored.categories[0].rules.kind, "server");
         assert_eq!(restored.categories[0].rules.mc_versions.len(), 2);

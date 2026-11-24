@@ -94,7 +94,7 @@ async function restartLauncher(errors){
     await waitSaved(s=>s.language==='ru','Russian language saved');
     await page.waitForFunction(()=>!document.querySelector('#onboard-next').disabled);
     // v0.51.0 adds the opt-in tray choice as a separate onboarding step.
-    for(let i=0;i<7;i++)await page.locator('#onboard-next').click();
+    for(let i=0;i<8;i++)await page.locator('#onboard-next').click();
     await waitSaved(s=>s.onboarded===true,'first-run wizard completed');
     await page.waitForSelector('#dv-results');
     assert.equal(await page.locator('#home-filters-toggle').getAttribute('aria-expanded'),'false');

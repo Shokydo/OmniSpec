@@ -69,7 +69,7 @@ const server = http.createServer((req, res) => {
             case 'server_backup_delete': this.backups = this.backups.filter((item) => item.name !== args.name); return null;
             case 'search_modrinth': return {hits: [], total_hits: 0};
             case 'server_search_addons': return {hits: [{project_id: 'luckperms', title: 'LuckPerms', description: 'Permissions plugin', downloads: 12345}], total_hits: 1};
-            case 'server_addon_versions': return [{id: 'luck-v1', project_id: 'luckperms', name: '5.4.0', version_number: '5.4.0', game_versions: ['1.21.4'], loaders: [], files: [{url: 'https://cdn.example.test/LuckPerms.jar', filename: 'LuckPerms.jar', primary: true, size: 40, hashes: {sha1: '0123456789abcdef0123456789abcdef01234567'}}]}];
+            case 'server_addon_versions': return [{id: 'luck-v1', project_id: 'luckperms', name: '5.4.0', version_number: '5.4.0', game_versions: ['1.21.4'], loaders: ['paper'], files: [{url: 'https://cdn.example.test/LuckPerms.jar', filename: 'LuckPerms.jar', primary: true, size: 40, hashes: {sha1: '0123456789abcdef0123456789abcdef01234567'}}]}];
             case 'server_install_catalog_addon': return {name: args.req.filename, path: `plugins/${args.req.filename}`, size: args.req.size, kind: 'plugins', enabled: true};
             case 'server_kernels': return [{id: 'paper', label: 'Paper', group: 'Bukkit', supports_plugins: true, supports_mods: false}];
             case 'server_kernel_versions': return [{id: '1.21.4', label: '1.21.4', mc_version: '1.21.4'}];
@@ -91,6 +91,15 @@ const server = http.createServer((req, res) => {
     await page.locator('[data-server-open="srv"]').click();
     await page.waitForSelector('.server-view');
     assert.match(await page.locator('.server-view').innerText(), /Local Paper/);
+    const radii = await page.evaluate(() => {
+      const body = document.body, prior = body.dataset.shape;
+      const measure = () => [getComputedStyle(document.querySelector('.server-overview-hero')).borderRadius, getComputedStyle(document.querySelector('.stat-card')).borderRadius, getComputedStyle(document.querySelector('.panel')).borderRadius, getComputedStyle(document.querySelector('.build-head .tb-icon')).borderRadius];
+      body.dataset.shape = 'square'; const square = measure();
+      body.dataset.shape = 'rounded'; const rounded = measure();
+      body.dataset.shape = prior; return {square, rounded};
+    });
+    assert(radii.square.every(r => r === '0px'), `all server panels and build icon square: ${JSON.stringify(radii)}`);
+    assert(radii.rounded.every(r => r !== '0px'), `round shape restored: ${JSON.stringify(radii)}`);
     assert.equal(await page.locator('#server-eula').count(), 1, 'new/imported servers expose an EULA action');
     await page.locator('#server-eula').click();
     await page.waitForFunction(() => window.__serverTest.eula === true);
@@ -150,6 +159,12 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.locator('[data-server-action="kill"]').count(), 1);
     await page.locator('[data-tab="download"]').click();
     await page.waitForSelector('#server-download-query');
+    await page.waitForSelector('.server-download-card');
+    const initial = await page.evaluate(() => window.__serverTest.calls.find(c => c.command === 'server_search_addons'));
+    assert.equal(initial.args.query, '', 'server catalog loads without search input');
+    assert.equal(initial.args.mcVersion, '1.21.4');
+    assert.equal(initial.args.loader, 'paper');
+    assert.equal(initial.args.projectType, 'plugin');
     await page.locator('#server-download-query').fill('LuckPerms');
     await page.locator('#server-download-search').click();
     await page.waitForSelector('.server-download-card');
@@ -161,6 +176,16 @@ const server = http.createServer((req, res) => {
     assert.equal(downloadCall.args.req.project_id, 'luckperms');
     assert.equal(downloadCall.args.req.filename, 'LuckPerms.jar');
     assert.equal(downloadCall.args.req.project_type, 'plugin');
+    assert.equal(downloadCall.args.req.loader, 'paper');
+    await page.evaluate(() => {
+      const state = window.omnispecDebug.state;
+      const meta = state.instances.find(x => x.id === 'srv');
+      meta.server = { ...meta.server, kernel: 'fabric', mc_version: '1.20.1' };
+    });
+    await page.locator('[data-tab="server"]').click();
+    await page.locator('[data-tab="download"]').click();
+    await page.waitForFunction(() => window.__serverTest.calls.some(c => c.command === 'server_search_addons' && c.args.projectType === 'mod' && c.args.loader === 'fabric' && c.args.mcVersion === '1.20.1' && c.args.query === ''));
+    await page.evaluate(() => { const meta = window.omnispecDebug.state.instances.find(x => x.id === 'srv'); meta.server = {...meta.server, kernel:'paper', mc_version:'1.21.4'}; });
     await page.locator('[data-tab="server"]').click();
     await page.waitForSelector('.server-overview-hero');
     await page.locator('[data-server-action="kill"]').click();

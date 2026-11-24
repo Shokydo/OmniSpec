@@ -131,7 +131,7 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .brand-logo {
   width: 28px; height: 28px; flex: none;
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   overflow: hidden;
   background: var(--bg-4);
   border: 1px solid var(--line-2);
@@ -309,7 +309,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .tb-icon {
   width: 22px; height: 22px; flex: none;
   display: grid; place-items: center;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   background: var(--bg-4); border: 1px solid var(--line-2);
   overflow: hidden;
 }
@@ -839,7 +839,7 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .switch::after {
   content: ""; position: absolute; top: 1px; left: 1px;
-  width: 12px; height: 12px; border-radius: 50%;
+  width: 12px; height: 12px; border-radius: var(--r-pill);
   background: var(--dim-2);
   transition: left var(--t-fast), background var(--t-fast);
 }
@@ -935,7 +935,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .card-actions .btn { height: var(--h-sm); font-size: 11.5px; }
 
 /* ==================== ФОРМА ЭЛЕМЕНТОВ (как в OmniPanel) ==================== */
-body[data-shape="square"] { --r-xs: 0px; --r-sm: 0px; --r-md: 0px; --r: 0px; --r-lg: 0px; }
+body[data-shape="square"] { --r-xs: 0px; --r-sm: 0px; --r-md: 0px; --r: 0px; --r-lg: 0px; --r-pill: 0px; }
 body[data-shape="soft"] { --r-xs: 4px; --r-sm: 6px; --r-md: 8px; --r: 8px; --r-lg: 10px; }
 body[data-shape="rounded"] { --r-xs: 8px; --r-sm: 12px; --r-md: 16px; --r: 16px; --r-lg: 20px; }
 body[data-shape="pill"] { --r-xs: 999px; --r-sm: 999px; --r-md: 999px; --r: 999px; --r-lg: 999px; }
@@ -1756,7 +1756,7 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
   border: 1px solid var(--line); border-radius: var(--r-sm);
   background: var(--bg-2); color: var(--dim); font-size: 10.5px; text-align: center;
 }
-.launcher-icon-card img { display: block; width: 56px; height: 56px; object-fit: contain; border-radius: 9px; }
+.launcher-icon-card img { display: block; width: 56px; height: 56px; object-fit: contain; border-radius: var(--r-sm); }
 .launcher-icon-option:hover .launcher-icon-card { border-color: var(--line-2); }
 .launcher-icon-option input:checked + .launcher-icon-card { border-color: var(--accent); color: var(--text); background: var(--bg-3); }
 .launcher-icon-option input:checked + .launcher-icon-card::after {
@@ -2090,7 +2090,7 @@ input, select, textarea, button { font-family: inherit; }
 /* левая часть заголовка окна — только бренд */
 .tb-logo {
   width: 20px; height: 20px; flex: none;
-  border-radius: 5px; overflow: hidden;
+  border-radius: var(--r-sm); overflow: hidden;
   background: var(--bg-4); border: 1px solid var(--line-2);
 }
 .tb-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
@@ -2183,7 +2183,7 @@ body.has-wall .account-chip { background: var(--bg-3a); }
 /* иконка приложения в шапке окна: крупнее и круглее */
 .tb-logo {
   width: 28px; height: 28px; flex: none;
-  border-radius: 9px; overflow: hidden;
+  border-radius: var(--r-sm); overflow: hidden;
   display: grid; place-items: center;
   background: var(--bg-3); border: 1px solid var(--line-2);
 }
@@ -2191,7 +2191,7 @@ body.has-wall .account-chip { background: var(--bg-3a); }
 .tb-left { gap: 8px; }
 
 /* иконка выбранной сборки в шапке сборки */
-.build-head .tb-icon { width: 28px; height: 28px; border-radius: 8px; }
+.build-head .tb-icon { width: 28px; height: 28px; border-radius: var(--r-sm); }
 .build-head .tb-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .build-head .tb-icon .ic { width: 16px; height: 16px; color: var(--dim); }
 .build-head .tb-icon .tb-letter {
@@ -2499,7 +2499,7 @@ body.has-wall .home-import { background: var(--bg-2a); }
 .tb-logo {
   width: 22px; height: 22px; flex: none;
   display: grid; place-items: center;
-  border-radius: 6px; overflow: hidden;
+  border-radius: var(--r-sm); overflow: hidden;
   background: var(--bg-4); border: 1px solid var(--line-2);
 }
 .tb-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
@@ -2645,7 +2645,7 @@ body.has-wall .home-import { background: var(--bg-2a); }
 .skin-preset .preset-del {
   position: absolute; top: 2px; right: 2px;
   width: 15px; height: 15px; display: grid; place-items: center;
-  border-radius: 4px; font-size: 12px; line-height: 1; color: var(--dim-2); opacity: 0;
+  border-radius: var(--r-xs); font-size: 12px; line-height: 1; color: var(--dim-2); opacity: 0;
 }
 .skin-preset:hover .preset-del { opacity: .7; }
 .skin-preset .preset-del:hover { background: var(--bg-5); color: var(--red); opacity: 1; }
@@ -3476,7 +3476,7 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
 .skin-library-select { width: 100%; padding: 6px 4px; border: 0; background: transparent; color: var(--dim); display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .skin-library-select:hover { color: var(--text); }
 .skin-library-name { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.skin-library-remove { position: absolute; right: 3px; top: 3px; width: 21px; height: 21px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: var(--bg-3); color: var(--dim-2); font-size: 16px; line-height: 1; }
+.skin-library-remove { position: absolute; right: 3px; top: 3px; width: 21px; height: 21px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--r-xs); background: var(--bg-3); color: var(--dim-2); font-size: 16px; line-height: 1; }
 .skin-library-remove:hover { color: var(--red); background: var(--bg-5); }
 .skin-import-errors { margin-top: 10px; color: var(--red); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 
@@ -3493,7 +3493,7 @@ body.has-wall .home-head, body.has-wall .home-feed-head { background: transparen
   .wall-link-row { flex-wrap: wrap; }
   .wall-link-row .input { flex-basis: 100%; }
 }
-.fav-slot .preset-del { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 4px; line-height: 1; font-size: 14px; }
+.fav-slot .preset-del { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: var(--r-xs); line-height: 1; font-size: 14px; }
 
 /* Каталог: своё меню загрузчиков вместо системного списка Windows. */
 .home-loader { position: relative; width: 100%; }
@@ -3884,3 +3884,47 @@ body.has-wall .download-catalog-sidebar { background: var(--bg-2); }
 .sidebar .sidebar-quick.is-icon-only, .sidebar .sidebar-new.is-icon-only { justify-content: center; padding-inline: 0; }
 .sidebar .sidebar-quick.is-icon-only > span, .sidebar .sidebar-new.is-icon-only > span { display: none; }
 .app-body > .sidebar, .sidebar-foot { min-width: 0; }
+
+/* Модпаки в каталоге: как компактная плитка — описание читается в окне
+   проекта, а не занимает место на карточке при изменении её размера. */
+.modrinth-results .card[data-project-type="modpack"] .card-desc { display: none; }
+.modrinth-results.is-grid .card[data-project-type="modpack"] .card-meta { display: none; }
+.modrinth-results.is-grid .card[data-project-type="modpack"].is-installed,
+.modrinth-results.is-grid .card[data-project-type="modpack"].is-downloading { position: relative; }
+.modrinth-results.is-grid .card[data-project-type="modpack"].is-installed .card-meta,
+.modrinth-results.is-grid .card[data-project-type="modpack"].is-downloading .card-meta {
+  display: flex; position: absolute; z-index: 1; top: 8px; left: 8px; right: 8px;
+  height: auto; margin: 0; pointer-events: none;
+}
+.modrinth-results.is-grid .card[data-project-type="modpack"] .card-meta > :not([data-project-status]) { display: none; }
+.modrinth-results.is-grid .card[data-project-type="modpack"] .card-meta [data-project-status] {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: var(--bg-2);
+}
+.modrinth-results .card-actions .card-icon-btn {
+  box-sizing: border-box; width: 30px; min-width: 30px; max-width: 30px;
+  height: 30px; min-height: 30px; max-height: 30px; padding: 0; flex: 0 0 30px;
+}
+.modrinth-results .card-actions .card-icon-btn .ic { width: 14px; height: 14px; flex: none; }
+
+.history-controls { display: flex; align-items: center; gap: 2px; flex: none; }
+.history-controls .icon-btn:disabled { opacity: .35; cursor: default; }
+
+body[data-merged-workspace="true"] .sidebar { min-width: 150px; }
+.workspace-library { flex: 1; min-width: 0; min-height: 0; padding: 12px; overflow: hidden; }
+.workspace-library:not([hidden]) { display: flex; flex-direction: column; }
+.workspace-library .instance-list { width: 100%; flex: 1; min-height: 0; }
+.main[data-library-visible="true"] > .tabs, .main[data-library-visible="true"] > .tab-body { display: none !important; }
+.main[data-tabs-orientation="vertical"][data-library-visible="true"] > .workspace-library { grid-column: 1 / -1; grid-row: 3; }
+
+/* Общие превью компоновок: первый запуск и настройки используют одни файлы. */
+.preset-preview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.preset-preview { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px; text-align: left; color: var(--text); background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r); cursor: pointer; }
+.preset-preview:hover, .preset-preview.is-active { border-color: var(--accent); background: var(--bg-3); }
+.preset-preview img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top; border-radius: var(--r-sm); background: var(--bg); }
+.preset-preview strong { font-size: 12px; }
+.preset-preview small { color: var(--dim-2); line-height: 1.3; }
+.preset-preview input { position: absolute; opacity: 0; pointer-events: none; }
+.preset-preview:focus-within, .preset-preview:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[data-theme-row] .switch { flex: none; }
+@media (max-width: 580px) { .preset-preview-grid { grid-template-columns: 1fr; } .preset-preview img { max-height: 160px; object-fit: contain; } }

@@ -3752,12 +3752,14 @@
     $$(".instance", list).forEach((el) => {
       el.addEventListener("click", () => {
         if (consumeDragClick()) return;
-        openInstance(el.dataset.id);
+        if (mergedLibraryVisible()) selectInstance(el.dataset.id);
+        else openInstance(el.dataset.id);
       });
       // двойной клик по сборке — сразу запускаем игру
       el.addEventListener("dblclick", (event) => {
         event.preventDefault();
-        launchFromList(el.dataset.id);
+        if (mergedLibraryVisible()) openInstance(el.dataset.id);
+        else launchFromList(el.dataset.id);
       });
       el.addEventListener("contextmenu", (event) => {
         event.preventDefault();
@@ -4296,7 +4298,30 @@
     return INITIAL_TABS.some(([tab]) => tab === id) ? id : "console";
   }
 
+  let mergedWorkspace = false;
+  let libraryVisible = false;
+  function mergedLibraryVisible() { return mergedWorkspace && libraryVisible; }
+  function showWorkspaceLibrary(show) {
+    libraryVisible = Boolean(show && mergedWorkspace);
+    const main = $(".main"), library = $("#workspace-library-body");
+    if (main) main.dataset.libraryVisible = String(libraryVisible);
+    if (library) library.hidden = !libraryVisible;
+    const open = $("#workspace-open");
+    if (open) { open.hidden = !libraryVisible; open.disabled = !selected(); }
+    const button = $("#workspace-library");
+    if (button) button.hidden = !mergedWorkspace || libraryVisible;
+  }
+  window.addEventListener("omnispec-workspace-layout", (event) => {
+    const next = event.detail?.merged === true;
+    const list = $("#instance-list"), library = $("#workspace-library-body");
+    const sidebar = $(".sidebar"), foot = $(".sidebar-foot");
+    if (!list || !library || !sidebar || !foot) return;
+    if (next) library.appendChild(list); else sidebar.insertBefore(list, foot);
+    if (next !== mergedWorkspace) { mergedWorkspace = next; showWorkspaceLibrary(next); }
+  });
+
   function openInstance(id) {
+    if (mergedWorkspace) showWorkspaceLibrary(false);
     const meta = id && state.instances.find((item) => item.id === id);
     if (meta) state.tab = isServer(meta) ? "server" : initialTab();
     selectInstance(id);
@@ -4307,7 +4332,10 @@
     state.selectedId = id;
     const meta = selected();
     refreshInstalledProjects();
-    renderSidebar();
+    if (mergedLibraryVisible()) {
+      $$(".instance", $("#instance-list")).forEach(el => el.classList.toggle("is-active", el.dataset.id === id));
+      const open = $("#workspace-open"); if (open) open.disabled = !meta;
+    } else renderSidebar();
     $("#tb-name").textContent = meta ? meta.name : "OmniSpec";
     // версия видна текстом; менять её — на странице сборки
     const versionLabel = $("#tb-version");
@@ -5038,8 +5066,14 @@
     const meta = selected();
     if (!meta) return;
     const mcVersion = meta.server?.mc_version || meta.mc_version || "";
+    const kernel = String(meta.server?.kernel || "").trim().toLowerCase();
+    const modded = ["fabric", "forge", "neoforge"].includes(kernel);
+    const pluginLoaders = { paper: "paper", purpur: "paper", spigot: "spigot", folia: "folia", velocity: "velocity", waterfall: "bungeecord", bungeecord: "bungeecord" };
+    const loader = modded ? kernel : (pluginLoaders[kernel] || null);
+    const projectType = modded ? "mod" : "plugin";
+    const noun = modded ? "моды" : "плагины";
     const body = $("#tab-body");
-    body.innerHTML = `<section class="server-view server-download-view"><div class="server-download-head"><div><div class="eyebrow"><svg class="ic"><use href="#i-modrinth"/></svg>MODRINTH</div><h1>Загрузить</h1><p class="muted">Плагины для ${esc(meta.name)} · Minecraft ${esc(mcVersion || "версия не указана")}. Скачивание проходит через проверку проекта, версии, размера и SHA-1.</p></div><button class="btn" id="server-download-back">Сервер</button></div><div class="server-download-search"><svg class="ic"><use href="#i-search"/></svg><input class="input grow" id="server-download-query" placeholder="Найти плагин на Modrinth" spellcheck="false"><button class="btn btn-primary" id="server-download-search"><svg class="ic"><use href="#i-search"/></svg>Найти плагины</button></div><div class="server-download-hint">Ищутся только проекты типа <strong>plugin</strong>, совместимые с версией этого сервера.</div><div id="server-download-results" class="server-addon-card-grid" aria-live="polite"><div class="empty-state">Введи название плагина и нажми «Найти плагины».</div></div></section>`;
+    body.innerHTML = `<section class="server-view server-download-view"><div class="server-download-head"><div><div class="eyebrow"><svg class="ic"><use href="#i-modrinth"/></svg>MODRINTH</div><h1>Загрузить</h1><p class="muted">${modded ? "Моды" : "Плагины"} для ${esc(meta.name)} · Minecraft ${esc(mcVersion || "версия не указана")}. Скачивание проходит через проверку проекта, версии, размера и SHA-1.</p></div><button class="btn" id="server-download-back">Сервер</button></div><div class="server-download-search"><svg class="ic"><use href="#i-search"/></svg><input class="input grow" id="server-download-query" placeholder="Найти ${modded ? "мод" : "плагин"} на Modrinth" spellcheck="false"><button class="btn btn-primary" id="server-download-search"><svg class="ic"><use href="#i-search"/></svg>Найти</button></div><div class="server-download-hint">Показаны ${noun} для Minecraft ${esc(mcVersion || "—")} и ядра ${esc(kernel || "—")}; совместимость указана по данным Modrinth.</div><div id="server-download-results" class="server-addon-card-grid" aria-live="polite"><div class="loading-line">Загружаем каталог…</div></div></section>`;
     const input = $("#server-download-query");
     const results = $("#server-download-results");
     const pageSize = 24;
@@ -5055,14 +5089,14 @@
 
     const cardHtml = (item) => `<article class="server-addon-card server-download-card" data-server-download-project="${esc(item.project_id)}"><div class="server-download-card-title"><strong>${esc(item.title)}</strong><span class="server-source-badge">Modrinth</span></div><span>${esc(item.description || "Описание не указано")}</span><small>${Number(item.downloads || 0).toLocaleString()} загрузок · ${esc(item.project_id)}</small><button class="btn btn-small" data-server-download-load>Показать версии</button><div class="server-download-versions" data-server-download-versions hidden></div></article>`;
     const sentinelHtml = () => {
-      if (loadingMore) return `<div class="server-download-sentinel is-loading"><span class="mr-more-spinner"></span>Загружаем ещё плагины…</div>`;
+      if (loadingMore) return `<div class="server-download-sentinel is-loading"><span class="mr-more-spinner"></span>Загружаем ещё ${noun}…</div>`;
       if (moreError) return `<div class="server-download-sentinel is-error"><span>${esc(moreError)}</span><button class="btn btn-small" data-server-download-retry>Повторить</button></div>`;
       if (hits.length >= total) return `<div class="server-download-sentinel">Показано всё: ${hits.length}</div>`;
       return `<div class="server-download-sentinel">Прокрути вниз — ещё ${Math.max(0, total - hits.length)}</div>`;
     };
     const renderResults = () => {
       if (loading && !hits.length) {
-        results.innerHTML = `<div class="loading-line">Ищем плагины на Modrinth…</div>`;
+        results.innerHTML = `<div class="loading-line">Ищем ${noun} на Modrinth…</div>`;
         return;
       }
       if (error && !hits.length) {
@@ -5070,7 +5104,7 @@
         return;
       }
       if (!hits.length) {
-        results.innerHTML = `<div class="empty-state">Плагины не найдены.</div>`;
+        results.innerHTML = `<div class="empty-state">${modded ? "Моды" : "Плагины"} не найдены.</div>`;
         return;
       }
       results.innerHTML = `${hits.map(cardHtml).join("")}${sentinelHtml()}`;
@@ -5084,21 +5118,21 @@
     const watchMore = () => {
       if (observer) { observer.disconnect(); observer = null; }
       const sentinel = $(".server-download-sentinel", results);
-      if (!sentinel || hits.length >= total || !query) return;
+      if (!sentinel || hits.length >= total || moreError) return;
       observer = new IntersectionObserver((entries) => {
         if (entries.some((entry) => entry.isIntersecting)) loadMore();
       }, { rootMargin: "320px" });
       observer.observe(sentinel);
     };
     const loadMore = async () => {
-      if (loading || loadingMore || error || !query || hits.length >= total) return;
+      if (loading || loadingMore || error || hits.length >= total) return;
       loadingMore = true;
       moreError = "";
       updateSentinel();
       const currentGeneration = generation;
       try {
-        const response = await api.serverSearchAddons(query, "plugin", mcVersion, null, hits.length, pageSize);
-        if (currentGeneration !== generation) return;
+        const response = await api.serverSearchAddons(query, projectType, mcVersion, loader, hits.length, pageSize);
+        if (currentGeneration !== generation || !results.isConnected || selected()?.id !== meta.id) return;
         const known = new Set(hits.map((item) => item.project_id));
         const fresh = (response?.hits || []).filter((item) => !known.has(item.project_id));
         hits = hits.concat(fresh);
@@ -5110,10 +5144,10 @@
           else results.insertAdjacentHTML("beforeend", fresh.map(cardHtml).join(""));
         }
       } catch (loadError) {
-        if (currentGeneration !== generation) return;
+        if (currentGeneration !== generation || !results.isConnected || selected()?.id !== meta.id) return;
         moreError = String(loadError);
       } finally {
-        if (currentGeneration !== generation) return;
+        if (currentGeneration !== generation || !results.isConnected || selected()?.id !== meta.id) return;
         loadingMore = false;
         updateSentinel();
         watchMore();
@@ -5121,7 +5155,6 @@
     };
     const search = async () => {
       const nextQuery = input?.value.trim() || "";
-      if (!nextQuery) { toast("Введи название плагина", "err"); input?.focus(); return; }
       query = nextQuery;
       generation += 1;
       const currentGeneration = generation;
@@ -5133,15 +5166,15 @@
       if (observer) { observer.disconnect(); observer = null; }
       renderResults();
       try {
-        const response = await api.serverSearchAddons(query, "plugin", mcVersion, null, 0, pageSize);
-        if (currentGeneration !== generation) return;
+        const response = await api.serverSearchAddons(query, projectType, mcVersion, loader, 0, pageSize);
+        if (currentGeneration !== generation || !results.isConnected || selected()?.id !== meta.id) return;
         hits = response?.hits || [];
         total = Number(response?.total_hits ?? hits.length);
       } catch (searchError) {
-        if (currentGeneration !== generation) return;
+        if (currentGeneration !== generation || !results.isConnected || selected()?.id !== meta.id) return;
         error = String(searchError);
       } finally {
-        if (currentGeneration !== generation) return;
+        if (currentGeneration !== generation || !results.isConnected || selected()?.id !== meta.id) return;
         loading = false;
         renderResults();
       }
@@ -5158,8 +5191,8 @@
         const box = $("[data-server-download-versions]", card);
         loadButton.disabled = true;
         try {
-          const versions = await api.serverAddonVersions(card.dataset.serverDownloadProject, mcVersion, null);
-          const compatible = versions.filter((version) => version.game_versions?.includes(mcVersion) && version.files?.some((file) => file.url && file.filename?.toLowerCase().endsWith(".jar") && file.size > 0 && file.hashes?.sha1));
+          const versions = await api.serverAddonVersions(card.dataset.serverDownloadProject, mcVersion, loader);
+          const compatible = versions.filter((version) => version.game_versions?.includes(mcVersion) && version.loaders?.some((value) => String(value).toLowerCase() === loader) && version.files?.some((file) => file.url && file.filename?.toLowerCase().endsWith(".jar") && file.size > 0 && file.hashes?.sha1));
           card._serverDownloadVersions = compatible;
           box.hidden = false;
           box.innerHTML = compatible.length ? `<select class="input" data-server-download-version>${compatible.map((version, index) => `<option value="${index}">${esc(version.name || version.version_number || version.id)} · ${esc(version.files?.find((file) => file.primary && file.filename?.toLowerCase().endsWith(".jar"))?.filename || version.files?.[0]?.filename || "JAR")}</option>`).join("")}</select><button class="btn btn-small btn-primary" data-server-download-install><svg class="ic"><use href="#i-download"/></svg>Установить</button>` : `<span class="muted">Нет проверенного JAR для Minecraft ${esc(mcVersion)}.</span>`;
@@ -5181,14 +5214,19 @@
       if (!version || !file) { toast("Выбери проверенную версию JAR", "err"); return; }
       installButton.disabled = true;
       try {
-        await api.serverInstallCatalogAddon(meta.id, { source: "modrinth", project_id: card.dataset.serverDownloadProject, version_id: version.id, project_type: "plugin", mc_version: mcVersion, loader: null, url: file.url, filename: file.filename, size: file.size, sha1: file.hashes.sha1 });
+        await api.serverInstallCatalogAddon(meta.id, { source: "modrinth", project_id: card.dataset.serverDownloadProject, version_id: version.id, project_type: projectType, mc_version: mcVersion, loader, url: file.url, filename: file.filename, size: file.size, sha1: file.hashes.sha1 });
         installButton.textContent = "Установлено";
-        toast(`${$("strong", card)?.textContent || "Плагин"} установлен`, "ok");
+        toast(`${$("strong", card)?.textContent || (modded ? "Мод" : "Плагин")} установлен`, "ok");
       } catch (installError) {
         installButton.disabled = false;
         toast(String(installError), "err");
       }
     });
+    if (!mcVersion || !loader) {
+      results.innerHTML = `<div class="empty-state">${!mcVersion ? "Сначала укажите версию Minecraft в настройках сервера." : "Для этого ядра автоматический каталог модов и плагинов недоступен."}</div>`;
+      if (input) input.disabled = true;
+      const button = $("#server-download-search"); if (button) button.disabled = true;
+    } else search();
   }
 
   async function renderServerPlayers() {
@@ -5227,6 +5265,34 @@
     $$('[data-backup-delete]').forEach((button) => button.addEventListener("click", async () => { if (!window.confirm("Удалить бэкап?")) return; try { await api.serverBackupDelete(meta.id, button.dataset.backupDelete); renderServerBackups(); } catch (error) { toast(String(error), "err"); } }));
   }
 
+  // История принадлежит выбранной сборке и не смешивается с главной страницей.
+  let tabHistory = [];
+  let tabHistoryIndex = -1;
+  let tabHistoryInstance = null;
+  function updateTabHistoryButtons() {
+    const back = $("#tab-back"), forward = $("#tab-forward");
+    if (back) back.disabled = !selected() || tabHistoryIndex <= 0;
+    if (forward) forward.disabled = !selected() || tabHistoryIndex >= tabHistory.length - 1;
+  }
+  function rememberTab() {
+    if (!state.selectedId) { tabHistory = []; tabHistoryIndex = -1; tabHistoryInstance = null; }
+    else if (tabHistoryInstance !== state.selectedId) {
+      tabHistoryInstance = state.selectedId; tabHistory = [state.tab]; tabHistoryIndex = 0;
+    } else if (tabHistory[tabHistoryIndex] !== state.tab) {
+      tabHistory = tabHistory.slice(0, tabHistoryIndex + 1);
+      tabHistory.push(state.tab); tabHistoryIndex = tabHistory.length - 1;
+    }
+    updateTabHistoryButtons();
+  }
+  function navigateTabHistory(direction) {
+    const index = tabHistoryIndex + direction;
+    if (!selected() || index < 0 || index >= tabHistory.length) return;
+    tabHistoryIndex = index; state.tab = tabHistory[index];
+    if (state.tab === "download") refreshInstalledProjects();
+    renderTab();
+    updateTabHistoryButtons();
+  }
+
   let tabRenderGeneration = 0;
   function renderTab() {
     if (state.windowHidden) {
@@ -5245,6 +5311,8 @@
     else if (meta && state.tab === "discover") state.tab = isServer(meta) ? "server" : "console";
     else if (meta && isServer(meta) && !["server", "console", "files", "players", "metrics", "backups", "download", "settings"].includes(state.tab)) state.tab = "server";
     else if (meta && !isServer(meta) && ["server", "players", "metrics", "backups", "servers"].includes(state.tab)) state.tab = "console";
+    if (tabHistoryInstance !== state.selectedId || tabHistoryIndex < 0) rememberTab();
+    updateTabHistoryButtons();
     $$(".tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.tab));
     const viewKey = `${state.selectedId || "home"}:${state.tab}`;
     if (body.dataset.activeView !== viewKey) { body.dataset.activeView = viewKey; animateView(body); }
@@ -7204,13 +7272,13 @@
   function modsGridLevel() {
     const s = state.settings || {};
     const level = Number(s.mods_grid ?? s.mr_grid ?? s.cf_grid);
-    return level === 1 || level === 2 || level === 3 ? level : 2;
+    return Number.isInteger(level) && level >= 1 && level <= 6 ? level : 2;
   }
 
   // Ползунок задаёт максимум, а не число, которое нужно принудительно
   // втиснуть в узкое окно. Вычитаем фактический padding и учитываем gap.
   function catalogColumns(level, width = 0, gap = 8) {
-    const wanted = level === 1 ? 12 : level === 3 ? 6 : 9;
+    const wanted = [12, 9, 6, 4, 3, 2][level - 1] || 9;
     if (width <= 0) return wanted;
     return Math.max(1, Math.min(wanted, Math.floor((width + gap) / (120 + gap))));
   }
@@ -7360,7 +7428,7 @@
     const results = $("#mr-results") || $("#cf-results");
     if (results) {
       results.classList.toggle("is-grid", view === "grid");
-      results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
+      results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3", "feed-grid-4", "feed-grid-5", "feed-grid-6");
       if (view === "grid") results.classList.add(`feed-grid-${modsGridLevel()}`);
       syncCatalogColumns();
       // После смены раскладки конец списка может оказаться прямо на экране.
@@ -7612,9 +7680,9 @@
             <button type="button" class="${view === "list" ? "is-active" : ""}" data-dl-view="list" aria-pressed="${view === "list"}"><svg class="ic"><use href="#i-list"/></svg>Список</button>
             <button type="button" class="${view === "grid" ? "is-active" : ""}" data-dl-view="grid" aria-pressed="${view === "grid"}"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
           </div>
-          <label class="feed-size" style="align-self:flex-end" title="Размер плитки: 1 — 12 в ряд, 2 — 9 в ряд, 3 — 6 в ряд">
+          <label class="feed-size" style="align-self:flex-end" title="Размер плитки: от 1 (маленькие) до 6 (большие)">
             <svg class="ic"><use href="#i-grid"/></svg>
-            <input type="range" id="dl-size" min="1" max="3" step="1" value="${modsGridLevel()}" aria-label="Размер плитки">
+            <input type="range" id="dl-size" min="1" max="6" step="1" value="${modsGridLevel()}" aria-label="Размер плитки">
             <span class="mono" id="dl-size-val">${modsGridLevel()}</span>
           </label>
         </div>
@@ -7633,7 +7701,7 @@
         if (label) label.textContent = String(level);
         const results = $("#mr-results") || $("#cf-results");
         if (results) {
-          results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
+          results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3", "feed-grid-4", "feed-grid-5", "feed-grid-6");
           if (state.modsView === "grid") results.classList.add(`feed-grid-${level}`);
           if (state.modsSource === "curseforge") cfWatchMore();
           else watchMore();
@@ -7864,7 +7932,7 @@
   /** Размер плиток: не более 12, 9 или 6 колонок соответственно. */
   function feedGridLevel() {
     const level = Number(state.settings && state.settings.feed_grid);
-    return level === 1 || level === 2 || level === 3 ? level : 2;
+    return Number.isInteger(level) && level >= 1 && level <= 6 ? level : 2;
   }
 
   function feedColumns(level = feedGridLevel(), width = 0) {
@@ -7895,7 +7963,7 @@
   }
 
   function setFeedGridLevel(level) {
-    const clean = level === 1 || level === 3 ? level : 2;
+    const clean = Number.isInteger(level) && level >= 1 && level <= 6 ? level : 2;
     state.settings = { ...(state.settings || {}), feed_grid: clean };
     api.saveSettings(state.settings).catch(() => {});
   }
@@ -8339,9 +8407,9 @@
                 <button type="button" class="${view === "list" ? "is-active" : ""}" data-dv-view="list" aria-pressed="${view === "list"}"><svg class="ic"><use href="#i-list"/></svg>Список</button>
                 <button type="button" class="${view === "grid" ? "is-active" : ""}" data-dv-view="grid" aria-pressed="${view === "grid"}"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button>
               </div>
-              <label class="feed-size" title="Размер плиток: 1 — 12 в ряд, 2 — 9 в ряд, 3 — 6 в ряд">
+              <label class="feed-size" title="Размер плиток: от 1 (маленькие) до 6 (большие)">
                 <svg class="ic"><use href="#i-grid"/></svg>
-                <input type="range" id="feed-size" min="1" max="3" step="1" value="${feedGridLevel()}" aria-label="Размер плиток">
+                <input type="range" id="feed-size" min="1" max="6" step="1" value="${feedGridLevel()}" aria-label="Размер плиток">
                 <span class="mono" id="feed-size-val">${feedGridLevel()}</span>
               </label>
             </div>
@@ -8411,7 +8479,7 @@
       const results = $("#dv-results");
       if (results) {
         results.classList.toggle("is-grid", view === "grid");
-        results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
+        results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3", "feed-grid-4", "feed-grid-5", "feed-grid-6");
         if (view === "grid") results.classList.add(`feed-grid-${feedGridLevel()}`);
         syncFeedColumns();
         dvWatch();
@@ -8427,7 +8495,7 @@
         if (label) label.textContent = String(level);
         const results = $("#dv-results");
         if (results) {
-          results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3");
+          results.classList.remove("feed-grid-1", "feed-grid-2", "feed-grid-3", "feed-grid-4", "feed-grid-5", "feed-grid-6");
           results.classList.add(`feed-grid-${level}`);
         }
         setFeedGridLevel(level);
@@ -14491,8 +14559,11 @@
     $$(".tab").forEach((tab) => tab.addEventListener("click", () => {
       state.tab = tab.dataset.tab;
       if (state.tab === "download") refreshInstalledProjects();
+      rememberTab();
       renderTab();
     }));
+    on("#tab-back", "click", () => navigateTabHistory(-1));
+    on("#tab-forward", "click", () => navigateTabHistory(1));
     on("#btn-play", "click", play);
     on("#btn-stop", "click", stopGame);
     on("#btn-restart", "click", async () => {
@@ -14506,7 +14577,9 @@
       if (!state.running.has(meta.id)) play();
       else toast("Сервер ещё останавливается — запусти его после завершения", "");
     });
-    on("#btn-home", "click", () => selectInstance(null));
+    on("#workspace-library", "click", () => showWorkspaceLibrary(true));
+    on("#workspace-open", "click", () => { if (state.selectedId) openInstance(state.selectedId); });
+    on("#btn-home", "click", () => { if (mergedWorkspace) showWorkspaceLibrary(true); else selectInstance(null); });
     on("#btn-create", "click", openCreate);
 
     /* аккаунты и настройки лаунчера */
@@ -14790,7 +14863,7 @@
    * Короткие шаги: язык, тема, эффекты, трей, трейсер, масштаб и импорт сборок.
    * Показываем один раз — отметка onboarded живёт в настройках.
    */
-  const ONBOARD_STEPS = ["language", "theme", "effects", "tray", "trail", "scale", "import"];
+  const ONBOARD_STEPS = ["language", "layout", "theme", "effects", "tray", "trail", "scale", "import"];
   let onboardStep = 0;
 
   /** Окно первого запуска — только при самом первом входе, не при обновлении. */
@@ -14836,6 +14909,12 @@
         <div class="onboard-languages" role="group" aria-label="Язык интерфейса">
           ${LANGUAGES.map(([code, label]) => `<button type="button" class="onboard-language ${displayedLanguage === code ? "is-active" : ""}" data-onboard-language="${code}" aria-pressed="${displayedLanguage === code}" translate="no">${esc(label)}</button>`).join("")}
         </div>`;
+    }
+    if (step === "layout") {
+      const current = state.settings?.ui_layout?.preset || "omnispec";
+      const presets = [["omnispec", "OmniSpec"], ["modrinth", "Modrinth"], ["prism", "Prism Launcher"]];
+      return `<div class="onboard-lead"><span class="onboard-title">Компоновка интерфейса</span><span class="muted">Выберите расположение элементов. Его можно изменить позже в настройках интерфейса.</span></div>
+        <div class="preset-preview-grid onboard-preset-grid" role="group" aria-label="Компоновка интерфейса">${presets.map(([id, label]) => `<button type="button" class="preset-preview ${current === id ? "is-active" : ""}" data-onboard-layout="${id}" aria-pressed="${current === id}"><img src="assets/preset-previews/${id}.png" alt=""><strong>${label}</strong></button>`).join("")}</div>`;
     }
     if (step === "theme") {
       return `<div class="onboard-lead">
@@ -14942,6 +15021,14 @@
         await chooseLanguage(button.dataset.onboardLanguage);
         next.disabled = false;
         if (!$("#modal-onboard").hidden && ONBOARD_STEPS[onboardStep] === "language") renderOnboard();
+      }));
+    }
+    if (step === "layout") {
+      $$("[data-onboard-layout]", body).forEach(button => button.addEventListener("click", async () => {
+        const buttons = $$("[data-onboard-layout]", body), next = $("#onboard-next"), prev = $("#onboard-prev");
+        buttons.forEach(item => { item.disabled = true; }); next.disabled = true; prev.disabled = true;
+        try { await window.omnispecCustomizer?.applyUiPreset(button.dataset.onboardLayout); }
+        finally { next.disabled = false; prev.disabled = false; if (!$("#modal-onboard").hidden && ONBOARD_STEPS[onboardStep] === "layout") renderOnboard(); }
       }));
     }
     if (step === "theme") {
