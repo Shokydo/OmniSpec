@@ -21456,6 +21456,11 @@ window.OMNISPEC_LOCALES = {
     const name = $("#account-chip-name");
     const kind = $("#account-chip-kind");
     if (!avatar || !name) return;
+    const chip = $("#account-chip");
+    if (chip) {
+      const label = account ? `Профиль: ${account.username}` : "Нет аккаунта — добавить";
+      chip.title = label; chip.setAttribute("aria-label", label);
+    }
     if (!account) {
       avatar.innerHTML = '<svg class="ic"><use href="#i-user"/></svg>';
       avatar.classList.remove("has-skin");
@@ -25885,6 +25890,10 @@ window.OMNISPEC_LOCALES = {
       });
       [sidebar, ...buttons, ...buttons.map(button => button.parentElement)].filter(Boolean).forEach(node => observer.observe(node));
     }
+    const accountChip = $("#account-chip");
+    if (accountChip && "ResizeObserver" in window) {
+      new ResizeObserver(() => accountChip.classList.toggle("is-avatar-only", accountChip.clientWidth < 110)).observe(accountChip);
+    }
     const buildList = $("#instance-list");
     if (buildList && "ResizeObserver" in window) {
       new ResizeObserver(() => buildList.classList.toggle("is-narrow", buildList.clientWidth < 120)).observe(buildList);
@@ -25955,7 +25964,11 @@ window.OMNISPEC_LOCALES = {
         if (!$("#modal-project-image").hidden) { event.preventDefault(); closeProjectImage(); return; }
         if (!$("#modal-mod-target").hidden) { event.preventDefault(); closeModTarget(); return; }
         if (!$("#modal-project").hidden) { event.preventDefault(); closeProjectModal(); return; }
-        const buildList = $("#instance-list");
+        const accountChip = $("#account-chip");
+    if (accountChip && "ResizeObserver" in window) {
+      new ResizeObserver(() => accountChip.classList.toggle("is-avatar-only", accountChip.clientWidth < 110)).observe(accountChip);
+    }
+    const buildList = $("#instance-list");
     if (buildList && "ResizeObserver" in window) {
       new ResizeObserver(() => buildList.classList.toggle("is-narrow", buildList.clientWidth < 120)).observe(buildList);
     }
@@ -26621,6 +26634,11 @@ window.OMNISPEC_LOCALES = {
 [data-os-element-mode="free"] { position: relative; z-index: 2; }
 [data-os-element-mode="absolute"] { position: fixed !important; box-sizing: border-box; z-index: 3; max-width: none; max-height: none; }
 body[data-ui-independent="true"] .app-body > .sidebar, body[data-ui-independent="true"] .app-body > .main { background: transparent; border-color: transparent; }
+/* Разделители исходных контейнеров не должны оставлять линии между независимыми блоками. */
+body[data-ui-independent="true"] .app :is(.account-chip, .sidebar-foot, .toolbar, .tabs, .build-path) { border-color: transparent; }
+body[data-ui-independent="true"] .app .account-chip:hover { border-color: transparent; }
+.account-chip.is-avatar-only { justify-content: center; min-width: 0; overflow: hidden; padding-inline: 0; gap: 0; }
+.account-chip.is-avatar-only .acc-main, .account-chip.is-avatar-only .chev { display: none; }
 [data-os-element-variant="compact"] { --os-element-scale: .94; font-size: calc(100% * var(--os-element-scale)); }
 [data-os-element-variant="prominent"] { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent), 0 10px 24px color-mix(in srgb, var(--accent) 12%, transparent); }
 [data-os-element-variant="ghost"] { background: transparent !important; border-color: transparent !important; box-shadow: none !important; }
@@ -27297,6 +27315,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
       Object.assign(item.style, { left: `${left * scale}px`, top: `${top * scale}px`, width: `${width * scale}px`, height: `${height * scale}px` });
       const copy = original.cloneNode(true);
       if (spec.id === "build-list") copy.classList.toggle("is-narrow", original.clientWidth < 120);
+      if (spec.id === "account") copy.classList.toggle("is-avatar-only", original.clientWidth < 110);
       const originals = original.matches(".sidebar-quick, .sidebar-new") ? [original] : [...original.querySelectorAll(".sidebar-quick, .sidebar-new")];
       const copies = copy.matches(".sidebar-quick, .sidebar-new") ? [copy] : [...copy.querySelectorAll(".sidebar-quick, .sidebar-new")];
       copies.forEach((button, index) => button.classList.toggle("is-icon-only", originals[index].clientWidth < 105));
