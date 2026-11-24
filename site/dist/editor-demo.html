@@ -26446,6 +26446,22 @@ window.OMNISPEC_LOCALES = {
     { id: "tabs", label: "Вкладки сборки", description: "Консоль, моды, файлы, загрузка и настройки", selector: ".tabs", previewX: 246, previewY: 120, previewWidth: 450, previewHeight: 34 },
     { id: "content", label: "Рабочая область", description: "Содержимое активной вкладки", selector: ".tab-body", previewX: 246, previewY: 162, previewWidth: 450, previewHeight: 238 }
   ];
+  // Дополнительные элементы можно скрывать независимо, не перепозиционируя
+  // вложенные узлы: они остаются частью своих рабочих страниц.
+  const VISIBILITY_ITEMS = [
+    { id: "brand", label: "Логотип и название", selector: ".tb-brand" },
+    { id: "window-controls", label: "Кнопки окна", selector: ".tb-right" },
+    { id: "instance-title", label: "Название сборки", selector: "#tb-name" },
+    { id: "instance-status", label: "Статус сборки", selector: ".tb-meta" },
+    { id: "action-folder", label: "Кнопка папки", selector: "#btn-folder" },
+    { id: "action-restart", label: "Кнопка перезапуска", selector: "#btn-restart" },
+    { id: "action-play", label: "Кнопка Играть", selector: "#btn-play" },
+    { id: "action-stop", label: "Кнопка Стоп", selector: "#btn-stop" },
+    ...[["discover", "Главная"], ["servers", "Серверы"], ["console", "Консоль"], ["server", "Сервер"], ["players", "Игроки"], ["metrics", "Метрики"], ["backups", "Бэкапы"], ["errors", "Ошибки"], ["files", "Файлы"], ["mods", "Моды"], ["resourcepacks", "Ресурспаки"], ["shaders", "Шейдеры"], ["worlds", "Миры"], ["screenshots", "Скриншоты"], ["download", "Загрузить"], ["settings", "Сборка"]]
+      .map(([id, label]) => ({ id: `tab-${id}`, label: `Вкладка «${label}»`, selector: `.tabs [data-tab="${id}"]` }))
+  ].map(item => ({ ...item, hideOnly: true, description: "Только видимость" }));
+  ELEMENTS.push(...VISIBILITY_ITEMS);
+
   const ELEMENT_VARIANTS = [
     ["default", "Стандартный"],
     ["compact", "Компактный"],
@@ -26573,6 +26589,10 @@ body[data-customizer-open="true"] { overflow: hidden; }
 .visual-editor { display: grid; grid-template-columns: 190px minmax(360px, 1fr) 235px; gap: 10px; min-height: 440px; }
 .visual-panel { min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg-2); }
 .visual-panel-title { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; color: var(--dim); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.visual-element-row { display: flex; align-items: center; gap: 3px; }
+.visual-element-row .visual-element { flex: 1; min-width: 0; }
+.visual-visibility { flex: none; padding: 4px 5px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-3); color: var(--dim); font-size: 9px; cursor: pointer; }
+.visual-visibility:hover { color: var(--text); border-color: var(--line-2); }
 .visual-element-list { display: flex; flex-direction: column; gap: 4px; max-height: 390px; overflow: auto; }
 .visual-element { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 5px 6px; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; color: var(--dim); text-align: left; cursor: pointer; }
 .visual-element:hover { background: var(--bg-3); color: var(--text); }
@@ -26796,6 +26816,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
       element.dataset.osElementMode = value.mode;
       element.dataset.osElementVariant = value.variant;
       element.dataset.osElementHidden = value.visible ? "false" : "true";
+      if (spec.hideOnly) return;
       element.style.width = value.width ? `${value.width}px` : "";
       element.style.height = value.height ? `${value.height}px` : "";
       element.style.flexShrink = value.width || value.height ? "0" : "";
@@ -26907,7 +26928,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
     if (!root || root.dataset.editorBound) return;
     root.dataset.editorBound = "true";
     root.addEventListener("click", (event) => {
-      const target = event.target.closest?.("[data-custom-tab], [data-custom-close], [data-custom-reset], [data-layout-action], [data-css-action], [data-css-preset], [data-ui-preset], [data-visual-id], [data-element-visibility], [data-align-grid]");
+      const target = event.target.closest?.("[data-custom-tab], [data-custom-close], [data-custom-reset], [data-layout-action], [data-css-action], [data-css-preset], [data-ui-preset], [data-visual-id], [data-element-visibility], [data-align-grid], [data-visual-toggle]");
       if (!target || !root.contains(target)) return;
       if (suppressClick) { suppressClick = false; event.preventDefault(); return; }
       if (target.dataset.customTab) { currentTab = target.dataset.customTab; renderEditor(); return; }
@@ -26918,7 +26939,15 @@ body[data-customizer-open="true"] { overflow: hidden; }
       if (target.dataset.cssPreset) { applyCssPreset(target.dataset.cssPreset); return; }
       if (target.dataset.uiPreset) { applyUiPreset(target.dataset.uiPreset); return; }
       if (target.dataset.alignGrid !== undefined) { alignAllToGrid(); return; }
-      if (target.dataset.visualId) { selectedElementId = target.dataset.visualId; renderEditor(); return; }
+      if (target.dataset.visualToggle) {
+        selectedElementId = target.dataset.visualToggle;
+        updateElement("visible", !elementState(selectedElementId).visible);
+        $(`[data-visual-toggle="${selectedElementId}"]`, root)?.focus({ preventScroll: true }); return;
+      }
+      if (target.dataset.visualId) {
+        selectedElementId = target.dataset.visualId; const onCanvas = target.classList.contains("visual-canvas-item");
+        renderEditor(); $(`${onCanvas ? ".visual-canvas-item" : ".visual-element"}[data-visual-id="${selectedElementId}"]`, root)?.focus({ preventScroll: true }); return;
+      }
       if (target.dataset.elementVisibility) { updateElement("visible", target.dataset.elementVisibility !== "hide"); return; }
     });
     root.addEventListener("input", (event) => {
@@ -26933,10 +26962,26 @@ body[data-customizer-open="true"] { overflow: hidden; }
       if (target.dataset.elementNumber && target.value !== "") updateElement(target.dataset.elementNumber, target.value);
     });
     root.addEventListener("keydown", (event) => {
+      const focused = event.target.closest?.(".visual-canvas-item[data-visual-id], .visual-element[data-visual-id]");
+      if (focused && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key) && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        const spec = ELEMENTS.find(item => item.id === focused.dataset.visualId);
+        if (!spec || spec.hideOnly || !elementState(spec.id).visible) return;
+        event.preventDefault(); selectedElementId = spec.id;
+        freezeIndependent();
+        const current = elementState(spec.id);
+        if (current.mode !== "absolute") { setStatus("Элемент сейчас не отображается", "error"); return; }
+        const step = gridSize || 1;
+        const dx = event.key === "ArrowRight" ? step : event.key === "ArrowLeft" ? -step : 0;
+        const dy = event.key === "ArrowDown" ? step : event.key === "ArrowUp" ? -step : 0;
+        updateElementValues(spec.id, { ...current, x: current.x + dx, y: current.y + dy }, true);
+        const selector = focused.classList.contains("visual-canvas-item") ? ".visual-canvas-item" : ".visual-element";
+        $(`${selector}[data-visual-id="${spec.id}"]`, root)?.focus({ preventScroll: true });
+        return;
+      }
       if (event.target.id === "custom-css-find" && event.key === "Enter") { event.preventDefault(); findCss(root); return; }
       if (event.target.id !== "custom-css-editor") return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
-        event.preventDefault(); $("#custom-css-find", root)?.focus();
+        event.preventDefault(); $("#custom-css-find", root)?.focus({ preventScroll: true });
       } else if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
         event.preventDefault();
         const input = event.target;
@@ -26989,7 +27034,9 @@ body[data-customizer-open="true"] { overflow: hidden; }
       if (!pointerDrag || pointerDrag.pointer !== event.pointerId) return;
       const drag = pointerDrag; pointerDrag = null; drag.item.classList.remove("is-dragging");
       if (drag.moved) { clearTimeout(saveTimer); queueSave({ ui_layout: layout }); }
-      suppressClick = drag.moved; renderEditor(); setTimeout(() => { suppressClick = false; }, 0);
+      suppressClick = drag.moved; renderEditor();
+      $(`.visual-canvas-item[data-visual-id="${drag.id}"]`, root)?.focus({ preventScroll: true });
+      setTimeout(() => { suppressClick = false; }, 0);
     };
     root.addEventListener("pointerup", finishPointer);
     root.addEventListener("pointercancel", (event) => {
@@ -27072,7 +27119,14 @@ body[data-customizer-open="true"] { overflow: hidden; }
     body.innerHTML = currentTab === "editor" ? renderVisualEditor() : currentTab === "layout" ? renderLayout() : renderCss();
     if (currentTab === "editor") populateSnapshots(root);
     if (currentTab === "css") { bindFileImport(root); loadCssEditor(root); }
-    if (currentTab === "editor") setTimeout(() => $("[data-visual-id='${selectedElementId}']", root)?.scrollIntoView?.({ block: "nearest" }), 0);
+    if (currentTab === "editor") {
+      const list = $(".visual-element-list", root), selected = $(`.visual-element[data-visual-id="${selectedElementId}"]`, root);
+      if (list && selected) {
+        const a = list.getBoundingClientRect(), b = selected.getBoundingClientRect();
+        if (b.top < a.top) list.scrollTop -= a.top - b.top;
+        else if (b.bottom > a.bottom) list.scrollTop += b.bottom - a.bottom;
+      }
+    }
   }
 
   async function loadCssEditor(root) {
@@ -27124,6 +27178,10 @@ body[data-customizer-open="true"] { overflow: hidden; }
       copy.removeAttribute("id"); copy.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
       copy.querySelectorAll("[autofocus]").forEach((node) => node.removeAttribute("autofocus"));
       copy.removeAttribute("style");
+      for (const node of [copy, ...copy.querySelectorAll("[data-os-element]")]) {
+        delete node.dataset.osElement; delete node.dataset.osElementMode;
+        delete node.dataset.osElementHidden; delete node.dataset.osElementVariant;
+      }
       copy.style.width = "100%"; copy.style.height = "100%"; copy.style.maxWidth = "none"; copy.style.margin = "0";
       const snapshot = document.createElement("div"); snapshot.className = "visual-snapshot";
       Object.assign(snapshot.style, { width: `${width}px`, height: `${height}px`, transform: `scale(${scale})` });
@@ -27137,7 +27195,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
     const app = $(".app"), rect = app.getBoundingClientRect(), zoom = rect.width / app.offsetWidth;
     const measured = new Map();
     for (const spec of ELEMENTS) {
-      if (elementState(spec.id).mode === "absolute") continue;
+      if (spec.hideOnly || elementState(spec.id).mode === "absolute") continue;
       const node = elementNodes(spec)[0]; if (!node) continue;
       const box = node.getBoundingClientRect(); if (!box.width || !box.height) continue;
       measured.set(spec.id, { mode: "absolute", x: Math.round(box.left / zoom), y: Math.round(box.top / zoom),
@@ -27300,7 +27358,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
     selectedElementId = selected.id;
     const value = elementState(selected.id);
     const controls = (key, title, description, min, max, unit = "px", raw = value[key] ?? 0) => `<label class="customizer-control"><span><strong>${title}</strong><small>${description}</small></span><input type="range" min="${min}" max="${max}" value="${raw || 0}" data-element-control="${key}"><output id="element-value-${key}">${key === "width" || key === "height" ? (raw ? `${raw}${unit}` : "auto") : `${raw || 0}${unit}`}</output>${["x", "y", "width", "height"].includes(key) ? `<input type="number" data-element-number="${key}" aria-label="${title}, точное значение" min="${key === "x" || key === "y" ? -32768 : 0}" max="${key === "x" || key === "y" ? 32767 : 65535}" value="${raw || 0}">` : ""}</label>`;
-    return `<section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-sliders"/></svg><div><h3>Раскладка и визуальный редактор</h3><p>На холсте представлены основные области. Перетаскивай их и меняй размер за края; при первом движении видимые области становятся независимыми. Для остальных элементов используй CSS.</p></div></div><div class="ui-preset-grid">${UI_PRESETS.map(([id, label, description]) => `<button type="button" class="ui-preset ${layout.preset === id ? "is-active" : ""}" data-ui-preset="${id}"><strong>${label}</strong><small>${description}</small></button>`).join("")}</div></section><section class="customizer-section"><div class="visual-editor"><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-list"/></svg>Элементы</div><div class="visual-element-list">${ELEMENTS.map((item) => { const state = elementState(item.id); return `<button type="button" class="visual-element ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}"><svg class="ic"><use href="#i-dots"/></svg><span class="visual-element-copy"><strong>${item.label}</strong><small>${state.visible ? item.description : "скрыт"}</small></span></button>`; }).join("")}</div></div><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-grid"/></svg>Холст · перетащи блоки <label style="margin-left:auto">Сетка <select class="select" data-snap-grid aria-label="Привязка к сетке"><option value="0" ${gridSize === 0 ? "selected" : ""}>Выключена</option>${[8,16,32].map(n => `<option value="${n}" ${gridSize === n ? "selected" : ""}>${n} px</option>`).join("")}</select></label><button class="btn btn-small" type="button" data-align-grid>Выровнять всё</button></div><div class="visual-stage"><div class="visual-stage-inner">${ELEMENTS.map((item) => { const state = elementState(item.id); const left = Math.max(3, item.previewX + state.x); const top = Math.max(3, item.previewY + state.y); const width = state.width || item.previewWidth; const height = state.height || item.previewHeight; return `<div class="visual-canvas-item ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px"><span class="visual-label">${item.label}</span>${["n","s","e","w","nw","ne","sw","se"].map(edge => `<span class="visual-resize" data-edge="${edge}" title="Изменить размер"></span>`).join("")}</div>`; }).join("")}</div><div class="visual-stage-help">Координаты и размеры соответствуют окну лаунчера. «Выровнять всё» привязывает видимые области к сетке; зажми край для изменения размера.</div></div></div><div class="visual-panel visual-properties"><div class="visual-panel-title"><svg class="ic"><use href="#i-pencil"/></svg>Свойства</div><div class="customizer-note"><strong>${selected.label}</strong><br>${selected.description}</div><label class="customizer-control"><span><strong>Видимость</strong><small>Показывать элемент в лаунчере</small></span><button class="switch ${value.visible ? "on" : ""}" type="button" data-element-visibility="${value.visible ? "hide" : "show"}" aria-pressed="${value.visible}"></button></label><label class="customizer-control"><span><strong>Режим расположения</strong><small>Адаптивный поток или свободные координаты</small></span><select class="select" data-element-select="mode"><option value="flow" ${value.mode === "flow" ? "selected" : ""}>В потоке</option><option value="free" ${value.mode === "free" ? "selected" : ""}>Смещение (старое)</option><option value="absolute" ${value.mode === "absolute" ? "selected" : ""}>Независимо</option></select></label><label class="customizer-control"><span><strong>Вариант</strong><small>Размер и визуальный акцент</small></span><select class="select" data-element-select="variant">${ELEMENT_VARIANTS.map(([id, label]) => `<option value="${id}" ${value.variant === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>${controls("x", "X", "Горизонтальное смещение", -4096, 4096)}${controls("y", "Y", "Вертикальное смещение", -4096, 4096)}${controls("width", "Ширина", "0 — автоматически", 0, 4096)}${controls("height", "Высота", "0 — автоматически", 0, 4096)}${controls("margin", "Отступ снаружи", "Свободное пространство", 0, 40)}${controls("padding", "Внутренний отступ", "Пространство внутри", 0, 40)}${controls("radius", "Закругление", "Радиус углов", 0, 40)}</div></div></section>`;
+    return `<section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-sliders"/></svg><div><h3>Раскладка и визуальный редактор</h3><p>На холсте представлены основные области. Перетаскивай их и меняй размер за края; стрелки двигают выбранный блок на клетку. Кнопки «Скрыть» отключают отображение элемента; вернуть его можно в списке слева.</p></div></div><div class="ui-preset-grid">${UI_PRESETS.map(([id, label, description]) => `<button type="button" class="ui-preset ${layout.preset === id ? "is-active" : ""}" data-ui-preset="${id}"><strong>${label}</strong><small>${description}</small></button>`).join("")}</div></section><section class="customizer-section"><div class="visual-editor"><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-list"/></svg>Элементы</div><div class="visual-element-list">${ELEMENTS.map((item) => { const state = elementState(item.id); return `<div class="visual-element-row"><button type="button" class="visual-element ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}"><svg class="ic"><use href="#i-dots"/></svg><span class="visual-element-copy"><strong>${item.label}</strong><small>${state.visible ? item.description : "скрыт"}</small></span></button><button class="visual-visibility" type="button" data-visual-toggle="${item.id}" aria-label="${state.visible ? "Скрыть" : "Показать"} ${item.label}" title="${state.visible ? "Скрыть" : "Показать"}">${state.visible ? "Скрыть" : "Показать"}</button></div>`; }).join("")}</div></div><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-grid"/></svg>Холст · перетащи блоки <label style="margin-left:auto">Сетка <select class="select" data-snap-grid aria-label="Привязка к сетке"><option value="0" ${gridSize === 0 ? "selected" : ""}>Выключена</option>${[8,16,32].map(n => `<option value="${n}" ${gridSize === n ? "selected" : ""}>${n} px</option>`).join("")}</select></label><button class="btn btn-small" type="button" data-align-grid>Выровнять всё</button></div><div class="visual-stage"><div class="visual-stage-inner">${ELEMENTS.filter(item => !item.hideOnly).map((item) => { const state = elementState(item.id); const left = Math.max(3, item.previewX + state.x); const top = Math.max(3, item.previewY + state.y); const width = state.width || item.previewWidth; const height = state.height || item.previewHeight; return `<div class="visual-canvas-item ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" tabindex="0" role="button" aria-label="${item.label}: переместить стрелками" data-visual-id="${item.id}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px"><span class="visual-label">${item.label}</span>${["n","s","e","w","nw","ne","sw","se"].map(edge => `<span class="visual-resize" data-edge="${edge}" title="Изменить размер"></span>`).join("")}</div>`; }).join("")}</div><div class="visual-stage-help">Координаты и размеры соответствуют окну лаунчера. «Выровнять всё» привязывает видимые области к сетке; зажми край для изменения размера.</div></div></div><div class="visual-panel visual-properties"><div class="visual-panel-title"><svg class="ic"><use href="#i-pencil"/></svg>Свойства</div><div class="customizer-note"><strong>${selected.label}</strong><br>${selected.description}</div><label class="customizer-control"><span><strong>Видимость</strong><small>Показывать элемент в лаунчере</small></span><button class="switch ${value.visible ? "on" : ""}" type="button" data-element-visibility="${value.visible ? "hide" : "show"}" aria-pressed="${value.visible}"></button></label>${selected.hideOnly ? `<div class="customizer-note">Этот элемент вложен в страницу: здесь можно скрыть его или вернуть. Положение и стиль доступны во вкладке CSS.</div>` : `<label class="customizer-control"><span><strong>Режим расположения</strong><small>Адаптивный поток или свободные координаты</small></span><select class="select" data-element-select="mode"><option value="flow" ${value.mode === "flow" ? "selected" : ""}>В потоке</option><option value="free" ${value.mode === "free" ? "selected" : ""}>Смещение (старое)</option><option value="absolute" ${value.mode === "absolute" ? "selected" : ""}>Независимо</option></select></label><label class="customizer-control"><span><strong>Вариант</strong><small>Размер и визуальный акцент</small></span><select class="select" data-element-select="variant">${ELEMENT_VARIANTS.map(([id, label]) => `<option value="${id}" ${value.variant === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>${controls("x", "X", "Горизонтальное смещение", -4096, 4096)}${controls("y", "Y", "Вертикальное смещение", -4096, 4096)}${controls("width", "Ширина", "0 — автоматически", 0, 4096)}${controls("height", "Высота", "0 — автоматически", 0, 4096)}${controls("margin", "Отступ снаружи", "Свободное пространство", 0, 40)}${controls("padding", "Внутренний отступ", "Пространство внутри", 0, 40)}${controls("radius", "Закругление", "Радиус углов", 0, 40)}`}</div></div></section>`;
   }
 
   function renderCss() {
