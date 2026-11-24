@@ -74,6 +74,16 @@ const server = http.createServer((req, res) => {
     }));
     assert(iconSizes.length > 0 && iconSizes.every((size) => size[0] === iconSizes[0][0] && size[1] === iconSizes[0][1]), 'settings icons have equal dimensions');
     await page.locator('[data-pref="interface"]').click();
+    assert.equal(await page.locator('[data-theme-toggle]').count(), 3, 'built-in CSS themes are listed in interface settings');
+    await page.locator('[data-theme-toggle="builtin-glass"]').check();
+    assert(await page.locator('#omnispec-theme-modules').textContent().then(s => s.includes('backdrop-filter')), 'switch applies theme CSS');
+    await page.locator('[data-theme-toggle="builtin-glass"]').uncheck();
+    await page.locator('[data-theme-file]').setInputFiles({ name: 'custom-test.css', mimeType: 'text/css', buffer: Buffer.from('body { --theme-test: yes; }') });
+    await page.waitForSelector('[data-theme-row]:has-text("custom-test.css")');
+    await page.locator('[data-theme-row]:has-text("custom-test.css") input').check();
+    assert((await page.locator('#omnispec-theme-modules').textContent()).includes('--theme-test'), 'imported CSS can be enabled');
+    await page.waitForFunction(() => window.__v052.settings.ui_theme_modules?.some(m => m.name === 'custom-test.css' && m.enabled));
+    await page.locator('[data-open-customizer]').click();
     await page.waitForSelector('#modal-customizer:not([hidden]) [data-editor-root]');
     assert.equal(await page.locator('#modal-prefs:not([hidden]) [data-editor-root]').count(), 0, 'customizer is not mounted in the cramped preferences pane');
     assert.equal(await page.locator('#modal-customizer:not([hidden]) .visual-editor').count(), 1, 'visual editor is mounted in the fullscreen customizer');
@@ -124,6 +134,36 @@ const server = http.createServer((req, res) => {
     });
     assert.deepEqual(filterRadii.rounded, { home: '20px', download: '20px', category: '12px' }, 'filter shells follow rounded shape');
     assert.deepEqual(filterRadii.pill, { home: '999px', download: '999px', category: '999px' }, 'filter controls follow pill shape');
+
+    const allVisibleList = await page.locator('.visual-element-list').evaluate(el => ({ client: el.clientHeight, scroll: el.scrollHeight, max: getComputedStyle(el).maxHeight }));
+    assert.equal(allVisibleList.max, 'none', 'complete element list is not clipped by an inner fixed height');
+    assert(allVisibleList.client >= allVisibleList.scroll, 'all rows can be reached using the editor scroll');
+    assert(await page.locator('.visual-element[data-visual-id="build-path"]').count(), 'build path is available in the editor');
+    assert(await page.locator('.visual-canvas-item[data-visual-id="build-path"] .visual-snapshot').count(), 'real build path appears on the canvas for a selected instance');
+    await page.locator('.visual-element[data-visual-id="build-path"]').click();
+    await page.locator('[data-element-select="mode"]').selectOption('absolute');
+    await page.locator('[data-element-number="x"]').fill('176');
+    await page.locator('[data-element-number="x"]').dispatchEvent('input');
+    assert.equal(await page.locator('#build-path').evaluate(el => getComputedStyle(el).position), 'fixed');
+    assert.equal(await page.locator('#build-path').evaluate(el => el.style.left), '176px');
+    await page.locator('[data-element-control="surface_opacity"]').fill('0');
+    await page.locator('[data-element-control="surface_opacity"]').dispatchEvent('input');
+    await page.locator('[data-element-control="backdrop_blur"]').fill('12');
+    await page.locator('[data-element-control="backdrop_blur"]').dispatchEvent('input');
+    assert.match(await page.locator('#build-path').evaluate(el => getComputedStyle(el).backgroundColor), /(?:\/ 0|, 0)\)$/, 'zero opacity hides background without hiding text');
+    assert.equal(await page.locator('#build-path').evaluate(el => getComputedStyle(el).backdropFilter), 'blur(12px)');
+    assert.equal(await page.locator('#build-path').evaluate(el => getComputedStyle(el).opacity), '1', 'transparent background does not hide text or controls');
+    await page.waitForFunction(() => {const e=window.__v052.settings.ui_layout?.elements?.find(x=>x.id==='build-path');return e?.surface_opacity===0 && e?.backdrop_blur===12;});
+    await page.locator('[data-surface-reset]').click();
+    assert.equal(await page.locator('#build-path').evaluate(el => el.style.getPropertyValue('backdrop-filter')), '', 'theme reset clears custom blur');
+    await page.locator('[data-ui-preset="omnispec"]').click();
+    await page.locator('.visual-element[data-visual-id="build-list"]').click();
+    await page.locator('[data-element-select="list_view"]').selectOption('grid');
+    assert.equal(await page.locator('#instance-list .cat.is-open .cat-items').first().evaluate(el => getComputedStyle(el).display), 'grid', 'compact cards use actual grid layout');
+    await page.waitForFunction(() => window.__v052.settings.ui_layout?.elements?.find(x=>x.id==='build-list')?.list_view==='grid');
+    await page.locator('[data-element-select="list_view"]').selectOption('list');
+    assert.equal(await page.locator('#instance-list .cat.is-open .cat-items').first().evaluate(el => getComputedStyle(el).display), 'flex', 'list layout can be restored');
+    await page.locator('[data-ui-preset="omnispec"]').click();
 
     await page.locator('.visual-element[data-visual-id="account"]').click();
     await page.locator('[data-element-select="mode"]').selectOption('absolute');
@@ -333,13 +373,23 @@ const server = http.createServer((req, res) => {
     // Скрытый элемент восстанавливает состояние после перезапуска.
     await page.evaluate(() => window.omnispecCustomizer.open());
     await page.locator('[data-visual-toggle="build-search"]').click();
-    await page.waitForFunction(() => window.__v052.settings.ui_layout?.elements?.some(e => e.id === 'build-search' && e.visible === false));
+    await page.locator('.visual-element[data-visual-id="build-list"]').click();
+    await page.locator('[data-element-select="list_view"]').selectOption('grid');
+    await page.locator('[data-element-control="surface_opacity"]').fill('20');
+    await page.locator('[data-element-control="surface_opacity"]').dispatchEvent('input');
+    await page.locator('[data-element-control="backdrop_blur"]').fill('8');
+    await page.locator('[data-element-control="backdrop_blur"]').dispatchEvent('input');
+    await page.waitForFunction(() => {const es=window.__v052.settings.ui_layout?.elements || []; const e=es.find(x=>x.id==='build-list'); return es.some(x=>x.id==='build-search'&&!x.visible) && e?.list_view==='grid' && e?.surface_opacity===20 && e?.backdrop_blur===8;});
     // Полный файл переживает перезапуск и может быть безопасно отключён.
     await page.reload();
     await page.waitForFunction(() => document.querySelector('link[href="styles.css"]')?.disabled === true);
     assert((await page.locator('#omnispec-replacement-base-css').textContent()).includes(css), 'edited base restored after reload');
+    await page.waitForFunction(() => document.querySelector('#omnispec-theme-modules')?.textContent.includes('--theme-test'));
     await page.evaluate(() => window.omnispecCustomizer.open());
     assert.equal(await page.locator('#instance-search').isVisible(), false, 'hidden search stays hidden after reload');
+    assert.equal(await page.locator('#instance-list').getAttribute('data-build-view'), 'grid', 'chosen grid survives reload');
+    assert.equal(await page.locator('#instance-list').evaluate(el => getComputedStyle(el).backdropFilter), 'blur(8px)', 'blur survives reload');
+    assert.equal((await page.locator('#instance-list').evaluate(el => el.style.getPropertyValue('background-color'))).includes('20%'), true, 'background opacity survives reload');
     await page.locator('[data-visual-toggle="build-search"]').click();
     assert.equal(await page.locator('#instance-search').isVisible(), true, 'hidden search can be restored after reload');
     await page.locator('[data-custom-tab="css"]').click();

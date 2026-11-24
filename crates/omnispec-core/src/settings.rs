@@ -7,6 +7,15 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::paths::Paths;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UiThemeModule {
+    pub id: String,
+    pub name: String,
+    pub css: String,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 fn default_username() -> String {
     "Player".into()
 }
@@ -192,6 +201,12 @@ pub struct UiElement {
     pub radius: u8,
     /// Вариант отображения элемента: default | compact | prominent | ghost.
     pub variant: String,
+    /// None — цвет и прозрачность темы, Some(0..=100) — непрозрачность подложки.
+    pub surface_opacity: Option<u8>,
+    /// None — стиль темы, Some(0..=40) — размытие фона под элементом.
+    pub backdrop_blur: Option<u8>,
+    /// Для списка сборок: default | list | grid.
+    pub list_view: String,
 }
 
 impl Default for UiElement {
@@ -208,6 +223,9 @@ impl Default for UiElement {
             padding: 0,
             radius: 0,
             variant: "default".to_string(),
+            surface_opacity: None,
+            backdrop_blur: None,
+            list_view: "default".to_string(),
         }
     }
 }
@@ -399,6 +417,9 @@ pub struct Settings {
     /// Пользовательский CSS-слой темы. Только стили, без выполнения JavaScript.
     #[serde(default)]
     pub custom_css: String,
+    /// Независимые CSS-заготовки в порядке применения.
+    #[serde(default)]
+    pub ui_theme_modules: Vec<UiThemeModule>,
     /// Раскладка крупных областей лаунчера из визуального конструктора.
     #[serde(default)]
     pub ui_layout: UiLayout,
@@ -586,6 +607,7 @@ impl Default for Settings {
             theme_accent: None,
             theme_text: None,
             custom_css: String::new(),
+            ui_theme_modules: Vec::new(),
             ui_layout: UiLayout::default(),
             click_fx: default_click_fx(),
             ui_scale: default_ui_scale(),
@@ -740,6 +762,7 @@ mod discord_tests {
             width: Some(640),
             padding: 8,
             variant: "prominent".into(),
+            surface_opacity: Some(0), backdrop_blur: Some(12), list_view: "grid".into(),
             ..UiElement::default()
         });
         let mut category = Category { id: "servers".into(), name: "Серверы".into(), dynamic: true, ..Category::default() };
@@ -753,6 +776,9 @@ mod discord_tests {
         assert_eq!(restored.ui_layout.main_order, changed.ui_layout.main_order);
         assert_eq!(restored.ui_layout.preset, "prism");
         assert_eq!(restored.ui_layout.elements[0].x, 12);
+        assert_eq!(restored.ui_layout.elements[0].surface_opacity, Some(0));
+        assert_eq!(restored.ui_layout.elements[0].backdrop_blur, Some(12));
+        assert_eq!(restored.ui_layout.elements[0].list_view, "grid");
         assert_eq!(restored.categories[0].rules.kind, "server");
         assert_eq!(restored.categories[0].rules.mc_versions.len(), 2);
     }

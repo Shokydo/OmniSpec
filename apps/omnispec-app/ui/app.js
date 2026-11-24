@@ -10673,10 +10673,6 @@
         <button class="prefs-tab" data-pref="${item.id}"><span class="prefs-tab-icon"><svg class="ic"><use href="#${item.icon}"/></svg></span><span>${item.label}</span></button>`).join("");
       $$(".prefs-tab[data-pref]", nav).forEach((tab) => tab.addEventListener("click", () => {
         prefsCategory = tab.dataset.pref;
-        if (prefsCategory === "interface") {
-          openInterfaceCustomizer();
-          return;
-        }
         renderPrefs();
       }));
     }
@@ -10712,7 +10708,7 @@
     if (prefsCategory === "profile") body.innerHTML = prefsProfile();
     if (prefsCategory === "avatar") body.innerHTML = prefsAvatar();
     if (prefsCategory === "interface") {
-      body.innerHTML = `<section class="prefs-section interface-launch-card"><div class="prefs-label">Визуальный редактор</div><h3>Настрой интерфейс в отдельном полноэкранном режиме</h3><p class="muted">Холст, свойства элементов, пресеты и редактируемый базовый CSS открываются в большом окне, чтобы ничего не сжималось и не перекрывало друг друга.</p><button class="btn btn-primary" data-open-customizer><svg class="ic"><use href="#i-sliders"/></svg>Открыть визуальный редактор</button></section>`;
+      body.innerHTML = `<section class="prefs-section interface-launch-card"><div class="prefs-label">Интерфейс</div><button class="btn btn-primary" data-open-customizer><svg class="ic"><use href="#i-sliders"/></svg>Открыть визуальный редактор</button><div data-interface-themes></div></section>`;
     }
     if (prefsCategory === "look") body.innerHTML = prefsLook(settings);
     if (prefsCategory === "wall") body.innerHTML = prefsWall(settings);
@@ -10722,7 +10718,10 @@
     if (prefsCategory === "discord") body.innerHTML = prefsDiscord(settings);
     if (prefsCategory === "sound") body.innerHTML = prefsSound(settings);
     bindPrefs();
-    if (prefsCategory === "interface") $("[data-open-customizer]", body)?.addEventListener("click", openInterfaceCustomizer);
+    if (prefsCategory === "interface") {
+      $("[data-open-customizer]", body)?.addEventListener("click", openInterfaceCustomizer);
+      window.omnispecCustomizer?.renderThemes?.($("[data-interface-themes]", body));
+    }
     if (prefsCategory === "profile") bindPrefsProfile();
     if (prefsCategory === "avatar") {
       bindCapes();

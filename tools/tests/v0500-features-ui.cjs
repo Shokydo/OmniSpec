@@ -210,6 +210,7 @@ async function setRange(page,selector,value){
       for(const pref of prefs){
         await page.locator(`[data-pref="${pref}"]`).click();
         if(pref==='interface'){
+          await page.locator('#prefs-body [data-open-customizer]').click();
           await page.waitForSelector('#modal-customizer:not([hidden]) [data-editor-root]');
           assert.equal(await page.locator('#modal-prefs:not([hidden]) [data-editor-root]').count(),0,`${label}: customizer must not render inside the narrow preferences pane`);
           await page.locator('#modal-customizer [data-custom-close]').last().click();
