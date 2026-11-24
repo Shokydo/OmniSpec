@@ -299,6 +299,22 @@ const server = http.createServer((req, res) => {
     await page.waitForFunction(() => !document.querySelector('#custom-css-editor')?.readOnly);
     const original = await page.locator('#custom-css-editor').inputValue();
     assert(original.length > 120000 && original.includes('.sidebar {'), 'editor loads the complete original styles.css');
+    assert(original.includes('#css-effect-1::before') && original.includes('#ambient'), 'base CSS documents screen effects');
+    const effectCss = `
+body, body * { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Ccircle cx='7' cy='7' r='5' fill='red'/%3E%3C/svg%3E") 7 7, crosshair !important; }
+#ambient { filter: hue-rotate(90deg); }
+#css-effect-1 { pointer-events: auto !important; }
+#css-effect-1::before { content: ""; position: absolute; inset: 0; background: rgba(10,200,100,.1); animation: test-glow 3s infinite; }
+@keyframes test-glow { from {opacity: .2} to {opacity: .8} }`;
+    await page.locator('#custom-css-editor').evaluate((el, value) => { el.value += value; el.dispatchEvent(new Event('input', {bubbles:true})); }, effectCss);
+    await page.waitForFunction(() => window.__v052.settings.custom_css.includes('test-glow'));
+    assert((await page.locator('.app').evaluate(el => getComputedStyle(el).cursor)).includes('data:image/svg+xml'), 'custom cursor applies from base CSS editor');
+    assert((await page.locator('#ambient').evaluate(el => getComputedStyle(el).filter)).includes('hue-rotate(90deg)'), 'canvas layer styled via CSS');
+    assert.equal(await page.locator('#css-effect-1').evaluate(el => getComputedStyle(el).pointerEvents), 'none', 'overlay does not intercept clicks');
+    assert.equal(await page.locator('#css-effect-1').evaluate(el => getComputedStyle(el, '::before').animationName), 'test-glow');
+    await page.evaluate(() => document.body.dataset.windowHidden = 'true');
+    assert.equal(await page.locator('#css-effect-1').evaluate(el => getComputedStyle(el, '::before').animationPlayState), 'paused');
+    await page.evaluate(() => document.body.dataset.windowHidden = 'false');
     const css = '[data-os="sidebar"] { outline: 2px solid rgb(1, 2, 3); }';
     // Full mode replaces the base sheet at its original cascade position; do not
     // remove the complete CSS here, otherwise the editor itself has no layout.
@@ -453,6 +469,8 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.locator('#instance-search').isVisible(), true, 'hidden search can be restored after reload');
     await page.locator('[data-custom-tab="css"]').click();
     assert((await page.locator('#custom-css-editor').inputValue()).includes(css), 'full stylesheet remains editable after reload');
+    assert((await page.locator('#custom-css-editor').inputValue()).includes('test-glow'), 'screen effect CSS persists on reload');
+    assert((await page.locator('.app').evaluate(el => getComputedStyle(el).cursor)).includes('data:image/svg+xml'), 'custom cursor persists on reload');
     await page.locator('#custom-css-find').fill('sidebar');
     await page.locator('[data-css-action="find"]').click();
     const found = await page.locator('#custom-css-editor').evaluate(el => el.value.slice(el.selectionStart, el.selectionEnd));

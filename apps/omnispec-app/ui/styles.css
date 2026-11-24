@@ -3943,3 +3943,26 @@ body[data-merged-workspace="true"] .sidebar { min-width: 150px; }
 .visual-context-menu button:hover, .visual-context-menu button:focus-visible { background: var(--bg-4); outline: 1px solid var(--accent); }
 .visual-context-check { display: grid; place-items: center; width: 18px; height: 18px; flex: none; border: 1px solid var(--line-2); border-radius: 4px; }
 .visual-context-menu [aria-checked="true"] .visual-context-check { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+
+/* ═══ Курсор и экранные эффекты в CSS ═══
+   #ambient и #trail — Canvas: CSS меняет весь слой, а не отдельные частицы.
+   #fx-layer .cfx-ring, .cfx-dot и другие — эффекты клика (удаляются через 700 мс).
+   Для своих эффектов доступны прозрачные #css-effect-1, #css-effect-2 и #css-effect-3.
+   Слои не перехватывают клики; анимация приостанавливается в скрытом окне.
+   Пример: уберите комментарий и настройте по вкусу. Курсор можно заменить на
+   url("data:image/png;base64,...") 4 4, auto; внешние файлы зависят от доступа WebView.
+
+body, body * { cursor: crosshair !important; }
+#ambient { filter: hue-rotate(90deg); }
+#trail { filter: hue-rotate(90deg); }
+#fx-layer .cfx-ring { border-color: #52edb2; }
+#css-effect-1::before {
+  content: ""; position: absolute; inset: -20%;
+  background: radial-gradient(circle at 35% 30%, rgba(65,255,183,.15), transparent 34%);
+  animation: custom-screen-glow 5s ease-in-out infinite alternate;
+}
+@keyframes custom-screen-glow {
+  from { opacity: .3; transform: translateX(-3%); }
+  to { opacity: .9; transform: translateX(3%); }
+}
+*/

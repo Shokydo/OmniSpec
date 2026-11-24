@@ -454,7 +454,7 @@ async function setRange(page, selector, value) {
     }
     // Та же проверка для всех доступных типов частиц, включая летящую вверх пыль.
     await prefs(page,'fx');
-    for (const style of ['stars','dust','sticks','snow','flakes','leaves','petals','butterflies','hearts']) {
+    for (const style of ['stars','dust','sticks','snow','flakes','leaves','petals','butterflies','hearts','triangles','squares','diamonds','hexagons','rings','shapes']) {
       await page.setViewportSize({width:1080,height:640});
       await page.locator(`[data-ambient="${style}"]`).click();
       const snapshots=await page.evaluate(() => {
@@ -463,6 +463,10 @@ async function setRange(page, selector, value) {
         return {a,b:window.omnispecDebug.ambientSnapshot()};
       });
       assert(snapshots.a.particles.length > 0,`нет частиц ${style}`);
+      if (['triangles','squares','diamonds','hexagons','rings','shapes'].includes(style)) {
+        assert(snapshots.a.particles.every(p => p.kind === 'shape' && (style === 'shapes' || p.shape === style)), `${style}: неверные фигуры`);
+        await page.waitForFunction(expected => window.omnispecDebug.state.settings.ambient === expected, style);
+      }
       assert.deepEqual(snapshots.b.particles,snapshots.a.particles,`${style}: resize изменил частицы без движения времени`);
       const began=Date.now();
       await page.setViewportSize({width:1320,height:800});
@@ -478,7 +482,18 @@ async function setRange(page, selector, value) {
         assert(Math.abs(q.x-p.x) <= 50*duration+4,`${style}: ускорилось движение по горизонтали`);
       }
     }
-    console.log('EFFECTS_RESIZE: все 9 эффектов сохраняют частицы и скорость — OK');
+    await page.waitForTimeout(100);
+    assert(await page.locator('#ambient').evaluate(canvas => {
+      const data=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;
+      for (let i=3;i<data.length;i+=4) if (data[i]) return true;
+      return false;
+    }), 'геометрические фигуры действительно нарисованы на canvas');
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('instance-prefs-settings') || '{}').ambient === 'shapes');
+    await page.reload();
+    await page.waitForFunction(() => document.body.dataset.ambient === 'shapes' && window.omnispecDebug?.ambientSnapshot().particles.length > 0);
+    assert((await page.evaluate(() => window.omnispecDebug.ambientSnapshot().particles)).every(p => p.kind === 'shape'), 'выбор фигур сохраняется после перезапуска');
+    await prefs(page,'fx');
+    console.log('EFFECTS_RESIZE: все 15 эффектов сохраняют частицы и скорость — OK');
 
     // След курсора не должен стираться на каждом движении; после resize
     // сохранённые точки заново рисуются на изменённом canvas.

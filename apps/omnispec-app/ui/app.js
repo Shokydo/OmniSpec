@@ -41,7 +41,7 @@
   const FX_STYLES = { wave: "Волна", dot: "Точка", ring: "Кольцо", cross: "Крест", off: "Выкл" };
 
   /** Фоновая анимация: звёздочки, пыль, палочки, снег. */
-  const AMBIENT_STYLES = { stars: "Звёзды", dust: "Пыль", sticks: "Палочки", snow: "Снег", flakes: "Снежинки", leaves: "Листья", petals: "Лепестки", butterflies: "Бабочки", hearts: "Сердечки", off: "Выкл" };
+  const AMBIENT_STYLES = { stars: "Звёзды", dust: "Пыль", sticks: "Палочки", snow: "Снег", flakes: "Снежинки", leaves: "Листья", petals: "Лепестки", butterflies: "Бабочки", hearts: "Сердечки", triangles: "Треугольники", squares: "Квадраты", diamonds: "Ромбы", hexagons: "Шестиугольники", rings: "Кольца", shapes: "Разные фигуры", off: "Выкл" };
 
   function rgbOf(hex) {
     const clean = String(hex || "#000").replace("#", "");
@@ -521,6 +521,7 @@
       if (style === "dust") return mul(Math.max(40, Math.min(180, Math.round(area / 11000))));
       if (style === "sticks") return mul(Math.max(16, Math.min(70, Math.round(area / 26000))));
       if (style === "leaves" || style === "petals") return mul(Math.max(20, Math.min(90, Math.round(area / 21000))));
+      if (["triangles", "squares", "diamonds", "hexagons", "rings", "shapes"].includes(style)) return mul(Math.max(18, Math.min(80, Math.round(area / 24000))));
       if (style === "hearts") return mul(Math.max(12, Math.min(50, Math.round(area / 32000))));
       if (style === "butterflies") return mul(Math.max(6, Math.min(26, Math.round(area / 52000))));
       return mul(Math.max(34, Math.min(170, Math.round(area / 12000))));
@@ -552,6 +553,10 @@
       }
       if (style === "hearts") {
         return { ...base, s: rand(3.5, 6.5) * scale, vy: rand(8, 20), drift: rand(-7, 7), spin: rand(-0.7, 0.7), rot: rand(0, Math.PI), sway: rand(0.4, 1.1), kind: "heart" };
+      }
+      if (["triangles", "squares", "diamonds", "hexagons", "rings", "shapes"].includes(style)) {
+        const shape = style === "shapes" ? ["triangles", "squares", "diamonds", "hexagons", "rings"][Math.floor(Math.random() * 5)] : style;
+        return { ...base, s: rand(4, 10) * scale, vy: rand(8, 25), drift: rand(-8, 8), spin: rand(-1, 1), rot: rand(0, Math.PI * 2), sway: rand(.4, 1.1), kind: "shape", shape };
       }
       if (style === "butterflies") {
         // бабочка: волнистый полёт, крылья машут
@@ -702,6 +707,26 @@
       ctx.restore();
     }
 
+    function drawShape(p) {
+      ctx.save();
+      ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.globalAlpha = p.alpha * .9; ctx.strokeStyle = ink;
+      ctx.lineWidth = Math.max(.7, p.s * .14); ctx.lineJoin = "round";
+      ctx.beginPath();
+      if (p.shape === "rings") ctx.arc(0, 0, p.s, 0, Math.PI * 2);
+      else {
+        const sides = p.shape === "triangles" ? 3 : p.shape === "hexagons" ? 6 : 4;
+        const angle = p.shape === "squares" ? Math.PI / 4 : -Math.PI / 2;
+        for (let i = 0; i < sides; i += 1) {
+          const a = angle + i * Math.PI * 2 / sides;
+          const x = Math.cos(a) * p.s, y = Math.sin(a) * p.s * (p.shape === "diamonds" ? 1.35 : 1);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+      }
+      ctx.stroke(); ctx.restore();
+    }
+
     function drawStick(p) {
       ctx.save();
       ctx.globalAlpha = p.alpha * 0.7;
@@ -722,8 +747,8 @@
         const p = particles[i];
         p.y += p.vy * dt;
         p.x += (p.drift || 0) * dt;
-        if (p.kind === "stick" || p.kind === "flake" || p.kind === "leaf" || p.kind === "petal" || p.kind === "heart") p.rot += p.spin * dt;
-        if ((p.kind === "dot" || p.kind === "flake" || p.kind === "leaf" || p.kind === "petal" || p.kind === "heart") && p.sway) p.x += Math.sin(time * p.sway + p.phase) * 6 * dt;
+        if (p.kind === "shape" || p.kind === "stick" || p.kind === "flake" || p.kind === "leaf" || p.kind === "petal" || p.kind === "heart") p.rot += p.spin * dt;
+        if ((p.kind === "shape" || p.kind === "dot" || p.kind === "flake" || p.kind === "leaf" || p.kind === "petal" || p.kind === "heart") && p.sway) p.x += Math.sin(time * p.sway + p.phase) * 6 * dt;
         if (p.kind === "butterfly") {
           // волнистый полёт: виляет из стороны в сторону и кренится на поворотах
           p.x += Math.sin(time * p.wander + p.phase) * 34 * dt;
@@ -731,7 +756,8 @@
         }
         const gone = p.vy > 0 ? p.y > height + 40 : p.y < -40;
         if (gone || p.x < -60 || p.x > width + 60) { particles[i] = spawn(false); continue; }
-        if (p.kind === "star") drawStar(p, time);
+        if (p.kind === "shape") drawShape(p);
+        else if (p.kind === "star") drawStar(p, time);
         else if (p.kind === "stick") drawStick(p);
         else if (p.kind === "flake") drawFlake(p);
         else if (p.kind === "leaf") drawLeaf(p);
