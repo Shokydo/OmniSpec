@@ -11037,6 +11037,9 @@
     const src = media?.src || (media?.path && (TAURI?.core?.convertFileSrc ? TAURI.core.convertFileSrc(media.path) : media.path));
     if (!src) return null;
     const video = media.kind === "video";
+    // Asset-протокол WebView может запрещать чтение пикселей через canvas.
+    // Неподвижные изображения можно показывать напрямую, не декодируя дважды.
+    if (media.kind === "image") return src;
     const element = document.createElement(video ? "video" : "img");
     if (video) { element.muted = true; element.preload = "auto"; element.crossOrigin = "anonymous"; }
     const frame = await new Promise((resolve) => {
@@ -11064,7 +11067,9 @@
     }
     if (video) { element.pause(); element.removeAttribute("src"); element.load(); await api.wallpaperHistoryPreviewRelease().catch(() => {}); }
     else element.removeAttribute("src");
-    return result;
+    // Если canvas заблокирован политикой WebView, GIF всё равно доступен как
+    // изображение. Он живёт только пока открыт видимый раздел настроек.
+    return result || (!video && frame ? src : null);
   }
   function bindWallpaperLinks() {
     stopWallpaperPreviews();
