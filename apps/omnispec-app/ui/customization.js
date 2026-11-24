@@ -46,6 +46,22 @@
     { id: "tabs", label: "Вкладки сборки", description: "Консоль, моды, файлы, загрузка и настройки", selector: ".tabs", previewX: 246, previewY: 120, previewWidth: 450, previewHeight: 34 },
     { id: "content", label: "Рабочая область", description: "Содержимое активной вкладки", selector: ".tab-body", previewX: 246, previewY: 162, previewWidth: 450, previewHeight: 238 }
   ];
+  // Дополнительные элементы можно скрывать независимо, не перепозиционируя
+  // вложенные узлы: они остаются частью своих рабочих страниц.
+  const VISIBILITY_ITEMS = [
+    { id: "brand", label: "Логотип и название", selector: ".tb-brand" },
+    { id: "window-controls", label: "Кнопки окна", selector: ".tb-right" },
+    { id: "instance-title", label: "Название сборки", selector: "#tb-name" },
+    { id: "instance-status", label: "Статус сборки", selector: ".tb-meta" },
+    { id: "action-folder", label: "Кнопка папки", selector: "#btn-folder" },
+    { id: "action-restart", label: "Кнопка перезапуска", selector: "#btn-restart" },
+    { id: "action-play", label: "Кнопка Играть", selector: "#btn-play" },
+    { id: "action-stop", label: "Кнопка Стоп", selector: "#btn-stop" },
+    ...[["discover", "Главная"], ["servers", "Серверы"], ["console", "Консоль"], ["server", "Сервер"], ["players", "Игроки"], ["metrics", "Метрики"], ["backups", "Бэкапы"], ["errors", "Ошибки"], ["files", "Файлы"], ["mods", "Моды"], ["resourcepacks", "Ресурспаки"], ["shaders", "Шейдеры"], ["worlds", "Миры"], ["screenshots", "Скриншоты"], ["download", "Загрузить"], ["settings", "Сборка"]]
+      .map(([id, label]) => ({ id: `tab-${id}`, label: `Вкладка «${label}»`, selector: `.tabs [data-tab="${id}"]` }))
+  ].map(item => ({ ...item, hideOnly: true, description: "Только видимость" }));
+  ELEMENTS.push(...VISIBILITY_ITEMS);
+
   const ELEMENT_VARIANTS = [
     ["default", "Стандартный"],
     ["compact", "Компактный"],
@@ -54,8 +70,8 @@
   ];
   const UI_PRESETS = [
     ["omnispec", "OmniSpec", "Тёмный плотный лаунчер с зелёным акцентом"],
-    ["prism", "Prism Launcher", "Компактная панель и строгие карточки"],
-    ["modrinth", "Modrinth", "Мягкие панели и зелёный каталог"],
+    ["prism", "Prism Launcher", "Каталог плиткой и панель сборки справа"],
+    ["modrinth", "Modrinth", "Каталог карточками и панель сборки справа"],
     ["custom", "Полностью кастомный", "Только твои параметры и CSS"]
   ];
   const CSS_PRESETS = {
@@ -99,16 +115,43 @@
 [data-os="panel"] { padding-top: var(--os-panel-pad, 10px); }
 [data-os-element-hidden="true"] { display: none !important; }
 [data-os-element-mode="free"] { position: relative; z-index: 2; }
+[data-os-element-mode="absolute"] { position: fixed !important; box-sizing: border-box; z-index: 3; max-width: none; max-height: none; }
+body[data-ui-independent="true"] .app-body > .sidebar, body[data-ui-independent="true"] .app-body > .main { background: transparent; border-color: transparent; }
+/* Разделители исходных контейнеров не должны оставлять линии между независимыми блоками. */
+body[data-ui-independent="true"] .app :is(.account-chip, .sidebar-foot, .toolbar, .tabs, .build-path) { border-color: transparent; }
+body[data-ui-independent="true"] .app .account-chip:hover { border-color: transparent; }
+.account-chip.is-avatar-only { justify-content: center; min-width: 0; overflow: hidden; padding-inline: 0; gap: 0; }
+.account-chip.is-avatar-only .acc-main, .account-chip.is-avatar-only .chev { display: none; }
 [data-os-element-variant="compact"] { --os-element-scale: .94; font-size: calc(100% * var(--os-element-scale)); }
 [data-os-element-variant="prominent"] { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent), 0 10px 24px color-mix(in srgb, var(--accent) 12%, transparent); }
 [data-os-element-variant="ghost"] { background: transparent !important; border-color: transparent !important; box-shadow: none !important; }
+/* Приближённые раскладки: перемещаются реальные панели, обработчики остаются на месте. */
+body:is([data-ui-preset="prism"], [data-ui-preset="modrinth"]) .app-body > .sidebar {
+  order: 1; flex: 1 1 0 !important; width: auto !important; min-width: 0; overflow: hidden;
+}
+body:is([data-ui-preset="prism"], [data-ui-preset="modrinth"]) .app-body > .main {
+  order: 2; flex: 0 0 clamp(240px, 27%, 380px); width: clamp(240px, 27%, 380px);
+  border-left: 1px solid var(--line);
+}
+body:is([data-ui-preset="prism"], [data-ui-preset="modrinth"]) .sidebar .cat:not(.cat-running) > .cat-items {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; padding: 6px;
+}
+body:is([data-ui-preset="prism"], [data-ui-preset="modrinth"]) .sidebar .cat:not(.cat-running):not(.is-open) > .cat-items { display: none; }
+body:is([data-ui-preset="prism"], [data-ui-preset="modrinth"]) .sidebar .cat:not(.cat-running) .instance {
+  display: flex; flex-direction: column; align-items: center; text-align: center; min-height: 100px; padding: 10px 6px;
+}
+body:is([data-ui-preset="prism"], [data-ui-preset="modrinth"]) .sidebar .cat:not(.cat-running) .instance-icon { width: 48px; height: 48px; }
+body:is([data-ui-preset="prism"], [data-ui-preset="modrinth"]) .sidebar .cat:not(.cat-running) .instance-body { width: 100%; }
+body:is([data-ui-preset="prism"], [data-ui-preset="modrinth"]) .sidebar .cat:not(.cat-running) .instance-time { display: none; }
+body:is([data-ui-preset="prism"], [data-ui-preset="modrinth"]) .main .toolbar { flex-wrap: wrap; height: auto; min-height: 70px; }
+body:is([data-ui-preset="prism"], [data-ui-preset="modrinth"]) .main .tabs { overflow-x: auto; }
 body[data-ui-preset="prism"] { --accent: #7fa7ff; }
-body[data-ui-preset="prism"] .sidebar { background: #20242b; }
-body[data-ui-preset="prism"] .card, body[data-ui-preset="prism"] .instance { border-radius: 4px; }
-body[data-ui-preset="modrinth"] { --accent: #65d391; }
-body[data-ui-preset="modrinth"] .sidebar, body[data-ui-preset="modrinth"] .toolbar { background: color-mix(in srgb, var(--bg-2) 78%, #65d391 22%); }
-body[data-ui-preset="modrinth"] .card, body[data-ui-preset="modrinth"] .panel { border-radius: 14px; }
-body[data-ui-preset="custom"] .app { filter: saturate(1.08); }
+body[data-ui-preset="prism"] .sidebar { background: #202124; }
+body[data-ui-preset="prism"] .instance { border-radius: 4px; }
+body[data-ui-preset="modrinth"] { --accent: #1bd96a; }
+body[data-ui-preset="modrinth"] .sidebar { background: #16181c; }
+body[data-ui-preset="modrinth"] .sidebar .cat:not(.cat-running) .instance { border-radius: 14px; background: #25282c; border: 1px solid #35383e; }
+body[data-ui-preset="modrinth"] .sidebar .cat:not(.cat-running) .instance-icon { width: 72px; height: 72px; }
 .customizer-box { width: min(1180px, 97vw); height: min(820px, 94vh); }
 .customizer-backdrop { place-items: stretch; padding: 12px; box-sizing: border-box; }
 .customizer-backdrop .customizer-box { width: 100%; max-width: none; height: 100%; max-height: none; min-height: 0; border-radius: var(--r-lg); }
@@ -151,6 +194,10 @@ body[data-customizer-open="true"] { overflow: hidden; }
 .visual-editor { display: grid; grid-template-columns: 190px minmax(360px, 1fr) 235px; gap: 10px; min-height: 440px; }
 .visual-panel { min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg-2); }
 .visual-panel-title { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; color: var(--dim); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.visual-element-row { display: flex; align-items: center; gap: 3px; }
+.visual-element-row .visual-element { flex: 1; min-width: 0; }
+.visual-visibility { flex: none; padding: 4px 5px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-3); color: var(--dim); font-size: 9px; cursor: pointer; }
+.visual-visibility:hover { color: var(--text); border-color: var(--line-2); }
 .visual-element-list { display: flex; flex-direction: column; gap: 4px; max-height: 390px; overflow: auto; }
 .visual-element { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 5px 6px; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; color: var(--dim); text-align: left; cursor: pointer; }
 .visual-element:hover { background: var(--bg-3); color: var(--text); }
@@ -162,22 +209,50 @@ body[data-customizer-open="true"] { overflow: hidden; }
 .visual-element-copy strong { font-size: 10.5px; }
 .visual-element-copy small { margin-top: 2px; color: var(--dim-2); font-size: 9px; }
 .visual-stage { position: relative; min-height: 430px; overflow: auto; padding: 8px; border: 1px solid var(--line-2); border-radius: var(--r); background: linear-gradient(145deg, color-mix(in srgb, var(--bg-4) 90%, var(--accent) 10%), var(--bg-2)); }
-.visual-stage-inner { position: relative; min-width: 720px; min-height: 410px; border: 1px dashed var(--line-2); border-radius: var(--r-sm); background: color-mix(in srgb, var(--bg-2) 86%, transparent); }
-.visual-canvas-item { overflow: hidden; touch-action: none; position: absolute; display: flex; align-items: center; gap: 6px; min-width: 60px; min-height: 24px; padding: 5px 8px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: var(--r-sm); background: color-mix(in srgb, var(--bg-3) 88%, var(--accent) 12%); color: var(--text); font-size: 10px; cursor: grab; user-select: none; }
+.visual-stage-inner { position: relative; width: 100%; min-width: 0; min-height: 1px; border: 1px dashed var(--line-2); border-radius: var(--r-sm); background-color: var(--bg-2); background-image: linear-gradient(to right, #ffffff19 1px, transparent 1px), linear-gradient(to bottom, #ffffff19 1px, transparent 1px); }
+.visual-stage-inner[data-grid="off"] { background-image: none; }
+.visual-canvas-item { overflow: hidden; touch-action: none; position: absolute; z-index: 0; display: block; min-width: 0; min-height: 0; padding: 0; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: var(--r-sm); background: transparent; color: var(--text); font-size: 10px; cursor: grab; user-select: none; }
 .visual-canvas-item:hover, .visual-canvas-item.is-selected { z-index: 20; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
+.visual-canvas-item.is-selected { z-index: 30; }
 .visual-canvas-item:active { cursor: grabbing; }
-.visual-canvas-item .visual-snapshot { flex: 1; min-width: 0; max-height: 100%; overflow: hidden; pointer-events: none; }
+.visual-canvas-item .visual-snapshot { position: absolute; left: 0; top: 0; transform-origin: top left; pointer-events: none; overflow: hidden; }
 .visual-canvas-item .visual-snapshot > * { max-width: 100%; }
+.visual-resize { position: absolute; z-index: 30; touch-action: none; }
+.visual-resize[data-edge="n"], .visual-resize[data-edge="s"] { left: 8px; right: 8px; height: 8px; cursor: ns-resize; }
+.visual-resize[data-edge="e"], .visual-resize[data-edge="w"] { top: 8px; bottom: 8px; width: 8px; cursor: ew-resize; }
+.visual-resize[data-edge="n"] { top: 0; } .visual-resize[data-edge="s"] { bottom: 0; }
+.visual-resize[data-edge="e"] { right: 0; } .visual-resize[data-edge="w"] { left: 0; }
+.visual-resize[data-edge="nw"], .visual-resize[data-edge="ne"], .visual-resize[data-edge="sw"], .visual-resize[data-edge="se"] { width: 12px; height: 12px; }
+.visual-resize[data-edge="nw"] { left: 0; top: 0; cursor: nwse-resize; } .visual-resize[data-edge="ne"] { right: 0; top: 0; cursor: nesw-resize; }
+.visual-resize[data-edge="sw"] { left: 0; bottom: 0; cursor: nesw-resize; } .visual-resize[data-edge="se"] { right: 0; bottom: 0; cursor: nwse-resize; }
 .visual-canvas-item .visual-label { position: absolute; bottom: 0; right: 0; font-size: 9px; background: var(--bg-2); padding: 2px 4px; opacity: .8; }
 .visual-canvas-item.is-hidden { opacity: .3; border-style: dashed; }
 .visual-canvas-item .ic { width: 13px; height: 13px; flex: none; }
+.sidebar-quick.is-icon-only, .sidebar-new.is-icon-only { min-width: 0; overflow: hidden; justify-content: center; padding-inline: 0; }
+.sidebar-quick.is-icon-only > span, .sidebar-new.is-icon-only > span { display: none; }
 .visual-stage-help { margin-top: 6px; color: var(--dim-2); font-size: 9.5px; line-height: 1.4; }
 .visual-properties { display: flex; flex-direction: column; gap: 7px; }
 .visual-properties .customizer-control { display: grid; grid-template-columns: 1fr 82px; gap: 6px; padding: 7px; }
+/* Компактный список учитывает ширину именно списка, в том числе отдельно от сайдбара. */
+.instance-list.is-narrow .instance-body, .instance-list.is-narrow .instance-time { display: none; }
+.instance-list.is-narrow .instance { justify-content: center; align-items: center; gap: 0; padding: 4px; min-width: 0; }
+.instance-list.is-narrow .instance-icon { margin: 0; }
+.instance-list.is-narrow .instance-running { position: absolute; right: 4px; bottom: 4px; }
+.instance-list.is-narrow .cat-name, .instance-list.is-narrow .cat-head .spacer, .instance-list.is-narrow .cat-head .cat-act, .instance-list.is-narrow .cat-dynamic-icon { display: none; }
+.instance-list.is-narrow .cat-head { justify-content: center; gap: 4px; padding-inline: 1px; }
+.instance-list.is-narrow .cat-items { padding-left: 0; }
+body .instance-list.is-narrow .cat.is-open:not(.cat-running) > .cat-items { display: flex; flex-direction: column; }
+body .instance-list.is-narrow .cat:not(.cat-running) .instance { flex-direction: row; }
+body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28px; height: 28px; }
+.instance-list.is-narrow .instance-dup { overflow: hidden; }
+.instance-list.is-narrow .dup-name, .instance-list.is-narrow .dup-sep, .instance-list.is-narrow .dup-account { display: none; }
+.visual-properties .customizer-control.visual-select-control { grid-template-columns: minmax(0, 1fr); }
+.visual-properties .customizer-control.visual-select-control select { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
 .visual-properties .customizer-control strong { font-size: 10.5px; }
 .visual-properties .customizer-control small { font-size: 9px; }
 .visual-properties .customizer-control input[type="range"] { min-width: 0; width: 100%; }
 .visual-properties .customizer-control output { min-width: 42px; font-size: 10px; }
+.visual-properties .customizer-control input[type="number"] { width: 82px; min-width: 0; background: var(--bg-3); color: var(--text); border: 1px solid var(--line-2); border-radius: 4px; padding: 3px; }
 .layout-order { display: grid; gap: 6px; }
 .layout-item { display: flex; align-items: center; gap: 8px; min-height: 47px; padding: 7px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-2); cursor: grab; user-select: none; }
 .layout-item:active { cursor: grabbing; }
@@ -200,7 +275,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
 .customizer-footer .hint { min-width: 0; color: var(--dim-2); font-size: 10.5px; }
 .customizer-footer-actions { display: flex; gap: 6px; }
 @media (max-width: 980px) { .visual-editor { grid-template-columns: 170px minmax(300px, 1fr); } .visual-properties { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 720px) { .ui-preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .visual-editor { grid-template-columns: 1fr; } .visual-properties { display: flex; } .visual-stage-inner { min-width: 680px; } .customizer-grid { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .ui-preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .visual-editor { grid-template-columns: 1fr; } .visual-properties { display: flex; } .visual-stage-inner { min-width: 0; } .customizer-grid { grid-template-columns: 1fr; } }
 `;
 
   let styleEl = null;
@@ -221,6 +296,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
   let statusTimer = 0;
   let dragId = null;
   let pointerDrag = null;
+  let gridSize = 16;
   let suppressClick = false;
   let layoutDragId = null;
   let started = false;
@@ -248,11 +324,11 @@ body[data-customizer-open="true"] { overflow: hidden; }
     return {
       id: spec.id,
       visible: source.visible !== false,
-      mode: source.mode === "free" ? "free" : "flow",
-      x: number("x", -240, 720, 0),
-      y: number("y", -180, 480, 0),
-      width: optional("width", 0, 900),
-      height: optional("height", 0, 420),
+      mode: ["free", "absolute"].includes(source.mode) ? source.mode : "flow",
+      x: number("x", -32768, 32767, 0),
+      y: number("y", -32768, 32767, 0),
+      width: optional("width", 0, 65535),
+      height: optional("height", 0, 65535),
       margin: number("margin", 0, 40, 0),
       padding: number("padding", 0, 40, 0),
       radius: number("radius", 0, 40, 0),
@@ -351,7 +427,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
       return input?.parentElement ? [input.parentElement] : [];
     }
     if (spec.id === "account") { const node = $("#account-chip"); return node ? [node] : []; }
-    return $$(spec.selector);
+    return $$(spec.selector, $(".app"));
   }
   function elementState(id) { return layout.elements.find((item) => item.id === id) || normalizeElement({}, ELEMENTS.find((item) => item.id === id)); }
 
@@ -362,12 +438,16 @@ body[data-customizer-open="true"] { overflow: hidden; }
       element.dataset.osElementMode = value.mode;
       element.dataset.osElementVariant = value.variant;
       element.dataset.osElementHidden = value.visible ? "false" : "true";
+      if (spec.hideOnly) return;
       element.style.width = value.width ? `${value.width}px` : "";
       element.style.height = value.height ? `${value.height}px` : "";
-      element.style.margin = value.margin ? `${value.margin}px` : "";
+      element.style.flexShrink = value.width || value.height ? "0" : "";
+      element.style.margin = value.mode === "absolute" || value.margin ? `${value.margin}px` : "";
       element.style.padding = value.padding ? `${value.padding}px` : "";
       element.style.borderRadius = value.radius ? `${value.radius}px` : "";
       element.style.transform = value.mode === "free" && (value.x || value.y) ? `translate(${value.x}px, ${value.y}px)` : "";
+      element.style.left = value.mode === "absolute" ? `${value.x}px` : "";
+      element.style.top = value.mode === "absolute" ? `${value.y}px` : "";
     });
   }
   function applyElements() { ELEMENTS.forEach((spec) => applyElement(spec, elementState(spec.id))); }
@@ -386,6 +466,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
     root.style.setProperty("--os-panel-pad", `${density.panel}px`);
     body.dataset.layoutDensity = layout.density;
     body.dataset.uiPreset = layout.preset;
+    body.dataset.uiIndependent = String(layout.elements.some((item) => item.mode === "absolute"));
     appBody.dataset.customSidebarSide = layout.sidebar_side;
     sidebar.style.width = `${layout.sidebar_width}px`; sidebar.style.flexBasis = `${layout.sidebar_width}px`;
     main.style.padding = `${layout.main_padding}px`; main.style.gap = `${layout.main_gap}px`;
@@ -469,7 +550,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
     if (!root || root.dataset.editorBound) return;
     root.dataset.editorBound = "true";
     root.addEventListener("click", (event) => {
-      const target = event.target.closest?.("[data-custom-tab], [data-custom-close], [data-custom-reset], [data-layout-action], [data-css-action], [data-css-preset], [data-ui-preset], [data-visual-id], [data-element-visibility]");
+      const target = event.target.closest?.("[data-custom-tab], [data-custom-close], [data-custom-reset], [data-layout-action], [data-css-action], [data-css-preset], [data-ui-preset], [data-visual-id], [data-element-visibility], [data-align-grid], [data-visual-toggle]");
       if (!target || !root.contains(target)) return;
       if (suppressClick) { suppressClick = false; event.preventDefault(); return; }
       if (target.dataset.customTab) { currentTab = target.dataset.customTab; renderEditor(); return; }
@@ -479,7 +560,16 @@ body[data-customizer-open="true"] { overflow: hidden; }
       if (target.dataset.cssAction) { handleCssAction(target.dataset.cssAction); return; }
       if (target.dataset.cssPreset) { applyCssPreset(target.dataset.cssPreset); return; }
       if (target.dataset.uiPreset) { applyUiPreset(target.dataset.uiPreset); return; }
-      if (target.dataset.visualId) { selectedElementId = target.dataset.visualId; renderEditor(); return; }
+      if (target.dataset.alignGrid !== undefined) { alignAllToGrid(); return; }
+      if (target.dataset.visualToggle) {
+        selectedElementId = target.dataset.visualToggle;
+        updateElement("visible", !elementState(selectedElementId).visible);
+        $(`[data-visual-toggle="${selectedElementId}"]`, root)?.focus({ preventScroll: true }); return;
+      }
+      if (target.dataset.visualId) {
+        selectedElementId = target.dataset.visualId; const onCanvas = target.classList.contains("visual-canvas-item");
+        renderEditor(); $(`${onCanvas ? ".visual-canvas-item" : ".visual-element"}[data-visual-id="${selectedElementId}"]`, root)?.focus({ preventScroll: true }); return;
+      }
       if (target.dataset.elementVisibility) { updateElement("visible", target.dataset.elementVisibility !== "hide"); return; }
     });
     root.addEventListener("input", (event) => {
@@ -491,12 +581,29 @@ body[data-customizer-open="true"] { overflow: hidden; }
       }
       if (target.dataset.layoutControl) { updateLayoutControl(target.dataset.layoutControl, target.value); return; }
       if (target.dataset.elementControl) updateElement(target.dataset.elementControl, target.value);
+      if (target.dataset.elementNumber && target.value !== "") updateElement(target.dataset.elementNumber, target.value);
     });
     root.addEventListener("keydown", (event) => {
+      const focused = event.target.closest?.(".visual-canvas-item[data-visual-id], .visual-element[data-visual-id]");
+      if (focused && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key) && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        const spec = ELEMENTS.find(item => item.id === focused.dataset.visualId);
+        if (!spec || spec.hideOnly || !elementState(spec.id).visible) return;
+        event.preventDefault(); selectedElementId = spec.id;
+        freezeIndependent();
+        const current = elementState(spec.id);
+        if (current.mode !== "absolute") { setStatus("Элемент сейчас не отображается", "error"); return; }
+        const step = gridSize || 1;
+        const dx = event.key === "ArrowRight" ? step : event.key === "ArrowLeft" ? -step : 0;
+        const dy = event.key === "ArrowDown" ? step : event.key === "ArrowUp" ? -step : 0;
+        updateElementValues(spec.id, { ...current, x: current.x + dx, y: current.y + dy }, true);
+        const selector = focused.classList.contains("visual-canvas-item") ? ".visual-canvas-item" : ".visual-element";
+        $(`${selector}[data-visual-id="${spec.id}"]`, root)?.focus({ preventScroll: true });
+        return;
+      }
       if (event.target.id === "custom-css-find" && event.key === "Enter") { event.preventDefault(); findCss(root); return; }
       if (event.target.id !== "custom-css-editor") return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
-        event.preventDefault(); $("#custom-css-find", root)?.focus();
+        event.preventDefault(); $("#custom-css-find", root)?.focus({ preventScroll: true });
       } else if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
         event.preventDefault();
         const input = event.target;
@@ -508,44 +615,57 @@ body[data-customizer-open="true"] { overflow: hidden; }
     });
     root.addEventListener("change", (event) => {
       const target = event.target;
+      if (target.dataset.snapGrid !== undefined) { gridSize = Number(target.value) || 0; try { localStorage.setItem("omnispec-grid-size", String(gridSize)); } catch {} populateSnapshots(root); return; }
       if (target.dataset.layoutSelect) updateLayoutControl(target.dataset.layoutSelect, target.value);
       if (target.dataset.elementSelect) updateElement(target.dataset.elementSelect, target.value);
     });
     root.addEventListener("pointerdown", (event) => {
       const item = event.target.closest?.(".visual-canvas-item[data-visual-id]");
       if (!item || event.button !== 0) return;
-      event.preventDefault();
-      const value = elementState(item.dataset.visualId);
-      selectedElementId = item.dataset.visualId;
+      event.preventDefault(); selectedElementId = item.dataset.visualId;
       pointerDrag = { item, id: selectedElementId, pointer: event.pointerId,
-        startX: event.clientX, startY: event.clientY, x: value.x, y: value.y, moved: false };
-      item.setPointerCapture(event.pointerId);
-      item.classList.add("is-dragging");
+        startX: event.clientX, startY: event.clientY,
+        left: Number(item.dataset.logicalLeft), top: Number(item.dataset.logicalTop),
+        width: Number(item.dataset.logicalWidth), height: Number(item.dataset.logicalHeight),
+        factor: Number(item.dataset.screenFactor), stageScale: Number(item.dataset.stageScale),
+        edge: event.target.closest?.("[data-edge]")?.dataset.edge || "", before: layout, moved: false };
+      item.setPointerCapture(event.pointerId); item.classList.add("is-dragging");
     });
     root.addEventListener("pointermove", (event) => {
       if (!pointerDrag || pointerDrag.pointer !== event.pointerId) return;
       const drag = pointerDrag;
-      const dx = Math.round(event.clientX - drag.startX), dy = Math.round(event.clientY - drag.startY);
-      if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
+      const dx = (event.clientX - drag.startX) / drag.factor, dy = (event.clientY - drag.startY) / drag.factor;
+      if (Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY) > 2) {
+        if (!drag.moved) { freezeIndependent(); drag.moved = true; }
+      }
       if (!drag.moved) return;
-      const spec = ELEMENTS.find((item) => item.id === drag.id);
-      const x = Math.max(-240, Math.min(720, drag.x + dx));
-      const y = Math.max(-180, Math.min(480, drag.y + dy));
-      drag.item.style.left = `${Math.max(3, spec.previewX + x)}px`;
-      drag.item.style.top = `${Math.max(3, spec.previewY + y)}px`;
-      updateElementValues(drag.id, { mode: "free", x, y });
+      const snap = (n) => gridSize ? Math.round(n / gridSize) * gridSize : Math.round(n);
+      let left = drag.left, top = drag.top, width = drag.width, height = drag.height;
+      const edge = drag.edge;
+      if (!edge) { left = snap(drag.left + dx); top = snap(drag.top + dy); }
+      else {
+        if (edge.includes("e")) width = Math.max(gridSize || 8, snap(drag.width + dx));
+        if (edge.includes("s")) height = Math.max(gridSize || 8, snap(drag.height + dy));
+        if (edge.includes("w")) { width = Math.max(gridSize || 8, snap(drag.width - dx)); left = snap(drag.left + drag.width - width); }
+        if (edge.includes("n")) { height = Math.max(gridSize || 8, snap(drag.height - dy)); top = snap(drag.top + drag.height - height); }
+      }
+      Object.assign(drag.item.style, { left: `${left * drag.stageScale}px`, top: `${top * drag.stageScale}px`, width: `${width * drag.stageScale}px`, height: `${height * drag.stageScale}px` });
+      updateElementValues(drag.id, { mode: "absolute", x: Math.round(left), y: Math.round(top), width: Math.round(width), height: Math.round(height) });
     });
     const finishPointer = (event) => {
       if (!pointerDrag || pointerDrag.pointer !== event.pointerId) return;
-      const drag = pointerDrag; pointerDrag = null;
-      drag.item.classList.remove("is-dragging");
+      const drag = pointerDrag; pointerDrag = null; drag.item.classList.remove("is-dragging");
       if (drag.moved) { clearTimeout(saveTimer); queueSave({ ui_layout: layout }); }
-      suppressClick = drag.moved;
-      renderEditor();
+      suppressClick = drag.moved; renderEditor();
+      $(`.visual-canvas-item[data-visual-id="${drag.id}"]`, root)?.focus({ preventScroll: true });
       setTimeout(() => { suppressClick = false; }, 0);
     };
     root.addEventListener("pointerup", finishPointer);
-    root.addEventListener("pointercancel", finishPointer);
+    root.addEventListener("pointercancel", (event) => {
+      if (!pointerDrag || pointerDrag.pointer !== event.pointerId) return;
+      const before = pointerDrag.before; pointerDrag = null; clearTimeout(saveTimer);
+      layout = normalizeLayout(before); applyLayout(); queueSave({ ui_layout: layout }); renderEditor();
+    });
     root.addEventListener("dragstart", (event) => {
       const visual = event.target.closest?.(".visual-canvas-item[data-visual-id]");
       if (visual && root.contains(visual)) {
@@ -621,7 +741,14 @@ body[data-customizer-open="true"] { overflow: hidden; }
     body.innerHTML = currentTab === "editor" ? renderVisualEditor() : currentTab === "layout" ? renderLayout() : renderCss();
     if (currentTab === "editor") populateSnapshots(root);
     if (currentTab === "css") { bindFileImport(root); loadCssEditor(root); }
-    if (currentTab === "editor") setTimeout(() => $("[data-visual-id='${selectedElementId}']", root)?.scrollIntoView?.({ block: "nearest" }), 0);
+    if (currentTab === "editor") {
+      const list = $(".visual-element-list", root), selected = $(`.visual-element[data-visual-id="${selectedElementId}"]`, root);
+      if (list && selected) {
+        const a = list.getBoundingClientRect(), b = selected.getBoundingClientRect();
+        if (b.top < a.top) list.scrollTop -= a.top - b.top;
+        else if (b.bottom > a.bottom) list.scrollTop += b.bottom - a.bottom;
+      }
+    }
   }
 
   async function loadCssEditor(root) {
@@ -644,20 +771,74 @@ body[data-customizer-open="true"] { overflow: hidden; }
     }
   }
 
-  // Показываем содержимое реальных областей, не копируя идентификаторы и обработчики.
+  // Размеры и координаты берём из реального окна, а не из фиктивной схемы.
   function populateSnapshots(root) {
+    const app = $(".app"), stage = $(".visual-stage-inner", root);
+    if (!app || !stage) return;
+    const appRect = app.getBoundingClientRect();
+    if (!appRect.width || !app.offsetWidth) return;
+    const zoom = appRect.width / app.offsetWidth;
+    const stageWidth = stage.clientWidth;
+    const scale = stageWidth / app.offsetWidth;
+    const screenFactor = stage.getBoundingClientRect().width / app.offsetWidth;
+    stage.style.height = `${app.offsetHeight * scale}px`;
+    stage.style.backgroundSize = `${gridSize * scale}px ${gridSize * scale}px`;
+    stage.dataset.grid = gridSize ? "on" : "off";
     $$(".visual-canvas-item[data-visual-id]", root).forEach((item) => {
       const spec = ELEMENTS.find((entry) => entry.id === item.dataset.visualId);
       const original = spec && elementNodes(spec)[0];
-      if (!original) return;
+      item.querySelector(".visual-snapshot")?.remove();
+      if (!original) { item.hidden = true; return; }
+      const rect = original.getBoundingClientRect();
+      if (!rect.width || !rect.height) { item.hidden = true; return; }
+      item.hidden = false;
+      const left = (rect.left - appRect.left) / zoom, top = (rect.top - appRect.top) / zoom;
+      const width = rect.width / zoom, height = rect.height / zoom;
+      Object.assign(item.dataset, { logicalLeft: left, logicalTop: top, logicalWidth: width, logicalHeight: height, screenFactor, stageScale: scale });
+      Object.assign(item.style, { left: `${left * scale}px`, top: `${top * scale}px`, width: `${width * scale}px`, height: `${height * scale}px` });
       const copy = original.cloneNode(true);
-      copy.removeAttribute("id");
-      copy.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+      if (spec.id === "build-list") copy.classList.toggle("is-narrow", original.clientWidth < 120);
+      if (spec.id === "account") copy.classList.toggle("is-avatar-only", original.clientWidth < 110);
+      const originals = original.matches(".sidebar-quick, .sidebar-new") ? [original] : [...original.querySelectorAll(".sidebar-quick, .sidebar-new")];
+      const copies = copy.matches(".sidebar-quick, .sidebar-new") ? [copy] : [...copy.querySelectorAll(".sidebar-quick, .sidebar-new")];
+      copies.forEach((button, index) => button.classList.toggle("is-icon-only", originals[index].clientWidth < 105));
+      copy.removeAttribute("id"); copy.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
       copy.querySelectorAll("[autofocus]").forEach((node) => node.removeAttribute("autofocus"));
       copy.removeAttribute("style");
+      for (const node of [copy, ...copy.querySelectorAll("[data-os-element]")]) {
+        delete node.dataset.osElement; delete node.dataset.osElementMode;
+        delete node.dataset.osElementHidden; delete node.dataset.osElementVariant;
+      }
+      copy.style.width = "100%"; copy.style.height = "100%"; copy.style.maxWidth = "none"; copy.style.margin = "0";
       const snapshot = document.createElement("div"); snapshot.className = "visual-snapshot";
+      Object.assign(snapshot.style, { width: `${width}px`, height: `${height}px`, transform: `scale(${scale})` });
       snapshot.appendChild(copy); item.prepend(snapshot);
     });
+  }
+
+  // Сохраняем измеренные геометрии сразу всех видимых областей до перевода
+  // в независимое позиционирование: их DOM и обработчики остаются на месте.
+  function freezeIndependent() {
+    const app = $(".app"), rect = app.getBoundingClientRect(), zoom = rect.width / app.offsetWidth;
+    const measured = new Map();
+    for (const spec of ELEMENTS) {
+      if (spec.hideOnly || elementState(spec.id).mode === "absolute") continue;
+      const node = elementNodes(spec)[0]; if (!node) continue;
+      const box = node.getBoundingClientRect(); if (!box.width || !box.height) continue;
+      measured.set(spec.id, { mode: "absolute", x: Math.round(box.left / zoom), y: Math.round(box.top / zoom),
+        width: Math.round(box.width / zoom), height: Math.round(box.height / zoom), margin: 0 });
+    }
+    layout = normalizeLayout({ ...layout, preset: "custom", elements: layout.elements.map(item => ({ ...item, ...(measured.get(item.id) || {}) })) });
+    applyLayout();
+  }
+  function alignAllToGrid() {
+    if (!gridSize) { setStatus("Сначала выбери шаг сетки", "error"); return; }
+    freezeIndependent();
+    const snap = n => Math.round(n / gridSize) * gridSize;
+    layout = normalizeLayout({ ...layout, elements: layout.elements.map(item => item.mode !== "absolute" ? item : ({
+      ...item, x: snap(item.x), y: snap(item.y), width: Math.max(gridSize, snap(item.width)), height: Math.max(gridSize, snap(item.height))
+    })) });
+    applyLayout(); queueSave({ ui_layout: layout }); renderEditor();
   }
 
   function updateLayoutControl(key, rawValue) {
@@ -677,20 +858,31 @@ body[data-customizer-open="true"] { overflow: hidden; }
     if (immediate) { queueSave({ ui_layout: layout }); renderEditor(); } else queueSaveSoon({ ui_layout: layout });
   }
   function updateElement(key, rawValue) {
+    if (key === "mode" && rawValue === "absolute") freezeIndependent();
     const current = elementState(selectedElementId); let value = rawValue;
     if (["x", "y", "width", "height", "margin", "padding", "radius"].includes(key)) value = Number(rawValue);
     if (key === "width" || key === "height") value = Number(rawValue) <= 0 ? null : Number(rawValue);
     if (key === "visible") value = Boolean(rawValue);
-    updateElementValues(selectedElementId, { ...current, [key]: value });
+    const next = { ...current, [key]: value };
+    if ((key === "x" || key === "y") && current.mode !== "absolute") next.mode = "free";
+    updateElementValues(selectedElementId, next);
+    const modeSelect = $("[data-element-select='mode']", editorRoot());
+    if (modeSelect && (key === "x" || key === "y")) modeSelect.value = next.mode;
     const output = $(`#element-value-${key}`, editorRoot()); if (output) output.textContent = key === "width" || key === "height" ? (value ? `${value}px` : "auto") : `${value}px`;
+    const numeric = $(`[data-element-number="${key}"]`, editorRoot());
+    if (numeric && document.activeElement !== numeric) numeric.value = elementState(selectedElementId)[key] ?? 0;
+    const slider = $(`[data-element-control="${key}"]`, editorRoot());
+    if (slider && document.activeElement !== slider) slider.value = elementState(selectedElementId)[key] ?? 0;
     if (key === "mode" || key === "variant" || key === "visible") renderEditor();
+    else populateSnapshots(editorRoot());
   }
 
   function applyUiPreset(id) {
     if (!UI_PRESETS.some(([preset]) => preset === id)) return;
-    const variant = id === "prism" ? "compact" : id === "modrinth" ? "prominent" : "default";
-    layout = normalizeLayout({ ...layout, preset: id, density: id === "prism" ? "compact" : id === "modrinth" ? "comfortable" : "comfortable", elements: layout.elements.map((item) => ({ ...item, variant })) });
-    applyLayout(); queueSave({ ui_layout: layout }); renderEditor(); setStatus(`Применён стиль «${UI_PRESETS.find(([preset]) => preset === id)?.[1]}»`, "saved");
+    if (id === "custom") layout = normalizeLayout({ ...layout, preset: id });
+    else layout = normalizeLayout({ ...DEFAULT_LAYOUT, preset: id, density: id === "prism" ? "compact" : "comfortable" });
+    applyLayout(); queueSave({ ui_layout: layout }); renderEditor();
+    setStatus(`Применена раскладка «${UI_PRESETS.find(([preset]) => preset === id)?.[1]}»`, "saved");
   }
 
   function moveLayout(id, direction) {
@@ -792,8 +984,8 @@ body[data-customizer-open="true"] { overflow: hidden; }
     const selected = ELEMENTS.find((item) => item.id === selectedElementId) || ELEMENTS[0];
     selectedElementId = selected.id;
     const value = elementState(selected.id);
-    const controls = (key, title, description, min, max, unit = "px", raw = value[key] ?? 0) => `<label class="customizer-control"><span><strong>${title}</strong><small>${description}</small></span><input type="range" min="${min}" max="${max}" value="${raw || 0}" data-element-control="${key}"><output id="element-value-${key}">${key === "width" || key === "height" ? (raw ? `${raw}${unit}` : "auto") : `${raw || 0}${unit}`}</output></label>`;
-    return `<section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-sliders"/></svg><div><h3>Собери интерфейс как в OmniSpec, Prism Launcher, Modrinth или полностью по-своему</h3><p>Выбери пресет, затем перетащи отдельные элементы на холсте. Для каждого элемента доступны свободная позиция, размер, отступы, радиус, стиль и видимость.</p></div></div><div class="ui-preset-grid">${UI_PRESETS.map(([id, label, description]) => `<button type="button" class="ui-preset ${layout.preset === id ? "is-active" : ""}" data-ui-preset="${id}"><strong>${label}</strong><small>${description}</small></button>`).join("")}</div></section><section class="customizer-section"><div class="visual-editor"><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-list"/></svg>Элементы</div><div class="visual-element-list">${ELEMENTS.map((item) => { const state = elementState(item.id); return `<button type="button" class="visual-element ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}"><svg class="ic"><use href="#i-dots"/></svg><span class="visual-element-copy"><strong>${item.label}</strong><small>${state.visible ? item.description : "скрыт"}</small></span></button>`; }).join("")}</div></div><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-grid"/></svg>Холст · перетащи блоки</div><div class="visual-stage"><div class="visual-stage-inner">${ELEMENTS.map((item) => { const state = elementState(item.id); const left = Math.max(3, item.previewX + state.x); const top = Math.max(3, item.previewY + state.y); const width = state.width || item.previewWidth; const height = state.height || item.previewHeight; return `<div class="visual-canvas-item ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}" style="left:${left}px;top:${top}px;width:${width}px;min-height:${height}px"><span class="visual-label">${item.label}</span></div>`; }).join("")}</div><div class="visual-stage-help">Перетаскивание переводит элемент в режим «Свободно» и записывает координаты в профиль. Это не пользовательский JavaScript.</div></div></div><div class="visual-panel visual-properties"><div class="visual-panel-title"><svg class="ic"><use href="#i-pencil"/></svg>Свойства</div><div class="customizer-note"><strong>${selected.label}</strong><br>${selected.description}</div><label class="customizer-control"><span><strong>Видимость</strong><small>Показывать элемент в лаунчере</small></span><button class="switch ${value.visible ? "on" : ""}" type="button" data-element-visibility="${value.visible ? "hide" : "show"}" aria-pressed="${value.visible}"></button></label><label class="customizer-control"><span><strong>Режим расположения</strong><small>Адаптивный поток или свободные координаты</small></span><select class="select" data-element-select="mode"><option value="flow" ${value.mode === "flow" ? "selected" : ""}>В потоке</option><option value="free" ${value.mode === "free" ? "selected" : ""}>Свободно</option></select></label><label class="customizer-control"><span><strong>Вариант</strong><small>Размер и визуальный акцент</small></span><select class="select" data-element-select="variant">${ELEMENT_VARIANTS.map(([id, label]) => `<option value="${id}" ${value.variant === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>${controls("x", "X", "Горизонтальное смещение", -240, 720)}${controls("y", "Y", "Вертикальное смещение", -180, 480)}${controls("width", "Ширина", "0 — автоматически", 0, 900)}${controls("height", "Высота", "0 — автоматически", 0, 420)}${controls("margin", "Отступ снаружи", "Свободное пространство", 0, 40)}${controls("padding", "Внутренний отступ", "Пространство внутри", 0, 40)}${controls("radius", "Закругление", "Радиус углов", 0, 40)}</div></div></section>`;
+    const controls = (key, title, description, min, max, unit = "px", raw = value[key] ?? 0) => `<label class="customizer-control"><span><strong>${title}</strong><small>${description}</small></span><input type="range" min="${min}" max="${max}" value="${raw || 0}" data-element-control="${key}"><output id="element-value-${key}">${key === "width" || key === "height" ? (raw ? `${raw}${unit}` : "auto") : `${raw || 0}${unit}`}</output>${["x", "y", "width", "height"].includes(key) ? `<input type="number" data-element-number="${key}" aria-label="${title}, точное значение" min="${key === "x" || key === "y" ? -32768 : 0}" max="${key === "x" || key === "y" ? 32767 : 65535}" value="${raw || 0}">` : ""}</label>`;
+    return `<section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-sliders"/></svg><div><h3>Раскладка и визуальный редактор</h3><p>На холсте представлены основные области. Перетаскивай их и меняй размер за края; стрелки двигают выбранный блок на клетку. Кнопки «Скрыть» отключают отображение элемента; вернуть его можно в списке слева.</p></div></div><div class="ui-preset-grid">${UI_PRESETS.map(([id, label, description]) => `<button type="button" class="ui-preset ${layout.preset === id ? "is-active" : ""}" data-ui-preset="${id}"><strong>${label}</strong><small>${description}</small></button>`).join("")}</div></section><section class="customizer-section"><div class="visual-editor"><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-list"/></svg>Элементы</div><div class="visual-element-list">${ELEMENTS.map((item) => { const state = elementState(item.id); return `<div class="visual-element-row"><button type="button" class="visual-element ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}"><svg class="ic"><use href="#i-dots"/></svg><span class="visual-element-copy"><strong>${item.label}</strong><small>${state.visible ? item.description : "скрыт"}</small></span></button><button class="visual-visibility" type="button" data-visual-toggle="${item.id}" aria-label="${state.visible ? "Скрыть" : "Показать"} ${item.label}" title="${state.visible ? "Скрыть" : "Показать"}">${state.visible ? "Скрыть" : "Показать"}</button></div>`; }).join("")}</div></div><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-grid"/></svg>Холст · перетащи блоки <label style="margin-left:auto">Сетка <select class="select" data-snap-grid aria-label="Привязка к сетке"><option value="0" ${gridSize === 0 ? "selected" : ""}>Выключена</option>${[8,16,32].map(n => `<option value="${n}" ${gridSize === n ? "selected" : ""}>${n} px</option>`).join("")}</select></label><button class="btn btn-small" type="button" data-align-grid>Выровнять всё</button></div><div class="visual-stage"><div class="visual-stage-inner">${ELEMENTS.filter(item => !item.hideOnly).map((item) => { const state = elementState(item.id); const left = Math.max(3, item.previewX + state.x); const top = Math.max(3, item.previewY + state.y); const width = state.width || item.previewWidth; const height = state.height || item.previewHeight; return `<div class="visual-canvas-item ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" tabindex="0" role="button" aria-label="${item.label}: переместить стрелками" data-visual-id="${item.id}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px"><span class="visual-label">${item.label}</span>${["n","s","e","w","nw","ne","sw","se"].map(edge => `<span class="visual-resize" data-edge="${edge}" title="Изменить размер"></span>`).join("")}</div>`; }).join("")}</div><div class="visual-stage-help">Координаты и размеры соответствуют окну лаунчера. «Выровнять всё» привязывает видимые области к сетке; зажми край для изменения размера.</div></div></div><div class="visual-panel visual-properties"><div class="visual-panel-title"><svg class="ic"><use href="#i-pencil"/></svg>Свойства</div><div class="customizer-note"><strong>${selected.label}</strong><br>${selected.description}</div><label class="customizer-control"><span><strong>Видимость</strong><small>Показывать элемент в лаунчере</small></span><button class="switch ${value.visible ? "on" : ""}" type="button" data-element-visibility="${value.visible ? "hide" : "show"}" aria-pressed="${value.visible}"></button></label>${selected.hideOnly ? `<div class="customizer-note">Этот элемент вложен в страницу: здесь можно скрыть его или вернуть. Положение и стиль доступны во вкладке CSS.</div>` : `<label class="customizer-control visual-select-control"><span><strong>Режим расположения</strong><small>Адаптивный поток или свободные координаты</small></span><select class="select" data-element-select="mode"><option value="flow" ${value.mode === "flow" ? "selected" : ""}>В потоке</option><option value="free" ${value.mode === "free" ? "selected" : ""}>Смещение (старое)</option><option value="absolute" ${value.mode === "absolute" ? "selected" : ""}>Независимо</option></select></label><label class="customizer-control visual-select-control"><span><strong>Вариант</strong><small>Размер и визуальный акцент</small></span><select class="select" data-element-select="variant">${ELEMENT_VARIANTS.map(([id, label]) => `<option value="${id}" ${value.variant === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>${controls("x", "X", "Горизонтальное смещение", -4096, 4096)}${controls("y", "Y", "Вертикальное смещение", -4096, 4096)}${controls("width", "Ширина", "0 — автоматически", 0, 4096)}${controls("height", "Высота", "0 — автоматически", 0, 4096)}${controls("margin", "Отступ снаружи", "Свободное пространство", 0, 40)}${controls("padding", "Внутренний отступ", "Пространство внутри", 0, 40)}${controls("radius", "Закругление", "Радиус углов", 0, 40)}`}</div></div></section>`;
   }
 
   function renderCss() {
@@ -805,8 +997,9 @@ body[data-customizer-open="true"] { overflow: hidden; }
     const prefs = document.getElementById("modal-prefs");
     if (prefs) prefs.hidden = true;
     const current = currentSettings(); layout = normalizeLayout(current.ui_layout || layout); customCss = String(current.custom_css ?? customCss ?? "");
-    injectStyles(); applyLayout(); currentTab = "editor"; renderEditor(); bindFileImport(editorRoot());
-    modal.hidden = false; document.body.dataset.customizerOpen = "true"; setStatus("Изменения сохраняются автоматически");
+    injectStyles(); applyLayout(); currentTab = "editor";
+    modal.hidden = false; document.body.dataset.customizerOpen = "true";
+    renderEditor(); bindFileImport(editorRoot()); setStatus("Изменения сохраняются автоматически");
     setTimeout(() => $("[data-custom-tab='editor']", editorRoot())?.focus(), 0);
   }
   function closeCustomizer() { if (!modal) return; modal.hidden = true; document.body.dataset.customizerOpen = "false"; }
@@ -831,7 +1024,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
     }
   }
   function start() {
-    if (started) return; started = true; injectStyles(); observeUi(); loadSettings().catch(() => {});
+    if (started) return; started = true; try { const savedGrid = localStorage.getItem("omnispec-grid-size"); if (["0", "8", "16", "32"].includes(savedGrid)) gridSize = Number(savedGrid); } catch {} injectStyles(); observeUi(); loadSettings().catch(() => {});
     let attempts = 0;
     const wait = setInterval(() => {
       attempts += 1; const state = appState();
@@ -844,6 +1037,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
       }
       if (attempts > 30) clearInterval(wait);
     }, 250);
+    window.addEventListener("resize", () => { if (currentTab === "editor" && editorRoot()) populateSnapshots(editorRoot()); });
     document.addEventListener("keydown", (event) => {
       if (event.ctrlKey && event.shiftKey && event.key === "Backspace") {
         event.preventDefault();

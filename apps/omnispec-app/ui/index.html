@@ -101,7 +101,7 @@
       <button class="icon-btn" id="btn-sort" title="Сортировка"><svg class="ic"><use href="#i-sort"/></svg></button>
     </div>
 
-    <button class="btn btn-small sidebar-new" id="btn-new-build">
+    <button class="btn btn-small sidebar-new" id="btn-new-build" title="Создать сборку" aria-label="Создать сборку">
       <svg class="ic"><use href="#i-plus"/></svg><span>Создать</span>
     </button>
 
@@ -116,7 +116,7 @@
       <button class="pill update-pill sidebar-update" id="btn-update" hidden>
         <span class="update-dot"></span><span id="btn-update-text">Обновление</span>
       </button>
-      <button class="btn btn-small sidebar-quick" id="btn-quick-settings" title="Настройки лаунчера">
+      <button class="btn btn-small sidebar-quick" id="btn-quick-settings" title="Настройки лаунчера" aria-label="Настройки лаунчера">
         <svg class="ic"><use href="#i-settings"/></svg><span>Настройки</span>
       </button>
     </div>
@@ -134,6 +134,8 @@
             <span id="tb-status">сборка не выбрана</span>
             <span class="sep" id="tb-version-sep" hidden>·</span>
             <span class="muted" id="tb-version" hidden></span>
+            <span class="sep" id="tb-playtime-sep" hidden>·</span>
+            <span class="muted" id="tb-playtime" title="Общее время игры" hidden></span>
           </div>
         </div>
         <button class="icon-btn" id="btn-build-menu" title="Ещё" hidden><svg class="ic"><use href="#i-dots"/></svg></button>

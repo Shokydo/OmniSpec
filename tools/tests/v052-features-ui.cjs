@@ -28,7 +28,7 @@ const server = http.createServer((req, res) => {
       const settings = { onboarded: true, onboarding_pending: false, update_enabled: false, discord_rpc: false, discord_instance_icon: false, theme: 'dark', click_fx: 'off', ambient: 'off', trail: false, ui_scale: 100, categories: [] };
       try { Object.assign(settings, JSON.parse(sessionStorage.getItem('v052-settings') || '{}')); } catch {}
       const instances = [
-        { id: 'fabric', name: 'Fabric Pack', mc_version: '1.21.1', loader: { type: 'fabric', version: '0.16.9' }, source: 'manual', notes: '' },
+        { id: 'fabric', name: 'Fabric Pack', playtime_secs: 7200, mc_version: '1.21.1', loader: { type: 'fabric', version: '0.16.9' }, source: 'manual', notes: '' },
         { id: 'paper', name: 'Paper Server', mc_version: '1.21.1', loader: { type: 'vanilla' }, source: 'manual', notes: '', is_server: true, kind: 'server', server: { kernel: 'paper', mc_version: '1.21.1', kernel_version: '1.21.1', memory_mb: 4096, port: 25565 } },
         { id: 'forge', name: 'Forge Pack', mc_version: '1.20.1', loader: { type: 'forge', version: '47.2' }, source: 'import', notes: 'shaders' }
       ];
@@ -53,12 +53,20 @@ const server = http.createServer((req, res) => {
         if (command === 'server_addon_versions') return [];
         return null;
       };
-      window.__v052 = { calls, settings };
+      window.__v052 = { calls, settings, instances };
       window.__TAURI__ = { core: { invoke }, event: { listen: async () => () => {} } };
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.waitForSelector('[data-id="fabric"]');
 
+    await page.locator('[data-id="fabric"]').first().click();
+    assert.equal(await page.locator('#tb-playtime').innerText(), 'Время игры: 2 ч', 'selected build playtime is shown in its toolbar');
+    await page.evaluate(() => { window.__v052.instances[0].playtime_secs = 10800; });
+    await page.keyboard.press('Control+r');
+    await page.waitForFunction(() => document.querySelector('#tb-playtime').textContent === 'Время игры: 3 ч');
+    await page.evaluate(() => { window.__v052.instances[0].playtime_secs = 7200; });
+    await page.keyboard.press('Control+r');
+    await page.waitForFunction(() => document.querySelector('#tb-playtime').textContent === 'Время игры: 2 ч');
     assert.equal(await page.locator('.sidebar-foot [data-open-customizer]').count(), 0, 'old sidebar customizer button is removed');
     await page.locator('#btn-quick-settings').click();
     const iconSizes = await page.locator('#prefs-nav .prefs-tab-icon .ic').evaluateAll((nodes) => nodes.map((node) => {
@@ -76,6 +84,25 @@ const server = http.createServer((req, res) => {
     assert(customizerGeometry.width >= customizerGeometry.viewportWidth - 52, 'customizer uses the full available width');
     assert(customizerGeometry.height >= customizerGeometry.viewportHeight - 52, 'customizer uses the full available height');
     assert.equal(await page.locator('[data-element-select="mode"].select').count(), 1, 'visual editor selects use launcher styling');
+    const measured = await page.evaluate(() => {
+      const app = document.querySelector('.app').getBoundingClientRect();
+      const actual = document.querySelector('.app .toolbar').getBoundingClientRect();
+      const stage = document.querySelector('.visual-stage-inner').getBoundingClientRect();
+      const preview = document.querySelector('.visual-canvas-item[data-visual-id="toolbar"]').getBoundingClientRect();
+      return { expectedWidth: actual.width / app.width, previewWidth: preview.width / stage.width,
+        expectedHeight: actual.height / app.width, previewHeight: preview.height / stage.width };
+    });
+    assert(Math.abs(measured.expectedWidth - measured.previewWidth) < 0.005, 'preview width reflects real launcher geometry');
+    assert(Math.abs(measured.expectedHeight - measured.previewHeight) < 0.005, 'preview height reflects real launcher geometry');
+    assert.equal(await page.locator('[data-snap-grid]').inputValue(), '16', 'grid snapping defaults to 16 pixels');
+    await page.evaluate(() => { document.body.style.zoom = '1.5'; document.body.style.width = 'calc(100vw / 1.5)'; document.body.style.height = 'calc(100vh / 1.5)'; window.dispatchEvent(new Event('resize')); });
+    const zoomed = await page.evaluate(() => {
+      const app = document.querySelector('.app').getBoundingClientRect(), actual = document.querySelector('.app .toolbar').getBoundingClientRect();
+      const stage = document.querySelector('.visual-stage-inner').getBoundingClientRect(), preview = document.querySelector('.visual-canvas-item[data-visual-id="toolbar"]').getBoundingClientRect();
+      return [actual.width / app.width, preview.width / stage.width, actual.height / app.width, preview.height / stage.width];
+    });
+    assert(Math.abs(zoomed[0] - zoomed[1]) < .008 && Math.abs(zoomed[2] - zoomed[3]) < .008, 'preview geometry follows 150 percent UI scale');
+    await page.evaluate(() => { document.body.style.zoom = ''; document.body.style.width = ''; document.body.style.height = ''; window.dispatchEvent(new Event('resize')); });
     const filterRadii = await page.evaluate(() => {
       const home = document.createElement('aside');
       home.className = 'home-catalog-sidebar';
@@ -98,6 +125,56 @@ const server = http.createServer((req, res) => {
     assert.deepEqual(filterRadii.rounded, { home: '20px', download: '20px', category: '12px' }, 'filter shells follow rounded shape');
     assert.deepEqual(filterRadii.pill, { home: '999px', download: '999px', category: '999px' }, 'filter controls follow pill shape');
 
+    await page.locator('.visual-element[data-visual-id="account"]').click();
+    await page.locator('[data-element-select="mode"]').selectOption('absolute');
+    await page.locator('[data-element-number="width"]').fill('64');
+    await page.locator('[data-element-number="width"]').dispatchEvent('input');
+    await page.waitForFunction(() => document.querySelector('#account-chip').classList.contains('is-avatar-only'));
+    assert.equal(await page.locator('#account-chip .acc-main').isVisible(), false, 'compact profile hides text');
+    assert.equal(await page.locator('#account-chip .chev').isVisible(), false, 'compact profile hides chevron');
+    assert.equal(await page.locator('#account-chip .acc-avatar').isVisible(), true, 'compact profile keeps avatar');
+    assert((await page.locator('#account-chip').getAttribute('aria-label')).length > 0, 'profile has an accessible name');
+    await page.waitForFunction(() => document.querySelector('.visual-canvas-item[data-visual-id="account"] .account-chip')?.classList.contains('is-avatar-only'));
+    await page.waitForFunction(() => /, 0\)$/.test(getComputedStyle(document.querySelector('.app .account-chip')).borderBottomColor));
+    await page.locator('[data-element-number="width"]').fill('224');
+    await page.locator('[data-element-number="width"]').dispatchEvent('input');
+    await page.waitForFunction(() => !document.querySelector('#account-chip').classList.contains('is-avatar-only'));
+    assert.equal(await page.locator('#account-chip .acc-main').isVisible(), true, 'profile text returns on expansion');
+    await page.locator('[data-ui-preset="omnispec"]').click();
+
+    await page.locator('.visual-element[data-visual-id="build-list"]').click();
+    await page.locator('[data-element-select="mode"]').selectOption('absolute');
+    await page.locator('[data-element-number="width"]').fill('80');
+    await page.locator('[data-element-number="width"]').dispatchEvent('input');
+    await page.waitForFunction(() => document.querySelector('#instance-list').classList.contains('is-narrow'));
+    const compactRow = page.locator('#instance-list .instance[data-id="fabric"]').first();
+    assert.equal(await compactRow.locator('.instance-time').isVisible(), false, 'compact rows hide playtime');
+    assert.equal(await compactRow.locator('.instance-body').isVisible(), false, 'compact rows hide build text');
+    assert.equal(await compactRow.locator('.instance-icon').isVisible(), true, 'compact rows retain the build icon');
+    assert.equal(await compactRow.getAttribute('title'), 'Fabric Pack', 'compact icon retains build name in tooltip');
+    assert.equal(await page.locator('#tb-playtime').innerText(), 'Время игры: 2 ч');
+    await page.locator('[data-element-number="width"]').fill('224');
+    await page.locator('[data-element-number="width"]').dispatchEvent('input');
+    await page.waitForFunction(() => !document.querySelector('#instance-list').classList.contains('is-narrow'));
+    assert.equal(await page.locator('#instance-list .instance[data-id="fabric"] .instance-time').first().isVisible(), true, 'expanded rows restore playtime');
+    await page.locator('[data-ui-preset="omnispec"]').click();
+
+    await page.locator('.visual-element[data-visual-id="sidebar-actions"]').click();
+    for (const select of await page.locator('.visual-properties [data-element-select]').all()) {
+      const within = await select.evaluate(el => { const a = el.getBoundingClientRect(), b = el.closest('.customizer-control').getBoundingClientRect(); return a.left >= b.left && a.right <= b.right && a.bottom <= b.bottom; });
+      assert(within, 'property dropdown is completely inside its cell');
+    }
+    await page.locator('[data-element-select="mode"]').selectOption('absolute');
+    await page.locator('[data-element-number="width"]').fill('64');
+    await page.locator('[data-element-number="width"]').dispatchEvent('input');
+    await page.waitForFunction(() => document.querySelector('#btn-quick-settings').classList.contains('is-icon-only'));
+    assert.equal(await page.locator('#btn-quick-settings span').isVisible(), false, 'independently narrowed actions show only the settings icon');
+    await page.waitForFunction(() => document.querySelector('.visual-canvas-item[data-visual-id="sidebar-actions"] .sidebar-quick')?.classList.contains('is-icon-only'));
+    await page.locator('[data-element-number="width"]').fill('224');
+    await page.locator('[data-element-number="width"]').dispatchEvent('input');
+    await page.waitForFunction(() => !document.querySelector('#btn-quick-settings').classList.contains('is-icon-only'));
+    assert.equal(await page.locator('#btn-quick-settings span').isVisible(), true, 'caption returns when the independent actions panel grows');
+    await page.locator('[data-ui-preset="omnispec"]').click();
     await page.locator('.visual-element[data-visual-id="tabs"]').click();
     await page.locator('[data-element-select="mode"]').selectOption('free');
     await page.locator('[data-element-select="variant"]').selectOption('prominent');
@@ -106,6 +183,8 @@ const server = http.createServer((req, res) => {
       await control.fill(value);
       await control.dispatchEvent('input');
     }
+    const resized = await page.locator('.app .tabs').evaluate(el => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height }));
+    assert(Math.abs(resized.width - 510) < 2 && Math.abs(resized.height - 80) < 2, 'width and height inputs resize the actual element, not just its preview');
     await page.locator('[data-element-visibility="hide"]').click();
     await page.locator('[data-element-visibility="show"]').click();
     await page.waitForTimeout(900);
@@ -116,6 +195,16 @@ const server = http.createServer((req, res) => {
     });
     await page.locator('[data-ui-preset="prism"]').click();
     await page.waitForFunction(() => window.__v052.settings.ui_layout?.preset === 'prism');
+    const prism = await page.evaluate(() => {
+      const sidebar = document.querySelector('.app .sidebar').getBoundingClientRect();
+      const main = document.querySelector('.app .main').getBoundingClientRect();
+      const group = document.querySelector('.app .cat:not(.cat-running) .cat-items');
+      return { sidebarWidth: sidebar.width, mainWidth: main.width, grid: getComputedStyle(group).display };
+    });
+    assert(prism.sidebarWidth > prism.mainWidth && prism.grid === 'grid', 'Prism preset rearranges real panels and uses a grid');
+    await page.locator('[data-ui-preset="modrinth"]').click();
+    await page.waitForFunction(() => window.__v052.settings.ui_layout?.preset === 'modrinth');
+    assert.equal(await page.locator('.app .cat:not(.cat-running) .cat-items').first().evaluate(el => getComputedStyle(el).display), 'grid', 'Modrinth preset uses real grid layout');
 
     // Живой редактируемый базовый CSS применён к документу и сохранён.
     await page.locator('[data-custom-tab="css"]').click();
@@ -134,18 +223,63 @@ const server = http.createServer((req, res) => {
     await page.locator('[data-custom-tab="editor"]').click();
     const canvasItem = page.locator('.visual-canvas-item[data-visual-id="toolbar"]');
     assert(await canvasItem.locator('.visual-snapshot .toolbar').count(), 'canvas previews the actual toolbar contents');
+    const beforeOthers = await page.evaluate(() => ['#account-chip', '#instance-list', '.app .tab-body'].map(sel => {
+      const r = document.querySelector(sel).getBoundingClientRect(); return [r.left, r.top, r.width, r.height];
+    }));
     const box = await canvasItem.boundingBox();
-    await page.mouse.move(box.x + 20, box.y + 20);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
     const before = await canvasItem.evaluate(node => node.offsetLeft);
-    await page.mouse.move(box.x + 100, box.y + 60, { steps: 5 });
+    await page.mouse.move(box.x + box.width / 2 + 80, box.y + box.height / 2 + 40, { steps: 5 });
     const during = await canvasItem.evaluate(node => node.offsetLeft);
     assert(during > before + 50, 'the visible block follows the pointer before release');
     await page.mouse.up();
     await page.waitForFunction(() => {
       const item = window.__v052.settings.ui_layout?.elements?.find((entry) => entry.id === 'toolbar');
-      return item?.mode === 'free' && item?.x !== 0 && item?.y !== 0;
+      return item?.mode === 'absolute' && item?.x !== 0 && item?.y !== 0;
     });
+    const afterOthers = await page.evaluate(() => ['#account-chip', '#instance-list', '.app .tab-body'].map(sel => {
+      const r = document.querySelector(sel).getBoundingClientRect(); return [r.left, r.top, r.width, r.height];
+    }));
+    assert(beforeOthers.every((entry, i) => entry.every((value, j) => Math.abs(value - afterOthers[i][j]) < 2)), 'other real regions do not shift when a region is detached and moved');
+    assert.equal(await page.locator('.app .toolbar').evaluate(el => getComputedStyle(el).position), 'fixed', 'moved real control is independent of its old container');
+    await page.locator('.visual-element[data-visual-id="toolbar"]').click();
+    const resizedItem = page.locator('.visual-canvas-item[data-visual-id="toolbar"]');
+    await page.waitForFunction(() => { const node = document.querySelector('.visual-canvas-item[data-visual-id="toolbar"]'); return node?.classList.contains('is-selected') && getComputedStyle(node).zIndex === '30'; });
+    await resizedItem.locator('[data-edge="w"]').hover();
+    const edgeBox = await resizedItem.locator('[data-edge="w"]').boundingBox();
+    const edgeStart = await resizedItem.evaluate(el => +el.dataset.logicalWidth);
+    await page.mouse.move(edgeBox.x + edgeBox.width / 2, edgeBox.y + edgeBox.height / 2);
+    await page.mouse.down(); await page.mouse.move(edgeBox.x - 55, edgeBox.y + edgeBox.height / 2, { steps: 5 }); await page.mouse.up();
+    const resizedWidth = await page.locator('.visual-canvas-item[data-visual-id="toolbar"]').evaluate(el => +el.dataset.logicalWidth);
+    assert(resizedWidth > edgeStart + 30 && Math.abs(resizedWidth / 16 - Math.round(resizedWidth / 16)) < 0.08, 'dragging edge resizes the real area with grid snapping');
+    const snapped = await page.locator('.visual-canvas-item[data-visual-id="toolbar"]').evaluate(el => ({ x: +el.dataset.logicalLeft, y: +el.dataset.logicalTop }));
+    assert(Math.abs(snapped.x / 16 - Math.round(snapped.x / 16)) < 0.08 && Math.abs(snapped.y / 16 - Math.round(snapped.y / 16)) < 0.08, 'drag aligns real element geometry with grid');
+    await page.locator('[data-align-grid]').click();
+    const aligned = await page.evaluate(() => window.__v052.settings.ui_layout.elements.filter(x => x.mode === 'absolute'));
+    assert(aligned.length >= 7 && aligned.every(x => x.x % 16 === 0 && x.y % 16 === 0 && x.width % 16 === 0 && x.height % 16 === 0), 'align all snaps positions and sizes');
+    const keyItem = page.locator('.visual-canvas-item[data-visual-id="toolbar"]');
+    const initialPosition = await page.evaluate(() => window.omnispecDebug.state.settings.ui_layout.elements.find(e => e.id === 'toolbar'));
+    await keyItem.focus(); await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowDown');
+    const movedByKeys = await page.evaluate(() => window.omnispecDebug.state.settings.ui_layout.elements.find(e => e.id === 'toolbar'));
+    assert.equal(movedByKeys.x, initialPosition.x + 16, 'right arrow moves one grid cell');
+    assert.equal(movedByKeys.y, initialPosition.y + 16, 'down arrow moves one grid cell');
+    await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowUp');
+    for (const [id, selector] of [['build-search', '#instance-search'], ['new-build', '#btn-new-build'], ['account', '#account-chip'], ['action-play', '#btn-play'], ['tab-mods', '.tabs [data-tab="mods"]']]) {
+      const toggle = page.locator(`[data-visual-toggle="${id}"]`);
+      await toggle.click();
+      assert.equal(await page.locator(selector).first().isVisible(), false, `${id} is actually hidden`);
+      await page.waitForFunction(id => window.__v052.settings.ui_layout?.elements?.some(e => e.id === id && e.visible === false), id);
+      assert.equal(await page.locator(`[data-visual-toggle="${id}"]`).innerText(), 'Показать', `${id} can be restored from the list`);
+      await page.locator(`[data-visual-toggle="${id}"]`).click();
+      assert.equal(await page.locator(selector).first().isVisible(), true, `${id} is restored`);
+    }
+    await page.locator('[data-snap-grid]').selectOption('0');
+    const offPos = await page.evaluate(() => window.omnispecDebug.state.settings.ui_layout.elements.find(e => e.id === 'toolbar'));
+    await page.locator('.visual-canvas-item[data-visual-id="toolbar"]').focus(); await page.keyboard.press('ArrowRight');
+    const offMoved = await page.evaluate(() => window.omnispecDebug.state.settings.ui_layout.elements.find(e => e.id === 'toolbar'));
+    assert.equal(offMoved.x, offPos.x + 1, 'arrows move one pixel when grid is off');
+    assert.equal(await page.locator('.visual-stage-inner').getAttribute('data-grid'), 'off', 'grid can be disabled');
 
     // Порядок крупных областей тоже меняется перетаскиванием и сохраняется.
     await page.locator('[data-custom-tab="layout"]').click();
@@ -196,11 +330,18 @@ const server = http.createServer((req, res) => {
     await page.locator('.server-download-sentinel').scrollIntoViewIfNeeded();
     await page.waitForFunction(() => document.querySelectorAll('.server-download-card').length === 48);
     assert.equal(await page.locator('.server-download-sentinel').textContent(), 'Показано всё: 48');
+    // Скрытый элемент восстанавливает состояние после перезапуска.
+    await page.evaluate(() => window.omnispecCustomizer.open());
+    await page.locator('[data-visual-toggle="build-search"]').click();
+    await page.waitForFunction(() => window.__v052.settings.ui_layout?.elements?.some(e => e.id === 'build-search' && e.visible === false));
     // Полный файл переживает перезапуск и может быть безопасно отключён.
     await page.reload();
     await page.waitForFunction(() => document.querySelector('link[href="styles.css"]')?.disabled === true);
     assert((await page.locator('#omnispec-replacement-base-css').textContent()).includes(css), 'edited base restored after reload');
     await page.evaluate(() => window.omnispecCustomizer.open());
+    assert.equal(await page.locator('#instance-search').isVisible(), false, 'hidden search stays hidden after reload');
+    await page.locator('[data-visual-toggle="build-search"]').click();
+    assert.equal(await page.locator('#instance-search').isVisible(), true, 'hidden search can be restored after reload');
     await page.locator('[data-custom-tab="css"]').click();
     assert((await page.locator('#custom-css-editor').inputValue()).includes(css), 'full stylesheet remains editable after reload');
     await page.locator('#custom-css-find').fill('sidebar');

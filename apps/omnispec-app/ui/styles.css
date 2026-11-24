@@ -3878,3 +3878,9 @@ body.has-wall .download-catalog-sidebar { background: var(--bg-2); }
 @media (max-width: 620px) {
   .category-editor-grid { grid-template-columns: 1fr; }
 }
+
+/* При узкой панели подписи не обрезаются: остаются доступные по title иконки. */
+.sidebar .sidebar-quick, .sidebar .sidebar-new { min-width: 0; overflow: hidden; }
+.sidebar .sidebar-quick.is-icon-only, .sidebar .sidebar-new.is-icon-only { justify-content: center; padding-inline: 0; }
+.sidebar .sidebar-quick.is-icon-only > span, .sidebar .sidebar-new.is-icon-only > span { display: none; }
+.app-body > .sidebar, .sidebar-foot { min-width: 0; }

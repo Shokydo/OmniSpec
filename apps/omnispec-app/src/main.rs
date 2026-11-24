@@ -4258,11 +4258,20 @@ async fn wallpaper_history_preview(app: AppHandle, state: State<'_, AppState>, n
     let in_history = settings.wallpaper_recent.iter().any(|id| id == &format!("custom:{name}")
         || (id == "custom" && settings.custom_wallpaper.as_deref() == Some(name.as_str())));
     if !in_history { return Err("фона нет в истории".into()); }
-    let media = wallpapers::custom_media(&state.paths.root.join("wallpapers"), &name)?;
-    if media.kind != "video" {
+    let mut media = wallpapers::custom_media(&state.paths.root.join("wallpapers"), &name)?;
+    if media.kind == "video" {
+        let mut guard = state.video_server.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() { *guard = Some(video_stream::VideoServer::new()?); }
+        media.src = Some(guard.as_ref().unwrap().expose("history-preview", Path::new(&media.path))?);
+    } else {
         app.asset_protocol_scope().allow_file(&media.path).map_err(|e| format!("не удалось открыть медиа: {e}"))?;
     }
     Ok(media)
+}
+
+#[tauri::command]
+fn wallpaper_history_preview_release(state: State<'_, AppState>) {
+    revoke_video_slot(&state, "history-preview");
 }
 
 fn revoke_video_slot(state: &AppState, slot: &str) {
@@ -4645,6 +4654,7 @@ fn main() {
             download_custom_wallpaper,
             select_wallpaper_history,
             wallpaper_history_preview,
+            wallpaper_history_preview_release,
             wallpaper_source,
             instance_path,
             version_info,

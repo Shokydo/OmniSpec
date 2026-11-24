@@ -180,7 +180,8 @@ impl LauncherIcon {
 pub struct UiElement {
     pub id: String,
     pub visible: bool,
-    /// flow — обычная адаптивная раскладка, free — свободное смещение.
+    /// flow — адаптивная раскладка, free — прежнее смещение, absolute —
+    /// независимые координаты относительно окна лаунчера.
     pub mode: String,
     pub x: i16,
     pub y: i16,

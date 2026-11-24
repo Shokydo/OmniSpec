@@ -96,7 +96,7 @@ impl VideoServer {
 
     /// Слот — только внутренний идентификатор, URL не содержит локального пути.
     pub fn expose(&self, slot: &str, path: &Path) -> Result<String, String> {
-        if slot != "custom" {
+        if slot != "custom" && slot != "history-preview" {
             return Err("неизвестный источник видео".into());
         }
         let media = crate::wallpapers::media_at(path)?;
@@ -386,6 +386,26 @@ mod tests {
             std::thread::sleep(Duration::from_millis(25));
         }
         assert!(TcpStream::connect(("127.0.0.1", port)).is_err(), "unused listener must stop");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn preview_slot_is_separate_and_can_be_revoked_without_stopping_wallpaper() {
+        let dir = std::env::temp_dir().join(format!("omnispec-video-preview-{}-{}", std::process::id(), random_hex().unwrap()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("movie.mp4");
+        std::fs::write(&file, b"\x00\x00\x00\x18ftypisom01234567890123456789").unwrap();
+        let server = VideoServer::new().unwrap();
+        let custom = server.expose("custom", &file).unwrap();
+        let preview = server.expose("history-preview", &file).unwrap();
+        let custom_path = reqwest::Url::parse(&custom).unwrap().path().to_string();
+        let preview_path = reqwest::Url::parse(&preview).unwrap().path().to_string();
+        assert_ne!(custom_path, preview_path);
+        server.revoke("history-preview");
+        assert!(String::from_utf8_lossy(&request(&server, &preview_path, "")).starts_with("HTTP/1.1 404"));
+        assert!(String::from_utf8_lossy(&request(&server, &custom_path, "")).starts_with("HTTP/1.1 200"));
+        server.revoke("custom");
+        assert!(server.is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

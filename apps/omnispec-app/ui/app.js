@@ -2397,6 +2397,7 @@
     downloadWallpaper: (url) => invoke("download_custom_wallpaper", { url }),
     selectWallpaperHistory: (name) => invoke("select_wallpaper_history", { name }),
     wallpaperHistoryPreview: (name) => invoke("wallpaper_history_preview", { name }),
+    wallpaperHistoryPreviewRelease: () => invoke("wallpaper_history_preview_release"),
     wallpaperSource: (source) => invoke("wallpaper_source", { source }),
     modrinthProject: (projectId) => invoke("modrinth_project", { projectId }),
     searchCurseforge: (q) => invoke("search_curseforge", q),
@@ -2910,6 +2911,7 @@
     downloadWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
     selectWallpaperHistory: async (name) => { DEMO.settings = { ...DEMO.settings, wallpaper: "custom", custom_wallpaper: name }; return { ...DEMO.settings }; },
     wallpaperHistoryPreview: async () => null,
+    wallpaperHistoryPreviewRelease: async () => {},
     wallpaperSource: async () => null,
     instancePath: async (id) => `demo/instances/${id}`,
     openUrl: async (url) => { window.open(url, "_blank"); return null; },
@@ -3016,6 +3018,7 @@
     if (document.body) document.body.dataset.windowHidden = next ? "true" : "false";
 
     if (next) {
+      stopWallpaperPreviews();
       ambient.pause();
       trailFx.pause();
       const wallVideo = $("#wall-video");
@@ -3042,6 +3045,7 @@
     renderSidebar();
     updateStatus();
     renderTab();
+    if (!$("#modal-prefs")?.hidden) renderPrefs();
     refreshInstances().catch(() => {});
     syncPresence();
   }
@@ -3638,7 +3642,7 @@
           </div>`).join("")}</div>`
       : "";
     return `<div class="instance-wrap">
-      <div class="instance ${item.id === state.selectedId ? "is-active" : ""}" data-id="${esc(item.id)}">
+      <div class="instance ${item.id === state.selectedId ? "is-active" : ""}" data-id="${esc(item.id)}" title="${esc(item.name)}" aria-label="${esc(item.name)}">
         <div class="instance-icon" translate="no">${instanceIconHtml(item)}</div>
         <div class="instance-body">
           <div class="instance-name" translate="no">${esc(item.name)}</div>
@@ -3656,7 +3660,7 @@
     const dynamic = Boolean(category?.dynamic);
     const canDrop = Boolean(id && id !== "__running" && !dynamic);
     return `<div class="cat ${open ? "is-open" : ""} ${running ? "cat-running" : ""} ${dynamic ? "cat-dynamic" : ""}" data-cat="${esc(id || "")}" ${canDrop ? `data-drop-cat="${esc(id)}"` : ""}>
-      <div class="cat-head ${running ? "cat-run" : ""}" data-cat-head="${esc(id || "")}" title="${dynamic ? "Динамическая категория: содержимое определяется условиями" : ""}">
+      <div class="cat-head ${running ? "cat-run" : ""}" data-cat-head="${esc(id || "")}" title="${esc(name)}${dynamic ? " · Динамическая категория: содержимое определяется условиями" : ""}">
         <svg class="ic cat-chev"><use href="#i-chev"/></svg>
         ${dynamic ? '<svg class="ic cat-dynamic-icon"><use href="#i-bolt"/></svg>' : ""}
         <span class="cat-name" ${id && id !== "__running" ? 'translate="no"' : ""}>${esc(name)}</span>
@@ -4353,6 +4357,9 @@
     const status = running ? (isServer(meta) ? "сервер запущен" : "запущена") : preparing ? "подготавливается" : (meta && isServer(meta) ? "сервер остановлен" : "остановлена");
     $("#tb-dot").className = `dot ${running ? "on" : ""}`;
     $("#tb-status").textContent = meta ? status : "сборка не выбрана";
+    const playtime = $("#tb-playtime"), playtimeSep = $("#tb-playtime-sep");
+    if (playtime) { playtime.hidden = !meta; playtime.textContent = meta ? `Время игры: ${playtimeLabel(meta.playtime_secs)}` : ""; }
+    if (playtimeSep) playtimeSep.hidden = !meta;
     $("#tb-center").textContent = meta ? `${meta.name} — ${status}` : "OmniSpec — лаунчер Minecraft";
     const playButton = $("#btn-play");
     playButton.querySelector("span").textContent = isServer(meta) ? (running ? "Перезапустить сервер" : "Запустить сервер") : (running ? "Играть снова" : "Играть");
@@ -10184,6 +10191,11 @@
     const name = $("#account-chip-name");
     const kind = $("#account-chip-kind");
     if (!avatar || !name) return;
+    const chip = $("#account-chip");
+    if (chip) {
+      const label = account ? `Профиль: ${account.username}` : "Нет аккаунта — добавить";
+      chip.title = label; chip.setAttribute("aria-label", label);
+    }
     if (!account) {
       avatar.innerHTML = '<svg class="ic"><use href="#i-user"/></svg>';
       avatar.classList.remove("has-skin");
@@ -10674,6 +10686,7 @@
     if (previousCategory !== prefsCategory) animateView(body);
     refreshActiveIndicators();
     const keepScroll = previousCategory === prefsCategory ? body.scrollTop : 0;
+    if (previousCategory === "wall") stopWallpaperPreviews();
     // Выбор плаща перерисовывает гардероб. Сохраняем фокус карточки, чтобы
     // после Enter/пробела можно было продолжить пользоваться стрелками.
     const focusedCape = previousCategory === "avatar" && prefsCategory === "avatar"
@@ -11009,25 +11022,83 @@
       </div>`;
   }
 
+  // Миниатюры — статичные кадры, а не десятки одновременно играющих GIF/видео.
+  // Очередь последовательная: видео-сервер отдаёт только один preview-слот.
   const wallpaperPreviewCache = new Map();
+  let wallpaperPreviewObserver = null, wallpaperPreviewGeneration = 0;
+  let wallpaperPreviewQueue = Promise.resolve(), cancelWallpaperThumbnail = null;
+  function stopWallpaperPreviews() {
+    wallpaperPreviewGeneration++;
+    cancelWallpaperThumbnail?.();
+    wallpaperPreviewObserver?.disconnect();
+    wallpaperPreviewObserver = null;
+  }
+  async function wallpaperThumbnail(media) {
+    const src = media?.src || (media?.path && (TAURI?.core?.convertFileSrc ? TAURI.core.convertFileSrc(media.path) : media.path));
+    if (!src) return null;
+    const video = media.kind === "video";
+    const element = document.createElement(video ? "video" : "img");
+    if (video) { element.muted = true; element.preload = "auto"; element.crossOrigin = "anonymous"; }
+    const frame = await new Promise((resolve) => {
+      let finished = false;
+      const finish = (ok) => { if (finished) return; finished = true; clearTimeout(timer); resolve(ok); };
+      const timer = setTimeout(() => finish(false), 10000);
+      cancelWallpaperThumbnail = () => finish(false);
+      element.onerror = () => finish(false);
+      if (video) element.onloadeddata = () => finish(true);
+      else element.onload = () => finish(true);
+      element.src = src;
+    });
+    cancelWallpaperThumbnail = null;
+    let result = null;
+    if (frame) {
+      try {
+        const canvas = document.createElement("canvas"); canvas.width = 224; canvas.height = 124;
+        const w = video ? element.videoWidth : element.naturalWidth, h = video ? element.videoHeight : element.naturalHeight;
+        if (w && h) {
+          const scale = Math.max(canvas.width / w, canvas.height / h);
+          canvas.getContext("2d").drawImage(element, (canvas.width - w * scale) / 2, (canvas.height - h * scale) / 2, w * scale, h * scale);
+          result = canvas.toDataURL("image/jpeg", .75);
+        }
+      } catch (_) { /* неподдерживаемый кодек или запрет чтения кадра */ }
+    }
+    if (video) { element.pause(); element.removeAttribute("src"); element.load(); await api.wallpaperHistoryPreviewRelease().catch(() => {}); }
+    else element.removeAttribute("src");
+    return result;
+  }
   function bindWallpaperLinks() {
+    stopWallpaperPreviews();
+    const generation = wallpaperPreviewGeneration;
     const customChip = $("#wall-custom-chip");
     if (customChip && state.customWall && state.customWall.kind !== "video") customChip.style.backgroundImage = `url("${state.customWall.src}")`;
-    $$("[data-wall-history-preview]").forEach((button) => {
+    const enqueue = (button) => {
+      wallpaperPreviewObserver?.unobserve(button);
       const name = button.dataset.wallHistoryPreview;
-      if (!wallpaperPreviewCache.has(name)) {
-        const pending = api.wallpaperHistoryPreview(name).then((media) => {
-          if (!media || media.kind === "video") return { video: media?.kind === "video" };
-          return { src: media.src || (TAURI?.core?.convertFileSrc ? TAURI.core.convertFileSrc(media.path) : media.path) };
-        }).catch(() => { wallpaperPreviewCache.delete(name); return {}; });
-        wallpaperPreviewCache.set(name, pending);
-      }
-      wallpaperPreviewCache.get(name).then((media) => {
-        if (!button.isConnected) return;
-        if (media.src) button.style.backgroundImage = `url(${JSON.stringify(media.src)})`;
-        if (media.video) button.classList.add("is-video");
-      });
-    });
+      if (/\.(mp4|m4v|webm)$/i.test(name)) button.classList.add("is-video");
+      wallpaperPreviewQueue = wallpaperPreviewQueue.catch(() => {}).then(async () => {
+        if (generation !== wallpaperPreviewGeneration || !button.isConnected || $("#modal-prefs")?.hidden || state.windowHidden) return;
+        let thumbnail = wallpaperPreviewCache.get(name);
+        if (!thumbnail) {
+          const media = await api.wallpaperHistoryPreview(name);
+          if (generation !== wallpaperPreviewGeneration || state.windowHidden || $("#modal-prefs")?.hidden) {
+            if (media?.kind === "video") await api.wallpaperHistoryPreviewRelease().catch(() => {});
+            return;
+          }
+          if (media?.kind === "video" && button.isConnected) button.classList.add("is-video");
+          thumbnail = await wallpaperThumbnail(media);
+          if (thumbnail) {
+            wallpaperPreviewCache.set(name, thumbnail);
+            if (wallpaperPreviewCache.size > 60) wallpaperPreviewCache.delete(wallpaperPreviewCache.keys().next().value);
+          }
+        }
+        if (thumbnail && generation === wallpaperPreviewGeneration && button.isConnected && !$("#modal-prefs")?.hidden) button.style.backgroundImage = `url(${JSON.stringify(thumbnail)})`;
+      }).catch(() => { /* отсутствующий файл или неподдерживаемый формат: название остаётся доступным */ });
+    };
+    const buttons = $$("[data-wall-history-preview]");
+    if ("IntersectionObserver" in window) {
+      wallpaperPreviewObserver = new IntersectionObserver(entries => entries.forEach(entry => { if (entry.isIntersecting) enqueue(entry.target); }), { root: $("#prefs-body"), rootMargin: "120px" });
+      buttons.forEach(button => wallpaperPreviewObserver.observe(button));
+    } else buttons.forEach(enqueue);
     $$("[data-wall-history-select]").forEach((button) => button.addEventListener("click", async () => {
       const id = button.dataset.wallHistorySelect;
       const name = wallpaperHistoryName(id);
@@ -13710,6 +13781,7 @@
       else {
         renderSidebar();
         renderBuildIcon(selected());
+        updateStatus();
         syncPresence();
       }
     })().finally(() => { instancesRefreshPending = null; });
@@ -14531,7 +14603,36 @@
     const verModal = $("#modal-versions");
     if (verModal) verModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-versions") verModal.hidden = true; });
     const prefsModal = $("#modal-prefs");
-    if (prefsModal) prefsModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-prefs") prefsModal.hidden = true; });
+    if (prefsModal) {
+      prefsModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-prefs") prefsModal.hidden = true; });
+      new MutationObserver(() => {
+        if (prefsModal.hidden) {
+          stopWallpaperPreviews();
+          const body = $("#prefs-body");
+          if (body) { body.replaceChildren(); delete body.dataset.prefCategory; }
+        }
+      }).observe(prefsModal, { attributes: true, attributeFilter: ["hidden"] });
+    }
+    const sidebar = $(".app-body > .sidebar");
+    if (sidebar && "ResizeObserver" in window) {
+      const buttons = $$(".sidebar-quick, .sidebar-new", sidebar);
+      const observer = new ResizeObserver(() => {
+        buttons.forEach(button => {
+          // Панель действий может быть вынесена и уменьшена независимо от сайдбара.
+          const width = Math.min(button.clientWidth, button.parentElement?.clientWidth || button.clientWidth);
+          button.classList.toggle("is-icon-only", width < 105);
+        });
+      });
+      [sidebar, ...buttons, ...buttons.map(button => button.parentElement)].filter(Boolean).forEach(node => observer.observe(node));
+    }
+    const accountChip = $("#account-chip");
+    if (accountChip && "ResizeObserver" in window) {
+      new ResizeObserver(() => accountChip.classList.toggle("is-avatar-only", accountChip.clientWidth < 110)).observe(accountChip);
+    }
+    const buildList = $("#instance-list");
+    if (buildList && "ResizeObserver" in window) {
+      new ResizeObserver(() => buildList.classList.toggle("is-narrow", buildList.clientWidth < 120)).observe(buildList);
+    }
     const initialTabModal = $("#modal-initial-tab");
     if (initialTabModal) {
       $("[data-close-initial-tab]", initialTabModal)?.addEventListener("click", closeInitialTabDialog);
@@ -14598,7 +14699,15 @@
         if (!$("#modal-project-image").hidden) { event.preventDefault(); closeProjectImage(); return; }
         if (!$("#modal-mod-target").hidden) { event.preventDefault(); closeModTarget(); return; }
         if (!$("#modal-project").hidden) { event.preventDefault(); closeProjectModal(); return; }
-        const initialTabModal = $("#modal-initial-tab");
+        const accountChip = $("#account-chip");
+    if (accountChip && "ResizeObserver" in window) {
+      new ResizeObserver(() => accountChip.classList.toggle("is-avatar-only", accountChip.clientWidth < 110)).observe(accountChip);
+    }
+    const buildList = $("#instance-list");
+    if (buildList && "ResizeObserver" in window) {
+      new ResizeObserver(() => buildList.classList.toggle("is-narrow", buildList.clientWidth < 120)).observe(buildList);
+    }
+    const initialTabModal = $("#modal-initial-tab");
         if (initialTabModal && !initialTabModal.hidden) {
           event.preventDefault();
           closeInitialTabDialog();

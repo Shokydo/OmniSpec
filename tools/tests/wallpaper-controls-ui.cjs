@@ -57,6 +57,9 @@ async function setup(page) {
             if (this.failDownload) throw 'test download failure';
             this.settings={...this.settings,wallpaper:'custom',custom_wallpaper:'download.gif'};
             this.save(); return clone(this.settings);
+          case 'wallpaper_history_preview':
+            return args.name.endsWith('.gif') ? {path:'/wall/file.gif',src:gif,kind:'gif'} : {path:'/wall/tone.webm',src:location.origin+'/__tone.webm',kind:'video'};
+          case 'wallpaper_history_preview_release': return null;
           case 'wallpaper_source':
             if (args.source !== 'custom') throw 'unexpected external source';
             return this.settings.custom_wallpaper?.endsWith('.gif')
@@ -91,6 +94,21 @@ async function openWall(page) {
   const errors=[]; page.on('pageerror',e=>errors.push(String(e)));
   try {
     await setup(page);
+    await page.evaluate(() => { window.omnispecDebug.state.settings.wallpaper_recent = ['custom:old.gif','custom:tone.webm']; });
+    await openWall(page);
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-wall-history-preview]')].length === 2 && [...document.querySelectorAll('[data-wall-history-preview]')].every(e => e.style.backgroundImage.includes('data:image/jpeg')), null, {timeout:15000});
+    assert.equal(await page.locator('#wall-history video, #wall-history img').count(), 0, 'history previews are static frames');
+    assert(await page.locator('[data-wall-history-preview="tone.webm"]').evaluate(e => e.classList.contains('is-video')));
+    await page.locator('[data-pref="look"]').click();
+    assert.equal(await page.locator('#wall-history').count(), 0, 'inactive settings tab is unmounted');
+    await page.locator('[data-close-prefs]').first().click();
+    await page.waitForFunction(() => document.querySelector('#prefs-body').children.length === 0);
+    assert.equal(await page.locator('#prefs-body').count(), 1, 'closed settings releases its content');
+    await page.locator('.app-body > .sidebar').evaluate(el => { el.style.setProperty('width','80px','important'); el.style.setProperty('flex-basis','80px','important'); });
+    await page.waitForFunction(() => document.querySelector('#btn-quick-settings').classList.contains('is-icon-only'),null,{timeout:5000});
+    assert.equal(await page.locator('#btn-quick-settings span').isVisible(), false, 'narrow settings button becomes icon only');
+    await page.locator('.app-body > .sidebar').evaluate(el => { el.style.removeProperty('width'); el.style.setProperty('flex-basis','264px'); });
+    await page.waitForFunction(() => !document.querySelector('#btn-quick-settings').classList.contains('is-icon-only'));
     assert(await page.locator('#wall').isHidden(),'old Workshop background is not launched');
     await openWall(page);
     assert.match(await page.locator('#prefs-body').innerText(),/исходные файлы не удалены/);
