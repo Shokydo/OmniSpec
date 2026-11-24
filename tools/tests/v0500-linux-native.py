@@ -203,7 +203,9 @@ try:
     assert get("document.documentElement.lang")=="en"
     click('[data-onboard-language="ru"]');wait_saved(lambda s:s.get('language')=='ru','Russian')
     wait("!document.querySelector('#onboard-next').disabled")
-    for _ in range(6):click('#onboard-next')
+    # Seven steps are shown after the language choice (theme, effects, tray,
+    # trail, scale, import, then the final «Готово» click).
+    for _ in range(7):click('#onboard-next')
     wait_saved(lambda s:s.get('onboarded') is True,'onboarding')
     wait("document.querySelector('#dv-results')")
     assert get("document.querySelector('#home-filters-toggle').getAttribute('aria-expanded')")=='false'
