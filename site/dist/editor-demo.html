@@ -3885,6 +3885,12 @@ body.has-wall .download-catalog-sidebar { background: var(--bg-2); }
 @media (max-width: 620px) {
   .category-editor-grid { grid-template-columns: 1fr; }
 }
+
+/* При узкой панели подписи не обрезаются: остаются доступные по title иконки. */
+.sidebar .sidebar-quick, .sidebar .sidebar-new { min-width: 0; overflow: hidden; }
+.sidebar .sidebar-quick.is-icon-only, .sidebar .sidebar-new.is-icon-only { justify-content: center; padding-inline: 0; }
+.sidebar .sidebar-quick.is-icon-only > span, .sidebar .sidebar-new.is-icon-only > span { display: none; }
+.app-body > .sidebar, .sidebar-foot { min-width: 0; }
 </style>
 <style>/* Server workspace additions kept separate so the build/resource UI remains unchanged. */
 .server-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
@@ -4092,7 +4098,7 @@ body.has-wall .download-catalog-sidebar { background: var(--bg-2); }
       <button class="icon-btn" id="btn-sort" title="Сортировка"><svg class="ic"><use href="#i-sort"/></svg></button>
     </div>
 
-    <button class="btn btn-small sidebar-new" id="btn-new-build">
+    <button class="btn btn-small sidebar-new" id="btn-new-build" title="Создать сборку" aria-label="Создать сборку">
       <svg class="ic"><use href="#i-plus"/></svg><span>Создать</span>
     </button>
 
@@ -4107,7 +4113,7 @@ body.has-wall .download-catalog-sidebar { background: var(--bg-2); }
       <button class="pill update-pill sidebar-update" id="btn-update" hidden>
         <span class="update-dot"></span><span id="btn-update-text">Обновление</span>
       </button>
-      <button class="btn btn-small sidebar-quick" id="btn-quick-settings" title="Настройки лаунчера">
+      <button class="btn btn-small sidebar-quick" id="btn-quick-settings" title="Настройки лаунчера" aria-label="Настройки лаунчера">
         <svg class="ic"><use href="#i-settings"/></svg><span>Настройки</span>
       </button>
     </div>
@@ -13654,6 +13660,7 @@ window.OMNISPEC_LOCALES = {
     downloadWallpaper: (url) => invoke("download_custom_wallpaper", { url }),
     selectWallpaperHistory: (name) => invoke("select_wallpaper_history", { name }),
     wallpaperHistoryPreview: (name) => invoke("wallpaper_history_preview", { name }),
+    wallpaperHistoryPreviewRelease: () => invoke("wallpaper_history_preview_release"),
     wallpaperSource: (source) => invoke("wallpaper_source", { source }),
     modrinthProject: (projectId) => invoke("modrinth_project", { projectId }),
     searchCurseforge: (q) => invoke("search_curseforge", q),
@@ -14167,6 +14174,7 @@ window.OMNISPEC_LOCALES = {
     downloadWallpaper: async () => ({ ...DEMO.settings, wallpaper: "custom" }),
     selectWallpaperHistory: async (name) => { DEMO.settings = { ...DEMO.settings, wallpaper: "custom", custom_wallpaper: name }; return { ...DEMO.settings }; },
     wallpaperHistoryPreview: async () => null,
+    wallpaperHistoryPreviewRelease: async () => {},
     wallpaperSource: async () => null,
     instancePath: async (id) => `demo/instances/${id}`,
     openUrl: async (url) => { window.open(url, "_blank"); return null; },
@@ -14273,6 +14281,7 @@ window.OMNISPEC_LOCALES = {
     if (document.body) document.body.dataset.windowHidden = next ? "true" : "false";
 
     if (next) {
+      stopWallpaperPreviews();
       ambient.pause();
       trailFx.pause();
       const wallVideo = $("#wall-video");
@@ -14299,6 +14308,7 @@ window.OMNISPEC_LOCALES = {
     renderSidebar();
     updateStatus();
     renderTab();
+    if (!$("#modal-prefs")?.hidden) renderPrefs();
     refreshInstances().catch(() => {});
     syncPresence();
   }
@@ -21931,6 +21941,7 @@ window.OMNISPEC_LOCALES = {
     if (previousCategory !== prefsCategory) animateView(body);
     refreshActiveIndicators();
     const keepScroll = previousCategory === prefsCategory ? body.scrollTop : 0;
+    if (previousCategory === "wall") stopWallpaperPreviews();
     // Выбор плаща перерисовывает гардероб. Сохраняем фокус карточки, чтобы
     // после Enter/пробела можно было продолжить пользоваться стрелками.
     const focusedCape = previousCategory === "avatar" && prefsCategory === "avatar"
@@ -22266,25 +22277,83 @@ window.OMNISPEC_LOCALES = {
       </div>`;
   }
 
+  // Миниатюры — статичные кадры, а не десятки одновременно играющих GIF/видео.
+  // Очередь последовательная: видео-сервер отдаёт только один preview-слот.
   const wallpaperPreviewCache = new Map();
+  let wallpaperPreviewObserver = null, wallpaperPreviewGeneration = 0;
+  let wallpaperPreviewQueue = Promise.resolve(), cancelWallpaperThumbnail = null;
+  function stopWallpaperPreviews() {
+    wallpaperPreviewGeneration++;
+    cancelWallpaperThumbnail?.();
+    wallpaperPreviewObserver?.disconnect();
+    wallpaperPreviewObserver = null;
+  }
+  async function wallpaperThumbnail(media) {
+    const src = media?.src || (media?.path && (TAURI?.core?.convertFileSrc ? TAURI.core.convertFileSrc(media.path) : media.path));
+    if (!src) return null;
+    const video = media.kind === "video";
+    const element = document.createElement(video ? "video" : "img");
+    if (video) { element.muted = true; element.preload = "auto"; element.crossOrigin = "anonymous"; }
+    const frame = await new Promise((resolve) => {
+      let finished = false;
+      const finish = (ok) => { if (finished) return; finished = true; clearTimeout(timer); resolve(ok); };
+      const timer = setTimeout(() => finish(false), 10000);
+      cancelWallpaperThumbnail = () => finish(false);
+      element.onerror = () => finish(false);
+      if (video) element.onloadeddata = () => finish(true);
+      else element.onload = () => finish(true);
+      element.src = src;
+    });
+    cancelWallpaperThumbnail = null;
+    let result = null;
+    if (frame) {
+      try {
+        const canvas = document.createElement("canvas"); canvas.width = 224; canvas.height = 124;
+        const w = video ? element.videoWidth : element.naturalWidth, h = video ? element.videoHeight : element.naturalHeight;
+        if (w && h) {
+          const scale = Math.max(canvas.width / w, canvas.height / h);
+          canvas.getContext("2d").drawImage(element, (canvas.width - w * scale) / 2, (canvas.height - h * scale) / 2, w * scale, h * scale);
+          result = canvas.toDataURL("image/jpeg", .75);
+        }
+      } catch (_) { /* неподдерживаемый кодек или запрет чтения кадра */ }
+    }
+    if (video) { element.pause(); element.removeAttribute("src"); element.load(); await api.wallpaperHistoryPreviewRelease().catch(() => {}); }
+    else element.removeAttribute("src");
+    return result;
+  }
   function bindWallpaperLinks() {
+    stopWallpaperPreviews();
+    const generation = wallpaperPreviewGeneration;
     const customChip = $("#wall-custom-chip");
     if (customChip && state.customWall && state.customWall.kind !== "video") customChip.style.backgroundImage = `url("${state.customWall.src}")`;
-    $$("[data-wall-history-preview]").forEach((button) => {
+    const enqueue = (button) => {
+      wallpaperPreviewObserver?.unobserve(button);
       const name = button.dataset.wallHistoryPreview;
-      if (!wallpaperPreviewCache.has(name)) {
-        const pending = api.wallpaperHistoryPreview(name).then((media) => {
-          if (!media || media.kind === "video") return { video: media?.kind === "video" };
-          return { src: media.src || (TAURI?.core?.convertFileSrc ? TAURI.core.convertFileSrc(media.path) : media.path) };
-        }).catch(() => { wallpaperPreviewCache.delete(name); return {}; });
-        wallpaperPreviewCache.set(name, pending);
-      }
-      wallpaperPreviewCache.get(name).then((media) => {
-        if (!button.isConnected) return;
-        if (media.src) button.style.backgroundImage = `url(${JSON.stringify(media.src)})`;
-        if (media.video) button.classList.add("is-video");
-      });
-    });
+      if (/\.(mp4|m4v|webm)$/i.test(name)) button.classList.add("is-video");
+      wallpaperPreviewQueue = wallpaperPreviewQueue.catch(() => {}).then(async () => {
+        if (generation !== wallpaperPreviewGeneration || !button.isConnected || $("#modal-prefs")?.hidden || state.windowHidden) return;
+        let thumbnail = wallpaperPreviewCache.get(name);
+        if (!thumbnail) {
+          const media = await api.wallpaperHistoryPreview(name);
+          if (generation !== wallpaperPreviewGeneration || state.windowHidden || $("#modal-prefs")?.hidden) {
+            if (media?.kind === "video") await api.wallpaperHistoryPreviewRelease().catch(() => {});
+            return;
+          }
+          if (media?.kind === "video" && button.isConnected) button.classList.add("is-video");
+          thumbnail = await wallpaperThumbnail(media);
+          if (thumbnail) {
+            wallpaperPreviewCache.set(name, thumbnail);
+            if (wallpaperPreviewCache.size > 60) wallpaperPreviewCache.delete(wallpaperPreviewCache.keys().next().value);
+          }
+        }
+        if (thumbnail && generation === wallpaperPreviewGeneration && button.isConnected && !$("#modal-prefs")?.hidden) button.style.backgroundImage = `url(${JSON.stringify(thumbnail)})`;
+      }).catch(() => { /* отсутствующий файл или неподдерживаемый формат: название остаётся доступным */ });
+    };
+    const buttons = $$("[data-wall-history-preview]");
+    if ("IntersectionObserver" in window) {
+      wallpaperPreviewObserver = new IntersectionObserver(entries => entries.forEach(entry => { if (entry.isIntersecting) enqueue(entry.target); }), { root: $("#prefs-body"), rootMargin: "120px" });
+      buttons.forEach(button => wallpaperPreviewObserver.observe(button));
+    } else buttons.forEach(enqueue);
     $$("[data-wall-history-select]").forEach((button) => button.addEventListener("click", async () => {
       const id = button.dataset.wallHistorySelect;
       const name = wallpaperHistoryName(id);
@@ -25788,7 +25857,24 @@ window.OMNISPEC_LOCALES = {
     const verModal = $("#modal-versions");
     if (verModal) verModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-versions") verModal.hidden = true; });
     const prefsModal = $("#modal-prefs");
-    if (prefsModal) prefsModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-prefs") prefsModal.hidden = true; });
+    if (prefsModal) {
+      prefsModal.addEventListener("mousedown", (event) => { if (event.target.id === "modal-prefs") prefsModal.hidden = true; });
+      new MutationObserver(() => {
+        if (prefsModal.hidden) {
+          stopWallpaperPreviews();
+          const body = $("#prefs-body");
+          if (body) { body.replaceChildren(); delete body.dataset.prefCategory; }
+        }
+      }).observe(prefsModal, { attributes: true, attributeFilter: ["hidden"] });
+    }
+    const sidebar = $(".app-body > .sidebar");
+    if (sidebar && "ResizeObserver" in window) {
+      new ResizeObserver(() => {
+        $$(".sidebar-quick, .sidebar-new", sidebar).forEach(button => {
+          button.classList.toggle("is-icon-only", button.clientWidth < 105);
+        });
+      }).observe(sidebar);
+    }
     const initialTabModal = $("#modal-initial-tab");
     if (initialTabModal) {
       $("[data-close-initial-tab]", initialTabModal)?.addEventListener("click", closeInitialTabDialog);
@@ -26606,7 +26692,7 @@ body[data-customizer-open="true"] { overflow: hidden; }
 .visual-stage { position: relative; min-height: 430px; overflow: auto; padding: 8px; border: 1px solid var(--line-2); border-radius: var(--r); background: linear-gradient(145deg, color-mix(in srgb, var(--bg-4) 90%, var(--accent) 10%), var(--bg-2)); }
 .visual-stage-inner { position: relative; width: 100%; min-width: 0; min-height: 1px; border: 1px dashed var(--line-2); border-radius: var(--r-sm); background-color: var(--bg-2); background-image: linear-gradient(to right, #ffffff19 1px, transparent 1px), linear-gradient(to bottom, #ffffff19 1px, transparent 1px); }
 .visual-stage-inner[data-grid="off"] { background-image: none; }
-.visual-canvas-item { overflow: hidden; touch-action: none; position: absolute; display: block; min-width: 0; min-height: 0; padding: 0; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: var(--r-sm); background: transparent; color: var(--text); font-size: 10px; cursor: grab; user-select: none; }
+.visual-canvas-item { overflow: hidden; touch-action: none; position: absolute; z-index: 0; display: block; min-width: 0; min-height: 0; padding: 0; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: var(--r-sm); background: transparent; color: var(--text); font-size: 10px; cursor: grab; user-select: none; }
 .visual-canvas-item:hover, .visual-canvas-item.is-selected { z-index: 20; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
 .visual-canvas-item.is-selected { z-index: 30; }
 .visual-canvas-item:active { cursor: grabbing; }
