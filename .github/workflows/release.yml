@@ -291,53 +291,69 @@ jobs:
           tag = os.environ["TAG"]
           logo = "https://raw.githubusercontent.com/Shokydo/OmniSpec/main/apps/omnispec-app/ui/assets/logo.png"
 
-          body = subprocess.run(
-              ["gh", "release", "view", tag, "--json", "body", "--jq", ".body"],
-              capture_output=True, text=True,
-          ).stdout
-          # Только список изменений (секция What's Changed), без инструкции по установке.
-          notes = body
-          marker = "## What's Changed"
-          if marker in body:
-              notes = body.split(marker, 1)[1].strip()
-          notes = notes[:4000] or "Описание изменений не указано."
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+              raise SystemExit("Не указан корректный репозиторий релиза.")
+          try:
+              body = subprocess.run(
+                  ["gh", "release", "view", tag, "--repo", repo, "--json", "body", "--jq", ".body"],
+                  capture_output=True, text=True, check=True,
+              ).stdout.strip()
+          except (OSError, subprocess.CalledProcessError):
+              raise SystemExit("Не удалось получить описание релиза GitHub; анонс не отправлен.")
+          # Только секция What's Changed; следующие секции и ссылка сравнения не патч-лист.
+          marker = re.search(r"(?m)^##\s+What's Changed\s*$", body)
+          if marker:
+              notes = body[marker.end():]
+              end = re.search(r"(?m)^(?:##\s+|\*\*Full Changelog\*\*)", notes)
+              if end:
+                  notes = notes[:end.start()]
+          else:
+              notes = body  # старые релизы могут содержать только список изменений
+          notes = notes.strip() or "Описание изменений не указано."
 
-          embed = {
-              "title": f"🚀 OmniSpec {tag}",
-              "description": notes,
-              "color": 0x5865F2,
-              "thumbnail": {"url": logo},
-              "fields": [{
-                  "name": "Скачать",
-                  "value": f"https://github.com/Shokydo/OmniSpec/releases/tag/{tag}",
-                  "inline": False,
-              }],
-              "footer": {"text": "OmniSpec"},
-          }
-          payload = json.dumps({
-              "username": "OmniSpec",
-              "avatar_url": logo,
-              "allowed_mentions": {"parse": []},
-              "embeds": [embed],
-          }).encode()
+          # Discord ограничивает описание embed 4096 символами. Сохраняем весь текст,
+          # разбивая длинный список на отдельные сообщения, желательно по строкам.
+          # До 1800 Unicode-кодовых точек — безопасно и для UTF-16 с эмодзи.
+          chunks = []
+          while notes:
+              if len(notes) <= 1800:
+                  chunks.append(notes)
+                  break
+              cut = notes.rfind("\n", 0, 1800)
+              if cut < 1:
+                  cut = 1800
+              chunks.append(notes[:cut])
+              notes = notes[cut:].lstrip("\n")
+          payloads = []
+          for i, chunk in enumerate(chunks):
+              embed = {
+                  "title": f"🚀 OmniSpec {tag}" + (f" — часть {i + 1}" if i else ""),
+                  "description": chunk,
+                  "color": 0x5865F2,
+                  "thumbnail": {"url": logo},
+                  "fields": [{"name": "Скачать", "value": f"https://github.com/{repo}/releases/tag/{tag}", "inline": False}],
+                  "footer": {"text": "OmniSpec"},
+              }
+              payloads.append(json.dumps({
+                  "username": "OmniSpec", "avatar_url": logo,
+                  "allowed_mentions": {"parse": []}, "embeds": [embed],
+              }).encode())
           # Не передаём секрет через редирект и не печатаем его при ошибках.
           class NoRedirect(urllib.request.HTTPRedirectHandler):
               def redirect_request(self, req, fp, code, msg, headers, newurl):
                   return None
 
-          req = urllib.request.Request(
-              webhook,
-              data=payload,
-              headers={
-                  "Content-Type": "application/json",
-                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-              },
-          )
-          try:
-              with urllib.request.build_opener(NoRedirect).open(req, timeout=20) as resp:
-                  print("Discord анонс отправлен:", resp.status)
-          except urllib.error.HTTPError as exc:
-              raise SystemExit(f"Discord не принял анонс (HTTP {exc.code}).")
-          except Exception:
-              raise SystemExit("Не удалось связаться с Discord; анонс не отправлен.")
+          for payload in payloads:
+              req = urllib.request.Request(
+                  webhook, data=payload,
+                  headers={"Content-Type": "application/json", "User-Agent": "OmniSpec-release-announcer"},
+              )
+              try:
+                  with urllib.request.build_opener(NoRedirect).open(req, timeout=20) as resp:
+                      print("Discord анонс отправлен:", resp.status)
+              except urllib.error.HTTPError as exc:
+                  raise SystemExit(f"Discord не принял анонс (HTTP {exc.code}); предыдущие части могли быть отправлены.")
+              except Exception:
+                  raise SystemExit("Не удалось связаться с Discord; предыдущие части могли быть отправлены.")
           PYEOF

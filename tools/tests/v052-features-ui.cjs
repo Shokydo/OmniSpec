@@ -41,6 +41,7 @@ const server = http.createServer((req, res) => {
         if (command === 'accounts_info') return { accounts: [], active: null };
         if (command === 'app_info') return { home: '/test', version: '0.52.1', demo: false };
         if (command === 'version_info') return { version: '0.52.1', enabled: false };
+        if (command === 'check_update') return window.__v052.updateInfo || null;
         if (command === 'system_memory') return { total_mb: 8192 };
         if (command === 'list_java') return [];
         if (command === 'running_instances' || command === 'running_sessions') return [];
@@ -60,6 +61,27 @@ const server = http.createServer((req, res) => {
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.waitForSelector('[data-id="fabric"]');
+    // Данные приходят с GitHub через backend: показываем только What's Changed,
+    // даже если список промежуточных релизов не содержит последней версии.
+    await page.evaluate(() => { window.__v052.updateInfo = {
+      version: '0.57.1', current_version: '0.57.0', asset_name: 'OmniSpec.exe',
+      notes: "## Установка\nНе показывать инструкцию\n\n## What's Changed\n\n### Экранные эффекты\n\n- Новые фигуры\n- Текст <img src=x onerror=alert(1)>\n\n### Ограничения\n- Canvas\n\n**Full Changelog**: https://example.invalid",
+      changelog: [{version:'0.56.0', notes:'Старые изменения'}]
+    }; document.querySelector('#btn-update').click(); });
+    await page.waitForSelector('#modal-update:not([hidden])');
+    assert.equal(await page.locator('#upd-notes .upd-change').count(), 2, 'latest release appended when list is incomplete');
+    const latestNotes = page.locator('#upd-notes .upd-change').last();
+    assert.deepEqual(await latestNotes.locator('h4').allTextContents(), ['Экранные эффекты','Ограничения']);
+    assert((await latestNotes.innerText()).includes('Новые фигуры'));
+    assert(!(await latestNotes.innerText()).includes('Не показывать инструкцию'));
+    assert(!(await latestNotes.innerText()).includes('Full Changelog'));
+    assert.equal(await latestNotes.locator('img').count(), 0, 'release markdown is rendered as text, not HTML');
+    await page.locator('[data-close-update]').first().click();
+    await page.evaluate(() => { window.__v052.updateInfo.changelog=[{version:'0.57.1',notes:''}]; window.omnispecDebug.state.update.info=null; document.querySelector('#btn-update').click(); });
+    await page.waitForSelector('#modal-update:not([hidden])');
+    assert((await page.locator('#upd-notes').innerText()).includes('Новые фигуры'), 'missing latest changelog body falls back to latest release body');
+    await page.locator('[data-close-update]').first().click();
+
 
     await page.locator('[data-id="fabric"]').first().click();
     assert.equal(await page.locator('#tb-playtime').innerText(), 'Время игры: 2 ч', 'selected build playtime is shown in its toolbar');

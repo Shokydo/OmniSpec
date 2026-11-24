@@ -106,6 +106,8 @@ fn default_ambient_opacity() -> u8 {
     80
 }
 
+fn default_ambient_direction() -> String { "auto".into() }
+
 fn default_ambient() -> String {
     "stars".to_string()
 }
@@ -447,6 +449,9 @@ pub struct Settings {
     /// Фоновая анимация: stars | dust | sticks | snow | off.
     #[serde(default = "default_ambient")]
     pub ambient: String,
+    /// Направление движения экранных частиц: auto | up | down | left | right.
+    #[serde(default = "default_ambient_direction")]
+    pub ambient_direction: String,
     /// Вариант звука интерфейса: soft | classic | glass | wood | deep.
     #[serde(default = "default_sound_style")]
     pub sound_style: String,
@@ -625,6 +630,7 @@ impl Default for Settings {
             ui_scale: default_ui_scale(),
             initial_tab: default_initial_tab(),
             ambient: default_ambient(),
+            ambient_direction: default_ambient_direction(),
             sound_style: default_sound_style(),
             feed_grid: default_feed_grid(),
             mr_grid: default_feed_grid(),
@@ -756,6 +762,7 @@ mod discord_tests {
     fn custom_css_and_layout_default_for_legacy_and_roundtrip() {
         let legacy: Settings = serde_json::from_str(r#"{"username":"Alex"}"#).unwrap();
         assert!(legacy.custom_css.is_empty());
+        assert_eq!(legacy.ambient_direction, "auto");
         assert_eq!(legacy.ui_layout.sidebar_width, 264);
         assert_eq!(legacy.ui_layout.sidebar_side, "left");
         assert_eq!(legacy.ui_layout.preset, "omnispec");
@@ -763,6 +770,7 @@ mod discord_tests {
 
         let mut changed = legacy.clone();
         changed.custom_css = "[data-os=sidebar]{width:300px}".into();
+        changed.ambient_direction = "left".into();
         changed.ui_layout.sidebar_width = 300;
         changed.ui_layout.sidebar_side = "right".into();
         changed.ui_layout.main_order = vec!["tabs".into(), "content".into(), "toolbar".into()];
@@ -783,6 +791,7 @@ mod discord_tests {
         changed.categories.push(category);
         let restored: Settings = serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
         assert_eq!(restored.custom_css, changed.custom_css);
+        assert_eq!(restored.ambient_direction, "left");
         assert_eq!(restored.ui_layout.sidebar_width, 300);
         assert_eq!(restored.ui_layout.sidebar_side, "right");
         assert_eq!(restored.ui_layout.main_order, changed.ui_layout.main_order);

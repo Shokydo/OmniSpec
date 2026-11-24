@@ -41,7 +41,7 @@
   const FX_STYLES = { wave: "Волна", dot: "Точка", ring: "Кольцо", cross: "Крест", off: "Выкл" };
 
   /** Фоновая анимация: звёздочки, пыль, палочки, снег. */
-  const AMBIENT_STYLES = { stars: "Звёзды", dust: "Пыль", sticks: "Палочки", snow: "Снег", flakes: "Снежинки", leaves: "Листья", petals: "Лепестки", butterflies: "Бабочки", hearts: "Сердечки", triangles: "Треугольники", squares: "Квадраты", diamonds: "Ромбы", hexagons: "Шестиугольники", rings: "Кольца", shapes: "Разные фигуры", off: "Выкл" };
+  const AMBIENT_STYLES = { stars: "Звёзды", dust: "Пыль", sticks: "Палочки", snow: "Снег", flakes: "Снежинки", leaves: "Листья", petals: "Лепестки", butterflies: "Бабочки", hearts: "Сердечки", bubbles: "Пузырьки", triangles: "Треугольники", squares: "Квадраты", diamonds: "Ромбы", hexagons: "Шестиугольники", rings: "Кольца", shapes: "Разные фигуры", off: "Выкл" };
 
   function rgbOf(hex) {
     const clean = String(hex || "#000").replace("#", "");
@@ -481,6 +481,7 @@
     let width = 0;
     let height = 0;
     let style = "stars";
+    let direction = "auto";
     let ink = "#e8e8ee";
     // размер эффектов: настройка в процентах, влияет на все частицы
     let scale = 1;
@@ -522,12 +523,13 @@
       if (style === "sticks") return mul(Math.max(16, Math.min(70, Math.round(area / 26000))));
       if (style === "leaves" || style === "petals") return mul(Math.max(20, Math.min(90, Math.round(area / 21000))));
       if (["triangles", "squares", "diamonds", "hexagons", "rings", "shapes"].includes(style)) return mul(Math.max(18, Math.min(80, Math.round(area / 24000))));
+      if (style === "bubbles") return mul(Math.max(16, Math.min(70, Math.round(area / 27000))));
       if (style === "hearts") return mul(Math.max(12, Math.min(50, Math.round(area / 32000))));
       if (style === "butterflies") return mul(Math.max(6, Math.min(26, Math.round(area / 52000))));
       return mul(Math.max(34, Math.min(170, Math.round(area / 12000))));
     }
 
-    function spawn(anywhere = true) {
+    function createParticle(anywhere = true) {
       const y = anywhere ? rand(0, height) : -rand(4, 40);
       const base = { x: rand(0, width), y, alpha: rand(0.25, 0.8), phase: rand(0, Math.PI * 2) };
       if (style === "flakes") {
@@ -554,6 +556,10 @@
       if (style === "hearts") {
         return { ...base, s: rand(3.5, 6.5) * scale, vy: rand(8, 20), drift: rand(-7, 7), spin: rand(-0.7, 0.7), rot: rand(0, Math.PI), sway: rand(0.4, 1.1), kind: "heart" };
       }
+      if (style === "bubbles") {
+        const life = rand(3.5, 7);
+        return { ...base, y: anywhere ? rand(0, height) : height + rand(4, 40), s: rand(4, 10) * scale, vy: -rand(12, 25), drift: rand(-4, 4), sway: rand(.5, 1.2), kind: "bubble", age: anywhere ? rand(0, life * .7) : 0, life };
+      }
       if (["triangles", "squares", "diamonds", "hexagons", "rings", "shapes"].includes(style)) {
         const shape = style === "shapes" ? ["triangles", "squares", "diamonds", "hexagons", "rings"][Math.floor(Math.random() * 5)] : style;
         return { ...base, s: rand(4, 10) * scale, vy: rand(8, 25), drift: rand(-8, 8), spin: rand(-1, 1), rot: rand(0, Math.PI * 2), sway: rand(.4, 1.1), kind: "shape", shape };
@@ -564,6 +570,21 @@
       }
       // звёзды: часть — четырёхлучевые искры, остальные — точки
       return { ...base, r: rand(0.6, 1.9) * scale, vy: rand(5, 18), drift: rand(-6, 6), spark: Math.random() < 0.12, kind: "star" };
+    }
+
+    function effectiveDirection() {
+      return direction === "auto" ? (style === "dust" || style === "bubbles" ? "up" : "down") : direction;
+    }
+
+    function spawn(anywhere = true) {
+      const p = createParticle(anywhere);
+      if (!anywhere) {
+        const dir = effectiveDirection();
+        if (dir === "up") { p.y = height + rand(4, 40); p.x = rand(0, width); }
+        else if (dir === "down") { p.y = -rand(4, 40); p.x = rand(0, width); }
+        else { p.x = dir === "left" ? width + rand(4, 40) : -rand(4, 40); p.y = rand(0, height); }
+      }
+      return p;
     }
 
     function build() {
@@ -707,6 +728,26 @@
       ctx.restore();
     }
 
+    function drawBubble(p) {
+      const pop = Math.max(0, (p.age / p.life - .83) / .17);
+      const radius = p.s * (1 + pop * .7);
+      ctx.save(); ctx.translate(p.x, p.y);
+      ctx.strokeStyle = ink; ctx.lineWidth = Math.max(.7, p.s * .13);
+      ctx.globalAlpha = p.alpha * (1 - pop);
+      ctx.beginPath(); ctx.arc(0, 0, radius, 0, Math.PI * 2); ctx.stroke();
+      if (pop < .1) {
+        ctx.globalAlpha = p.alpha * .9;
+        ctx.beginPath(); ctx.arc(-p.s * .15, -p.s * .1, p.s * .7, Math.PI * 1.08, Math.PI * 1.52); ctx.stroke();
+      } else {
+        for (let i = 0; i < 6; i += 1) {
+          const a = i * Math.PI / 3;
+          ctx.beginPath(); ctx.moveTo(Math.cos(a) * radius, Math.sin(a) * radius);
+          ctx.lineTo(Math.cos(a) * (radius + p.s * pop * .65), Math.sin(a) * (radius + p.s * pop * .65)); ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
     function drawShape(p) {
       ctx.save();
       ctx.translate(p.x, p.y); ctx.rotate(p.rot);
@@ -745,18 +786,22 @@
       const time = now / 1000;
       for (let i = 0; i < particles.length; i += 1) {
         const p = particles[i];
-        p.y += p.vy * dt;
-        p.x += (p.drift || 0) * dt;
+        const dir = effectiveDirection();
+        const speed = Math.abs(p.vy);
+        const sideways = (p.drift || 0) + (p.sway ? Math.sin(time * p.sway + p.phase) * 6 : 0) + (p.kind === "butterfly" ? Math.sin(time * p.wander + p.phase) * 34 : 0);
+        if (dir === "up" || dir === "down") { p.y += (dir === "up" ? -speed : speed) * dt; p.x += sideways * dt; }
+        else { p.x += (dir === "left" ? -speed : speed) * dt; p.y += sideways * dt; }
+        if (p.kind === "bubble") { p.age += dt; if (p.age >= p.life) { particles[i] = spawn(false); continue; } }
         if (p.kind === "shape" || p.kind === "stick" || p.kind === "flake" || p.kind === "leaf" || p.kind === "petal" || p.kind === "heart") p.rot += p.spin * dt;
-        if ((p.kind === "shape" || p.kind === "dot" || p.kind === "flake" || p.kind === "leaf" || p.kind === "petal" || p.kind === "heart") && p.sway) p.x += Math.sin(time * p.sway + p.phase) * 6 * dt;
         if (p.kind === "butterfly") {
           // волнистый полёт: виляет из стороны в сторону и кренится на поворотах
-          p.x += Math.sin(time * p.wander + p.phase) * 34 * dt;
           p.rot = Math.cos(time * p.wander + p.phase) * 0.55;
         }
-        const gone = p.vy > 0 ? p.y > height + 40 : p.y < -40;
-        if (gone || p.x < -60 || p.x > width + 60) { particles[i] = spawn(false); continue; }
-        if (p.kind === "shape") drawShape(p);
+        const gone = dir === "up" ? p.y < -40 : dir === "down" ? p.y > height + 40 : dir === "left" ? p.x < -40 : p.x > width + 40;
+        const outCross = (dir === "up" || dir === "down") ? (p.x < -60 || p.x > width + 60) : (p.y < -60 || p.y > height + 60);
+        if (gone || outCross) { particles[i] = spawn(false); continue; }
+        if (p.kind === "bubble") drawBubble(p);
+        else if (p.kind === "shape") drawShape(p);
         else if (p.kind === "star") drawStar(p, time);
         else if (p.kind === "stick") drawStick(p);
         else if (p.kind === "flake") drawFlake(p);
@@ -830,6 +875,10 @@
         const el = canvas();
         if (el) el.style.opacity = String(layerOpacity);
         return clean;
+      },
+      direction: (value) => {
+        direction = ["auto", "up", "down", "left", "right"].includes(value) ? value : "auto";
+        return direction;
       },
       refreshInk: () => ambientInkRefresh && ambientInkRefresh(),
       // Тихий режим сворачивания останавливает только WebView-анимацию.
@@ -1081,6 +1130,11 @@
   })();
 
   /** Включение/выключение фоновой анимации из настроек. */
+  function applyAmbientDirection(value) {
+    state.ambientDirection = ambient.direction(value);
+    return state.ambientDirection;
+  }
+
   function applyAmbient(name) {
     state.ambient = ambient.apply(name);
     return state.ambient;
@@ -11364,6 +11418,12 @@
             </div>
           </div>
           <div class="prefs-section">
+            <div class="prefs-label">Направление движения</div>
+            <div class="chips" id="ambient-direction-chips">
+              ${[["auto", "По умолчанию"], ["up", "Вверх"], ["down", "Вниз"], ["left", "Влево"], ["right", "Вправо"]].map(([id, label]) => `<button type="button" class="chip ${(state.ambientDirection || "auto") === id ? "is-active" : ""}" data-ambient-direction="${id}">${label}</button>`).join("")}
+            </div>
+          </div>
+          <div class="prefs-section">
             <div class="prefs-row-head">
               <span class="prefs-label">Размер частиц</span>
               <div class="spacer"></div>
@@ -11899,6 +11959,12 @@
         api.saveSettings(state.settings).catch(() => {});
       });
     }
+    $$("#ambient-direction-chips .chip").forEach(chip => chip.addEventListener("click", () => {
+      const direction = applyAmbientDirection(chip.dataset.ambientDirection);
+      $$("#ambient-direction-chips .chip").forEach(el => el.classList.toggle("is-active", el === chip));
+      state.settings = { ...(state.settings || {}), ambient_direction: direction };
+      api.saveSettings(state.settings).catch(() => {});
+    }));
     const ambientSwitch = $("#set-ambient");
     if (ambientSwitch) ambientSwitch.addEventListener("click", () => {
       const on = !(state.ambient && state.ambient !== "off");
@@ -12211,6 +12277,8 @@
       applyShape("soft");
       state.fx = "wave";
       applyClickFx(state.fx);
+      applyAmbientDirection("auto");
+      state.settings = { ...(state.settings || {}), ambient_direction: "auto" };
       applyAmbient("stars");
       state.wall = { wallpaper: null, fit: "cover", blur: 0, dim: 40, recent: [] };
       state.sound = { on: true, volume: 60, style: "soft" };
@@ -12251,6 +12319,7 @@
       sound_style: state.sound.style || "soft",
       click_fx: state.fx,
       ambient: state.ambient || "stars",
+      ambient_direction: state.ambientDirection || "auto",
       effect_size: Number(state.effectSize) || 100,
       trail_size: Number(state.trailSize) || TRAIL_DEFAULTS.size,
       trail_style: state.trailStyle || TRAIL_DEFAULTS.style,
@@ -13735,13 +13804,42 @@
     }
   }
 
+  // GitHub release body содержит также инструкции по установке; показываем именно изменения.
+  function releaseChanges(body) {
+    const text = String(body || "").replace(/\r\n?/g, "\n").trim();
+    const marker = /^##\s+What's Changed\s*$/mi.exec(text);
+    if (!marker) return text;
+    const rest = text.slice(marker.index + marker[0].length);
+    const end = /^(?:##\s+|\*\*Full Changelog\*\*)/m.exec(rest);
+    return (end ? rest.slice(0, end.index) : rest).trim();
+  }
+
+  function appendReleaseChanges(container, text) {
+    let list = null;
+    for (const line of text.split("\n")) {
+      const heading = /^#{1,6}\s+(.+)$/.exec(line);
+      const item = /^\s*[-*]\s+(.+)$/.exec(line);
+      if (heading) {
+        list = null;
+        const title = document.createElement("h4"); title.textContent = heading[1]; container.appendChild(title);
+      } else if (item) {
+        if (!list) { list = document.createElement("ul"); container.appendChild(list); }
+        const li = document.createElement("li"); li.textContent = item[1].replace(/`([^`]+)`/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1"); list.appendChild(li);
+      } else if (line.trim()) {
+        list = null;
+        const p = document.createElement("p"); p.textContent = line.trim(); container.appendChild(p);
+      } else list = null;
+    }
+  }
+
   /** Список изменений: каждая версия между текущей и новой — отдельным блоком. */
   function renderUpdateNotes(info) {
     const box = $("#upd-notes");
     box.innerHTML = "";
-    const entries = info.changelog && info.changelog.length
-      ? info.changelog
-      : [{ version: info.version, notes: info.notes, published_at: info.published_at }];
+    const entries = Array.isArray(info.changelog) ? info.changelog.map(entry => ({ ...entry })) : [];
+    const latest = entries.find(entry => String(entry.version).replace(/^v/i, "") === String(info.version).replace(/^v/i, ""));
+    if (latest && !releaseChanges(latest.notes) && releaseChanges(info.notes)) latest.notes = info.notes;
+    if (!latest) entries.push({ version: info.version, notes: info.notes, published_at: info.published_at });
     for (const entry of entries) {
       const block = document.createElement("div");
       block.className = "upd-change";
@@ -13759,14 +13857,16 @@
         date.textContent = localizedReleaseDate(entry.published_at);
         head.appendChild(date);
       }
-      const pre = document.createElement("pre");
-      if (entry.notes && entry.notes.trim()) pre.textContent = entry.notes;
+      const content = document.createElement("div");
+      content.className = "upd-change-content";
+      const changes = releaseChanges(entry.notes);
+      if (changes) appendReleaseChanges(content, changes);
       else {
-        pre.dataset.emptyUpdateNotes = "";
-        pre.textContent = I18N.translate("Описание изменений не указано.");
+        content.dataset.emptyUpdateNotes = "";
+        content.textContent = I18N.translate("Описание изменений не указано.");
       }
       block.appendChild(head);
-      block.appendChild(pre);
+      block.appendChild(content);
       box.appendChild(block);
     }
   }
@@ -15198,6 +15298,7 @@
     state.theme = applyTheme((state.settings && state.settings.theme) || "dark");
     state.fx = (state.settings && state.settings.click_fx) || "wave";
     applyClickFx(state.fx);
+    applyAmbientDirection(state.settings?.ambient_direction || "auto");
     applyAmbient((state.settings && state.settings.ambient) || "stars");
     applyEffectSize((state.settings && state.settings.effect_size) || 100);
     applyTrailSize((state.settings && state.settings.trail_size) || TRAIL_DEFAULTS.size);

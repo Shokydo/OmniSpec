@@ -39,27 +39,30 @@ class FakeOpener:
     def __init__(self, failure=None):
         self.failure = failure
         self.request = None
+        self.requests = []
         self.timeout = None
 
     def open(self, request, timeout=None):
         self.request = request
+        self.requests.append(request)
         self.timeout = timeout
         if self.failure:
             raise self.failure
         return FakeResponse()
 
 
-def execute(secret, opener):
+def execute(secret, opener, body="## What's Changed\nТест", failure=None):
     output = io.StringIO()
-    env = {"TAG": "v0.0.0-test"}
+    env = {"TAG": "v0.0.0-test", "GITHUB_REPOSITORY": "Shokydo/OmniSpec"}
     if secret is not None:
         env["DISCORD_WEBHOOK"] = secret
     with patch.dict(os.environ, env, clear=True), \
-         patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "## What's Changed\nТест")), \
+         patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, body), side_effect=failure) as gh, \
          patch("urllib.request.build_opener", return_value=opener) as build_opener, \
          contextlib.redirect_stdout(output):
         exec(compile(SCRIPT, "release-announcement", "exec"), {})
         if build_opener.call_args:
+            assert "--repo" in gh.call_args.args[0] and "Shokydo/OmniSpec" in gh.call_args.args[0]
             opener.redirect_handler = build_opener.call_args.args[0]
     return output.getvalue()
 
@@ -208,6 +211,26 @@ class DiscordReleaseTests(unittest.TestCase):
         self.assertEqual(payload["embeds"][0]["title"], "🚀 OmniSpec v0.0.0-test")
         self.assertEqual(payload["allowed_mentions"], {"parse": []})
         self.assertIn("Тест", payload["embeds"][0]["description"])
+
+    def test_only_changes_section_and_multiple_messages_without_truncation(self):
+        opener = FakeOpener()
+        body = "## Install\nSecrets not here\n\n## What's Changed\n\n### Новое\n- " + ("абвг " * 2000) + "\nКОНЕЦ\n\n**Full Changelog**: https://example.org\n"
+        execute(FAKE_URL, opener, body)
+        descriptions = [json.loads(req.data)["embeds"][0]["description"] for req in opener.requests]
+        self.assertGreater(len(descriptions), 1)
+        self.assertTrue(all(len(x) <= 3800 for x in descriptions))
+        joined = "".join(descriptions)
+        self.assertIn("КОНЕЦ", joined)
+        self.assertNotIn("Secrets not here", joined)
+        self.assertNotIn("Full Changelog", joined)
+        self.assertEqual(joined.count("абвг"), 2000)
+
+    def test_gh_failure_does_not_send_misleading_announcement(self):
+        opener = FakeOpener()
+        with self.assertRaises(SystemExit) as error:
+            execute(FAKE_URL, opener, failure=subprocess.CalledProcessError(1, "gh"))
+        self.assertIn("Не удалось получить описание", str(error.exception))
+        self.assertIsNone(opener.request)
 
     def test_missing_and_invalid_secrets_are_rejected(self):
         for secret in (None, "", "https://evil.example/api/webhooks/123456789012345678/fake_test_token_123", FAKE_URL + "#fragment", FAKE_URL.replace("https:", "http:")):

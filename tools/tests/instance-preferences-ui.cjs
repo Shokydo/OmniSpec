@@ -454,7 +454,54 @@ async function setRange(page, selector, value) {
     }
     // Та же проверка для всех доступных типов частиц, включая летящую вверх пыль.
     await prefs(page,'fx');
-    for (const style of ['stars','dust','sticks','snow','flakes','leaves','petals','butterflies','hearts','triangles','squares','diamonds','hexagons','rings','shapes']) {
+    // На нормальной ширине варианты размещаются в двух рядах, без обрезки текста;
+    // при узком окне число рядов увеличивается, но кнопки остаются доступными.
+    for (const [width, height] of [[1280,800],[1080,640],[800,600]]) {
+      await page.setViewportSize({width,height});
+      const layout=await page.locator('#ambient-chips').evaluate(el => {
+        const group=el.getBoundingClientRect();
+        const buttons=[...el.querySelectorAll('.chip')];
+        const rows=new Set(buttons.map(b => Math.round(b.getBoundingClientRect().top)));
+        return {rows:rows.size, bad:buttons.filter(b => {
+          const r=b.getBoundingClientRect();
+          return b.scrollWidth > b.clientWidth + 1 || r.left < group.left - .5 || r.right > group.right + .5;
+        }).map(b => b.textContent)};
+      });
+      assert(layout.rows >= 2, `${width}: эффекты не перенесены`);
+      if (width === 1280) assert.equal(layout.rows, 2, 'на стандартной ширине должно быть два ряда');
+      assert.deepEqual(layout.bad, [], `${width}: подписи эффектов обрезаны или вышли за границы`);
+    }
+
+    const styles = ['stars','dust','sticks','snow','flakes','leaves','petals','butterflies','hearts','bubbles','triangles','squares','diamonds','hexagons','rings','shapes'];
+    await page.setViewportSize({width:1280,height:800});
+    for (const style of styles) {
+      await page.locator(`[data-ambient="${style}"]`).click();
+      for (const direction of ['up','down','left','right']) {
+        await page.locator(`[data-ambient-direction="${direction}"]`).click();
+        const samples=await page.evaluate(async () => {
+          const first=window.omnispecDebug.ambientSnapshot().particles;
+          await new Promise(resolve => setTimeout(resolve, 100));
+          return [first,window.omnispecDebug.ambientSnapshot().particles];
+        });
+        const after=new Map(samples[1].map(p=>[p.phase,p]));
+        const pairs=samples[0].filter(p=>after.has(p.phase)).map(p=>[p,after.get(p.phase)]);
+        assert(pairs.length > 0, `${style}: частицы исчезли`);
+        const axis=direction === 'up' || direction === 'down' ? 'y' : 'x';
+        const sign=direction === 'up' || direction === 'left' ? -1 : 1;
+        assert(pairs.some(([a,b]) => (b[axis]-a[axis])*sign > .1), `${style}: неверное направление ${direction}`);
+        assert(pairs.every(([a,b]) => (b[axis]-a[axis])*sign >= -.01), `${style}: движение против направления ${direction}`);
+      }
+    }
+    await page.locator('[data-ambient="bubbles"]').click();
+    const bubble=await page.evaluate(async () => {
+      const first=window.omnispecDebug.ambientSnapshot().particles;
+      await new Promise(r=>setTimeout(r,200));
+      return [first,window.omnispecDebug.ambientSnapshot().particles];
+    });
+    assert(bubble[0].every(p=>p.kind === 'bubble' && p.life > 0));
+    assert(bubble[0].some(p=>bubble[1].some(q=>q.phase===p.phase && q.age>p.age)), 'пузырьки анимируются и стареют до лопания');
+    await page.locator('[data-ambient-direction="auto"]').click();
+    for (const style of ['stars','dust','sticks','snow','flakes','leaves','petals','butterflies','hearts','bubbles','triangles','squares','diamonds','hexagons','rings','shapes']) {
       await page.setViewportSize({width:1080,height:640});
       await page.locator(`[data-ambient="${style}"]`).click();
       const snapshots=await page.evaluate(() => {
@@ -488,12 +535,14 @@ async function setRange(page, selector, value) {
       for (let i=3;i<data.length;i+=4) if (data[i]) return true;
       return false;
     }), 'геометрические фигуры действительно нарисованы на canvas');
-    await page.waitForFunction(() => JSON.parse(localStorage.getItem('instance-prefs-settings') || '{}').ambient === 'shapes');
+    await page.locator('[data-ambient-direction="left"]').click();
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('instance-prefs-settings') || '{}').ambient === 'shapes' && JSON.parse(localStorage.getItem('instance-prefs-settings') || '{}').ambient_direction === 'left');
     await page.reload();
     await page.waitForFunction(() => document.body.dataset.ambient === 'shapes' && window.omnispecDebug?.ambientSnapshot().particles.length > 0);
     assert((await page.evaluate(() => window.omnispecDebug.ambientSnapshot().particles)).every(p => p.kind === 'shape'), 'выбор фигур сохраняется после перезапуска');
     await prefs(page,'fx');
-    console.log('EFFECTS_RESIZE: все 15 эффектов сохраняют частицы и скорость — OK');
+    assert(await page.locator('[data-ambient-direction="left"]').evaluate(el=>el.classList.contains('is-active')), 'направление сохраняется после перезапуска');
+    console.log('EFFECTS_RESIZE: все 16 эффектов сохраняют частицы и скорость — OK');
 
     // След курсора не должен стираться на каждом движении; после resize
     // сохранённые точки заново рисуются на изменённом canvas.
