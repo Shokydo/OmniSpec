@@ -1533,15 +1533,8 @@ body.has-wall .console-wrap { background: var(--bg-1a); }
 }
 .modrinth-results.is-grid .card-body { width: 100%; min-width: 0; }
 .modrinth-results.is-grid .card-title { min-height: 1.45em; }
-/* Одинаковые места под описание и теги во всех рядах, даже у пустых
-   описаний и длинных категорий. Содержимое не расширяет колонку. */
-.modrinth-results.is-grid .card-desc {
-  display: -webkit-box; flex: none;
-  height: calc(3 * 1.45em);
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
+/* В плитках описание не занимает место; оно остаётся в списке и на странице проекта. */
+.modrinth-results.is-grid .card-desc { display: none; }
 .modrinth-results.is-grid .card-meta { height: 16px; flex: none; flex-wrap: nowrap; overflow: hidden; min-width: 0; }
 .modrinth-results.is-grid .card-meta .tag { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .modrinth-results.is-grid .card-actions { margin-top: auto; }

@@ -162,6 +162,34 @@ async function clickMods(page) { await page.locator('[data-dv-type="mod"]').clic
       assert.deepEqual(errors, []); await page.close();
     }
 
+    // В плитках модов описания полностью скрыты для Modrinth и CurseForge;
+    // в списке и на странице проекта описание по-прежнему доступно.
+    {
+      const {page,errors} = await newPage(browser);
+      await clickMods(page);
+      for (const source of ['modrinth','curseforge']) {
+        if (source === 'curseforge') { await page.locator('[data-dv-source="curseforge"]').click(); await waitHome(page, source, 'mod'); }
+        for (const size of [1,2,3,4,5,6]) {
+          await page.locator('#feed-size').fill(String(size));
+          const card=page.locator('#dv-results .card[data-project-type="mod"]').first();
+          await card.waitFor();
+          assert(await card.locator('.card-desc').isHidden(), `${source} size ${size}: mod description hidden`);
+          assert.equal(await card.locator('.card-desc').evaluate(el => el.getBoundingClientRect().height),0, 'hidden description occupies no space');
+          const buttons=await card.locator('.card-actions .card-icon-btn').evaluateAll(nodes => nodes.filter(n=>getComputedStyle(n).display!=='none').map(n=>{const r=n.getBoundingClientRect(),p=n.parentElement.getBoundingClientRect();return {width:r.width,height:r.height,right:r.right,parentRight:p.right}}));
+          assert(buttons.length>=2 && buttons.every(x=>Math.abs(x.width-30)<.6 && Math.abs(x.height-30)<.6 && x.right<=x.parentRight+.6), `${source} size ${size}: buttons visible and aligned`);
+        }
+        await page.locator('[data-dv-view="list"]').click();
+        assert(await page.locator('#dv-results .card[data-project-type="mod"] .card-desc').first().isVisible(), `${source}: list keeps description`);
+        await page.locator('#dv-results .card[data-project-type="mod"] .card-title').first().click();
+        await page.waitForSelector('#proj-panel-description');
+        assert((await page.locator('#proj-body').innerText()).includes('Описание сборки'), `${source}: project details keep full description`);
+        await page.keyboard.press('Escape');
+        await page.locator('[data-dv-view="grid"]').click();
+        assert(await page.locator('#dv-results .card[data-project-type="mod"] .card-desc').first().isHidden());
+      }
+      assert.deepEqual(errors,[]); await page.close();
+    }
+
     // Фильтры передаются серверу, сохраняются между страницами, типами и источниками.
     {
       const {page,errors} = await newPage(browser);
