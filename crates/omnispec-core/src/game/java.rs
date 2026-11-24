@@ -2,7 +2,9 @@
 //! (чтобы лаунчер работал «из коробки» у игрока без установленной Java).
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::io::Read;
+use sha1::{Digest, Sha1};
 
 use futures::StreamExt;
 use regex::Regex;
@@ -17,7 +19,8 @@ const RUNTIME_MANIFEST_URL: &str =
     "https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json";
 
 /// Компоненты рантаймов в порядке предпочтения (новые первыми).
-const COMPONENT_PREFERENCE: [&str; 5] = [
+const COMPONENT_PREFERENCE: [&str; 6] = [
+    "java-runtime-epsilon",
     "java-runtime-delta",
     "java-runtime-gamma",
     "java-runtime-beta",
@@ -333,6 +336,17 @@ pub fn pick_best(installs: Vec<JavaInstall>, required: u32) -> Option<JavaInstal
     installs.into_iter().find(|install| install.major == required)
 }
 
+/// Explicit per-instance paths are never silently replaced.
+pub async fn find_explicit_java(custom: &str, required_major: u32) -> Result<JavaInstall> {
+    let path = PathBuf::from(custom);
+    let mut install = probe(&path).await.ok_or_else(|| Error::Java(format!("указанный путь к Java не работает: {custom}")))?;
+    if install.major != required_major {
+        return Err(Error::Java(format!("выбрана Java {}, а требуется Java {}: измените путь или включите автоматический выбор", install.major, required_major)));
+    }
+    install.source = "settings".into();
+    Ok(install)
+}
+
 /// Найти подходящую Java: настройки → система → скачивание рантайма Mojang.
 pub async fn find_java(
     http: &Http,
@@ -341,21 +355,17 @@ pub async fn find_java(
     required_major: u32,
     reporter: &Reporter,
 ) -> Result<JavaInstall> {
-    if let Some(custom) = settings.java_path() {
-        let path = PathBuf::from(custom);
-        if let Some(mut install) = probe(&path).await {
-            if install.major != required_major {
-                return Err(Error::Java(format!(
-                    "выбранная Java {} несовместима с профилем, для которого нужна Java {}. Укажите Java {} в настройках сборки или уберите переопределение и включите автозагрузку",
-                    install.major, required_major, required_major
-                )));
-            }
-            install.source = "settings".into();
-            return Ok(install);
+    // Global choices are preferences when auto-selection is enabled: a single
+    // Java 21 path must not prevent an older profile from obtaining Java 8.
+    let preferred = if required_major <= 8 {
+        settings.java_path_legacy.as_deref().filter(|p| !p.trim().is_empty()).or_else(|| settings.java_path())
+    } else { settings.java_path() };
+    if let Some(custom) = preferred {
+        match find_explicit_java(custom, required_major).await {
+            Ok(install) => return Ok(install),
+            Err(error) if settings.auto_java => reporter.emit("java", 0, 1, format!("{error}; ищем подходящую Java {required_major} автоматически")),
+            Err(error) => return Err(error),
         }
-        return Err(Error::Java(format!(
-            "указанный в настройках путь к Java не работает: {custom}"
-        )));
     }
 
     // Сначала кеш: подходящая Java уже известна — ни одного лишнего процесса.
@@ -455,6 +465,23 @@ fn major_from_release_file(text: &str) -> Option<u32> {
     None
 }
 
+fn safe_runtime_path(relative: &str) -> Result<&Path> {
+    let path = Path::new(relative);
+    if relative.contains('\\') || path.components().any(|c| !matches!(c, Component::Normal(_))) || relative.is_empty() {
+        return Err(Error::Java(format!("небезопасный путь в манифесте Java: {relative}")));
+    }
+    Ok(path)
+}
+
+fn verify_runtime_file(path: &Path, expected_size: u64, expected_sha1: &str) -> Result<bool> {
+    let mut file = std::fs::File::open(path)?;
+    if file.metadata()?.len() != expected_size { return Ok(false); }
+    let mut hash = Sha1::new();
+    let mut buffer = [0u8; 65536];
+    loop { let n = file.read(&mut buffer)?; if n == 0 { break; } hash.update(&buffer[..n]); }
+    Ok(format!("{:x}", hash.finalize()).eq_ignore_ascii_case(expected_sha1))
+}
+
 /// Скачать рантайм Mojang нужной мажорной версии.
 pub async fn install_mojang_runtime(
     http: &Http,
@@ -521,10 +548,11 @@ pub async fn install_mojang_runtime(
         if file.kind != "file" {
             continue;
         }
-        let Some(download) = file.downloads.get("raw") else {
-            // Бывает только lzma-вариант — такие файлы пропускаем.
-            continue;
-        };
+        let download = file.downloads.get("raw").ok_or_else(|| Error::Java(format!("файл Java {relative} недоступен для загрузки")))?;
+        if download.sha1.as_deref().filter(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit())).is_none() {
+            return Err(Error::Java(format!("у файла Java {relative} отсутствует контрольная сумма")));
+        }
+        let relative = safe_runtime_path(relative)?;
         items.push(
             DownloadItem::new(download.url.clone(), target.join(relative))
                 .with_size(Some(download.size))
@@ -544,7 +572,19 @@ pub async fn install_mojang_runtime(
     let reporter_inner = reporter.clone();
     let mut stream = futures::stream::iter(items.into_iter().map(|item| {
         let http = http_inner.clone();
-        async move { http.download(&item.url, &item.dest, item.size, None, false).await }
+        async move {
+            let size = item.size.ok_or_else(|| Error::Java("нет размера файла Java".into()))?;
+            let sha = item.sha1.as_deref().ok_or_else(|| Error::Java("нет контрольной суммы файла Java".into()))?;
+            let valid = verify_runtime_file(&item.dest, size, sha).unwrap_or(false);
+            if !valid {
+                http.download(&item.url, &item.dest, Some(size), None, true).await?;
+                if !verify_runtime_file(&item.dest, size, sha)? {
+                    let _ = std::fs::remove_file(&item.dest);
+                    return Err(Error::Java(format!("контрольная сумма файла Java не совпадает: {}", item.dest.display())));
+                }
+            }
+            Ok::<(), Error>(())
+        }
     }))
     .buffer_unordered(8)
     .boxed();
@@ -561,7 +601,7 @@ pub async fn install_mojang_runtime(
         use std::os::unix::fs::PermissionsExt;
         for (relative, file) in &manifest.files {
             if file.executable && file.kind == "file" {
-                let path = target.join(relative);
+                let path = target.join(safe_runtime_path(relative)?);
                 if let Ok(meta) = std::fs::metadata(&path) {
                     let mut perms = meta.permissions();
                     perms.set_mode(perms.mode() | 0o755);
@@ -592,6 +632,42 @@ pub async fn install_mojang_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn safe_paths_and_runtime_hash() {
+        assert!(safe_runtime_path("bin/java").is_ok());
+        for path in ["../java", "/tmp/java", "bin/../java", "bin\\java", ""] {
+            assert!(safe_runtime_path(path).is_err(), "{path}");
+        }
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"abc").unwrap();
+        assert!(verify_runtime_file(file.path(), 3, "a9993e364706816aba3e25717850c26c9cd0d89d").unwrap());
+        assert!(!verify_runtime_file(file.path(), 3, "0000000000000000000000000000000000000000").unwrap());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn global_mismatch_falls_back_but_explicit_path_is_strict() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths::new(root.path()).unwrap();
+        let fake = |path: &Path, version: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("#!/bin/sh\necho 'openjdk version \"{version}\"' >&2\n")).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let java8 = java_binary(&paths.java_dir().join("test").join("v8"));
+        let java21 = root.path().join("java21");
+        fake(&java8, "1.8.0_402"); fake(&java21, "21.0.4");
+        let mut settings = Settings::default(); settings.java_path = Some(java21.to_string_lossy().to_string());
+        assert!(find_explicit_java(settings.java_path().unwrap(), 8).await.is_err());
+        let found = find_java(&Http::new(), &paths, &settings, 8, &Reporter::none()).await.unwrap();
+        assert_eq!(found.major, 8);
+        settings.auto_java = false;
+        assert!(find_java(&Http::new(), &paths, &settings, 8, &Reporter::none()).await.is_err());
+        settings.java_path_legacy = Some(java8.to_string_lossy().to_string());
+        assert_eq!(find_java(&Http::new(), &paths, &settings, 8, &Reporter::none()).await.unwrap().source, "settings");
+    }
 
     #[test]
     fn majors() {

@@ -82,35 +82,29 @@ pub async fn prepare(
     let features = version::default_features();
 
     reporter.emit("launch", 3, 5, "ищем Java");
-    let mut effective_settings = settings.clone();
-    if let Some(java_path) = instance
-        .java_path
-        .as_ref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        effective_settings.java_path = Some(java_path.clone());
-    }
-    // Для версий до 1.17 нужна Java 8: у неё свой путь в настройках.
-    if effective_settings.java_path.is_none() && resolved.java_major <= 8 {
-        if let Some(legacy) = effective_settings
-            .java_path_legacy
-            .as_ref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            effective_settings.java_path = Some(legacy.clone());
-        }
-    }
-    let java_install = java::find_java(
-        http,
-        paths,
-        &effective_settings,
-        resolved.java_major,
-        reporter,
-    )
-    .await?;
+    let java_install = if let Some(java_path) = instance.java_path.as_deref().filter(|value| !value.trim().is_empty()) {
+        // A profile-specific choice is intentional; do not silently ignore it.
+        java::find_explicit_java(java_path, resolved.java_major).await?
+    } else {
+        java::find_java(http, paths, settings, resolved.java_major, reporter).await?
+    };
 
     let memory_mb = instance.memory_or(settings.memory_clamped());
     let game_dir = crate::instances::ensure_game_dir(paths, instance)?;
+    // Diagnostic only: a successful preflight does not guarantee that another
+    // program (or the game) will not acquire a lock later.
+    if let Err(error) = super::config_preflight::check_config_directory(&game_dir) {
+        reporter.emit("launch", 3, 5, format!("Предупреждение: нельзя проверить запись в папку config: {error}"));
+    }
+    #[cfg(windows)]
+    {
+        let locked = super::config_preflight::blocked_configs(&game_dir);
+        if !locked.is_empty() {
+            let files = locked.iter().map(|(path, error)| format!("{} ({error})", path.display())).collect::<Vec<_>>().join("; ");
+            reporter.emit("launch", 3, 5, format!("Предупреждение: конфиги недоступны для записи: {files}. Закройте удерживающее их приложение."));
+        }
+    }
+
 
     let classpath: Vec<String> = report
         .classpath

@@ -1,5 +1,6 @@
 //! Всё про саму игру: манифест версий, установка файлов, Java и запуск.
 
+pub mod config_preflight;
 pub mod install;
 pub mod java;
 pub mod launch;
