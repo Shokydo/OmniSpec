@@ -1,20 +1,17 @@
 {
  "version": "0.52.0",
- "published_at": "2026-11-15",
- "downloads": 0,
+ "published_at": "2026-11-23",
+ "downloads": 823,
  "setup": {
   "name": "OmniSpec-Setup.exe",
-  "size": 0,
-  "url": "https://github.com/Shokydo/OmniSpec/releases/download/v0.52.0/OmniSpec-Setup.exe"
+  "size": 17763328
  },
  "portable": {
   "name": "OmniSpec.exe",
-  "size": 0,
-  "url": "https://github.com/Shokydo/OmniSpec/releases/download/v0.52.0/OmniSpec.exe"
+  "size": 13912064
  },
  "linux": {
-  "name": "OmniSpec-linux-x86_64",
-  "size": 0,
-  "url": "https://github.com/Shokydo/OmniSpec/releases/download/v0.52.0/OmniSpec"
+  "name": "OmniSpec",
+  "size": 16184440
  }
 }
