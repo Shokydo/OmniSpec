@@ -1491,12 +1491,20 @@ fn server_addons(state: State<'_, AppState>, instance_id: String) -> Result<Vec<
 
 #[tauri::command]
 fn server_toggle_addon(state: State<'_, AppState>, instance_id: String, path: String) -> Result<server::ServerAddon, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     server::toggle_addon(&state.paths, &instance_id, &path)
 }
 
 #[tauri::command]
 fn server_delete_addon(state: State<'_, AppState>, instance_id: String, path: String) -> Result<(), String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
     server::delete_addon(&state.paths, &instance_id, &path)
+}
+
+#[tauri::command]
+fn server_import_addon(state: State<'_, AppState>, instance_id: String, path: String) -> Result<server::ServerAddon, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    server::import_addon(&state.paths, &instance_id, Path::new(&path))
 }
 
 #[tauri::command]
@@ -1508,6 +1516,8 @@ async fn server_search_addons(
     loader: Option<String>,
     offset: Option<u32>,
     limit: Option<u32>,
+    category: Option<String>,
+    sort: Option<String>,
 ) -> Result<omnispec_core::modrinth::SearchResults, String> {
     let project_type = if project_type == "plugin" || project_type == "mod" { project_type } else { "plugin".into() };
     state.modrinth.search(&SearchQuery {
@@ -1515,10 +1525,10 @@ async fn server_search_addons(
         project_type,
         game_version: mc_version,
         loader,
-        categories: Vec::new(),
+        categories: category.filter(|v| !v.is_empty() && v.len() <= 60 && v.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')).into_iter().collect(),
         limit: limit.unwrap_or(24).min(100),
         offset: offset.unwrap_or(0),
-        sort: "downloads".into(),
+        sort: sort.filter(|s| matches!(s.as_str(), "downloads" | "relevance" | "follows" | "newest" | "updated")).unwrap_or_else(|| "downloads".into()),
     }).await.map_err(err)
 }
 
@@ -2417,6 +2427,70 @@ fn fm_move(
         moved += 1;
     }
     Ok(moved)
+}
+
+/// Копирует только обычные файлы и каталоги, никогда не следуя ссылкам и не
+/// перезаписывая существующие данные. При ошибке убирает созданную копию.
+fn copy_import_entry(source: &Path, destination: &Path) -> Result<(), String> {
+    use std::io::Write;
+    let meta = std::fs::symlink_metadata(source).map_err(err)?;
+    if meta.file_type().is_symlink() { return Err("символические ссылки не поддерживаются".into()); }
+    if meta.is_dir() {
+        std::fs::create_dir(destination).map_err(|e| format!("не удалось создать папку: {e}"))?;
+        let result = (|| {
+            for entry in std::fs::read_dir(source).map_err(err)? {
+                let entry = entry.map_err(err)?;
+                copy_import_entry(&entry.path(), &destination.join(entry.file_name()))?;
+            }
+            Ok(())
+        })();
+        if result.is_err() { let _ = std::fs::remove_dir_all(destination); }
+        result
+    } else if meta.is_file() {
+        let mut input = std::fs::File::open(source).map_err(err)?;
+        let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(destination)
+            .map_err(|e| format!("файл уже существует или недоступен: {e}"))?;
+        let result = std::io::copy(&mut input, &mut output).and_then(|_| output.flush());
+        if let Err(e) = result { drop(output); let _ = std::fs::remove_file(destination); return Err(format!("ошибка копирования: {e}")); }
+        Ok(())
+    } else { Err("можно добавить только файлы и папки".into()) }
+}
+
+fn checked_import_target(base: &Path, dir: &str) -> Result<PathBuf, String> {
+    let target = safe_join(base, dir)?;
+    let base_meta = std::fs::symlink_metadata(base).map_err(err)?;
+    if base_meta.file_type().is_symlink() || !base_meta.is_dir() { return Err("корневая папка недоступна или является ссылкой".into()); }
+    let relative = target.strip_prefix(base).map_err(err)?;
+    let mut current = base.to_path_buf();
+    for component in relative.components() {
+        if let std::path::Component::Normal(name) = component {
+            current.push(name);
+            let meta = std::fs::symlink_metadata(&current).map_err(err)?;
+            if meta.file_type().is_symlink() || !meta.is_dir() { return Err("папка назначения недоступна или является ссылкой".into()); }
+        }
+    }
+    Ok(target)
+}
+
+#[tauri::command]
+fn fm_import(state: State<'_, AppState>, instance_id: String, paths: Vec<String>, dir: String) -> Result<usize, String> {
+    let _write = reserve_content_write(&instance_id, &state.content_access)?;
+    let meta = instances::load(&state.paths, &instance_id).map_err(err)?;
+    let base = instances::game_dir_for(&state.paths, &meta);
+    let target = checked_import_target(&base, &dir)?;
+    let mut copied = 0;
+    for path in paths {
+        let source = Path::new(&path);
+        let name = source.file_name().ok_or("у источника нет имени")?;
+        let md = std::fs::symlink_metadata(source).map_err(err)?;
+        if md.file_type().is_symlink() { return Err("символические ссылки не поддерживаются".into()); }
+        if md.is_dir() && target.canonicalize().map_err(err)?.starts_with(source.canonicalize().map_err(err)?) {
+            return Err("нельзя скопировать папку внутрь самой себя".into());
+        }
+        copy_import_entry(source, &target.join(name))?;
+        copied += 1;
+    }
+    Ok(copied)
 }
 
 /// Картинка файлом как data-url: просмотр с зумом без отдельного протокола.
@@ -4631,6 +4705,7 @@ fn main() {
             server_addons,
             server_toggle_addon,
             server_delete_addon,
+            server_import_addon,
             server_search_addons,
             server_addon_versions,
             server_install_catalog_addon,
@@ -4669,6 +4744,7 @@ fn main() {
             fm_create_dir,
             fm_rename,
             fm_move,
+            fm_import,
             fm_read_image,
             archive_list,
             archive_read,

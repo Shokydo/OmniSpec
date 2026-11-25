@@ -1833,6 +1833,23 @@ pub fn addons(paths: &Paths, id: &str) -> Result<Vec<ServerAddon>, String> {
     Ok(out)
 }
 
+pub fn import_addon(paths: &Paths, id: &str, source: &Path) -> Result<ServerAddon, String> {
+    use std::io::Write;
+    let name = source.file_name().and_then(|v| v.to_str()).ok_or("у файла нет имени")?;
+    if !name.to_ascii_lowercase().ends_with(".jar") || name.len() <= 4 { return Err("выберите файл .jar".into()); }
+    let config = load(paths, id)?;
+    let folder = addon_folder(&config.kernel, None)?;
+    let destination = catalog_destination(paths, id, folder, name)?;
+    let mut input = fs::File::open(source).map_err(|e| format!("не удалось открыть JAR: {e}"))?;
+    if !input.metadata().map_err(|e| e.to_string())?.is_file() { return Err("источник должен быть файлом".into()); }
+    let mut output = fs::OpenOptions::new().write(true).create_new(true).open(&destination).map_err(|e| format!("не удалось создать JAR: {e}"))?;
+    if let Err(e) = std::io::copy(&mut input, &mut output).and_then(|_| output.flush()) {
+        drop(output); let _ = fs::remove_file(&destination); return Err(format!("не удалось скопировать JAR: {e}"));
+    }
+    let size = output.metadata().map_err(|e| e.to_string())?.len();
+    Ok(ServerAddon { name: name.into(), path: format!("{folder}/{name}"), size, kind: folder.into(), enabled: true })
+}
+
 pub fn toggle_addon(paths: &Paths, id: &str, relative: &str) -> Result<ServerAddon, String> {
     let meta = instances::load(paths, id).map_err(|e| e.to_string())?;
     let base = root(paths, &meta);

@@ -27,6 +27,8 @@ const server = http.createServer((req, res) => {
     await page.addInitScript(() => {
       const test = window.__serverTest = {
         calls: [],
+        events: {},
+        failStop: false,
         running: [],
         eula: false,
         backups: [],
@@ -54,13 +56,15 @@ const server = http.createServer((req, res) => {
             case 'instance_icon': return null;
             case 'server_snapshot': return {id: 'srv', config: {...this.instance.server}, root: '/test/instances/srv/server', eula_accepted: this.eula, running: this.running.length > 0, metrics: {pid: null, memory_bytes: 0, cpu_percent: 0, uptime_secs: 0, tps: null}, players: [], files: [], log_tail: []};
             case 'server_addons': return [];
+            case 'fm_import': return args.paths.length;
+            case 'list_dir': return [{name:'config', path:'config', is_dir:true, size:0}];
             case 'server_files': return [{name: 'plugins', path: 'plugins', size: 0, modified: 1700000000, kind: 'directory'}, {name: 'server.properties', path: 'server.properties', size: 64, modified: 1700000000, kind: 'config'}];
             case 'server_get': return {...this.instance.server, stop_command: 'stop', tps_command: 'tps', jar: 'paper.jar'};
             case 'server_save': this.instance.server = {...args.config}; return this.instance.server;
             case 'server_set_eula': this.eula = Boolean(args.accepted); return null;
             case 'server_write_icon': return null;
             case 'server_start': this.running = [{instance_id: 'srv', run_id: 'srv#server', account: 'server', started_at: 1700000000}]; return {instance_id: 'srv', run_id: 'srv#server', pid: 42, started_at: 1700000000};
-            case 'server_stop': this.running = []; return null;
+            case 'server_stop': if (this.failStop) throw new Error('stop failed'); this.running = []; return null;
             case 'server_kill': this.running = []; return null;
             case 'server_command': return null;
             case 'server_backup_list': return this.backups.map((item) => ({...item}));
@@ -68,7 +72,7 @@ const server = http.createServer((req, res) => {
             case 'server_backup_restore': return null;
             case 'server_backup_delete': this.backups = this.backups.filter((item) => item.name !== args.name); return null;
             case 'search_modrinth': return {hits: [], total_hits: 0};
-            case 'server_search_addons': return {hits: [{project_id: 'luckperms', title: 'LuckPerms', description: 'Permissions plugin', downloads: 12345}], total_hits: 1};
+            case 'server_search_addons': return {hits: [{project_id: 'luckperms', title: 'LuckPerms', description: 'Permissions plugin', downloads: 12345, icon_url:'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%2365d391%22/%3E%3C/svg%3E'}], total_hits: 1};
             case 'server_addon_versions': return [{id: 'luck-v1', project_id: 'luckperms', name: '5.4.0', version_number: '5.4.0', game_versions: ['1.21.4'], loaders: ['paper'], files: [{url: 'https://cdn.example.test/LuckPerms.jar', filename: 'LuckPerms.jar', primary: true, size: 40, hashes: {sha1: '0123456789abcdef0123456789abcdef01234567'}}]}];
             case 'server_install_catalog_addon': return {name: args.req.filename, path: `plugins/${args.req.filename}`, size: args.req.size, kind: 'plugins', enabled: true};
             case 'server_kernels': return [{id: 'paper', label: 'Paper', group: 'Bukkit', supports_plugins: true, supports_mods: false}];
@@ -80,7 +84,7 @@ const server = http.createServer((req, res) => {
       };
       window.__TAURI__ = {
         core: {invoke: (command, args) => test.invoke(command, args)},
-        event: {listen: async () => () => {}}
+        event: {listen: async (name, cb) => { test.events[name] = cb; return () => {}; }}
       };
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
@@ -127,6 +131,20 @@ const server = http.createServer((req, res) => {
     await page.locator('#btn-play').click();
     await page.waitForFunction(() => window.__serverTest.calls.some((item) => item.command === 'server_start'));
     await page.waitForFunction(() => window.omnispecDebug.state.running.has('srv'));
+    await page.waitForFunction(() => document.querySelector('#btn-play span')?.textContent.includes('Перезапустить'));
+    const beforeRestart = await page.evaluate(() => window.__serverTest.calls.length);
+    await page.locator('#btn-play').click();
+    await page.waitForFunction(n => window.__serverTest.calls.slice(n).some(x => x.command === 'server_start'), beforeRestart);
+    const actions = await page.evaluate(n => window.__serverTest.calls.slice(n).filter(x => ['server_start','server_stop'].includes(x.command)).map(x => x.command), beforeRestart);
+    assert.deepEqual(actions, ['server_stop', 'server_start'], 'toolbar restart stops before starting');
+    await page.waitForFunction(() => window.omnispecDebug.state.running.has('srv'));
+    await page.evaluate(() => { window.__serverTest.failStop = true; });
+    const beforeFailedRestart = await page.evaluate(() => window.__serverTest.calls.length);
+    await page.locator('#btn-play').click();
+    await page.waitForFunction(n => window.__serverTest.calls.slice(n).some(x => x.command === 'server_stop'), beforeFailedRestart);
+    await page.waitForTimeout(100);
+    assert.equal(await page.evaluate(n => window.__serverTest.calls.slice(n).some(x => x.command === 'server_start'), beforeFailedRestart), false, 'failed stop must never start');
+    await page.evaluate(() => { window.__serverTest.failStop = false; });
     const groupOrder = await page.locator('#instance-list > .cat').evaluateAll((groups) => groups.map((group) => group.dataset.cat));
     assert.equal(groupOrder[0], '__running', 'running servers stay in the pinned category');
     assert.equal(await page.locator('#instance-list > .cat.cat-running').count(), 1, 'running category has sticky marker');
@@ -180,6 +198,39 @@ const server = http.createServer((req, res) => {
     await page.locator('[data-tab="download"]').click();
     await page.waitForSelector('#server-download-query');
     await page.waitForSelector('.server-download-card');
+    assert.equal(await page.locator('.server-download-icon').count(), 1, 'project icon is rendered');
+    assert.equal(await page.locator('[data-server-view="list"]').getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.locator('.server-download-description').isVisible(), true);
+    await page.locator('[data-server-view="grid"]').click();
+    assert.equal(await page.locator('#server-download-results').evaluate(el => el.classList.contains('is-grid')), true);
+    assert.equal(await page.locator('.server-download-description').isVisible(), false);
+    for (let level=1; level<=6; level++) {
+      await page.locator('#server-download-size').fill(String(level));
+      assert.equal(await page.locator('#server-download-size-value').innerText(), String(level));
+      assert.equal(await page.evaluate(() => window.omnispecDebug.state.settings.mods_grid), level);
+      const card = await page.locator('.server-download-card').boundingBox();
+      assert(card.width >= 110 && card.width < 1100, 'card remains usable at every size');
+    }
+    await page.locator('#server-download-size').fill('1');
+    await page.locator('[data-server-download-load]').click();
+    await page.waitForSelector('[data-server-download-install]');
+    assert.equal(await page.locator('[data-server-download-install]').isVisible(), true, 'versions usable at smallest tile size');
+    await page.locator('[data-server-view="list"]').click();
+    assert.equal(await page.locator('[data-server-download-install]').isVisible(), true, 'switching layout preserves selected versions');
+    assert.equal(await page.locator('.server-download-description').isVisible(), true);
+    const filterRect = await page.locator('.server-catalog-sidebar').boundingBox();
+    const resultRect = await page.locator('#server-download-results').boundingBox();
+    assert(filterRect.x + filterRect.width <= resultRect.x, 'server filters appear left of results');
+    await page.locator('[data-server-category="optimization"]').click();
+    await page.waitForFunction(() => window.__serverTest.calls.some(x => x.command === 'server_search_addons' && x.args.category === 'optimization' && x.args.mcVersion === '1.21.4' && x.args.loader === 'paper'));
+    assert.equal(await page.locator('[data-server-category="optimization"]').getAttribute('aria-pressed'), 'true');
+    await page.locator('#server-download-sort').selectOption('updated');
+    await page.waitForFunction(() => window.__serverTest.calls.some(x => x.command === 'server_search_addons' && x.args.sort === 'updated' && x.args.category === 'optimization'));
+    await page.locator('#server-download-scope').selectOption('all');
+    await page.waitForFunction(() => window.__serverTest.calls.some(x => x.command === 'server_search_addons' && x.args.mcVersion === null && x.args.loader === 'paper'));
+    await page.locator('[data-server-category=""]').click();
+    await page.locator('#server-download-scope').selectOption('compatible');
+    await page.waitForFunction(() => window.__serverTest.calls.some(x => x.command === 'server_search_addons' && x.args.mcVersion === '1.21.4' && x.args.category === '' && x.args.sort === 'updated'));
     const initial = await page.evaluate(() => window.__serverTest.calls.find(c => c.command === 'server_search_addons'));
     assert.equal(initial.args.query, '', 'server catalog loads without search input');
     assert.equal(initial.args.mcVersion, '1.21.4');
@@ -216,10 +267,26 @@ const server = http.createServer((req, res) => {
     await page.waitForSelector('.fm-list');
     await page.waitForFunction(() => window.__serverTest.calls.some((item) => item.command === 'server_files'));
     assert.equal(await page.evaluate(() => window.__serverTest.calls.some((item) => item.command === 'list_dir')), false, 'server files use the guarded server_files endpoint');
+    const listBox = await page.locator('#fm-list').boundingBox();
+    await page.evaluate(({x,y}) => window.__serverTest.events['tauri://drag-drop']({payload:{paths:['/tmp/settings.json','/tmp/my-world'],position:{x,y}}}), {x:listBox.x+listBox.width-20,y:listBox.y+listBox.height-20});
+    await page.waitForFunction(() => window.__serverTest.calls.filter(x => x.command === 'fm_import').length === 2);
+    const imported = await page.evaluate(() => window.__serverTest.calls.filter(x => x.command === 'fm_import').map(x => x.args));
+    assert.deepEqual(imported.map(x => [x.paths[0],x.dir]), [['/tmp/settings.json',''],['/tmp/my-world','']]);
+    const folder = await page.locator('.fm-item[data-path="plugins"]').boundingBox();
+    await page.evaluate(({x,y}) => window.__serverTest.events['tauri://drag-drop']({payload:{paths:['/tmp/Extra.jar'],position:{x,y}}}), {x:folder.x+folder.width/2,y:folder.y+folder.height/2});
+    await page.waitForFunction(() => window.__serverTest.calls.some(x => x.command === 'fm_import' && x.args.dir === 'plugins'));
+
+
     await page.locator('[data-tab="backups"]').click();
     await page.waitForSelector('#backup-create');
     await page.locator('#backup-create').click();
     await page.waitForFunction(() => window.__serverTest.calls.some((item) => item.command === 'server_backup_create'));
+    await page.evaluate(() => { const meta = window.omnispecDebug.state.instances.find(x => x.id === 'srv'); meta.is_server = false; meta.kind = 'instance'; delete meta.server; });
+    await page.locator('[data-tab="files"]').click();
+    await page.waitForSelector('.fm-item[data-path="config"]');
+    const gameFolder = await page.locator('.fm-item[data-path="config"]').boundingBox();
+    await page.evaluate(({x,y}) => window.__serverTest.events['tauri://drag-drop']({payload:{paths:['/tmp/game-settings.json'],position:{x,y}}}), {x:gameFolder.x+gameFolder.width/2,y:gameFolder.y+gameFolder.height/2});
+    await page.waitForFunction(() => window.__serverTest.calls.some(x => x.command === 'fm_import' && x.args.paths[0] === '/tmp/game-settings.json' && x.args.dir === 'config'));
     assert.deepEqual(errors, []);
     console.log('SERVER_UI: EULA, sticky running category, server controls, guarded files, ZIP backup and Modrinth plugin flow — OK');
   } finally {

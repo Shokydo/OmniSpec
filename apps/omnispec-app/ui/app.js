@@ -2081,16 +2081,53 @@
     }
   }
 
+  function fileDropDestination(position) {
+    if (state.tab !== "files" || !selected() || fm.archive) return null;
+    if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) return null;
+    const ratio = window.devicePixelRatio || 1;
+    const node = document.elementFromPoint(position.x / ratio, position.y / ratio);
+    if (!node?.closest(".fm")) return null;
+    const folder = node.closest('.fm-item[data-drop="1"], .fm-row[data-drop="1"], .fm-crumb .c[data-drop]');
+    return folder ? (folder.dataset.path ?? folder.dataset.dir ?? folder.dataset.drop ?? "") : fm.path;
+  }
+
+  async function importDroppedIntoFiles(paths, dir, instanceId) {
+    let count = 0; const failures = [];
+    for (const path of paths) {
+      try { count += await api.fmImport(instanceId, [path], dir); }
+      catch (error) { failures.push(`${String(path).split(/[\\/]/).pop()}: ${String(error)}`); }
+    }
+    if (count) toast(`Добавлено в «${dir || "корень"}»: ${count}`, "ok");
+    if (failures.length) toast(`Не удалось добавить: ${failures.join("; ")}`, "err");
+    if (state.tab === "files" && state.selectedId === instanceId) { fmDropCache(); await fmRefresh(); await fmRenderTree(); }
+  }
+
   function bindFileDrop() {
     if (!IS_APP) return;
     const zone = $("#drop-zone");
     try {
-      TAURI.event.listen("tauri://drag-enter", () => { if (zone) zone.hidden = false; });
-      TAURI.event.listen("tauri://drag-over", () => { if (zone) zone.hidden = false; });
-      TAURI.event.listen("tauri://drag-leave", () => { if (zone) zone.hidden = true; });
+      TAURI.event.listen("tauri://drag-enter", () => { if (zone) zone.hidden = state.tab === "files"; });
+      TAURI.event.listen("tauri://drag-over", (event) => {
+        if (zone) zone.hidden = state.tab === "files";
+        if (state.tab !== "files") return;
+        document.querySelectorAll(".fm-external-drop").forEach(el => el.classList.remove("fm-external-drop"));
+        const position = event?.payload?.position, ratio = window.devicePixelRatio || 1;
+        if (!position) return;
+        const node = document.elementFromPoint(position.x / ratio, position.y / ratio);
+        const target = node?.closest('.fm-item[data-drop="1"], .fm-row[data-drop="1"], .fm-crumb .c[data-drop], #fm-list');
+        if (target && !fm.archive) target.classList.add("fm-external-drop");
+      });
+      TAURI.event.listen("tauri://drag-leave", () => { if (zone) zone.hidden = true; document.querySelectorAll(".fm-external-drop").forEach(el => el.classList.remove("fm-external-drop")); });
       TAURI.event.listen("tauri://drag-drop", (event) => {
         if (zone) zone.hidden = true;
+        document.querySelectorAll(".fm-external-drop").forEach(el => el.classList.remove("fm-external-drop"));
         const payload = event && event.payload ? event.payload : {};
+        if (state.tab === "files") {
+          const target = fileDropDestination(payload.position);
+          if (fm.archive) return toast("Нельзя добавлять файлы внутрь архива", "err");
+          if (target === null) return toast("Перетащи файлы на область файлов или папку", "err");
+          return importDroppedIntoFiles(payload.paths || [], target, state.selectedId);
+        }
         handleDroppedFiles(payload.paths || []);
       });
     } catch (error) { /* старые версии webview без drag-событий */ }
@@ -2422,7 +2459,8 @@
     serverAddons: (instanceId) => invoke("server_addons", { instanceId }),
     serverToggleAddon: (instanceId, path) => invoke("server_toggle_addon", { instanceId, path }),
     serverDeleteAddon: (instanceId, path) => invoke("server_delete_addon", { instanceId, path }),
-    serverSearchAddons: (query, projectType, mcVersion, loader, offset = 0, limit = 24) => invoke("server_search_addons", { query, projectType, mcVersion, loader, offset, limit }),
+    serverImportAddon: (instanceId, path) => invoke("server_import_addon", { instanceId, path }),
+    serverSearchAddons: (query, projectType, mcVersion, loader, offset = 0, limit = 24, category = "", sort = "downloads") => invoke("server_search_addons", { query, projectType, mcVersion, loader, offset, limit, category, sort }),
     serverAddonVersions: (projectId, mcVersion, loader) => invoke("server_addon_versions", { projectId, mcVersion, loader }),
     serverInstallCatalogAddon: (instanceId, req) => invoke("server_install_catalog_addon", { instanceId, req }),
     serverInstallAddon: (instanceId, url, kind = null) => invoke("server_install_addon", { instanceId, url, kind }),
@@ -2445,6 +2483,7 @@
     fmCreateDir: (instanceId, path) => invoke("fm_create_dir", { instanceId, path }),
     fmRename: (instanceId, path, name) => invoke("fm_rename", { instanceId, path, name }),
     fmMove: (instanceId, paths, dir) => invoke("fm_move", { instanceId, paths, dir }),
+    fmImport: (instanceId, paths, dir) => invoke("fm_import", { instanceId, paths, dir }),
     fmReadImage: (instanceId, path) => invoke("fm_read_image", { instanceId, path }),
     archiveList: (instanceId, path) => invoke("archive_list", { instanceId, path }),
     archiveRead: (instanceId, path, entry) => invoke("archive_read", { instanceId, path, entry }),
@@ -2780,6 +2819,7 @@
     serverAddons: async () => [],
     serverToggleAddon: async () => null,
     serverDeleteAddon: async () => null,
+    serverImportAddon: async (_id, path) => ({name: String(path).split(/[\\/]/).pop(), enabled:true}),
     serverSearchAddons: async (query, _projectType, mcVersion, _loader, offset = 0, limit = 24) => {
       const names = ["LuckPerms", "ViaVersion", "EssentialsX", "WorldEdit", "Geyser", "WorldGuard", "CoreProtect", "Chunky", "spark", "PlaceholderAPI", "Vault", "Citizens", "BlueMap", "Dynmap", "TAB", "ProtocolLib", "GriefPrevention", "Plan", "LiteBans", "DiscordSRV", "SkinsRestorer", "MythicMobs", "Jobs Reborn", "Quests"];
       const needle = String(query || "").toLocaleLowerCase();
@@ -2853,6 +2893,7 @@
       return next;
     },
     fmMove: async (_id, paths, dir) => demoFileMove(paths, dir),
+    fmImport: async (_id, paths) => paths.length,
     fmReadImage: async (_id, path) => DEMO.files.images[path] || demoPixelImage(),
     archiveList: async (_id, path) => {
       const list = DEMO.files.archives[path];
@@ -5004,8 +5045,8 @@
   /** Какие вкладки показывать: без сборки — только лента, со сборкой — всё остальное. */
   function applyTabs(meta) {
     const server = isServer(meta);
-    const serverOnlyTabs = new Set(["server", "players", "metrics", "backups"]);
-    const serverAllowed = new Set(["server", "console", "files", "players", "metrics", "backups", "download", "settings"]);
+    const serverOnlyTabs = new Set(["server", "players", "metrics", "backups", "plugins"]);
+    const serverAllowed = new Set(["server", "console", "files", "players", "metrics", "backups", "plugins", "download", "settings"]);
     $$(".tab").forEach((tab) => {
       const id = tab.dataset.tab;
       if (!meta) tab.hidden = !["discover", "servers"].includes(id);
@@ -5037,19 +5078,25 @@
     }).join("")}</div>`;
   }
 
-  async function waitServerStopped(instanceId, timeout = 20000) {
+  const serverActionsPending = new Set();
+  async function waitServerStopped(instanceId, timeout = 30000) {
     const deadline = Date.now() + timeout;
-    while (state.running.has(instanceId) && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      await refreshInstances();
-    }
-    return !state.running.has(instanceId);
+    do {
+      const sessions = await api.runningSessions();
+      if (!Array.isArray(sessions)) throw new Error("не удалось проверить состояние сервера; повторный запуск отменён");
+      if (!sessions.some(item => item.instance_id === instanceId)) return true;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    } while (Date.now() < deadline);
+    return false;
   }
 
   async function performServerAction(instanceId, action) {
     const meta = state.instances.find((item) => item.id === instanceId);
-    if (!meta || !isServer(meta)) return;
+    if (!meta || !isServer(meta) || serverActionsPending.has(instanceId)) return;
     if (action === "kill" && !(await askConfirm({ title: "Завершить сервер?", text: "Немедленно завершить процесс сервера? Несохранённые данные могут потеряться.", ok: "Завершить", danger: true }))) return;
+    serverActionsPending.add(instanceId);
+    const actionButtons = [...document.querySelectorAll(`[data-server-controls="${CSS.escape(instanceId)}"] [data-server-action], #btn-play, #btn-restart, #btn-stop`)].map(button => [button, button.disabled]);
+    actionButtons.forEach(([button]) => { button.disabled = true; });
     try {
       if (action === "start") {
         await api.serverStart(instanceId);
@@ -5061,12 +5108,11 @@
         await api.serverKill(instanceId);
         toast("Процесс сервера завершён", "ok");
       } else if (action === "restart") {
-        if (state.running.has(instanceId)) {
-          await api.serverStop(instanceId);
-          if (!await waitServerStopped(instanceId)) {
-            throw new Error("сервер не завершился вовремя; используй «Килл»");
-          }
-        }
+        const sessions = await api.runningSessions();
+        if (!Array.isArray(sessions)) throw new Error("не удалось проверить состояние сервера; перезапуск отменён");
+        if (!sessions.some(item => item.instance_id === instanceId)) throw new Error("сервер не запущен; используй «Запуск»");
+        await api.serverStop(instanceId);
+        if (!await waitServerStopped(instanceId)) throw new Error("сервер не завершился вовремя; повторный запуск отменён");
         await api.serverStart(instanceId);
         toast("Сервер перезапускается", "ok");
       }
@@ -5076,6 +5122,12 @@
       else if (state.tab === "servers") renderServerList();
     } catch (error) {
       toast(String(error), "err");
+    } finally {
+      serverActionsPending.delete(instanceId);
+      actionButtons.forEach(([button, disabled]) => { if (button.isConnected) button.disabled = disabled; });
+      await refreshInstances();
+      if (state.selectedId === instanceId) renderTab();
+      else if (state.tab === "servers") renderServerList();
     }
   }
 
@@ -5203,6 +5255,45 @@
     $$('[data-addon-delete]').forEach((button) => button.addEventListener("click", async () => { if (!(await askConfirm({ title: "Удалить аддон?", text: "Файл аддона будет удалён.", ok: "Удалить", danger: true }))) return; try { await api.serverDeleteAddon(meta.id, button.dataset.addonDelete); renderServerOverview(); } catch (error) { toast(String(error), "err"); } }));
   }
 
+  async function renderServerAddons() {
+    const meta = selected(); if (!meta || !isServer(meta)) return;
+    const body = $("#tab-body"), generation = tabRenderGeneration;
+    body.innerHTML = `<section class="server-view"><div class="loading-line">Загружаем плагины…</div></section>`;
+    let addons;
+    try { addons = await api.serverAddons(meta.id); }
+    catch (error) {
+      if (generation === tabRenderGeneration && selected()?.id === meta.id && state.tab === "plugins") body.innerHTML = `<section class="server-view"><div class="error-text">${esc(String(error))}</div><button class="btn" id="server-addons-retry">Повторить</button></section>`;
+      $("#server-addons-retry")?.addEventListener("click", renderServerAddons); return;
+    }
+    if (state.windowHidden || generation !== tabRenderGeneration || selected()?.id !== meta.id || state.tab !== "plugins") return;
+    const modded = ["fabric", "forge", "neoforge"].includes(String(meta.server?.kernel || "").toLowerCase());
+    body.innerHTML = `<section class="server-view server-plugins-view"><div class="server-download-head"><div><div class="eyebrow">СЕРВЕР · ${esc(meta.name)}</div><h1>Плагины${modded ? " и моды" : ""}</h1><p class="muted">Управление файлами сервера. Для применения изменений перезапустите сервер.</p></div><div class="server-plugin-actions"><button type="button" class="btn" id="server-addons-import">Импорт JAR</button><button type="button" class="btn btn-primary" id="server-addons-download">Загрузить с Modrinth</button></div></div><div class="panel"><div class="panel-head"><strong>Установленные</strong><span class="badge">${addons.length}</span></div><div class="server-addon-list">${addons.length ? addons.map(item => `<div class="server-addon"><span translate="no">${esc(item.name)}</span><small>${esc(item.kind)} · ${humanSize(item.size)} · ${item.enabled ? "включён" : "выключен"}</small><button type="button" class="icon-btn" data-plugin-toggle="${esc(item.path)}" title="Включить/выключить" aria-label="Включить или выключить ${esc(item.name)}">${item.enabled ? "✓" : "○"}</button><button type="button" class="icon-btn danger" data-plugin-delete="${esc(item.path)}" title="Удалить" aria-label="Удалить ${esc(item.name)}">×</button></div>`).join("") : `<div class="empty-state">Плагинов и модов пока нет. Импортируйте JAR или откройте каталог Modrinth.</div>`}</div></div></section>`;
+    $("#server-addons-download")?.addEventListener("click", () => { state.tab = "download"; renderTab(); });
+    $("#server-addons-import")?.addEventListener("click", async event => {
+      const button = event.currentTarget; button.disabled = true;
+      try {
+        const paths = await api.pickFiles("Выбери файлы плагинов", ["jar"]); if (!paths?.length) return;
+        let added = 0; const errors = [];
+        for (const path of paths) { try { await api.serverImportAddon(meta.id, path); added++; } catch (error) { errors.push(`${String(path).split(/[\\/]/).pop()}: ${String(error)}`); } }
+        if (added) toast(`Импортировано: ${added}. Перезапустите сервер для применения.`, "ok");
+        if (errors.length) toast(`Не удалось импортировать: ${errors.join("; ")}`, "err");
+        if (selected()?.id === meta.id && state.tab === "plugins") renderServerAddons();
+      } catch (error) { toast(String(error), "err"); }
+      finally { if (button.isConnected) button.disabled = false; }
+    });
+    $$('[data-plugin-toggle]', body).forEach(button => button.addEventListener("click", async () => {
+      button.disabled = true;
+      try { await api.serverToggleAddon(meta.id, button.dataset.pluginToggle); if (selected()?.id === meta.id && state.tab === "plugins") renderServerAddons(); }
+      catch (error) { button.disabled = false; toast(String(error), "err"); }
+    }));
+    $$('[data-plugin-delete]', body).forEach(button => button.addEventListener("click", async () => {
+      if (!await askConfirm({ title: "Удалить плагин?", text: `Файл «${button.dataset.pluginDelete}» будет удалён с сервера.`, ok: "Удалить", danger: true })) return;
+      button.disabled = true;
+      try { await api.serverDeleteAddon(meta.id, button.dataset.pluginDelete); if (selected()?.id === meta.id && state.tab === "plugins") renderServerAddons(); }
+      catch (error) { button.disabled = false; toast(String(error), "err"); }
+    }));
+  }
+
   async function renderServerDownloads() {
     const meta = selected();
     if (!meta) return;
@@ -5214,11 +5305,12 @@
     const projectType = modded ? "mod" : "plugin";
     const noun = modded ? "моды" : "плагины";
     const body = $("#tab-body");
-    body.innerHTML = `<section class="server-view server-download-view"><div class="server-download-head"><div><div class="eyebrow"><svg class="ic"><use href="#i-modrinth"/></svg>MODRINTH</div><h1>Загрузить</h1><p class="muted">${modded ? "Моды" : "Плагины"} для ${esc(meta.name)} · Minecraft ${esc(mcVersion || "версия не указана")}. Скачивание проходит через проверку проекта, версии, размера и SHA-1.</p></div><button class="btn" id="server-download-back">Сервер</button></div><div class="server-download-search"><svg class="ic"><use href="#i-search"/></svg><input class="input grow" id="server-download-query" placeholder="Найти ${modded ? "мод" : "плагин"} на Modrinth" spellcheck="false"><button class="btn btn-primary" id="server-download-search"><svg class="ic"><use href="#i-search"/></svg>Найти</button></div><div class="server-download-hint">Показаны ${noun} для Minecraft ${esc(mcVersion || "—")} и ядра ${esc(kernel || "—")}; совместимость указана по данным Modrinth.</div><div id="server-download-results" class="server-addon-card-grid" aria-live="polite"><div class="loading-line">Загружаем каталог…</div></div></section>`;
+    body.innerHTML = `<section class="server-view server-download-view"><div class="server-download-head"><div><div class="eyebrow"><svg class="ic"><use href="#i-modrinth"/></svg>MODRINTH</div><h1>Загрузить</h1><p class="muted">${modded ? "Моды" : "Плагины"} для ${esc(meta.name)} · Minecraft ${esc(mcVersion || "версия не указана")}. Скачивание проходит через проверку проекта, версии, размера и SHA-1.</p></div><button class="btn" id="server-download-back">Сервер</button></div><div class="server-download-search"><svg class="ic"><use href="#i-search"/></svg><input class="input grow" id="server-download-query" placeholder="Найти ${modded ? "мод" : "плагин"} на Modrinth" spellcheck="false"><button class="btn btn-primary" id="server-download-search"><svg class="ic"><use href="#i-search"/></svg>Найти</button></div><div class="server-catalog-toolbar"><div class="mr-view" role="group" aria-label="Вид каталога"><button type="button" data-server-view="list" aria-pressed="${state.modsView !== "grid"}"><svg class="ic"><use href="#i-list"/></svg>Список</button><button type="button" data-server-view="grid" aria-pressed="${state.modsView === "grid"}"><svg class="ic"><use href="#i-grid"/></svg>Плитка</button></div><label class="feed-size" title="Размер плиток"><svg class="ic"><use href="#i-grid"/></svg><input type="range" id="server-download-size" min="1" max="6" step="1" value="${modsGridLevel()}" aria-label="Размер плиток"><span class="mono" id="server-download-size-value">${modsGridLevel()}</span></label></div><div class="download-catalog-layout server-catalog-layout"><aside class="download-catalog-sidebar server-catalog-sidebar" aria-label="Фильтры каталога"><div class="download-filter-head"><span>Фильтры</span><span class="download-filter-source">Modrinth</span></div><div class="download-filter-fields"><div class="field catalog-filter-field"><label>Тип</label><div class="catalog-listbox-trigger server-filter-static">${modded ? "Моды" : "Плагины"}</div></div><div class="field catalog-filter-field"><label for="server-download-scope">Версия игры</label><select class="catalog-listbox-trigger" id="server-download-scope"><option value="compatible">Для ${esc(mcVersion || "сервера")}</option><option value="all">Все версии</option></select></div><div class="field catalog-filter-field"><label>Ядро</label><div class="catalog-listbox-trigger server-filter-static" translate="no">${esc(kernel || "—")}</div></div><div class="field catalog-filter-field"><label for="server-download-sort">Сортировка</label><select class="catalog-listbox-trigger" id="server-download-sort"><option value="downloads">Популярные</option><option value="relevance">По соответствию</option><option value="updated">Недавно обновлены</option><option value="newest">Новые</option><option value="follows">По подписчикам</option></select></div></div><details class="download-category-group" open><summary>Категории ${modded ? "модов" : "плагинов"}<svg class="ic"><use href="#i-chev"/></svg></summary><div class="download-category-list" role="group" aria-label="Категории"><button type="button" data-server-category="" class="home-category is-active" aria-pressed="true"><svg class="ic"><use href="#i-grid"/></svg>Все категории</button>${MOD_CATEGORIES.modrinth.map(([id,label,icon]) => `<button type="button" data-server-category="${esc(id)}" class="home-category" aria-pressed="false"><svg class="ic"><use href="#${icon}"/></svg>${esc(label)}</button>`).join("")}</div></details><input type="hidden" id="server-download-category" value=""></aside><div class="server-catalog-content"><div class="server-download-hint" id="server-download-hint">Показаны ${noun} для Minecraft ${esc(mcVersion || "—")} и ядра ${esc(kernel || "—")}; совместимость указана по данным Modrinth.</div><div id="server-download-results" class="server-addon-card-grid" aria-live="polite"><div class="loading-line">Загружаем каталог…</div></div></div></div></section>`;
     const input = $("#server-download-query");
     const results = $("#server-download-results");
     const pageSize = 24;
     let query = "";
+    let browseVersion = mcVersion, category = "", sort = "downloads", searchTimer = 0;
     let hits = [];
     let total = 0;
     let loading = false;
@@ -5228,7 +5320,7 @@
     let generation = 0;
     let observer = null;
 
-    const cardHtml = (item) => `<article class="server-addon-card server-download-card" data-server-download-project="${esc(item.project_id)}"><div class="server-download-card-title"><strong>${esc(item.title)}</strong><span class="server-source-badge">Modrinth</span></div><span>${esc(item.description || "Описание не указано")}</span><small>${Number(item.downloads || 0).toLocaleString()} загрузок · ${esc(item.project_id)}</small><button class="btn btn-small" data-server-download-load>Показать версии</button><div class="server-download-versions" data-server-download-versions hidden></div></article>`;
+    const cardHtml = (item) => `<article class="server-addon-card server-download-card" data-server-download-project="${esc(item.project_id)}"><div class="server-download-icon-wrap"><svg class="ic server-download-icon-fallback" aria-hidden="true"><use href="#i-mod"/></svg>${item.icon_url ? `<img class="server-download-icon" src="${esc(item.icon_url)}" alt="" loading="lazy">` : ""}</div><div class="server-download-info"><div class="server-download-card-title"><strong title="${esc(item.title)}">${esc(item.title)}</strong></div><span class="server-download-description">${esc(item.description || "Описание не указано")}</span><small class="server-download-meta">${Number(item.downloads || 0).toLocaleString()} загрузок · Modrinth</small></div><div class="server-download-actions"><button type="button" class="btn btn-small btn-primary server-download-action" data-server-download-load title="Выбрать версию и установить" aria-label="Выбрать версию и установить ${esc(item.title)}"><svg class="ic"><use href="#i-download"/></svg><span>Показать версии</span></button><button type="button" class="icon-btn server-download-action" data-server-download-link title="Открыть на Modrinth" aria-label="Открыть ${esc(item.title)} на Modrinth"><svg class="ic"><use href="#i-link"/></svg></button></div><div class="server-download-versions" data-server-download-versions hidden></div></article>`;
     const sentinelHtml = () => {
       if (loadingMore) return `<div class="server-download-sentinel is-loading"><span class="mr-more-spinner"></span>Загружаем ещё ${noun}…</div>`;
       if (moreError) return `<div class="server-download-sentinel is-error"><span>${esc(moreError)}</span><button class="btn btn-small" data-server-download-retry>Повторить</button></div>`;
@@ -5272,7 +5364,7 @@
       updateSentinel();
       const currentGeneration = generation;
       try {
-        const response = await api.serverSearchAddons(query, projectType, mcVersion, loader, hits.length, pageSize);
+        const response = await api.serverSearchAddons(query, projectType, browseVersion || null, loader, hits.length, pageSize, category, sort);
         if (currentGeneration !== generation || !results.isConnected || selected()?.id !== meta.id) return;
         const known = new Set(hits.map((item) => item.project_id));
         const fresh = (response?.hits || []).filter((item) => !known.has(item.project_id));
@@ -5297,6 +5389,11 @@
     const search = async () => {
       const nextQuery = input?.value.trim() || "";
       query = nextQuery;
+      category = $("#server-download-category")?.value || "";
+      sort = $("#server-download-sort")?.value || "downloads";
+      browseVersion = $("#server-download-scope")?.value === "all" ? "" : mcVersion;
+      const hint = $("#server-download-hint");
+      if (hint) hint.textContent = browseVersion ? `Показаны ${noun} для Minecraft ${mcVersion} и ядра ${kernel}; совместимость указана Modrinth.` : `Все версии для ядра ${kernel}. Перед установкой проверяется совместимость с Minecraft ${mcVersion}.`;
       generation += 1;
       const currentGeneration = generation;
       hits = [];
@@ -5307,8 +5404,17 @@
       if (observer) { observer.disconnect(); observer = null; }
       renderResults();
       try {
-        const response = await api.serverSearchAddons(query, projectType, mcVersion, loader, 0, pageSize);
+        let response = await api.serverSearchAddons(query, projectType, browseVersion || null, loader, 0, pageSize, category, sort);
         if (currentGeneration !== generation || !results.isConnected || selected()?.id !== meta.id) return;
+        // Показываем общие рекомендации, если точная версия не дала ни одного результата.
+        // Установка всё равно проверяет серверную версию, а не версию общего каталога.
+        if (!response?.hits?.length && !query && !category && browseVersion) {
+          browseVersion = "";
+          response = await api.serverSearchAddons("", projectType, null, loader, 0, pageSize, "", sort);
+          if (currentGeneration !== generation || !results.isConnected || selected()?.id !== meta.id) return;
+          const scope = $("#server-download-scope"); if (scope) scope.value = "all";
+          if (hint) hint.textContent = `Для Minecraft ${mcVersion} ничего не найдено. Показаны общие рекомендации для ${kernel}; совместимость будет проверена перед установкой. Проверьте версию сервера.`;
+        }
         hits = response?.hits || [];
         total = Number(response?.total_hits ?? hits.length);
       } catch (searchError) {
@@ -5320,12 +5426,58 @@
         renderResults();
       }
     };
-    $("#server-download-search")?.addEventListener("click", search);
-    input?.addEventListener("keydown", (event) => { if (event.key === "Enter") search(); });
+    const applyServerView = () => {
+      const grid = state.modsView === "grid";
+      results.classList.toggle("is-grid", grid);
+      $$("[data-server-view]", body).forEach(button => {
+        const active = button.dataset.serverView === (grid ? "grid" : "list");
+        button.classList.toggle("is-active", active); button.setAttribute("aria-pressed", String(active));
+      });
+      const width = results.clientWidth - (parseFloat(getComputedStyle(results).paddingLeft) || 0) - (parseFloat(getComputedStyle(results).paddingRight) || 0);
+      results.style.setProperty("--server-cols", String(modsColumns(modsGridLevel(), width, 8)));
+    };
+    const viewObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
+      if (!results.isConnected) { viewObserver.disconnect(); return; } applyServerView();
+    }) : null;
+    viewObserver?.observe(results);
+    applyServerView();
+    $$("[data-server-view]", body).forEach(button => button.addEventListener("click", () => {
+      state.modsView = button.dataset.serverView;
+      state.settings = { ...(state.settings || {}), mods_view: state.modsView };
+      api.saveSettings(state.settings).catch(() => {});
+      applyServerView(); watchMore();
+    }));
+    $("#server-download-size")?.addEventListener("input", event => {
+      const level = Math.max(1, Math.min(6, Number(event.target.value) || 2));
+      $("#server-download-size-value").textContent = String(level);
+      state.settings = { ...(state.settings || {}), mods_grid: level };
+      api.saveSettings(state.settings).catch(() => {});
+      applyServerView(); watchMore();
+    });
+    results.addEventListener("error", event => { if (event.target.matches?.(".server-download-icon")) event.target.remove(); }, true);
+    $("#server-download-search")?.addEventListener("click", () => { clearTimeout(searchTimer); search(); });
+    input?.addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(search, 350); });
+    input?.addEventListener("keydown", (event) => { if (event.key === "Enter") { clearTimeout(searchTimer); search(); } });
+    $$("[data-server-category]", body).forEach(button => button.addEventListener("click", () => {
+      const categoryInput = $("#server-download-category");
+      if (!categoryInput || categoryInput.value === button.dataset.serverCategory) return;
+      categoryInput.value = button.dataset.serverCategory;
+      $$("[data-server-category]", body).forEach(item => {
+        const active = item === button; item.classList.toggle("is-active", active); item.setAttribute("aria-pressed", String(active));
+      });
+      clearTimeout(searchTimer); search();
+    }));
+    ["#server-download-sort", "#server-download-scope"].forEach(selector => $(selector)?.addEventListener("change", () => { clearTimeout(searchTimer); search(); }));
     $("#server-download-back")?.addEventListener("click", () => { if (observer) observer.disconnect(); state.tab = "server"; renderTab(); });
     results.addEventListener("click", async (event) => {
       const retry = event.target.closest("[data-server-download-retry]");
       if (retry) { if (hits.length) { moreError = ""; loadingMore = false; watchMore(); loadMore(); } else search(); return; }
+      const linkButton = event.target.closest("[data-server-download-link]");
+      if (linkButton) {
+        const id = linkButton.closest(".server-download-card")?.dataset.serverDownloadProject;
+        if (id && /^[A-Za-z0-9_-]+$/.test(id)) api.openUrl(`https://modrinth.com/${projectType}/${encodeURIComponent(id)}`).catch(error => toast(String(error), "err"));
+        return;
+      }
       const loadButton = event.target.closest("[data-server-download-load]");
       if (loadButton) {
         const card = loadButton.closest(".server-download-card");
@@ -5451,8 +5603,8 @@
     // вкладки Minecraft-сборки.
     if (!meta && !["discover", "servers"].includes(state.tab)) state.tab = "discover";
     else if (meta && state.tab === "discover") state.tab = isServer(meta) ? "server" : "console";
-    else if (meta && isServer(meta) && !["server", "console", "files", "players", "metrics", "backups", "download", "settings"].includes(state.tab)) state.tab = "server";
-    else if (meta && !isServer(meta) && ["server", "players", "metrics", "backups", "servers"].includes(state.tab)) state.tab = "console";
+    else if (meta && isServer(meta) && !["server", "console", "files", "players", "metrics", "backups", "plugins", "download", "settings"].includes(state.tab)) state.tab = "server";
+    else if (meta && !isServer(meta) && ["server", "players", "metrics", "backups", "plugins", "servers"].includes(state.tab)) state.tab = "console";
     if (tabHistoryInstance !== state.selectedId || tabHistoryIndex < 0) rememberTab();
     updateTabHistoryButtons();
     $$(".tab").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.tab));
@@ -5469,6 +5621,7 @@
 
     switch (state.tab) {
       case "server": return renderServerOverview();
+      case "plugins": return renderServerAddons();
       case "players": return renderServerPlayers();
       case "metrics": return renderServerMetrics();
       case "backups": return renderServerBackups();
@@ -14098,10 +14251,7 @@
     const meta = selected();
     if (!meta) return toast("Выбери сборку", "err");
     if (isServer(meta)) {
-      if (state.running.has(meta.id)) return toast("Сервер уже запущен", "");
-      try { await api.serverStart(meta.id); await refreshInstances(); renderSidebar(); renderTab(); toast("Сервер запущен", "ok"); }
-      catch (error) { toast(String(error), "err"); }
-      return;
+      return performServerAction(meta.id, state.running.has(meta.id) ? "restart" : "start");
     }
     if (state.running.has(meta.id) || state.preparing.has(meta.id)) return toast("Сборка уже запущена или подготавливается", "err");
     const attemptId = nextAttemptId();
@@ -14796,14 +14946,9 @@
     on("#btn-stop", "click", stopGame);
     on("#btn-restart", "click", async () => {
       const meta = selected();
+      if (meta && isServer(meta)) return performServerAction(meta.id, "restart");
       await stopGame();
-      if (!meta || !isServer(meta)) { setTimeout(play, 800); return; }
-      for (let attempt = 0; attempt < 20 && state.running.has(meta.id); attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        await refreshInstances();
-      }
-      if (!state.running.has(meta.id)) play();
-      else toast("Сервер ещё останавливается — запусти его после завершения", "");
+      setTimeout(play, 800);
     });
     on("#workspace-library", "click", () => showWorkspaceLibrary(true));
     on("#workspace-open", "click", () => { if (state.selectedId) openInstance(state.selectedId); });
