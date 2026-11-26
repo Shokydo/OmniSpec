@@ -109,14 +109,14 @@ try:
     library = wait('Библиотека скинов')
     capes = wait('Гардероб плащей')
     apply = wait('Применить к аккаунту')
-    wait('Native favorite', partial=True)
+    wait('Ширина рук')
     if apply.getState().contains(pyatspi.STATE_ENABLED):
         raise AssertionError('Offline account can change the official skin')
     lx, ly, lw, lh = bounds(library)
     cx, cy, cw, ch = bounds(capes)
     mx, my, mw, mh = bounds(apply)
     assert lw > 100 and lh > 50 and cw > 100 and ch > 40
-    assert lx >= mx + mw and cy >= max(ly + lh, my + mh), (bounds(library), bounds(capes), bounds(apply))
+    assert ly >= my + mh and cy >= max(ly + lh, my + mh), (bounds(library), bounds(capes), bounds(apply))
     assert cx >= 0 and cy + ch <= 640 and cx + cw <= 1080, bounds(capes)
     print('LINUX_WEBKIT_AVATAR_MINIMUM_LAYOUT_AND_OFFLINE_GUARD_OK', flush=True)
 

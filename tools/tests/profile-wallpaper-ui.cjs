@@ -99,13 +99,14 @@ async function assertCalls(page, command, count) {
     await openPrefs(page,'avatar');
     await page.waitForSelector('#skin-library [data-skin-id="legacy"]');
     await page.waitForSelector('#skin-capes [data-cape-id="cape-1"]');
-    assert.equal(await page.locator('#skin-favorites [data-fav="saved-fav"]').count(),1,'старый образ загружается');
+    assert.equal(await page.locator('#skin-favorites').count(),0,'панель избранного убрана');
+    assert.equal(await page.evaluate(()=>window.__profileTest.settings.skin_favorites.length),1,'старый образ сохранён');
     assert(!((await page.locator('#prefs-body').innerText()).includes('Пресеты')),'нет интерфейса пресетов');
     const boxes=await page.evaluate(()=>{
       const r=s=>{const x=document.querySelector(s).getBoundingClientRect();return {x:x.x,y:x.y,w:x.width,h:x.height};};
-      return {favorites:r('.profile-favorites'),model:r('.profile-model'),capes:r('.profile-capes'),skins:r('.profile-skins')};
+      return {favorites:r('.profile-skin-controls'),model:r('.profile-model'),capes:r('.profile-capes'),skins:r('.profile-skins')};
     });
-    assert(boxes.model.x < boxes.skins.x && boxes.favorites.y < boxes.skins.y,'модель слева, избранное и скины справа');
+    assert(boxes.model.x < boxes.skins.x && boxes.favorites.y < boxes.skins.y,'модель слева, управление и скины справа');
     assert(boxes.capes.y >= boxes.model.y+boxes.model.h-1 && Math.abs(boxes.capes.x-boxes.model.x)<1,'плащи снизу на всю ширину');
     assert(await page.locator('#prefs-body').evaluate(el=>el.scrollHeight<=el.clientHeight+1),'при 100% не нужна общая вертикальная прокрутка');
     if (process.env.OMNISPEC_UI_SHOTS) await page.screenshot({path:path.join(process.env.OMNISPEC_UI_SHOTS,'avatar.png')});
@@ -122,17 +123,12 @@ async function assertCalls(page, command, count) {
     await waitSaved(page,()=>window.__profileTest.settings.skin_presets[1].variant==='slim');
     await page.locator('#skin-apply').click();
     await page.waitForFunction(()=>window.__profileTest.calls.some(c=>c.command==='apply_skin' && c.args.path==='/skins/copied-1.png' && c.args.variant==='slim'));
-    await page.locator('#fav-add').click();
-    await page.locator('#prompt-input').fill('Новый образ');
-    await page.locator('#prompt-ok').click();
-    await waitSaved(page,()=>window.__profileTest.settings.skin_favorites.length===2);
-    assert.equal(await page.locator('#skin-favorites [data-fav]').count(),2);
     await page.reload();
     await page.waitForFunction(()=>window.omnispecDebug?.state.accounts?.active==='licensed');
     await openPrefs(page,'avatar');
     await page.waitForSelector('#skin-library [data-skin-id="legacy"]');
     assert.equal(await page.locator('#skin-library [data-skin-id]').count(),3,'библиотека переживает перезапуск');
-    assert.equal(await page.locator('#skin-favorites [data-fav]').count(),2,'избранное переживает перезапуск');
+    assert.equal(await page.evaluate(()=>window.__profileTest.settings.skin_favorites.length),1,'сохранённые образы переживают перезапуск');
 
     await page.locator('[data-del-skin="legacy"]').click();
     await page.locator('#confirm-cancel').click();
@@ -140,7 +136,7 @@ async function assertCalls(page, command, count) {
     await page.locator('[data-del-skin="legacy"]').click();
     await page.locator('#confirm-ok').click();
     await waitSaved(page,()=>window.__profileTest.settings.skin_presets.length===2);
-    assert.equal(await page.locator('#skin-favorites [data-fav]').count(),2,'удаление из списка не удаляет образы');
+    assert.equal(await page.evaluate(()=>window.__profileTest.settings.skin_favorites.length),1,'удаление скина не удаляет сохранённые образы');
     await page.locator('[data-pref="profile"]').click();
     await page.locator('[data-uuid="offline"] [data-acc="pick"]').click();
     await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='offline' && !window.omnispecDebug.state.skin.licensed);
