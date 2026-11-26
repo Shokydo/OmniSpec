@@ -244,6 +244,17 @@ impl Default for UiElement {
     }
 }
 
+/// Встроенный пользовательский элемент; доверие никогда не хранится как разрешение запуска.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct UiCustomWidget {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub content: String,
+    pub trusted: bool,
+}
+
 /// Пользовательская компоновка интерфейса лаунчера.
 ///
 /// Помимо крупных областей сохраняем семантические параметры отдельных
@@ -272,6 +283,8 @@ pub struct UiLayout {
     /// Параметры отдельных элементов визуального редактора.
     #[serde(default)]
     pub elements: Vec<UiElement>,
+    #[serde(default)]
+    pub custom_widgets: Vec<UiCustomWidget>,
 }
 
 impl Default for UiLayout {
@@ -286,6 +299,7 @@ impl Default for UiLayout {
             density: "comfortable".to_string(),
             preset: default_ui_preset(),
             elements: Vec::new(),
+            custom_widgets: Vec::new(),
         }
     }
 }
