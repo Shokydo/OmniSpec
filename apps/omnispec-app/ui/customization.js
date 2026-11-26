@@ -66,6 +66,7 @@
 
   const trustedWidgets = new Map();
   let widgetEditor = null;
+  let widgetSavePending = false;
   const builtinCount = ELEMENTS.length;
   function widgetSpecs(widgets) {
     ELEMENTS.splice(builtinCount);
@@ -228,7 +229,7 @@ body[data-ui-preset="modrinth"] .tab.is-active { background: #30343a; color: #1b
 .customizer-backdrop { place-items: stretch; padding: 12px; box-sizing: border-box; }
 .customizer-backdrop .customizer-box { width: 100%; max-width: none; height: 100%; max-height: none; min-height: 0; border-radius: var(--r-lg); }
 body[data-customizer-open="true"] { overflow: hidden; }
-.customizer-inline-root { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.customizer-inline-root { position: relative; display: flex; flex-direction: column; min-height: 0; height: 100%; }
 /* Раскладка карточек работает независимо от выбранного пресета. */
 body :is(.app, .visual-snapshot) .instance-list[data-build-size="custom"][data-build-view="default"] .instance { min-height: var(--os-build-list-height); }
 body :is(.app, .visual-snapshot) .instance-list[data-build-size="custom"][data-build-view="default"] .instance-icon { width: var(--os-build-list-icon); height: var(--os-build-list-icon); }
@@ -245,7 +246,7 @@ body :is(.app, .visual-snapshot) .instance-list[data-build-view="list"] .instanc
 body :is(.app, .visual-snapshot) .instance-list[data-build-view="list"] .instance-body { width: auto; }
 body :is(.app, .visual-snapshot) .instance-list[data-build-view="list"] .instance-time { display: block; }
 body :is(.app, .visual-snapshot) .instance-list.is-narrow[data-build-view="list"] .instance-time { display: none; }
-.customizer-inline-root .customizer-body { min-height: 520px; }
+.customizer-inline-root .customizer-body { min-height: 0; }
 .customizer-head-copy { min-width: 0; flex: 1; }
 .customizer-kicker { color: var(--accent); font-size: 9px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
 .customizer-head-copy h2 { margin-top: 3px; }
@@ -282,15 +283,33 @@ body :is(.app, .visual-snapshot) .instance-list.is-narrow[data-build-view="list"
 .ui-preset small { margin-top: 5px; color: var(--dim-2); font-size: 9.5px; line-height: 1.3; }
 .os-custom-widget { background: var(--bg-2); overflow: hidden; }
 .os-custom-widget > iframe { width: 100%; height: 100%; border: 0; display: block; }
-.visual-editor { display: grid; grid-template-columns: 190px minmax(360px, 1fr) 235px; gap: 10px; min-height: 440px; }
+.customizer-body.is-visual { overflow: hidden; }
+.customizer-body.is-visual > .customizer-section { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; padding: 8px; }
+.visual-editor { display: grid; grid-template-columns: minmax(130px, 190px) minmax(200px, 1fr) minmax(175px, 235px); grid-template-rows: minmax(0, 1fr); gap: 10px; flex: 1 1 0; min-height: 0; }
+.visual-panel { min-height: 0; }
+.visual-panel.visual-elements, .visual-panel.visual-canvas-panel { display: flex; flex-direction: column; }
+.visual-panel.visual-properties { overflow-y: auto; overscroll-behavior: contain; }
+.visual-panel.visual-properties > * { flex-shrink: 0; }
+.widget-edit-shortcut { flex: none; padding: 4px; font-size: 10px; }
+.widget-dialog-backdrop { position: absolute; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,.7); }
+.widget-dialog { width: min(860px, 100%); max-height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 9px; padding: 16px; box-sizing: border-box; overflow: auto; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: 0 18px 45px #0008; }
+.widget-dialog h3, .widget-dialog p { margin: 0; }
+.widget-dialog p, .widget-dialog label { color: var(--dim-2); font-size: 11px; }
+.widget-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(130px, 1fr); gap: 10px; }
+.widget-fields label { display: grid; gap: 4px; }
+.widget-fields .input, .widget-fields .select { width: 100%; min-width: 0; box-sizing: border-box; }
+.widget-dialog textarea.customizer-code { flex: 1 1 200px; min-height: 140px; max-height: none; width: 100%; box-sizing: border-box; resize: vertical; }
+.widget-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.widget-mode-note { color: var(--dim-2); line-height: 1.4; }
+.widget-mode-note strong { color: var(--text); }
 .visual-panel { min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg-2); }
-.visual-panel-title { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; color: var(--dim); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.visual-panel-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; color: var(--dim); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .visual-element-row { display: flex; align-items: center; gap: 3px; }
 .visual-element-row .visual-element { flex: 1; min-width: 0; }
 .visual-visibility { flex: none; padding: 4px 5px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-3); color: var(--dim); font-size: 9px; cursor: pointer; }
 .visual-visibility:hover { color: var(--text); border-color: var(--line-2); }
 .visual-add-widget { width: 100%; min-width: 0; padding: 4px 6px; font-size: 10px; white-space: normal; }
-.visual-element-list { display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow: visible; }
+.visual-element-list { display: flex; flex: 1 1 0; flex-direction: column; gap: 4px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .visual-element { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 5px 6px; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; color: var(--dim); text-align: left; cursor: pointer; }
 .visual-element:hover { background: var(--bg-3); color: var(--text); }
 .visual-element.is-selected { border-color: var(--accent); background: var(--bg-4); color: var(--text); }
@@ -300,7 +319,7 @@ body :is(.app, .visual-snapshot) .instance-list.is-narrow[data-build-view="list"
 .visual-element-copy strong, .visual-element-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .visual-element-copy strong { font-size: 10.5px; }
 .visual-element-copy small { margin-top: 2px; color: var(--dim-2); font-size: 9px; }
-.visual-stage { position: relative; min-height: 430px; overflow: auto; padding: 8px; border: 1px solid var(--line-2); border-radius: var(--r); background: linear-gradient(145deg, color-mix(in srgb, var(--bg-4) 90%, var(--accent) 10%), var(--bg-2)); }
+.visual-stage { position: relative; flex: 1 1 0; min-height: 0; overflow: auto; padding: 8px; border: 1px solid var(--line-2); border-radius: var(--r); background: linear-gradient(145deg, color-mix(in srgb, var(--bg-4) 90%, var(--accent) 10%), var(--bg-2)); }
 .visual-stage-inner { position: relative; width: 100%; min-width: 0; min-height: 1px; border: 1px dashed var(--line-2); border-radius: var(--r-sm); background-color: var(--bg-2); background-image: linear-gradient(to right, #ffffff19 1px, transparent 1px), linear-gradient(to bottom, #ffffff19 1px, transparent 1px); }
 .visual-stage-inner[data-grid="off"] { background-image: none; }
 .visual-canvas-item { overflow: hidden; touch-action: none; position: absolute; z-index: 0; display: block; min-width: 0; min-height: 0; padding: 0; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: var(--r-sm); background: transparent; color: var(--text); font-size: 10px; cursor: grab; user-select: none; }
@@ -366,8 +385,8 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
 .customizer-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); background: var(--bg-2); }
 .customizer-footer .hint { min-width: 0; color: var(--dim-2); font-size: 10.5px; }
 .customizer-footer-actions { display: flex; gap: 6px; }
-@media (max-width: 980px) { .visual-editor { grid-template-columns: 170px minmax(300px, 1fr); } .visual-properties { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 720px) { .ui-preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .visual-editor { grid-template-columns: 1fr; } .visual-properties { display: flex; } .visual-stage-inner { min-width: 0; } .customizer-grid { grid-template-columns: 1fr; } }
+@media (max-width: 980px) { .visual-editor { grid-template-columns: minmax(120px, 17%) minmax(180px, 1fr) minmax(165px, 24%); } }
+@media (max-width: 720px) { .ui-preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .visual-editor { grid-template-columns: minmax(100px, 20%) minmax(130px, 1fr) minmax(140px, 26%); gap: 4px; } .visual-stage-inner { min-width: 0; } .customizer-grid { grid-template-columns: 1fr; } }
 `;
 
   let styleEl = null;
@@ -780,9 +799,10 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
       showWorkspaceContext(event);
     });
     root.addEventListener("click", (event) => {
-      const target = event.target.closest?.("[data-custom-tab], [data-custom-close], [data-custom-reset], [data-layout-action], [data-css-action], [data-css-preset], [data-ui-preset], [data-visual-id], [data-element-visibility], [data-align-grid], [data-visual-toggle], [data-surface-reset], [data-card-size-reset], [data-widget-action]");
+      const target = event.target.closest?.("[data-custom-tab], [data-custom-close], [data-custom-reset], [data-layout-action], [data-css-action], [data-css-preset], [data-ui-preset], [data-visual-id], [data-element-visibility], [data-align-grid], [data-visual-toggle], [data-surface-reset], [data-card-size-reset], [data-widget-action], [data-widget-edit-id]");
       if (!target || !root.contains(target)) return;
       if (suppressClick) { suppressClick = false; event.preventDefault(); return; }
+      if (target.dataset.widgetEditId) { selectedElementId = target.dataset.widgetEditId; handleWidgetAction("edit", root); return; }
       if (target.dataset.widgetAction) { handleWidgetAction(target.dataset.widgetAction, root); return; }
       if (target.dataset.customTab) { currentTab = target.dataset.customTab; renderEditor(); return; }
       if (target.dataset.customClose !== undefined) { closeCustomizer(); return; }
@@ -807,6 +827,9 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     });
     root.addEventListener("input", (event) => {
       const target = event.target;
+      if (widgetEditor && target.matches("[data-widget-name], [data-widget-content]")) {
+        widgetEditor[target.hasAttribute("data-widget-name") ? "name" : "content"] = target.value; return;
+      }
       if (target.id === "custom-css-editor") {
         customCss = (cssFullMode ? FULL_CSS_MARKER : "") + target.value.slice(0, MAX_CSS - FULL_CSS_MARKER.length);
         injectStyles(); layout.preset = "custom"; applyLayout(); setStatus("Предпросмотр…");
@@ -817,6 +840,14 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
       if (target.dataset.elementNumber && target.value !== "") updateElement(target.dataset.elementNumber, target.value);
     });
     root.addEventListener("keydown", (event) => {
+      if (widgetEditor && event.target.closest?.(".widget-dialog")) {
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); return; }
+        if (event.target.hasAttribute("data-widget-content") && event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+          event.preventDefault(); event.target.setRangeText("  ", event.target.selectionStart, event.target.selectionEnd, "end");
+          event.target.dispatchEvent(new Event("input", { bubbles: true })); return;
+        }
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); handleWidgetAction("save", root); return; }
+      }
       const focused = event.target.closest?.(".visual-canvas-item[data-visual-id], .visual-element[data-visual-id]");
       if (focused && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key) && !event.altKey && !event.ctrlKey && !event.metaKey) {
         const spec = ELEMENTS.find(item => item.id === focused.dataset.visualId);
@@ -825,10 +856,11 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
         freezeIndependent();
         const current = elementState(spec.id);
         if (current.mode !== "absolute") { setStatus("Элемент сейчас не отображается", "error"); return; }
+        const origin = canvasOrigin();
         const step = gridSize || 1;
         const dx = event.key === "ArrowRight" ? step : event.key === "ArrowLeft" ? -step : 0;
         const dy = event.key === "ArrowDown" ? step : event.key === "ArrowUp" ? -step : 0;
-        updateElementValues(spec.id, { ...current, x: current.x + dx, y: current.y + dy }, true);
+        updateElementValues(spec.id, { ...current, x: gridSize ? snapGrid(current.x - origin.x) + origin.x + dx : current.x + dx, y: gridSize ? snapGrid(current.y - origin.y) + origin.y + dy : current.y + dy }, true);
         const selector = focused.classList.contains("visual-canvas-item") ? ".visual-canvas-item" : ".visual-element";
         $(`${selector}[data-visual-id="${spec.id}"]`, root)?.focus({ preventScroll: true });
         return;
@@ -848,6 +880,8 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     });
     root.addEventListener("change", (event) => {
       const target = event.target;
+      if (widgetEditor && target.hasAttribute("data-widget-kind")) { widgetEditor.kind = target.value; return; }
+      if (widgetEditor && target.hasAttribute("data-widget-trusted")) { widgetEditor.trusted = target.checked; return; }
       if (target.dataset.snapGrid !== undefined) { gridSize = Number(target.value) || 0; try { localStorage.setItem("omnispec-grid-size", String(gridSize)); } catch {} populateSnapshots(root); return; }
       if (target.dataset.layoutSelect) updateLayoutControl(target.dataset.layoutSelect, target.value);
       if (target.dataset.elementSelect) updateElement(target.dataset.elementSelect, target.value);
@@ -861,7 +895,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
         left: Number(item.dataset.logicalLeft), top: Number(item.dataset.logicalTop),
         width: Number(item.dataset.logicalWidth), height: Number(item.dataset.logicalHeight),
         factor: Number(item.dataset.screenFactor), stageScale: Number(item.dataset.stageScale),
-        edge: event.target.closest?.("[data-edge]")?.dataset.edge || "", before: layout, moved: false };
+        origin: canvasOrigin(), edge: event.target.closest?.("[data-edge]")?.dataset.edge || "", before: layout, moved: false };
       item.setPointerCapture(event.pointerId); item.classList.add("is-dragging");
     });
     root.addEventListener("pointermove", (event) => {
@@ -872,18 +906,31 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
         if (!drag.moved) { freezeIndependent(); drag.moved = true; }
       }
       if (!drag.moved) return;
-      const snap = (n) => gridSize ? Math.round(n / gridSize) * gridSize : Math.round(n);
+      const snap = snapGrid;
       let left = drag.left, top = drag.top, width = drag.width, height = drag.height;
-      const edge = drag.edge;
-      if (!edge) { left = snap(drag.left + dx); top = snap(drag.top + dy); }
-      else {
-        if (edge.includes("e")) width = Math.max(gridSize || 8, snap(drag.width + dx));
-        if (edge.includes("s")) height = Math.max(gridSize || 8, snap(drag.height + dy));
-        if (edge.includes("w")) { width = Math.max(gridSize || 8, snap(drag.width - dx)); left = snap(drag.left + drag.width - width); }
-        if (edge.includes("n")) { height = Math.max(gridSize || 8, snap(drag.height - dy)); top = snap(drag.top + drag.height - height); }
+      const edge = drag.edge, min = gridSize || 8;
+      if (!edge) {
+        left = snap(drag.left + dx); top = snap(drag.top + dy);
+        if (gridSize) { width = Math.max(min, snap(drag.width)); height = Math.max(min, snap(drag.height)); }
+      } else if (gridSize) {
+        // Snap both edges, not just the size: an initially off-grid element must
+        // end with its actual borders on grid lines regardless of dragged side.
+        let right = snap(drag.left + drag.width), bottom = snap(drag.top + drag.height);
+        left = snap(drag.left); top = snap(drag.top);
+        right = Math.max(left + min, right); bottom = Math.max(top + min, bottom);
+        if (edge.includes("e")) right = Math.max(left + min, snap(drag.left + drag.width + dx));
+        if (edge.includes("s")) bottom = Math.max(top + min, snap(drag.top + drag.height + dy));
+        if (edge.includes("w")) left = Math.min(right - min, snap(drag.left + dx));
+        if (edge.includes("n")) top = Math.min(bottom - min, snap(drag.top + dy));
+        width = right - left; height = bottom - top;
+      } else {
+        if (edge.includes("e")) width = Math.max(min, snap(drag.width + dx));
+        if (edge.includes("s")) height = Math.max(min, snap(drag.height + dy));
+        if (edge.includes("w")) { width = Math.max(min, snap(drag.width - dx)); left = snap(drag.left + drag.width - width); }
+        if (edge.includes("n")) { height = Math.max(min, snap(drag.height - dy)); top = snap(drag.top + drag.height - height); }
       }
       Object.assign(drag.item.style, { left: `${left * drag.stageScale}px`, top: `${top * drag.stageScale}px`, width: `${width * drag.stageScale}px`, height: `${height * drag.stageScale}px` });
-      updateElementValues(drag.id, { mode: "absolute", x: Math.round(left), y: Math.round(top), width: Math.round(width), height: Math.round(height) });
+      updateElementValues(drag.id, { mode: "absolute", x: Math.round(left + drag.origin.x), y: Math.round(top + drag.origin.y), width: Math.round(width), height: Math.round(height), margin: 0 });
     });
     const finishPointer = (event) => {
       if (!pointerDrag || pointerDrag.pointer !== event.pointerId) return;
@@ -971,17 +1018,18 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     const root = editorRoot(); if (!root) return;
     $$("[data-custom-tab]", root).forEach((tab) => { tab.classList.toggle("is-active", tab.dataset.customTab === currentTab); tab.setAttribute("aria-selected", String(tab.dataset.customTab === currentTab)); });
     const body = $("[data-customizer-body]", root); if (!body) return;
+    const previous = { list: $(".visual-element-list", body)?.scrollTop || 0, props: $(".visual-properties", body)?.scrollTop || 0, stageY: $(".visual-stage", body)?.scrollTop || 0, stageX: $(".visual-stage", body)?.scrollLeft || 0 };
+    body.classList.toggle("is-visual", currentTab === "editor");
     body.innerHTML = currentTab === "editor" ? renderVisualEditor() : currentTab === "presets" ? renderPresets() : currentTab === "layout" ? renderLayout() : renderCss();
-    if (currentTab === "editor") populateSnapshots(root);
-    if (currentTab === "css") { bindFileImport(root); loadCssEditor(root); }
     if (currentTab === "editor") {
-      const list = $(".visual-element-list", root), selected = $(`.visual-element[data-visual-id="${selectedElementId}"]`, root);
-      if (list && selected) {
-        const a = list.getBoundingClientRect(), b = selected.getBoundingClientRect();
-        if (b.top < a.top) list.scrollTop -= a.top - b.top;
-        else if (b.bottom > a.bottom) list.scrollTop += b.bottom - a.bottom;
-      }
+      populateSnapshots(root);
+      const list = $(".visual-element-list", body), props = $(".visual-properties", body), stage = $(".visual-stage", body);
+      if (list) list.scrollTop = previous.list;
+      if (props) props.scrollTop = previous.props;
+      if (stage) { stage.scrollTop = previous.stageY; stage.scrollLeft = previous.stageX; }
     }
+    if (currentTab === "css") { bindFileImport(root); loadCssEditor(root); }
+
   }
 
   async function loadCssEditor(root) {
@@ -1013,7 +1061,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     const zoom = appRect.width / app.offsetWidth;
     const stageWidth = stage.clientWidth;
     const scale = stageWidth / app.offsetWidth;
-    const screenFactor = stage.getBoundingClientRect().width / app.offsetWidth;
+    const screenFactor = scale * (stage.getBoundingClientRect().width / stage.offsetWidth);
     stage.style.height = `${app.offsetHeight * scale}px`;
     stage.style.backgroundSize = `${gridSize * scale}px ${gridSize * scale}px`;
     stage.dataset.grid = gridSize ? "on" : "off";
@@ -1070,12 +1118,17 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     layout = normalizeLayout({ ...layout, preset: "custom", elements: layout.elements.map(item => ({ ...item, ...(measured.get(item.id) || {}) })) });
     applyLayout();
   }
+  function canvasOrigin() {
+    const app = $(".app"), rect = app.getBoundingClientRect(), zoom = rect.width / app.offsetWidth;
+    return { x: rect.left / zoom, y: rect.top / zoom };
+  }
+  function snapGrid(n) { return gridSize ? Math.round(n / gridSize) * gridSize : Math.round(n); }
   function alignAllToGrid() {
     if (!gridSize) { setStatus("Сначала выбери шаг сетки", "error"); return; }
     freezeIndependent();
-    const snap = n => Math.round(n / gridSize) * gridSize;
+    const snap = snapGrid, origin = canvasOrigin();
     layout = normalizeLayout({ ...layout, elements: layout.elements.map(item => item.mode !== "absolute" ? item : ({
-      ...item, x: snap(item.x), y: snap(item.y), width: Math.max(gridSize, snap(item.width)), height: Math.max(gridSize, snap(item.height))
+      ...item, x: Math.round(snap(item.x - origin.x) + origin.x), y: Math.round(snap(item.y - origin.y) + origin.y), width: item.width == null ? null : Math.max(gridSize, snap(item.width)), height: item.height == null ? null : Math.max(gridSize, snap(item.height)), margin: 0
     })) });
     applyLayout(); queueSave({ ui_layout: layout }); renderEditor();
   }
@@ -1230,24 +1283,43 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
       if (!await confirmChange("Удалить пользовательский элемент? Исполнявшийся код может продолжать работать до перезапуска приложения.", "Удалить")) return;
       trustedWidgets.delete(current.id); layout = normalizeLayout({ ...layout, custom_widgets: layout.custom_widgets.filter(w => w.id !== current.id), elements: layout.elements.filter(e => e.id !== current.id) }); selectedElementId = "toolbar"; widgetEditor = null; applyLayout(); queueSave({ui_layout: layout}); renderEditor(); return;
     }
-    if (action === "save" && widgetEditor) {
+    if (action === "save" && widgetEditor && !widgetSavePending) {
       const name = $("[data-widget-name]", root).value.trim().slice(0,80) || "Пользовательский элемент";
-      const kind = $("[data-widget-kind]", root).value; const content = $("[data-widget-content]", root).value.trim();
+      const kind = $("[data-widget-kind]", root).value; const rawContent = $("[data-widget-content]", root).value;
+      const content = kind === "url" ? rawContent.trim() : rawContent;
       const trusted = kind === "html" && $("[data-widget-trusted]", root).checked;
-      if (!content || content.length > 100000 || (kind === "url" && !validWidgetUrl(content))) { setStatus("Введите HTML или корректный HTTP(S) URL (не более 100 000 символов)", "error"); return; }
-      if (trusted && !await confirmChange("ОПАСНО: этот HTML и JavaScript выполняется с полным доступом к интерфейсу и командам лаунчера, может читать или изменять данные и отправлять их в сеть. Даже удаление не останавливает уже запущенный код до перезапуска. Доверяете этому коду? Подтверждение требуется после перезапуска и изменения кода.", "Доверяю и запускаю")) return;
+      if (!content.trim() || content.length > 100000 || (kind === "url" && !validWidgetUrl(content))) {
+        const message = "Введите HTML или корректный HTTP(S) URL (не более 100 000 символов)";
+        const error = $("[data-widget-error]", root); if (error) error.textContent = message;
+        setStatus(message, "error"); return;
+      }
+      const draft = widgetEditor;
+      if (trusted) {
+        widgetSavePending = true;
+        let approved = false;
+        try { approved = await confirmChange("ОПАСНО: этот HTML и JavaScript выполняется с полным доступом к интерфейсу и командам лаунчера, может читать или изменять данные и отправлять их в сеть. Даже удаление не останавливает уже запущенный код до перезапуска. Доверяете этому коду? Подтверждение требуется после перезапуска и изменения кода.", "Доверяю и запускаю"); }
+        finally { widgetSavePending = false; }
+        if (!approved || widgetEditor !== draft || draft.content !== rawContent || draft.kind !== kind || !draft.trusted) return;
+      }
       const id = widgetEditor.id || `widget-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,10)}`;
       const w = {id,name,kind,content,trusted}; trustedWidgets.delete(id); if (trusted) trustedWidgets.set(id,content);
-      const widgets = layout.custom_widgets.filter(x => x.id !== id); widgets.push(w);
+      const widgets = widgetEditor.id ? layout.custom_widgets.map(x => x.id === id ? w : x) : [...layout.custom_widgets, w];
       layout = normalizeLayout({ ...layout, custom_widgets: widgets }); selectedElementId = id; widgetEditor = null; applyLayout(); queueSave({ui_layout: layout}); renderEditor();
     }
   }
   function widgetForm() {
     if (!widgetEditor) return "";
     const w = widgetEditor;
-    return `<div class="customizer-note"><strong>${w.id ? "Изменить элемент" : "Добавить пользовательский элемент"}</strong><p>URL или HTML. Сайты могут запрещать встраивание. Код из неизвестных источников опасен.</p><label>Название <input class="input" data-widget-name maxlength="80" value="${esc(w.name)}"></label><label>Тип <select class="select" data-widget-kind><option value="url" ${w.kind === "url" ? "selected" : ""}>URL</option><option value="html" ${w.kind === "html" ? "selected" : ""}>HTML-код</option></select></label><textarea class="customizer-code" style="min-height:150px;width:100%" data-widget-content maxlength="100000" placeholder="https://… или HTML-код">${esc(w.content)}</textarea><label><input type="checkbox" data-widget-trusted ${w.trusted ? "checked" : ""}> Доверенный HTML/JS с полным доступом (опасно)</label><div><button class="btn btn-primary" type="button" data-widget-action="save">Сохранить</button> <button class="btn btn-small" type="button" data-widget-action="cancel">Отмена</button></div></div>`;
+    return `<div class="widget-dialog-backdrop"><div class="widget-dialog" role="dialog" aria-modal="true" aria-label="${w.id ? "Редактировать пользовательский элемент" : "Добавить пользовательский элемент"}">
+      <h3>${w.id ? "Редактировать код / структуру элемента" : "Добавить пользовательский элемент"}</h3>
+      <p>Измените HTML, CSS и JavaScript или адрес страницы. Изолированный режим не может изменять интерфейс лаунчера; сайты могут запрещать встраивание.</p>
+      <div class="widget-fields"><label>Название<input class="input" data-widget-name maxlength="80" value="${esc(w.name)}"></label><label>Тип<select class="select" data-widget-kind><option value="url" ${w.kind === "url" ? "selected" : ""}>URL</option><option value="html" ${w.kind === "html" ? "selected" : ""}>HTML / CSS / JS</option></select></label></div>
+      <label for="widget-content-editor">Код или URL</label><textarea id="widget-content-editor" class="customizer-code" data-widget-content maxlength="100000" spellcheck="false" aria-label="Код или URL пользовательского элемента" placeholder="https://… или HTML-код">${esc(w.content)}</textarea>
+      <label><input type="checkbox" data-widget-trusted ${w.trusted ? "checked" : ""}> Доверенный HTML/JS с полным доступом</label>
+      <div class="widget-mode-note"><strong>Внимание:</strong> доверенный код может читать и изменять данные приложения. Подтверждайте только проверенный код; после перезапуска доверие нужно подтвердить снова.</div>
+      <div data-widget-error role="alert" style="color:var(--danger, #ef7777)"></div><div class="widget-dialog-actions"><button class="btn btn-small" type="button" data-widget-action="cancel">Отмена</button><button class="btn btn-primary" type="button" data-widget-action="save">Сохранить и применить</button></div>
+    </div></div>`;
   }
-
   function renderPresets() {
     return `<section class="customizer-section"><div class="customizer-section-head"><svg class="ic"><use href="#i-sliders"/></svg><div><h3>Пресеты</h3><p>Выберите готовую компоновку интерфейса.</p></div></div><div class="ui-preset-grid">${UI_PRESETS.map(([id, label, description]) => `<button type="button" class="ui-preset ${layout.preset === id ? "is-active" : ""}" data-ui-preset="${id}">${id === "custom" ? "" : `<img src="assets/preset-previews/${id}.png" alt="" loading="lazy">`}<strong>${label}</strong><small>${description}</small></button>`).join("")}</div></section>`;
   }
@@ -1257,7 +1329,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     selectedElementId = selected.id;
     const value = elementState(selected.id);
     const controls = (key, title, description, min, max, unit = "px", raw = value[key] ?? 0) => `<label class="customizer-control"><span><strong>${title}</strong><small>${description}</small></span><input type="range" min="${min}" max="${max}" value="${raw || 0}" data-element-control="${key}"><output id="element-value-${key}">${["surface_opacity", "backdrop_blur", "surface_radius", "build_card_size"].includes(key) && value[key] === null ? "тема" : key === "width" || key === "height" ? (raw ? `${raw}${unit}` : "auto") : `${raw || 0}${unit}`}</output>${["x", "y", "width", "height"].includes(key) ? `<input type="number" data-element-number="${key}" aria-label="${title}, точное значение" min="${key === "x" || key === "y" ? -32768 : 0}" max="${key === "x" || key === "y" ? 32767 : 65535}" value="${raw || 0}">` : ""}</label>`;
-    return `<section class="customizer-section"><div class="visual-editor"><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-list"/></svg>Элементы</div><button class="btn btn-small visual-add-widget" type="button" data-widget-action="add" title="Добавить пользовательский элемент" aria-label="Добавить пользовательский элемент">+ Добавить</button><div class="visual-element-list">${ELEMENTS.map((item) => { const state = elementState(item.id); return `<div class="visual-element-row"><button type="button" class="visual-element ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}"><svg class="ic"><use href="#i-dots"/></svg><span class="visual-element-copy"><strong>${esc(item.label)}</strong><small>${esc(state.visible ? item.description : "скрыт")}</small></span></button><button class="visual-visibility" type="button" data-visual-toggle="${item.id}" aria-label="${state.visible ? "Скрыть" : "Показать"} ${esc(item.label)}" title="${state.visible ? "Скрыть" : "Показать"}">${state.visible ? "Скрыть" : "Показать"}</button></div>`; }).join("")}</div></div><div class="visual-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-grid"/></svg>Холст · перетащи блоки <label style="margin-left:auto">Сетка <select class="select" data-snap-grid aria-label="Привязка к сетке"><option value="0" ${gridSize === 0 ? "selected" : ""}>Выключена</option>${[8,16,32].map(n => `<option value="${n}" ${gridSize === n ? "selected" : ""}>${n} px</option>`).join("")}</select></label><button class="btn btn-small" type="button" data-align-grid>Выровнять всё</button></div><div class="visual-stage"><div class="visual-stage-inner">${ELEMENTS.filter(item => !item.hideOnly).map((item) => { const state = elementState(item.id); const left = Math.max(3, item.previewX + state.x); const top = Math.max(3, item.previewY + state.y); const width = state.width || item.previewWidth; const height = state.height || item.previewHeight; return `<div class="visual-canvas-item ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" tabindex="0" role="button" aria-label="${esc(item.label)}: переместить стрелками" data-visual-id="${item.id}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px"><span class="visual-label">${esc(item.label)}</span>${["n","s","e","w","nw","ne","sw","se"].map(edge => `<span class="visual-resize" data-edge="${edge}" title="Изменить размер"></span>`).join("")}</div>`; }).join("")}</div><div class="visual-stage-help">Координаты и размеры соответствуют окну лаунчера. «Выровнять всё» привязывает видимые области к сетке; зажми край для изменения размера.</div></div></div><div class="visual-panel visual-properties"><div class="visual-panel-title"><svg class="ic"><use href="#i-pencil"/></svg>Свойства</div><div class="customizer-note"><strong>${esc(selected.label)}</strong><br>${esc(selected.description)}</div>${selected.customWidget ? `<div><button class="btn btn-small" type="button" data-widget-action="edit">Изменить / подтвердить код</button> <button class="btn btn-small" type="button" data-widget-action="delete">Удалить</button></div>` : ""}${widgetForm()}<label class="customizer-control"><span><strong>Видимость</strong><small>Показывать элемент в лаунчере</small></span><button class="switch ${value.visible ? "on" : ""}" type="button" data-element-visibility="${value.visible ? "hide" : "show"}" aria-pressed="${value.visible}"></button></label>${controls("surface_opacity", "Непрозрачность фона", "0% — прозрачный фон, текст остаётся видимым", 0, 100, "%", value.surface_opacity ?? 100)}${controls("backdrop_blur", "Размытие подложки", "Размывает то, что находится за элементом", 0, 40, "px", value.backdrop_blur ?? 0)}${controls("surface_radius", "Закругление фона", "Радиус подложки, 0 — прямые углы", 0, 80, "px", value.surface_radius ?? 0)}<button class="btn btn-small" type="button" data-surface-reset>Вернуть фон темы</button>${selected.hideOnly ? `<div class="customizer-note">Этот элемент вложен в страницу: положение доступно во вкладке CSS.</div>` : `<label class="customizer-control visual-select-control"><span><strong>Режим расположения</strong><small>Адаптивный поток или свободные координаты</small></span><select class="select" data-element-select="mode"><option value="flow" ${value.mode === "flow" ? "selected" : ""}>В потоке</option><option value="free" ${value.mode === "free" ? "selected" : ""}>Смещение (старое)</option><option value="absolute" ${value.mode === "absolute" ? "selected" : ""}>Независимо</option></select></label><label class="customizer-control visual-select-control"><span><strong>Вариант</strong><small>Размер и визуальный акцент</small></span><select class="select" data-element-select="variant">${ELEMENT_VARIANTS.map(([id, label]) => `<option value="${id}" ${value.variant === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>${selected.id === "tabs" ? `<label class="customizer-control visual-select-control"><span><strong>Направление вкладок</strong><small>Отдельная панель рядом с рабочей областью</small></span><select class="select" data-element-select="tabs_orientation"><option value="horizontal" ${value.tabs_orientation === "horizontal" ? "selected" : ""}>Горизонтально</option><option value="vertical" ${value.tabs_orientation === "vertical" ? "selected" : ""}>Вертикально слева</option><option value="vertical-right" ${value.tabs_orientation === "vertical-right" ? "selected" : ""}>Вертикально справа</option></select></label>` : ""}${selected.id === "build-list" ? `<label class="customizer-control visual-select-control"><span><strong>Список и рабочая область</strong><small>Список в рабочей области или в боковой панели</small></span><select class="select" data-element-select="merged_workspace"><option value="false" ${!value.merged_workspace ? "selected" : ""}>Раздельно</option><option value="true" ${value.merged_workspace ? "selected" : ""}>Объединить</option></select></label>${controls("build_card_size", "Размер сборок", "Масштаб карточек в списке и сетке", 48, 180, "px", value.build_card_size ?? 76)}<button class="btn btn-small" type="button" data-card-size-reset>Размер темы</button><label class="customizer-control visual-select-control"><span><strong>Вид сборок</strong><small>Выберите расположение карточек</small></span><select class="select" data-element-select="list_view"><option value="default" ${value.list_view === "default" ? "selected" : ""}>Как в пресете</option><option value="list" ${value.list_view === "list" ? "selected" : ""}>Список</option><option value="grid" ${value.list_view === "grid" ? "selected" : ""}>Компактные плитки</option></select></label>` : ""}${controls("x", "X", "Горизонтальное смещение", -4096, 4096)}${controls("y", "Y", "Вертикальное смещение", -4096, 4096)}${controls("width", "Ширина", "0 — автоматически", 0, 4096)}${controls("height", "Высота", "0 — автоматически", 0, 4096)}${controls("margin", "Отступ снаружи", "Свободное пространство", 0, 40)}${controls("padding", "Внутренний отступ", "Пространство внутри", 0, 40)}${controls("radius", "Закругление", "Радиус углов", 0, 40)}`}</div></div></section>`;
+    return `<section class="customizer-section"><div class="visual-editor"><div class="visual-panel visual-elements"><div class="visual-panel-title"><svg class="ic"><use href="#i-list"/></svg>Элементы</div><button class="btn btn-small visual-add-widget" type="button" data-widget-action="add" title="Добавить пользовательский элемент" aria-label="Добавить пользовательский элемент">+ Добавить</button><div class="visual-element-list">${ELEMENTS.map((item) => { const state = elementState(item.id); return `<div class="visual-element-row"><button type="button" class="visual-element ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" data-visual-id="${item.id}"><svg class="ic"><use href="#i-dots"/></svg><span class="visual-element-copy"><strong>${esc(item.label)}</strong><small>${esc(state.visible ? item.description : "скрыт")}</small></span></button>${item.customWidget ? `<button class="btn btn-small widget-edit-shortcut" type="button" data-widget-edit-id="${item.id}" title="Редактировать код" aria-label="Редактировать код: ${esc(item.label)}">Код</button>` : ""}<button class="visual-visibility" type="button" data-visual-toggle="${item.id}" aria-label="${state.visible ? "Скрыть" : "Показать"} ${esc(item.label)}" title="${state.visible ? "Скрыть" : "Показать"}">${state.visible ? "Скрыть" : "Показать"}</button></div>`; }).join("")}</div></div><div class="visual-panel visual-canvas-panel"><div class="visual-panel-title"><svg class="ic"><use href="#i-grid"/></svg>Холст · перетащи блоки <label style="margin-left:auto">Сетка <select class="select" data-snap-grid aria-label="Привязка к сетке"><option value="0" ${gridSize === 0 ? "selected" : ""}>Выключена</option>${[8,16,32].map(n => `<option value="${n}" ${gridSize === n ? "selected" : ""}>${n} px</option>`).join("")}</select></label><button class="btn btn-small" type="button" data-align-grid>Выровнять всё</button></div><div class="visual-stage"><div class="visual-stage-inner">${ELEMENTS.filter(item => !item.hideOnly).map((item) => { const state = elementState(item.id); const left = Math.max(3, item.previewX + state.x); const top = Math.max(3, item.previewY + state.y); const width = state.width || item.previewWidth; const height = state.height || item.previewHeight; return `<div class="visual-canvas-item ${selected.id === item.id ? "is-selected" : ""} ${state.visible ? "" : "is-hidden"}" tabindex="0" role="button" aria-label="${esc(item.label)}: переместить стрелками" data-visual-id="${item.id}" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px"><span class="visual-label">${esc(item.label)}</span>${["n","s","e","w","nw","ne","sw","se"].map(edge => `<span class="visual-resize" data-edge="${edge}" title="Изменить размер"></span>`).join("")}</div>`; }).join("")}</div><div class="visual-stage-help">Сетка соответствует координатам окна. Перетаскивай блок или его край — границы привязываются к линиям. «Выровнять всё» переводит видимые области в независимый режим и меняет раскладку.</div></div></div><div class="visual-panel visual-properties"><div class="visual-panel-title"><svg class="ic"><use href="#i-pencil"/></svg>Свойства</div><div class="customizer-note"><strong>${esc(selected.label)}</strong><br>${esc(selected.description)}</div>${selected.customWidget ? `<div><button class="btn btn-small" type="button" data-widget-action="edit">Редактировать код / структуру</button> <button class="btn btn-small" type="button" data-widget-action="delete">Удалить</button></div>` : ""}<label class="customizer-control"><span><strong>Видимость</strong><small>Показывать элемент в лаунчере</small></span><button class="switch ${value.visible ? "on" : ""}" type="button" data-element-visibility="${value.visible ? "hide" : "show"}" aria-pressed="${value.visible}"></button></label>${controls("surface_opacity", "Непрозрачность фона", "0% — прозрачный фон, текст остаётся видимым", 0, 100, "%", value.surface_opacity ?? 100)}${controls("backdrop_blur", "Размытие подложки", "Размывает то, что находится за элементом", 0, 40, "px", value.backdrop_blur ?? 0)}${controls("surface_radius", "Закругление фона", "Радиус подложки, 0 — прямые углы", 0, 80, "px", value.surface_radius ?? 0)}<button class="btn btn-small" type="button" data-surface-reset>Вернуть фон темы</button>${selected.hideOnly ? `<div class="customizer-note">Этот элемент вложен в страницу: положение доступно во вкладке CSS.</div>` : `<label class="customizer-control visual-select-control"><span><strong>Режим расположения</strong><small>Адаптивный поток или свободные координаты</small></span><select class="select" data-element-select="mode"><option value="flow" ${value.mode === "flow" ? "selected" : ""}>В потоке</option><option value="free" ${value.mode === "free" ? "selected" : ""}>Смещение (старое)</option><option value="absolute" ${value.mode === "absolute" ? "selected" : ""}>Независимо</option></select></label><label class="customizer-control visual-select-control"><span><strong>Вариант</strong><small>Размер и визуальный акцент</small></span><select class="select" data-element-select="variant">${ELEMENT_VARIANTS.map(([id, label]) => `<option value="${id}" ${value.variant === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>${selected.id === "tabs" ? `<label class="customizer-control visual-select-control"><span><strong>Направление вкладок</strong><small>Отдельная панель рядом с рабочей областью</small></span><select class="select" data-element-select="tabs_orientation"><option value="horizontal" ${value.tabs_orientation === "horizontal" ? "selected" : ""}>Горизонтально</option><option value="vertical" ${value.tabs_orientation === "vertical" ? "selected" : ""}>Вертикально слева</option><option value="vertical-right" ${value.tabs_orientation === "vertical-right" ? "selected" : ""}>Вертикально справа</option></select></label>` : ""}${selected.id === "build-list" ? `<label class="customizer-control visual-select-control"><span><strong>Список и рабочая область</strong><small>Список в рабочей области или в боковой панели</small></span><select class="select" data-element-select="merged_workspace"><option value="false" ${!value.merged_workspace ? "selected" : ""}>Раздельно</option><option value="true" ${value.merged_workspace ? "selected" : ""}>Объединить</option></select></label>${controls("build_card_size", "Размер сборок", "Масштаб карточек в списке и сетке", 48, 180, "px", value.build_card_size ?? 76)}<button class="btn btn-small" type="button" data-card-size-reset>Размер темы</button><label class="customizer-control visual-select-control"><span><strong>Вид сборок</strong><small>Выберите расположение карточек</small></span><select class="select" data-element-select="list_view"><option value="default" ${value.list_view === "default" ? "selected" : ""}>Как в пресете</option><option value="list" ${value.list_view === "list" ? "selected" : ""}>Список</option><option value="grid" ${value.list_view === "grid" ? "selected" : ""}>Компактные плитки</option></select></label>` : ""}${controls("x", "X", "Горизонтальное смещение", -4096, 4096)}${controls("y", "Y", "Вертикальное смещение", -4096, 4096)}${controls("width", "Ширина", "0 — автоматически", 0, 4096)}${controls("height", "Высота", "0 — автоматически", 0, 4096)}${controls("margin", "Отступ снаружи", "Свободное пространство", 0, 40)}${controls("padding", "Внутренний отступ", "Пространство внутри", 0, 40)}${controls("radius", "Закругление", "Радиус углов", 0, 40)}`}</div></div>${widgetForm()}</section>`;
   }
 
   function renderCss() {
@@ -1544,7 +1616,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
         activateSafeMode(true); return;
       }
       if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "e") { event.preventDefault(); if (modal?.hidden === false) closeCustomizer(); else openCustomizer(); }
-      if (event.key === "Escape" && modal && !modal.hidden) closeCustomizer();
+      if (event.key === "Escape" && modal && !modal.hidden && !widgetEditor) closeCustomizer();
     });
   }
 

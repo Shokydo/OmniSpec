@@ -182,8 +182,9 @@ const server = http.createServer((req, res) => {
     assert.deepEqual(filterRadii.pill, { home: '999px', download: '999px', category: '999px' }, 'filter controls follow pill shape');
 
     const allVisibleList = await page.locator('.visual-element-list').evaluate(el => ({ client: el.clientHeight, scroll: el.scrollHeight, max: getComputedStyle(el).maxHeight }));
-    assert.equal(allVisibleList.max, 'none', 'complete element list is not clipped by an inner fixed height');
-    assert(allVisibleList.client >= allVisibleList.scroll, 'all rows can be reached using the editor scroll');
+    assert(allVisibleList.scroll > allVisibleList.client, 'long list scrolls within its own panel');
+    await page.locator('.visual-element-list').evaluate(el=>el.scrollTop=el.scrollHeight);
+    assert(await page.locator('.visual-element-list').evaluate(el=>el.scrollTop>0), 'all rows can be reached via the left panel');
     assert(await page.locator('.visual-element[data-visual-id="build-path"]').count(), 'build path is available in the editor');
     assert(await page.locator('.visual-canvas-item[data-visual-id="build-path"] .visual-snapshot').count(), 'real build path appears on the canvas for a selected instance');
     await page.locator('.visual-element[data-visual-id="build-path"]').click();
