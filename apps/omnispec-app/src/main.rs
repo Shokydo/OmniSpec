@@ -406,6 +406,8 @@ async fn save_settings(
     preserve_custom_wallpaper(&current, &mut settings);
     preserve_custom_sounds(&current, &mut settings);
     preserve_language(&current, &mut settings);
+    // Снимки, отправленные до аварийного восстановления, не должны отменить его.
+    preserve_safe_mode(&current, &mut settings);
     // Запрет действует сразу, даже если сохранить файл не удалось: до перезапуска
     // не начнём новых отправок и попытаемся отменить уже начатую.
     if !settings.discord_rpc { current.discord_rpc = false; }
@@ -423,15 +425,17 @@ async fn save_settings(
     } else { None };
     settings.save(&state.paths).map_err(err)?;
     state.presence.configure(settings.discord_rpc);
-    let minimize_to_tray = settings.minimize_to_tray;
     *current = settings;
     state.rpc_upload_allowed.send_replace(
         current.discord_rpc && current.discord_instance_icon && current.discord_upload_local_icon
     );
-    // Значок уже создан в setup; переключатель применяется сразу, но только
-    // после успешной атомарной записи settings.json.
-    set_tray_visible(&app, minimize_to_tray);
+    // Значок остаётся доступен для аварийного восстановления интерфейса.
+    let _ = app;
     Ok(())
+}
+
+fn preserve_safe_mode(current: &Settings, incoming: &mut Settings) {
+    incoming.ui_safe_mode = current.ui_safe_mode;
 }
 
 /// Сначала меняем нативный значок, затем атомарно записываем настройки. Если
@@ -4489,6 +4493,9 @@ fn instance_path(state: State<'_, AppState>, instance_id: String) -> Result<Stri
 const TRAY_ID: &str = "omnispec-tray";
 const TRAY_SHOW_ID: &str = "tray-show";
 const TRAY_QUIT_ID: &str = "tray-quit";
+const TRAY_SETTINGS_ID: &str = "tray-settings";
+const TRAY_PROFILE_ID: &str = "tray-profile";
+const TRAY_RECOVERY_ID: &str = "tray-recovery";
 
 /// Обновляет WebView только для смены видимости. Само скрытие окна не
 /// затрагивает нативный Discord worker или запущенные игровые/серверные процессы.
@@ -4516,12 +4523,29 @@ fn set_tray_visible(app: &AppHandle, visible: bool) {
     }
 }
 
-/// Значок создаётся один раз даже при выключенной настройке: это позволяет
-/// включить функцию без перезапуска. В выключенном состоянии сам значок скрыт.
-fn setup_tray(app: &AppHandle, enabled: bool) -> Result<(), String> {
+/// Безопасный режим сохраняется отдельно и не удаляет пользовательские данные.
+async fn commit_ui_safe_mode(state: &AppState, enabled: bool) -> Result<(), String> {
+    let mut settings = state.settings.lock().await;
+    let mut next = settings.clone();
+    next.ui_safe_mode = enabled;
+    next.save(&state.paths).map_err(err)?;
+    *settings = next;
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_ui_safe_mode(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    commit_ui_safe_mode(&state, enabled).await
+}
+
+/// Меню восстановления доступно даже при выключенном сворачивании в трей.
+fn setup_tray(app: &AppHandle, _enabled: bool) -> Result<(), String> {
     let show = MenuItem::with_id(app, TRAY_SHOW_ID, "Показать OmniSpec", true, None::<&str>).map_err(err)?;
-    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "Выйти", true, None::<&str>).map_err(err)?;
-    let menu = Menu::with_items(app, &[&show, &quit]).map_err(err)?;
+    let settings = MenuItem::with_id(app, TRAY_SETTINGS_ID, "Настройки", true, None::<&str>).map_err(err)?;
+    let profile = MenuItem::with_id(app, TRAY_PROFILE_ID, "Профиль", true, None::<&str>).map_err(err)?;
+    let recovery = MenuItem::with_id(app, TRAY_RECOVERY_ID, "Восстановить интерфейс", true, None::<&str>).map_err(err)?;
+    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "Выключить OmniSpec", true, None::<&str>).map_err(err)?;
+    let menu = Menu::with_items(app, &[&show, &settings, &profile, &recovery, &quit]).map_err(err)?;
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).map_err(err)?;
 
     TrayIconBuilder::with_id(TRAY_ID)
@@ -4532,8 +4556,21 @@ fn setup_tray(app: &AppHandle, enabled: bool) -> Result<(), String> {
         .on_menu_event(|app, event| {
             if event.id() == TRAY_SHOW_ID {
                 show_main_window(app);
+            } else if event.id() == TRAY_SETTINGS_ID || event.id() == TRAY_PROFILE_ID {
+                show_main_window(app);
+                let action = if event.id() == TRAY_PROFILE_ID { "profile" } else { "settings" };
+                let _ = app.emit("tray-action", json!({ "action": action }));
+            } else if event.id() == TRAY_RECOVERY_ID {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let result = commit_ui_safe_mode(&app.state::<AppState>(), true).await;
+                    show_main_window(&app);
+                    match result {
+                        Ok(()) => if let Some(window) = app.get_webview_window("main") { let _ = window.eval("window.location.reload()"); },
+                        Err(error) => { eprintln!("[omnispec] восстановление интерфейса: {error}"); let _ = app.emit("tray-action", json!({"action":"recovery-error", "error":error})); }
+                    }
+                });
             } else if event.id() == TRAY_QUIT_ID {
-                // Пункт «Выйти» — явное завершение, как кнопка X.
                 app.exit(0);
             }
         })
@@ -4550,7 +4587,7 @@ fn setup_tray(app: &AppHandle, enabled: bool) -> Result<(), String> {
         .build(app)
         .map_err(err)?;
 
-    set_tray_visible(app, enabled);
+    set_tray_visible(app, true);
     Ok(())
 }
 
@@ -4808,6 +4845,7 @@ fn main() {
             list_java,
             open_path,
             open_customization_folder,
+            set_ui_safe_mode,
             list_folder_themes,
             window_action,
             mod_icons,
@@ -5083,6 +5121,15 @@ mod tests {
         std::fs::remove_file(folder.join("bad.css")).unwrap();
         std::fs::write(folder.join("big.css"), vec![b'x'; 1_000_001]).unwrap();
         assert!(super::read_folder_themes(&paths).is_err());
+    }
+
+    #[test]
+    fn stale_settings_cannot_undo_emergency_interface_mode() {
+        let current = super::Settings { ui_safe_mode: true, ..super::Settings::default() };
+        let mut stale = super::Settings { ui_safe_mode: false, username: "Test".into(), ..super::Settings::default() };
+        super::preserve_safe_mode(&current, &mut stale);
+        assert!(stale.ui_safe_mode);
+        assert_eq!(stale.username, "Test");
     }
 
     #[test]

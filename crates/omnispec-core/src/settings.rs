@@ -467,6 +467,9 @@ pub struct Settings {
     /// Раскладка крупных областей лаунчера из визуального конструктора.
     #[serde(default)]
     pub ui_layout: UiLayout,
+    /// Аварийный режим: пользовательский CSS и раскладка временно отключены.
+    #[serde(default)]
+    pub ui_safe_mode: bool,
     /// Эффект от клика: wave | dot | ring | cross | off.
     #[serde(default = "default_click_fx")]
     pub click_fx: String,
@@ -657,6 +660,7 @@ impl Default for Settings {
             ui_theme_modules: Vec::new(),
             ui_script_modules: Vec::new(),
             ui_layout: UiLayout::default(),
+            ui_safe_mode: false,
             click_fx: default_click_fx(),
             ui_scale: default_ui_scale(),
             initial_tab: default_initial_tab(),

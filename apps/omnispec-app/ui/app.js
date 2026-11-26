@@ -15270,6 +15270,17 @@
     // Событие приходит только от нативного tray/window слоя. Оно не влияет
     // на set_presence: RPC должен жить независимо от видимости WebView.
     await api.onWindowVisibility((payload) => setQuietMode(Boolean(payload && payload.hidden)));
+    if (IS_APP && TAURI.event?.listen) {
+      await TAURI.event.listen("tray-action", (event) => {
+        const action = event.payload?.action;
+        if (action === "settings" || action === "profile") {
+          window.omnispecCustomizer?.close?.();
+          openPrefs(action === "profile" ? "profile" : "look");
+        } else if (action === "recovery-error") {
+          window.omnispecDialogs?.confirm({title:"Ошибка восстановления", text:String(event.payload?.error || "Не удалось сохранить настройки"), ok:"Понятно"});
+        }
+      });
+    }
     if (!IS_APP) {
       // демо-режим: показываем «живой» лог
       const demo = DEMO.demoLogs;
