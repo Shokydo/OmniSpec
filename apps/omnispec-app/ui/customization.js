@@ -383,6 +383,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
   let layout = { ...DEFAULT_LAYOUT };
   let customCss = "";
   let themeModules = [];
+  let folderThemeScan = null;
   let scriptModules = [];
   const scriptSessions = new Map();
   const trustedScriptRuns = new Set();
@@ -502,6 +503,20 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     });
     return originalCssPromise;
   }
+  // Цвета выбранной темы задаются inline на :root и иначе перекрывают обычный
+  // пользовательский CSS. Приоритет даём только тем переменным, которыми
+  // управляет движок темы; остальные CSS-правила не меняем.
+  const THEME_ROOT_TOKENS = new Set(["--bg","--bg-2","--bg-3","--bg-4","--bg-5","--line","--line-2","--line-3","--text","--dim","--dim-2","--accent","--accent-2","--accent-fg","--accent-soft","--green","--red","--yellow","--blue","--catalog-modrinth","--catalog-curseforge","--console-bg","--bg-elev","--panel","--panel-2","--panel-3","--border","--border-soft","--border-strong","--hover","--text-dim","--muted","--bg-1a","--bg-2a","--bg-3a"]);
+  function prioritizeUserRootTokens(style) {
+    const walk = rules => {
+      for (const rule of rules) {
+        if (rule.cssRules) walk(rule.cssRules);
+        if (!rule.selectorText || !rule.style || !rule.selectorText.split(",").some(x => [":root", "html"].includes(x.trim()))) continue;
+        for (const key of [...rule.style]) if (THEME_ROOT_TOKENS.has(key)) rule.style.setProperty(key, rule.style.getPropertyValue(key), "important");
+      }
+    };
+    try { if (style?.sheet) walk(style.sheet.cssRules); } catch { /* WebView CSSOM */ }
+  }
   function injectStyles() {
     if (!styleEl) { styleEl = document.createElement("style"); styleEl.id = "omnispec-customizer-base-style"; document.head.appendChild(styleEl); }
     styleEl.textContent = BASE_CSS;
@@ -518,8 +533,11 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
       baseLink.disabled = full;
     }
     userStyleEl.textContent = full ? "" : sanitizeCss(customCss);
+    prioritizeUserRootTokens(userStyleEl);
+    if (full) prioritizeUserRootTokens(replacementStyleEl);
     if (!themeStyleEl) { themeStyleEl = document.createElement("style"); themeStyleEl.id = "omnispec-theme-modules"; document.head.appendChild(themeStyleEl); }
     themeStyleEl.textContent = themeModules.filter(m => m.enabled).map(m => sanitizeCss(m.css)).join("\n");
+    prioritizeUserRootTokens(themeStyleEl);
     // Защита слоёв работает также при полной замене базового CSS.
     if (!effectGuardEl) { effectGuardEl = document.createElement("style"); effectGuardEl.id = "omnispec-effect-guard"; document.head.appendChild(effectGuardEl); }
     effectGuardEl.textContent = `
@@ -663,6 +681,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     scriptModules = normalizeScripts(settings.ui_script_modules ?? local.ui_script_modules);
     if (state && !state.settings) state.settings = { ...settings };
     injectStyles(); applyLayout(); markUi();
+    syncFolderThemes().catch(() => {});
   }
 
   function stageSettings(patch = {}) {
@@ -1240,10 +1259,33 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
   function normalizeModules(value) {
     const list = Array.isArray(value) ? value : [];
     const builtins = Object.entries(CSS_PRESETS).map(([id, item]) => ({ id: `builtin-${id}`, name: item.label, css: item.css, enabled: false }));
-    const clean = list.filter(m => m && typeof m.id === "string" && typeof m.css === "string").map(m => ({ id: m.id.slice(0, 120), name: String(m.name || "Тема").slice(0, 120), css: m.css.slice(0, MAX_CSS), enabled: m.enabled === true }));
+    const clean = list.filter(m => m && typeof m.id === "string" && typeof m.css === "string").map(m => ({ id: m.id.slice(0, 120), name: String(m.name || "Тема").slice(0, 120), css: m.css.slice(0, MAX_CSS), source_file: typeof m.source_file === "string" && m.source_file.length <= 255 ? m.source_file : null, enabled: m.enabled === true }));
     for (const b of builtins) if (!clean.some(m => m.id === b.id)) clean.push(b);
     return clean;
   }
+  function syncFolderThemes() {
+    if (folderThemeScan) return folderThemeScan;
+    const invoke = window.__TAURI__?.core?.invoke;
+    if (!invoke) return Promise.resolve(false);
+    folderThemeScan = (async () => {
+      const files = await invoke("list_folder_themes");
+      if (!Array.isArray(files)) return false;
+      const safe = files.filter(f => f && typeof f.name === "string" && f.name.length <= 255 && typeof f.css === "string" && f.css.length <= MAX_CSS);
+      if (safe.length !== files.length) throw new Error("Некорректный ответ при чтении папки тем");
+      const byName = new Map(safe.map(f => [f.name, f]));
+      const updated = themeModules.filter(m => !m.source_file || byName.has(m.source_file)).map(m => {
+        if (!m.source_file) return m;
+        const file = byName.get(m.source_file); if (!file) return m;
+        byName.delete(m.source_file);
+        return { ...m, name: file.name, css: file.css };
+      });
+      for (const file of byName.values()) updated.push({ id: `folder-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,10)}`, name: file.name, css: file.css, source_file: file.name, enabled: false });
+      if (JSON.stringify(updated) === JSON.stringify(themeModules)) return false;
+      themeModules = updated; injectStyles(); queueSave({ ui_theme_modules: themeModules }); return true;
+    })().finally(() => { folderThemeScan = null; });
+    return folderThemeScan;
+  }
+
   // Запуск никогда не восстанавливается из файла настроек/импорта: разрешение
   // действует только в текущем процессе и не переносится вместе со скриптом.
   function normalizeScripts(value) {
@@ -1315,7 +1357,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
       const invoke = window.__TAURI__?.core?.invoke;
       if (!invoke) throw new Error("открытие папки доступно в приложении");
       await invoke("open_customization_folder", { kind });
-      if (status) status.textContent = "Папка открыта. Импортированные файлы хранятся в настройках; содержимое папки не добавляется автоматически.";
+      if (status) status.textContent = kind === "themes" ? "Папка открыта. Вернитесь в лаунчер или нажмите «Обновить из папки»." : "Папка открыта. Скрипты нужно импортировать вручную; содержимое папки не запускается автоматически.";
     } catch (error) { if (status) status.textContent = `Не удалось открыть папку: ${error}`; }
   }
   function renderThemes(host) {
@@ -1324,7 +1366,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     scriptModules = normalizeScripts(currentSettings().ui_script_modules ?? scriptModules);
     let dragging = null;
     function draw() {
-      host.innerHTML = `<h3 style="margin-top:24px">Готовые компоновки</h3><p class="muted">Выбор компоновки сбрасывает пользовательское расположение элементов.</p><div class="preset-preview-grid">${UI_PRESETS.filter(([id]) => id !== "custom").map(([id, label, description]) => `<label class="preset-preview ${layout.preset === id ? "is-active" : ""}"><input type="radio" name="interface-layout-preset" data-theme-layout="${id}" ${layout.preset === id ? "checked" : ""}><img src="assets/preset-previews/${id}.png" alt="" loading="lazy"><strong>${esc(label)}</strong><small>${esc(description)}</small></label>`).join("")}</div><h3 style="margin-top:24px">Темы и заготовки</h3><p class="muted">Включайте и сочетайте CSS-заготовки. Нижние стили применяются позже; порядок можно менять мышью или кнопками. @import отключён.</p><div data-theme-list>${themeModules.map((m, i) => `<div draggable="true" data-theme-row="${esc(m.id)}" style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--line)"><span title="Перетащить" aria-hidden="true">⋮⋮</span><span style="flex:1;min-width:0">${esc(m.name)}</span><button type="button" class="switch ${m.enabled ? "on" : ""}" role="switch" aria-label="${esc(m.name)}" aria-checked="${m.enabled}" data-theme-toggle="${esc(m.id)}"></button><button class="btn btn-small" type="button" data-theme-move="-1" data-id="${esc(m.id)}" ${i === 0 ? "disabled" : ""} aria-label="Поднять ${esc(m.name)}">↑</button><button class="btn btn-small" type="button" data-theme-move="1" data-id="${esc(m.id)}" ${i === themeModules.length-1 ? "disabled" : ""} aria-label="Опустить ${esc(m.name)}">↓</button>${m.id.startsWith("builtin-") ? "" : `<button class="btn btn-small" type="button" data-theme-delete="${esc(m.id)}" aria-label="Удалить ${esc(m.name)}">✕</button>`}</div>`).join("")}</div><div data-theme-drop style="margin-top:16px;padding:16px;border:1px dashed var(--line);border-radius:var(--r)"><p>Перетащите сюда CSS-файлы или выберите их.</p><button type="button" class="btn btn-small" data-theme-import>Импорт CSS</button> <button type="button" class="btn btn-small" data-theme-folder>Открыть папку тем</button><input type="file" accept=".css,text/css" multiple hidden data-theme-file></div><p class="muted" data-theme-status aria-live="polite">Импортированные темы сначала выключены.</p><div data-script-host></div>`;
+      host.innerHTML = `<h3 style="margin-top:24px">Готовые компоновки</h3><p class="muted">Выбор компоновки сбрасывает пользовательское расположение элементов.</p><div class="preset-preview-grid">${UI_PRESETS.filter(([id]) => id !== "custom").map(([id, label, description]) => `<label class="preset-preview ${layout.preset === id ? "is-active" : ""}"><input type="radio" name="interface-layout-preset" data-theme-layout="${id}" ${layout.preset === id ? "checked" : ""}><img src="assets/preset-previews/${id}.png" alt="" loading="lazy"><strong>${esc(label)}</strong><small>${esc(description)}</small></label>`).join("")}</div><h3 style="margin-top:24px">Темы и заготовки</h3><p class="muted">Включайте и сочетайте CSS-заготовки. Нижние стили применяются позже; порядок можно менять мышью или кнопками. @import отключён.</p><div data-theme-list>${themeModules.map((m, i) => `<div draggable="true" data-theme-row="${esc(m.id)}" style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--line)"><span title="Перетащить" aria-hidden="true">⋮⋮</span><span style="flex:1;min-width:0">${esc(m.name)}${m.source_file ? " <small class=\"muted\">· из папки</small>" : ""}</span><button type="button" class="switch ${m.enabled ? "on" : ""}" role="switch" aria-label="${esc(m.name)}" aria-checked="${m.enabled}" data-theme-toggle="${esc(m.id)}"></button><button class="btn btn-small" type="button" data-theme-move="-1" data-id="${esc(m.id)}" ${i === 0 ? "disabled" : ""} aria-label="Поднять ${esc(m.name)}">↑</button><button class="btn btn-small" type="button" data-theme-move="1" data-id="${esc(m.id)}" ${i === themeModules.length-1 ? "disabled" : ""} aria-label="Опустить ${esc(m.name)}">↓</button>${m.id.startsWith("builtin-") || m.source_file ? "" : `<button class="btn btn-small" type="button" data-theme-delete="${esc(m.id)}" aria-label="Удалить ${esc(m.name)}">✕</button>`}</div>`).join("")}</div><div data-theme-drop style="margin-top:16px;padding:16px;border:1px dashed var(--line);border-radius:var(--r)"><p>Перетащите сюда CSS-файлы или выберите их.</p><button type="button" class="btn btn-small" data-theme-import>Импорт CSS</button> <button type="button" class="btn btn-small" data-theme-folder>Открыть папку тем</button> <button type="button" class="btn btn-small" data-theme-refresh>Обновить из папки</button><input type="file" accept=".css,text/css" multiple hidden data-theme-file></div><p class="muted" data-theme-status aria-live="polite">Новые темы сначала выключены. Файлы из папки можно удалить через проводник.</p><div data-script-host></div>`;
       renderScripts($("[data-script-host]", host));
     }
     function save() { injectStyles(); queueSave({ ui_theme_modules: themeModules }); draw(); }
@@ -1345,6 +1387,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     host.addEventListener("click", async e => {
       const button = e.target.closest("button"); if (!button) return;
       if (button.hasAttribute("data-theme-toggle")) { const m = themeModules.find(x => x.id === button.dataset.themeToggle); if (m) { m.enabled = !m.enabled; save(); } return; }
+      if (button.hasAttribute("data-theme-refresh")) { await refreshFolder(); return; }
       if (button.hasAttribute("data-theme-folder")) { await openCustomizationFolder("themes", $("[data-theme-status]",host)); return; }
       if (button.hasAttribute("data-theme-import")) $("[data-theme-file]", host)?.click();
       if (button.dataset.themeDelete && await confirmChange("Удалить импортированную тему?", "Удалить")) { themeModules = themeModules.filter(m => m.id !== button.dataset.themeDelete); save(); }
@@ -1358,7 +1401,14 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
       const row = e.target.closest("[data-theme-row]"); const i = themeModules.findIndex(m => m.id === dragging), j = themeModules.findIndex(m => m.id === row?.dataset.themeRow);
       if (i >= 0 && j >= 0 && i !== j) { const [m] = themeModules.splice(i, 1); themeModules.splice(j, 0, m); save(); } dragging = null;
     });
-    draw();
+    async function refreshFolder() {
+      try { const changed = await syncFolderThemes(); if (host.isConnected) { if (changed) draw(); $("[data-theme-status]",host).textContent = "Папка тем обновлена. Новые темы выключены."; } }
+      catch (error) { if (host.isConnected) $("[data-theme-status]",host).textContent = `Не удалось прочитать папку тем: ${error}`; }
+    }
+    const onFocus = () => { if (!host.isConnected) { window.removeEventListener("focus", onFocus); return; } refreshFolder(); };
+    if (host._folderThemeFocus) window.removeEventListener("focus", host._folderThemeFocus);
+    host._folderThemeFocus = onFocus; window.addEventListener("focus", onFocus);
+    draw(); refreshFolder();
   }
 
   function openCustomizer() {

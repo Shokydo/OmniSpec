@@ -12,6 +12,9 @@ pub struct UiThemeModule {
     pub id: String,
     pub name: String,
     pub css: String,
+    /// Имя файла из папки themes; импортированные вручную темы имеют None.
+    #[serde(default)]
+    pub source_file: Option<String>,
     #[serde(default)]
     pub enabled: bool,
 }
@@ -815,6 +818,10 @@ mod discord_tests {
             surface_opacity: Some(0), backdrop_blur: Some(12), surface_radius: Some(20), build_card_size: Some(100), tabs_orientation: "vertical-right".into(), merged_workspace: true, list_view: "grid".into(),
             ..UiElement::default()
         });
+        changed.ui_theme_modules.push(UiThemeModule {
+            id: "folder-test".into(), name: "example.css".into(),
+            css: ":root { --accent: red }".into(), source_file: Some("example.css".into()), enabled: true,
+        });
         changed.ui_script_modules.push(UiScriptModule { id: "script-test".into(), name: "demo.js".into(), code: "console.log(1)".into(), mode: "isolated".into() });
         changed.ui_layout.custom_widgets.push(UiCustomWidget {
             id: "widget-test".into(), name: "Example".into(), kind: "html".into(),
@@ -825,6 +832,8 @@ mod discord_tests {
         category.rules.mc_versions = vec!["1.21.1".into(), "1.21.4".into()];
         changed.categories.push(category);
         let restored: Settings = serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
+        assert_eq!(restored.ui_theme_modules[0].source_file.as_deref(), Some("example.css"));
+        assert!(restored.ui_theme_modules[0].enabled);
         assert_eq!(restored.ui_script_modules[0].code, "console.log(1)");
         assert_eq!(restored.ui_script_modules[0].mode, "isolated");
         assert_eq!(restored.ui_layout.custom_widgets[0].content, "<b>hello</b>");

@@ -4279,6 +4279,43 @@ fn prepare_customization_folder(paths: &Paths, kind: &str) -> Result<PathBuf, St
     Ok(folder)
 }
 
+#[derive(Debug, Serialize)]
+struct FolderCssFile {
+    name: String,
+    css: String,
+}
+
+/// Читаем только обычные UTF-8 CSS-файлы непосредственно из папки тем.
+/// Ошибка отдельного файла прерывает сканирование, чтобы не потерять список
+/// и настройки ранее включённых тем при временной ошибке чтения.
+fn read_folder_themes(paths: &Paths) -> Result<Vec<FolderCssFile>, String> {
+    const MAX_BYTES: u64 = 1_000_000;
+    const MAX_FILES: usize = 100;
+    let folder = prepare_customization_folder(paths, "themes")?;
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(&folder).map_err(err)? {
+        let entry = entry.map_err(err)?;
+        let kind = entry.file_type().map_err(err)?;
+        if !kind.is_file() || kind.is_symlink() { continue; }
+        let path = entry.path();
+        if !path.extension().and_then(|v| v.to_str()).is_some_and(|v| v.eq_ignore_ascii_case("css")) { continue; }
+        let name = entry.file_name().into_string().map_err(|_| "имя CSS-файла должно быть в UTF-8".to_string())?;
+        if files.len() >= MAX_FILES { return Err("в папке более 100 CSS-файлов".into()); }
+        let mut bytes = Vec::new();
+        std::fs::File::open(&path).map_err(err)?.take(MAX_BYTES + 1).read_to_end(&mut bytes).map_err(err)?;
+        if bytes.len() as u64 > MAX_BYTES { return Err(format!("файл {name} больше 1 МБ")); }
+        let css = String::from_utf8(bytes).map_err(|_| format!("файл {name} должен быть в UTF-8"))?;
+        files.push(FolderCssFile { name, css });
+    }
+    files.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(files)
+}
+
+#[tauri::command]
+fn list_folder_themes(state: State<'_, AppState>) -> Result<Vec<FolderCssFile>, String> {
+    read_folder_themes(&state.paths)
+}
+
 #[tauri::command]
 fn open_customization_folder(state: State<'_, AppState>, kind: String) -> Result<(), String> {
     let folder = prepare_customization_folder(&state.paths, &kind)?;
@@ -4771,6 +4808,7 @@ fn main() {
             list_java,
             open_path,
             open_customization_folder,
+            list_folder_themes,
             window_action,
             mod_icons,
             world_icons,
@@ -5026,6 +5064,25 @@ mod tests {
         assert_eq!(stale.wallpaper_workshop_project.as_deref(), Some("chosen"));
         assert_eq!(stale.wallpaper_steam_path.as_deref(), Some("kept-steam"));
         assert_eq!(stale.ui_scale, 125, "unrelated settings still change");
+    }
+
+    #[test]
+    fn folder_themes_only_read_css_and_fail_without_data_loss_on_invalid_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = super::Paths::new(temp.path()).unwrap();
+        let folder = super::prepare_customization_folder(&paths, "themes").unwrap();
+        std::fs::write(folder.join("b.CSS"), "body { color: red }").unwrap();
+        std::fs::write(folder.join("a.css"), ":root { --accent: pink }").unwrap();
+        std::fs::write(folder.join("script.js"), "ignored").unwrap();
+        std::fs::create_dir(folder.join("nested.css")).unwrap();
+        let files = super::read_folder_themes(&paths).unwrap();
+        assert_eq!(files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["a.css", "b.CSS"]);
+        assert!(files[0].css.contains("pink"));
+        std::fs::write(folder.join("bad.css"), [0xff]).unwrap();
+        assert!(super::read_folder_themes(&paths).is_err());
+        std::fs::remove_file(folder.join("bad.css")).unwrap();
+        std::fs::write(folder.join("big.css"), vec![b'x'; 1_000_001]).unwrap();
+        assert!(super::read_folder_themes(&paths).is_err());
     }
 
     #[test]
