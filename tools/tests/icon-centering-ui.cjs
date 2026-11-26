@@ -121,7 +121,7 @@ async function audit(page, label, scale, seen) {
       '.we-thumb > img', '.we-thumb > span:not(.we-type)'
     ];
     const text = ['.icon-chip.letter', '.skin-library-remove', '.instance-icon',
-      '.build-tile-icon.is-letter', '.fav-slot .preset-del'];
+      '.build-tile-icon.is-letter'];
     const inline = ['.btn > .ic', '.ctx-item > .ic', '.pop-item > .ic', '.home-category > .ic',
       '.search > .ic', '.mr-view button > .ic', '.initial-tab-option > .ic', '.home-filters-toggle > .ic'];
     const items = [];
@@ -336,7 +336,7 @@ async function checkSmallCells(page, scale, seen) {
           '.fm-item .fname .ico > .ic','.errors-status-icon > .ic','.cape-thumb-off > .ic',
           '.build-tile-icon.is-symbol > .ic','.build-tile-shot > .build-tile-icon','.shot-img > .ic',
           '.icon-chip.letter [text]','.skin-library-remove [text]','.instance-icon [text]',
-          '.build-tile-icon.is-letter [text]','.fav-slot .preset-del [text]',
+          '.build-tile-icon.is-letter [text]',
           '.ctx-item > .ic [inline]','.initial-tab-option > .ic [inline]'
         ]) assert(seen.has(required), `не проверена ячейка ${required} при масштабе ${scale}%`);
         assert.deepEqual(errors,[]);

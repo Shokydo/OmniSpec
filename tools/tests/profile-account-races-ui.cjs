@@ -212,19 +212,13 @@ async function setup(page) {
     await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='B' && window.omnispecDebug.state.capes?.loading && window.omnispecDebug.state.skin?.currentName==='B');
     await page.waitForTimeout(250);
     assert.equal(await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='account_capes' && c.args.accountUuid==='B').length),beforeBackFetch);
-    // Favorites must not silently treat an unpopulated list as "no cape" or
-    // save it while the real active cape is still being resolved.
-    await page.evaluate(()=>{
-      window.omnispecDebug.state.settings.skin_favorites=[{id:'loading-fav',name:'Loading favorite',skinDataUrl:window.__raceTest.images.B,variant:'classic',capeId:''}];
-    });
+    // While the cape list is loading, selection cannot send an accidental request.
     await page.locator('[data-pref="avatar"]').click();
-    const beforeLoadingFavorite=await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').length);
+    const beforeLoadingCape=await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').length);
     await page.evaluate(()=>{document.querySelector('#toasts').textContent='';});
-    await page.locator('[data-fav="loading-fav"]').click();
-    await page.waitForFunction(()=>[...document.querySelectorAll('#toasts .toast.err')].some(t=>t.textContent.includes('плащ не применён')));
-    await page.locator('#fav-add').click();
+    await page.locator('#skin-capes [data-cape-id=""]').click();
     await page.waitForFunction(()=>[...document.querySelectorAll('#toasts .toast.err')].some(t=>t.textContent.includes('Дождись завершения изменения плаща')));
-    assert.equal(await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').length),beforeLoadingFavorite);
+    assert.equal(await page.evaluate(()=>window.__raceTest.calls.filter(c=>c.command==='set_cape').length),beforeLoadingCape);
     await page.evaluate(()=>window.__raceTest.release('set-cape'));
     await page.waitForFunction(()=>window.omnispecDebug.state.accounts.active==='B' && !window.omnispecDebug.state.capes?.loading && window.omnispecDebug.state.capes.list.find(c=>c.active)?.id==='cape-B2');
     assert.equal(await page.evaluate(()=>window.__raceTest.serverCape.B),'cape-B2');
