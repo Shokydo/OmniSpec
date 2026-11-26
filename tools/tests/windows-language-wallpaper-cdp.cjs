@@ -172,6 +172,22 @@ async function visibleVideo() {
     assert.equal(final.wallpaper_workshop_project,path.join(steam,'old-project'));assert.equal(final.skin_presets[0].name,'Скин');
     assert.equal(fs.readFileSync(marker,'utf8'),'Do not delete or modify');assert(fs.existsSync(legacy));
     console.log('WINDOWS_WEBVIEW2_RESTART_MUTED_VIDEO_AND_USER_DATA_OK');
+    // Эксперимент YouTube: настройки проверяются обязательно; реальное
+    // воспроизведение фиксируется отдельно и не маскируется мок-плеером.
+    await page.locator('#wall-link').fill('https://www.youtube.com/watch?v=qDz-JtxT2gE');
+    await page.locator('#wall-link-add').click();
+    await waitSaved(s=>s.wallpaper==='youtube:qDz-JtxT2gE','YouTube selection');
+    await page.waitForSelector('#wall-youtube:not([hidden])');
+    await delay(18000);
+    const frame=page.frames().find(f=>f.url().includes('youtube-nocookie.com/embed/qDz-JtxT2gE'));
+    if (!frame) console.log('WINDOWS_YOUTUBE_TEST unavailable: iframe not loaded');
+    else {
+      try {
+        const info=await frame.evaluate(()=>{ const v=document.querySelector('video');return {text:(document.body?.innerText||'').slice(0,500),video:v?{paused:v.paused,ready:v.readyState,time:v.currentTime,muted:v.muted}:null}; });
+        console.log('WINDOWS_YOUTUBE_TEST',JSON.stringify(info));
+      } catch(error) { console.log('WINDOWS_YOUTUBE_TEST inspection failed',String(error).slice(0,200)); }
+    }
+
   } finally {
     await unlockSettings().catch(()=>{});
     await stop().catch(()=>{});
