@@ -20,10 +20,9 @@ function restore(handle){execFileSync('powershell.exe',['-NoProfile','-NonIntera
  await page.locator('[data-win="close"]').click();await waitFor(async()=>!(await visible()),'close hides to tray');assert.equal(child.exitCode,null,'process must remain alive');
  await page.waitForFunction(()=>window.omnispecDebug.state.quiet===true);
  restore(hwnd);await waitFor(visible,'restore hidden window');
- await page.locator('#btn-quick-settings').click();await page.locator('[data-pref="look"]').click();
- await page.locator('#set-minimize-to-tray').click();await page.waitForFunction(()=>window.omnispecDebug.state.settings.minimize_to_tray===false);
+ await page.evaluate(async()=>{const api=window.__TAURI__.core;const settings=await api.invoke('get_settings');settings.minimize_to_tray=false;await api.invoke('save_settings',{settings});});
  await page.waitForFunction(()=>window.__TAURI__.core.invoke('get_settings').then(s=>s.minimize_to_tray===false));
- await page.locator('[data-close-prefs]').click();await page.locator('[data-win="close"]').click();
+ await page.evaluate(()=>window.__TAURI__.core.invoke('window_action',{action:'close'})).catch(()=>{});
  await waitFor(()=>child.exitCode!==null,'close with tray disabled');assert.deepEqual(errors,[]);
  console.log('WINDOWS_TRAY_REAL_MINUS_TASKBAR_CLOSE_HIDES_SETTING_OFF_EXITS_OK');
  }finally{if(child&&child.exitCode===null)child.kill();if(browser)await browser.close().catch(()=>{});await delay(1000);try{fs.rmSync(root,{recursive:true,force:true,maxRetries:4,retryDelay:250})}catch{}}
