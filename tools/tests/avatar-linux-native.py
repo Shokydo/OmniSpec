@@ -109,7 +109,6 @@ try:
     library = wait('Библиотека скинов')
     capes = wait('Гардероб плащей')
     apply = wait('Применить к аккаунту')
-    wait('Ширина рук')
     if apply.getState().contains(pyatspi.STATE_ENABLED):
         raise AssertionError('Offline account can change the official skin')
     lx, ly, lw, lh = bounds(library)
