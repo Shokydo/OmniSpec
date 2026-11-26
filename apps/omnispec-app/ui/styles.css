@@ -4000,3 +4000,9 @@ body, body * { cursor: crosshair !important; }
 .content-panel-head { height: auto; min-height: 36px; padding-block: 5px; flex-wrap: wrap; }
 .content-panel-head > .content-search { flex: 1 1 220px; min-width: 140px; width: auto; }
 .content-panel-head > button { flex: 0 0 auto; }
+
+/* Экспериментальный YouTube-фон: не перехватывает управление интерфейсом. */
+.wall-youtube { position:absolute; left:50%; top:50%; width:max(100%, 177.778vh); height:max(100%, 56.25vw); transform:translate(-50%,-50%); border:0; pointer-events:none; }
+.wall-youtube.is-contain { width:min(100%,177.778vh); height:min(100%,56.25vw); }
+.wall-youtube.is-fill { width:100%; height:100%; }
+.wall-youtube[hidden] { display:none; }

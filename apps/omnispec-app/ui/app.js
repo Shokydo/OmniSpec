@@ -1280,6 +1280,37 @@
     return state.customWall;
   }
 
+  // Принимаем только известные адреса YouTube, а не произвольные iframe/скрипты.
+  function youtubeVideoId(input) {
+    try {
+      const u = new URL(String(input).trim());
+      if (!["http:", "https:"].includes(u.protocol) || u.username || u.password || u.port) return null;
+      const host = u.hostname.toLowerCase();
+      let id = null;
+      if (host === "youtu.be") id = u.pathname.split("/").filter(Boolean)[0];
+      else if (["youtube.com", "www.youtube.com", "m.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com"].includes(host)) {
+        const parts = u.pathname.split("/").filter(Boolean);
+        if (u.pathname === "/watch") id = u.searchParams.get("v");
+        else if (["embed", "shorts", "live"].includes(parts[0])) id = parts[1];
+      }
+      return /^[A-Za-z0-9_-]{11}$/.test(id || "") ? id : null;
+    } catch (_) { return null; }
+  }
+  function youtubeWallpaperId(value) {
+    const match = typeof value === "string" && /^youtube:([A-Za-z0-9_-]{11})$/.exec(value);
+    return match ? match[1] : null;
+  }
+  function unloadYoutubeWallpaper() {
+    const frame = $("#wall-youtube");
+    if (!frame) return;
+    frame.hidden = true;
+    if (frame.hasAttribute("src")) frame.removeAttribute("src");
+  }
+  function youtubeWallpaperSrc(id) {
+    const params = new URLSearchParams({ autoplay: "1", mute: "1", loop: "1", playlist: id, playsinline: "1", controls: "0", rel: "0" });
+    return `https://www.youtube-nocookie.com/embed/${id}?${params}`;
+  }
+
   let wallApplyRevision = 0;
   function playWallpaperVideo(video) {
     if (!video || video.hidden || document.hidden || !video.dataset.wallSrc) return;
@@ -1299,6 +1330,24 @@
     const fit = overrides.fit || settings.wallpaper_fit || "cover";
     const blur = Math.max(0, Math.min(20, Number(overrides.blur ?? settings.wallpaper_blur ?? 0) || 0));
     const dim = Number(overrides.dim ?? settings.wallpaper_dim ?? 40);
+    const youtubeId = youtubeWallpaperId(name);
+    const frame = $("#wall-youtube");
+    if (youtubeId && frame) {
+      if (video && !video.hidden) { video.pause(); video.removeAttribute("src"); video.dataset.wallSrc = ""; video.load(); video.hidden = true; }
+      layer.hidden = false; layer.style.backgroundImage = ""; layer.style.filter = ""; layer.style.transform = "";
+      layer.style.setProperty("--wall-dim", String(Math.min(100, Math.max(0, dim)) / 100));
+      document.body.classList.add("has-wall");
+      frame.style.filter = blur ? `blur(${blur}px)` : "";
+      frame.classList.toggle("is-contain", fit === "contain");
+      frame.classList.toggle("is-fill", fit === "fill");
+      if (!document.hidden && !state.windowHidden) {
+        const src = youtubeWallpaperSrc(youtubeId);
+        if (frame.getAttribute("src") !== src) frame.src = src;
+        frame.hidden = false;
+      } else unloadYoutubeWallpaper();
+      return;
+    }
+    unloadYoutubeWallpaper();
     const media = name === "custom" ? state.customWall
       : name && WALLS.some(([id]) => id === name) ? { src: wallUrl(name), kind: "image" } : null;
     if (!media || !media.src) {
@@ -1358,6 +1407,10 @@
   }
 
   document.addEventListener("visibilitychange", () => {
+    if (youtubeWallpaperId(state.wall?.wallpaper)) {
+      if (document.hidden) unloadYoutubeWallpaper();
+      else if (!state.windowHidden) applyWallpaper(state.wall);
+    }
     const video = $("#wall-video");
     if (!video || video.hidden) return;
     if (document.hidden) video.pause();
@@ -3182,6 +3235,7 @@
 
     if (next) {
       stopWallpaperPreviews();
+      unloadYoutubeWallpaper();
       ambient.pause();
       trailFx.pause();
       const wallVideo = $("#wall-video");
@@ -3201,6 +3255,7 @@
     trailFx.resume();
     const wallVideo = $("#wall-video");
     if (wallVideo && !wallVideo.hidden) playWallpaperVideo(wallVideo);
+    if (youtubeWallpaperId(state.wall?.wallpaper)) applyWallpaper(state.wall);
     if (logPending.length && !logFlushRaf) logFlushRaf = requestAnimationFrame(flushLog);
     // Один полный снимок после показа заменяет частые обновления, пропущенные
     // в свёрнутом состоянии; присутствие в Discord синхронизируем отдельно.
@@ -11339,7 +11394,7 @@
     for (const raw of Array.isArray(recent) ? recent : []) {
       const id = raw === "custom" && custom ? `custom:${custom}` : raw;
       const name = wallpaperHistoryName(id);
-      if ((WALLS.some(([wall]) => wall === id) || (name && !/[\\/\\\\]/.test(name))) && !result.includes(id)) result.push(id);
+      if ((WALLS.some(([wall]) => wall === id) || youtubeWallpaperId(id) || (name && !/[\\/\\\\]/.test(name))) && !result.includes(id)) result.push(id);
     }
     return result;
   }
@@ -11347,8 +11402,9 @@
     return ids.map((id) => {
       const name = wallpaperHistoryName(id);
       const builtin = WALLS.find(([wall]) => wall === id);
-      const label = builtin ? builtin[1] : name.replace(/-[0-9a-f]+-[0-9a-f]+(?=\.[^.]+$)/i, "");
-      const active = builtin ? state.wall.wallpaper === id : state.wall.wallpaper === "custom" && state.settings?.custom_wallpaper === name;
+      const youtube = youtubeWallpaperId(id);
+      const label = builtin ? builtin[1] : youtube ? `YouTube · ${youtube}` : name.replace(/-[0-9a-f]+-[0-9a-f]+(?=\.[^.]+$)/i, "");
+      const active = builtin || youtube ? state.wall.wallpaper === id : state.wall.wallpaper === "custom" && state.settings?.custom_wallpaper === name;
       const background = builtin ? ` style="background-image:url('${wallUrl(id)}')"` : "";
       return `<div class="wall-history-entry">
         <button type="button" class="wall-chip ${active ? "is-active" : ""}" data-wall-history-select="${esc(id)}"${name ? ` data-wall-history-preview="${esc(name)}"` : ""}${background} title="${esc(label)}"><span${name ? ' translate="no"' : ""}>${esc(label)}</span></button>
@@ -11377,10 +11433,10 @@
         <div class="skin-note">PNG, JPG, WebP, GIF, MP4 или WebM · до 512 МБ. Видео воспроизводится без звука.</div>
         ${settings.wallpaper === "workshop" ? '<div class="skin-note">Прежний фон Workshop больше не поддерживается. Выбери другой фон; исходные файлы не удалены.</div>' : ""}
         <div class="wall-link-row">
-          <input class="input" id="wall-link" value="${esc(state.wallLink.value)}" placeholder="Ссылка на файл или страницу Imgur" spellcheck="false" aria-label="Ссылка на обои">
+          <input class="input" id="wall-link" value="${esc(state.wallLink.value)}" placeholder="Ссылка на YouTube, файл или страницу Imgur" spellcheck="false" aria-label="Ссылка на обои">
           <button class="btn" id="wall-link-add" ${state.wallLink.busy ? "disabled" : ""}>${state.wallLink.busy ? "Загрузка…" : "Добавить"}</button>
         </div>
-        <div class="skin-note">Прямая HTTP(S)-ссылка на медиа или ссылка Imgur. Другие страницы и альбомы могут не поддерживаться.</div>
+        <div class="skin-note">Прямая ссылка на файл или страница Imgur. YouTube — экспериментально: встроенный плеер, без звука, нужен интернет; некоторые видео или WebView могут не работать. Интерфейс перекрывает плеер, что не соответствует правилам YouTube.</div>
         <div class="wall-group"><div class="wall-group-name">История фонов</div>
           <div class="skin-note">Удаление из истории не меняет текущий фон и не удаляет файл.</div>
           ${recent.length ? `<div class="wall-grid wall-history" id="wall-history">${wallHistoryHtml(recent)}</div>` : '<div class="skin-note">История пока пуста.</div>'}
@@ -11521,6 +11577,29 @@
     const link = state.wallLink;
     const url = String(link.value || $("#wall-link")?.value || "").trim();
     if (!url || link.busy) return;
+    const youtube = youtubeVideoId(url);
+    if (youtube) {
+      const previous = state.wall.wallpaper;
+      const previousRecent = state.wall.recent;
+      state.wall.wallpaper = `youtube:${youtube}`;
+      state.wall.recent = rememberWallpaper(previousRecent, state.wall.wallpaper);
+      if (!await persistWallpaper()) {
+        state.wall.wallpaper = previous; state.wall.recent = previousRecent;
+        state.settings = { ...state.settings, wallpaper: previous, wallpaper_recent: previousRecent };
+        toast("Не удалось сохранить фон YouTube", "err"); return;
+      }
+      link.value = "";
+      applyWallpaper(state.wall);
+      toast("YouTube-фон включён экспериментально; воспроизведение зависит от YouTube и WebView", "info");
+      if (prefsCategory === "wall" && !$("#modal-prefs")?.hidden) renderPrefs();
+      return;
+    }
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      if (host === "youtu.be" || host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtube-nocookie.com" || host.endsWith(".youtube-nocookie.com")) {
+        toast("Не удалось распознать ссылку на видео YouTube. Нужна ссылка на ролик, а не канал или плейлист.", "err"); return;
+      }
+    } catch (_) { /* обычные адреса проверяются загрузчиком */ }
     link.busy = true; renderPrefs();
     try {
       const saved = await api.downloadWallpaper(url);
