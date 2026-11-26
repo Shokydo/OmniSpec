@@ -622,7 +622,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     root.style.setProperty("--os-panel-pad", `${density.panel}px`);
     body.dataset.layoutDensity = layout.density;
     body.dataset.uiPreset = layout.preset;
-    body.dataset.uiIndependent = String(layout.elements.some((item) => item.mode === "absolute"));
+    body.dataset.uiIndependent = String(layout.elements.some((item) => item.mode === "absolute" && !item.id.startsWith("widget-")));
     main.dataset.tabsOrientation = elementState("tabs").tabs_orientation;
     const merged = elementState("build-list").merged_workspace;
     if (body.dataset.mergedWorkspace !== String(merged)) {
@@ -1087,7 +1087,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
   function applyUiPreset(id) {
     if (!UI_PRESETS.some(([preset]) => preset === id)) return;
     if (id === "custom") layout = normalizeLayout({ ...layout, preset: id });
-    else layout = normalizeLayout({ ...DEFAULT_LAYOUT, custom_widgets: layout.custom_widgets, preset: id, density: id === "prism" ? "compact" : "comfortable", elements: [{ id: "tabs", tabs_orientation: id === "prism" ? "vertical-right" : id === "modrinth" ? "vertical" : "horizontal" }, ...(id === "prism" ? [{ id: "build-list", merged_workspace: true, list_view: "grid" }] : [])] });
+    else layout = normalizeLayout({ ...DEFAULT_LAYOUT, custom_widgets: layout.custom_widgets, preset: id, density: id === "prism" ? "compact" : "comfortable", elements: [...layout.elements.filter(e => e.id.startsWith("widget-")), { id: "tabs", tabs_orientation: id === "prism" ? "vertical-right" : id === "modrinth" ? "vertical" : "horizontal" }, ...(id === "prism" ? [{ id: "build-list", merged_workspace: true, list_view: "grid" }] : [])] });
     applyLayout(); const saved = queueSave({ ui_layout: layout }); renderEditor();
     setStatus(`Применена раскладка «${UI_PRESETS.find(([preset]) => preset === id)?.[1]}»`, "saved");
     return saved;
