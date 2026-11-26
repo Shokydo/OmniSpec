@@ -436,6 +436,7 @@ async fn save_settings(
 
 fn preserve_safe_mode(current: &Settings, incoming: &mut Settings) {
     incoming.ui_safe_mode = current.ui_safe_mode;
+    if current.ui_safe_mode { for script in &mut incoming.ui_script_modules { script.auto_start = false; } }
 }
 
 /// Сначала меняем нативный значок, затем атомарно записываем настройки. Если
@@ -4528,9 +4529,20 @@ async fn commit_ui_safe_mode(state: &AppState, enabled: bool) -> Result<(), Stri
     let mut settings = state.settings.lock().await;
     let mut next = settings.clone();
     next.ui_safe_mode = enabled;
+    if enabled { for script in &mut next.ui_script_modules { script.auto_start = false; } }
     next.save(&state.paths).map_err(err)?;
     *settings = next;
     Ok(())
+}
+
+/// Отпечаток разрешения автозапуска привязан к id, режиму и точному коду.
+#[tauri::command]
+fn script_autostart_fingerprint(id: String, mode: String, code: String) -> Result<String, String> {
+    if id.len() > 100 || code.len() > 1_000_000 || !["trusted", "isolated"].contains(&mode.as_str()) {
+        return Err("некорректный скрипт".into());
+    }
+    let payload = serde_json::to_string(&(id, mode, code)).map_err(err)?;
+    Ok(format!("{:x}", sha2::Sha256::digest(payload.as_bytes())))
 }
 
 #[tauri::command]
@@ -4846,6 +4858,7 @@ fn main() {
             open_path,
             open_customization_folder,
             set_ui_safe_mode,
+            script_autostart_fingerprint,
             list_folder_themes,
             window_action,
             mod_icons,
@@ -5127,8 +5140,10 @@ mod tests {
     fn stale_settings_cannot_undo_emergency_interface_mode() {
         let current = super::Settings { ui_safe_mode: true, ..super::Settings::default() };
         let mut stale = super::Settings { ui_safe_mode: false, username: "Test".into(), ..super::Settings::default() };
+        stale.ui_script_modules.push(omnispec_core::settings::UiScriptModule { auto_start: true, ..Default::default() });
         super::preserve_safe_mode(&current, &mut stale);
         assert!(stale.ui_safe_mode);
+        assert!(!stale.ui_script_modules[0].auto_start);
         assert_eq!(stale.username, "Test");
     }
 
