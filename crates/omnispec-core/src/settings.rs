@@ -781,6 +781,7 @@ mod discord_tests {
         assert_eq!(legacy.ui_layout.sidebar_side, "left");
         assert_eq!(legacy.ui_layout.preset, "omnispec");
         assert!(legacy.ui_layout.elements.is_empty());
+        assert!(legacy.ui_layout.custom_widgets.is_empty());
 
         let mut changed = legacy.clone();
         changed.custom_css = "[data-os=sidebar]{width:300px}".into();
@@ -799,11 +800,17 @@ mod discord_tests {
             surface_opacity: Some(0), backdrop_blur: Some(12), surface_radius: Some(20), build_card_size: Some(100), tabs_orientation: "vertical-right".into(), merged_workspace: true, list_view: "grid".into(),
             ..UiElement::default()
         });
+        changed.ui_layout.custom_widgets.push(UiCustomWidget {
+            id: "widget-test".into(), name: "Example".into(), kind: "html".into(),
+            content: "<b>hello</b>".into(), trusted: true,
+        });
         let mut category = Category { id: "servers".into(), name: "Серверы".into(), dynamic: true, ..Category::default() };
         category.rules.kind = "server".into();
         category.rules.mc_versions = vec!["1.21.1".into(), "1.21.4".into()];
         changed.categories.push(category);
         let restored: Settings = serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
+        assert_eq!(restored.ui_layout.custom_widgets[0].content, "<b>hello</b>");
+        assert!(restored.ui_layout.custom_widgets[0].trusted);
         assert_eq!(restored.custom_css, changed.custom_css);
         assert_eq!(restored.ambient_direction, "left");
         assert_eq!(restored.ui_layout.sidebar_width, 300);
