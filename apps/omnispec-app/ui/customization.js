@@ -82,6 +82,27 @@
   function validWidgetUrl(value) {
     try { const u = new URL(value); return ["https:", "http:"].includes(u.protocol) && !u.username && !u.password; } catch { return false; }
   }
+  // Обычные страницы YouTube запрещают открытие во фрейме. Для ссылок на
+  // отдельный ролик используем официальный embed, не меняя сохранённый URL.
+  function widgetFrameUrl(value) {
+    try {
+      const url = new URL(value);
+      if (!validWidgetUrl(value) || url.port) return value;
+      const host = url.hostname.toLowerCase();
+      const parts = url.pathname.split("/").filter(Boolean);
+      let id = null;
+      if (host === "youtu.be" && parts.length === 1) id = parts[0];
+      else if (["youtube.com", "www.youtube.com", "m.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com"].includes(host)) {
+        if (url.pathname === "/watch") id = url.searchParams.get("v");
+        else if (["embed", "shorts", "live"].includes(parts[0]) && parts.length === 2) id = parts[1];
+      }
+      if (!/^[A-Za-z0-9_-]{11}$/.test(id || "")) return value;
+      const embedded = new URL(`https://www.youtube-nocookie.com/embed/${id}`);
+      const time = url.searchParams.get("start") || url.searchParams.get("t");
+      if (/^\d{1,7}$/.test(time || "")) embedded.searchParams.set("start", time);
+      return embedded.href;
+    } catch { return value; }
+  }
   function syncWidgets() {
     const app = $(".app"); if (!app) return;
     const widgets = layout.custom_widgets;
@@ -102,7 +123,7 @@
         for (const marker of host.querySelectorAll("[data-widget-script]")) { const old = marker._script; if (!old) continue; const script = document.createElement("script"); for (const attr of old.attributes) script.setAttribute(attr.name, attr.value); script.textContent = old.textContent; marker.replaceWith(script); }
       } else {
         const frame = document.createElement("iframe"); frame.title = w.name; frame.setAttribute("sandbox", "allow-scripts allow-forms allow-popups"); frame.referrerPolicy = "strict-origin-when-cross-origin"; frame.allow = "autoplay; encrypted-media; fullscreen; picture-in-picture";
-        if (w.kind === "url") { if (validWidgetUrl(w.content)) frame.src = w.content; else frame.srcdoc = "Некорректный URL"; } else frame.srcdoc = w.content;
+        if (w.kind === "url") { if (validWidgetUrl(w.content)) frame.src = widgetFrameUrl(w.content); else frame.srcdoc = "Некорректный URL"; } else frame.srcdoc = w.content;
         host.appendChild(frame);
       }
     }
@@ -1312,7 +1333,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     const w = widgetEditor;
     return `<div class="widget-dialog-backdrop"><div class="widget-dialog" role="dialog" aria-modal="true" aria-label="${w.id ? "Редактировать пользовательский элемент" : "Добавить пользовательский элемент"}">
       <h3>${w.id ? "Редактировать код / структуру элемента" : "Добавить пользовательский элемент"}</h3>
-      <p>Измените HTML, CSS и JavaScript или адрес страницы. Изолированный режим не может изменять интерфейс лаунчера; сайты могут запрещать встраивание.</p>
+      <p>Измените HTML, CSS и JavaScript или адрес страницы. Ссылки на ролики YouTube открываются через встроенный плеер; канал и некоторые ролики могут запрещать встраивание. Изолированный режим не может изменять интерфейс лаунчера.</p>
       <div class="widget-fields"><label>Название<input class="input" data-widget-name maxlength="80" value="${esc(w.name)}"></label><label>Тип<select class="select" data-widget-kind><option value="url" ${w.kind === "url" ? "selected" : ""}>URL</option><option value="html" ${w.kind === "html" ? "selected" : ""}>HTML / CSS / JS</option></select></label></div>
       <label for="widget-content-editor">Код или URL</label><textarea id="widget-content-editor" class="customizer-code" data-widget-content maxlength="100000" spellcheck="false" aria-label="Код или URL пользовательского элемента" placeholder="https://… или HTML-код">${esc(w.content)}</textarea>
       <label><input type="checkbox" data-widget-trusted ${w.trusted ? "checked" : ""}> Доверенный HTML/JS с полным доступом</label>
