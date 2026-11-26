@@ -3925,7 +3925,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "unrar",
- "windows-sys 0.60.0",
+ "windows-sys 0.59.0",
  "zip",
 ]
 
@@ -4853,7 +4853,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "windows-sys 0.60.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4921,7 +4921,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.60.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7199,7 +7199,7 @@ dependencies = [
 
 [[package]]
 name = "windows-sys"
-version = "0.60.0"
+version = "0.59.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
