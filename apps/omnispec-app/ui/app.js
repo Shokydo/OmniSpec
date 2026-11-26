@@ -4750,7 +4750,7 @@
 
   /* ==================== ПАНЕЛЬ ЗАГРУЗОК ==================== */
   const DL_STAGE_TITLES = {
-    modpack: "Установка сборки", mods: "Установка модов", update: "Обновление модов",
+    modpack: "Установка сборки", mods: "Установка модов", update: "Обновление",
     libraries: "Библиотеки игры", assets: "Ресурсы игры",
     version: "Версия игры", java: "Java", loader: "Загрузчик", check: "Проверяем…",
     import: "Импорт", unzip: "Распаковка", copy: "Копирование"
@@ -11159,7 +11159,6 @@
     if (prefsCategory === "profile") bindPrefsProfile();
     if (prefsCategory === "avatar") {
       bindCapes();
-      bindFavorites();
       bindSkin();
       const library = $("#skin-library", body);
       const capes = $("#skin-capes", body);
@@ -13118,20 +13117,16 @@
             ${skin.texture ? '<canvas id="skin-canvas"></canvas><span class="skin-stage-hint">ЛКМ — повернуть</span>'
               : '<div class="skin-stage-empty">Скин появится здесь в объёме.<br>Выбери PNG 64×64.</div>'}
           </div>
-          <div class="skin-model-options">
-            <div class="skin-top-label">Ширина рук</div>
-            <div class="chips" id="skin-variant">
-              <button class="chip ${variant === "classic" ? "is-active" : ""}" data-variant="classic">Wide · 4 px</button>
-              <button class="chip ${variant === "slim" ? "is-active" : ""}" data-variant="slim">Slim · 3 px</button>
-            </div>
-          </div>
-          <button class="btn btn-primary skin-apply" id="skin-apply" ${licensed ? "" : "disabled"}>Применить к аккаунту</button>
-          <div class="skin-note ${licensed ? "" : "warn"}" id="skin-status">${esc(skinStatusText())}</div>
         </section>
         <div class="avatar-collection">
-          <section class="prefs-section profile-favorites">
-            <div class="prefs-label-row"><span class="prefs-label">Избранные образы</span><div class="spacer"></div><span class="muted avatar-fav-count">скин + плащ · до ${FAV_SLOTS}</span></div>
-            ${favoriteSlotsHtml()}
+          <section class="prefs-section profile-skin-controls">
+            <div class="skin-top-label">Ширина рук</div>
+            <div class="skin-actions" id="skin-variant">
+              <button class="chip ${variant === "classic" ? "is-active" : ""}" data-variant="classic">Wide · 4 px</button>
+              <button class="chip ${variant === "slim" ? "is-active" : ""}" data-variant="slim">Slim · 3 px</button>
+              <button class="btn btn-primary skin-apply" id="skin-apply" ${licensed ? "" : "disabled"}>Применить к аккаунту</button>
+            </div>
+            <div class="skin-note ${licensed ? "" : "warn"}" id="skin-status">${esc(skinStatusText())}</div>
           </section>
           <section class="prefs-section profile-skins">
           <div class="prefs-label-row"><span class="prefs-label">Скины <span class="muted">${library.length}</span></span><div class="spacer"></div>
@@ -13591,6 +13586,47 @@
     slot.appendChild(canvas);
   }
 
+  // Экспортируем сам canvas модели, а не подложку, подсказку или эффекты интерфейса.
+  // Повторный рендер в большом разрешении сохраняет текущий ракурс и плащ.
+  function skinImageData() {
+    const canvas = $("#skin-canvas");
+    const skin = skinState();
+    if (!canvas || !skin.texture || !canvas.width || !canvas.height) throw new Error("Модель ещё не загружена");
+    const output = document.createElement("canvas");
+    const scale = Math.min(4, 1600 / Math.max(canvas.width, canvas.height));
+    output.width = Math.max(1, Math.round(canvas.width * scale));
+    output.height = Math.max(1, Math.round(canvas.height * scale));
+    drawSkinModel(output, skin.texture, skin.variant, skin.yaw, skin.pitch, state.capeTexture || null);
+    return output.toDataURL("image/png");
+  }
+
+  function openSkinImageMenu(x, y) {
+    fillCtxMenu(x, y, `
+      <div class="ctx-caption">Модель игрока</div>
+      <button class="ctx-item" data-act="copy"><svg class="ic"><use href="#i-copy"/></svg>Копировать изображение</button>
+      <button class="ctx-item" data-act="save"><svg class="ic"><use href="#i-download"/></svg>Скачать изображение</button>`, async (act) => {
+      try {
+        const dataUrl = skinImageData();
+        if (act === "copy") {
+          if (window.__TAURI__?.core) await invoke("copy_avatar_image", { dataUrl });
+          else {
+            const blob = await (await fetch(dataUrl)).blob();
+            await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+          }
+          toast("Изображение скопировано", "ok");
+        } else if (act === "save") {
+          if (window.__TAURI__?.core) {
+            const path = await invoke("save_avatar_image", { dataUrl });
+            if (path) toast(`Изображение сохранено: ${path}`, "ok");
+          } else {
+            const link = document.createElement("a"); link.href = dataUrl; link.download = "OmniSpec-avatar.png"; link.click();
+            toast("Изображение скачано", "ok");
+          }
+        }
+      } catch (error) { toast(`Не удалось обработать изображение: ${error}`, "err"); }
+    });
+  }
+
   function bindSkin() {
     const skin = skinState();
     if ($("#skin-canvas")) requestAnimationFrame(redrawSkinPreview);
@@ -13639,6 +13675,10 @@
       canvas.addEventListener("pointerup", stopDrag);
       canvas.addEventListener("pointercancel", stopDrag);
       canvas.addEventListener("pointerleave", stopDrag);
+      canvas.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        openSkinImageMenu(event.clientX, event.clientY);
+      });
       canvas.addEventListener("dblclick", () => {
         skin.yaw = -18;
         skin.pitch = 6;
@@ -13740,7 +13780,7 @@
     if (!item) return;
     const confirmed = await askConfirm({
       title: "Убрать скин из библиотеки",
-      text: `Скин «${item.name}» исчезнет из списка. Сам файл останется в папке лаунчера, избранные образы не удалятся.`,
+      text: `Скин «${item.name}» исчезнет из списка. Сам файл останется в папке лаунчера.`,
       ok: "Убрать"
     });
     if (!confirmed) return;
