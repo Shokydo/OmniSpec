@@ -11303,7 +11303,7 @@
         <div class="settings-row">
           <div class="label">Сворачивать в трей</div>
           <div>
-            <div class="switch-row"><button type="button" class="switch ${settings.minimize_to_tray === true ? "on" : ""}" id="set-minimize-to-tray" role="switch" aria-label="Сворачивать окно в системный трей" aria-checked="${settings.minimize_to_tray === true}"></button><span class="muted">кнопка «свернуть» прячет окно; X по-прежнему закрывает приложение</span></div>
+            <div class="switch-row"><button type="button" class="switch ${settings.minimize_to_tray === true ? "on" : ""}" id="set-minimize-to-tray" role="switch" aria-label="Сворачивать окно в системный трей" aria-checked="${settings.minimize_to_tray === true}"></button><span class="muted">X прячет окно в трей; «−» сворачивает на панель задач</span></div>
             <div class="hint">RPC Discord и серверы продолжают работать, пока окно скрыто.</div>
           </div>
         </div>
@@ -15481,7 +15481,7 @@
         <div class="onboard-row">
           <div class="onboard-row-main">
             <span class="onboard-row-title">${on ? "Включено" : "Выключено"}</span>
-            <span class="muted">кнопка «свернуть» прячет окно; кнопка X завершает приложение</span>
+            <span class="muted">X прячет окно в трей; «−» сворачивает на панель задач</span>
           </div>
           <button class="switch ${on ? "on" : ""}" id="onboard-tray" role="switch" aria-label="Сворачивать окно в системный трей" aria-checked="${on}"></button>
         </div>`;
