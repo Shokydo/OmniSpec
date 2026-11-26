@@ -16,11 +16,11 @@ const server = http.createServer((req, res) => {
   } catch { res.writeHead(404).end(); }
 });
 
-async function openPage(browser, fresh) {
+async function openPage(browser, fresh, initial = {}) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
-  await page.addInitScript((isFresh) => {
+  await page.addInitScript(({isFresh, initial}) => {
     const state = {
       onboarded: !isFresh,
       onboarding_pending: Boolean(isFresh),
@@ -31,6 +31,7 @@ async function openPage(browser, fresh) {
       theme: 'dark', click_fx: 'off', ambient: 'off', trail: false,
       ui_scale: 100, categories: [], last_instance: null
     };
+    Object.assign(state, initial, JSON.parse(sessionStorage.getItem("tray-settings") || "{}"));
     window.__trayTest = {
       settings: state,
       calls: [],
@@ -39,7 +40,8 @@ async function openPage(browser, fresh) {
         this.calls.push({ command, args });
         switch (command) {
           case 'get_settings': return { ...this.settings };
-          case 'save_settings': this.settings = { ...args.settings }; return null;
+          case 'save_settings': this.settings = { ...args.settings, ui_safe_mode: this.settings.ui_safe_mode }; sessionStorage.setItem('tray-settings', JSON.stringify(this.settings)); return null;
+          case 'set_ui_safe_mode': this.settings.ui_safe_mode = args.enabled; sessionStorage.setItem('tray-settings', JSON.stringify(this.settings)); return null;
           case 'accounts_info': return { accounts: [], active: null };
           case 'app_info': return { home: '/test', version: 'test', platform: 'linux', demo: false };
           case 'system_memory': return { total_mb: 8192 };
@@ -58,7 +60,7 @@ async function openPage(browser, fresh) {
       core: { invoke: (command, args) => window.__trayTest.invoke(command, args) },
       event: { listen: async (name, callback) => { window.__trayTest.listeners[name] = callback; return () => {}; } }
     };
-  }, fresh);
+  }, {isFresh: fresh, initial});
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   await page.waitForFunction(() => window.omnispecDebug?.state?.settings);
   return { page, errors };
@@ -70,6 +72,12 @@ async function openPage(browser, fresh) {
   try {
     {
       const { page, errors } = await openPage(browser, false);
+      await page.waitForFunction(() => window.__trayTest.listeners['tray-action']);
+      await page.evaluate(() => window.__trayTest.listeners['tray-action']({ payload: {action:'settings'} }));
+      await page.waitForSelector('#modal-prefs:not([hidden])');
+      await page.evaluate(() => window.__trayTest.listeners['tray-action']({ payload: {action:'profile'} }));
+      assert.equal(await page.locator('[data-pref="profile"]').evaluate(e=>e.classList.contains('is-active')), true);
+      await page.locator('[data-close-prefs]').click();
       await page.locator('#btn-quick-settings').click();
       await page.locator('[data-pref="look"]').click();
       await page.waitForSelector('#set-minimize-to-tray');
@@ -87,6 +95,29 @@ async function openPage(browser, fresh) {
       assert.deepEqual(errors, []);
       await page.close();
       console.log('TRAY_SETTING: persistent switch and quiet visibility event — OK');
+    }
+
+    {
+      const badCss = '.sidebar { display:none !important }';
+      const initial = { custom_css: badCss, ui_layout: { elements: [{id:'toolbar',visible:false}] }, ui_theme_modules: [{id:'bad-theme', name:'broken.css', css:'.titlebar { display:none !important }', enabled:true}] };
+      const {page, errors} = await openPage(browser, false, initial);
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('.app .sidebar')).display === 'none');
+      await page.keyboard.press('Control+Shift+Backspace');
+      await page.waitForFunction(() => window.__trayTest.settings.ui_safe_mode === true && getComputedStyle(document.querySelector('.app .sidebar')).display !== 'none');
+      assert.notEqual(await page.locator('.app .titlebar').evaluate(el=>getComputedStyle(el).display), 'none');
+      assert.notEqual(await page.locator('.app .toolbar').getAttribute('data-os-element-hidden'), 'true');
+      assert.equal(await page.evaluate(()=>window.__trayTest.settings.custom_css), badCss);
+      assert.equal(await page.evaluate(()=>window.__trayTest.settings.ui_theme_modules[0].enabled), true);
+      await page.locator('#btn-quick-settings').click(); await page.locator('[data-pref="interface"]').click();
+      await page.waitForSelector('[data-safe-notice]');
+      await page.locator('[data-theme-row="bad-theme"] [data-theme-toggle]').click();
+      await page.waitForFunction(()=>window.__trayTest.settings.ui_theme_modules.find(m=>m.id==='bad-theme').enabled===false);
+      await page.locator('[data-safe-restore]').click(); await page.locator('#modal-confirm:not([hidden]) #confirm-ok').click();
+      await page.waitForFunction(()=>window.__trayTest.settings.ui_safe_mode===false && getComputedStyle(document.querySelector('.app .sidebar')).display==='none');
+      assert.equal(await page.evaluate(()=>window.__trayTest.settings.custom_css),badCss);
+      assert.equal(await page.evaluate(()=>window.__trayTest.settings.ui_theme_modules.find(m=>m.id==='bad-theme').enabled),false);
+      assert.deepEqual(errors, []); await page.close();
+      console.log('TRAY_RECOVERY: hotkey, persisted safe mode, intact CSS and theme disable — OK');
     }
 
     {

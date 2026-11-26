@@ -382,6 +382,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
   let selectedElementId = "toolbar";
   let layout = { ...DEFAULT_LAYOUT };
   let customCss = "";
+  let safeMode = false;
   let themeModules = [];
   let folderThemeScan = null;
   let scriptModules = [];
@@ -527,16 +528,16 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
       replacementStyleEl.id = "omnispec-replacement-base-css";
       baseLink.after(replacementStyleEl);
     }
-    const full = isFullCss(customCss);
+    const full = !safeMode && isFullCss(customCss);
     if (baseLink && replacementStyleEl) {
       replacementStyleEl.textContent = full ? sanitizeCss(customCss.slice(FULL_CSS_MARKER.length)) : "";
       baseLink.disabled = full;
     }
-    userStyleEl.textContent = full ? "" : sanitizeCss(customCss);
+    userStyleEl.textContent = safeMode || full ? "" : sanitizeCss(customCss);
     prioritizeUserRootTokens(userStyleEl);
     if (full) prioritizeUserRootTokens(replacementStyleEl);
     if (!themeStyleEl) { themeStyleEl = document.createElement("style"); themeStyleEl.id = "omnispec-theme-modules"; document.head.appendChild(themeStyleEl); }
-    themeStyleEl.textContent = themeModules.filter(m => m.enabled).map(m => sanitizeCss(m.css)).join("\n");
+    themeStyleEl.textContent = (safeMode ? [] : themeModules.filter(m => m.enabled)).map(m => sanitizeCss(m.css)).join("\n");
     prioritizeUserRootTokens(themeStyleEl);
     // Защита слоёв работает также при полной замене базового CSS.
     if (!effectGuardEl) { effectGuardEl = document.createElement("style"); effectGuardEl.id = "omnispec-effect-guard"; document.head.appendChild(effectGuardEl); }
@@ -635,6 +636,8 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     const body = document.body;
     const appBody = $(".app-body"); const sidebar = $(".sidebar"); const main = $(".main");
     if (!body || !appBody || !sidebar || !main) return;
+    const savedLayout = safeMode ? layout : null;
+    if (safeMode) layout = normalizeLayout(DEFAULT_LAYOUT);
     const density = DENSITIES[layout.density] || DENSITIES.comfortable;
     const root = document.documentElement;
     root.style.setProperty("--os-sidebar-width", `${layout.sidebar_width}px`);
@@ -665,6 +668,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     const hidden = new Set(layout.hidden);
     [[sidebar, "sidebar"], [toolbar, "toolbar"], [tabs, "tabs"]].forEach(([element, id]) => { if (element) element.dataset.customHidden = hidden.has(id) ? "true" : "false"; });
     syncWidgets(); markUi(); applyElements();
+    if (savedLayout) layout = normalizeLayout(savedLayout);
   }
 
   async function loadSettings() {
@@ -675,6 +679,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     }
     const source = { ...local, ...(loaded || {}) };
     settings = source || {};
+    safeMode = settings.ui_safe_mode === true;
     layout = normalizeLayout(settings.ui_layout || local.ui_layout);
     customCss = String(settings.custom_css ?? local.custom_css ?? "");
     themeModules = normalizeModules(settings.ui_theme_modules ?? local.ui_theme_modules);
@@ -1253,7 +1258,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
   }
 
   function renderCss() {
-    return `<section class="customizer-section customizer-code-wrap"><div class="customizer-section-head"><svg class="ic"><use href="#i-code"/></svg><div><h3>Базовый CSS и переопределения</h3><p>Исходный styles.css или ранее сохранённые переопределения. Изменения применяются и сохраняются автоматически. Курсор, экранные слои и пример своей анимации описаны в исходном CSS. Canvas-частицы стилизуются только целым слоем; эффекты клика живут до 700 мс. Tab — отступ, Ctrl+S — сохранить. @import отключён.</p></div></div><div class="customizer-actions"><input id="custom-css-find" class="input" type="search" placeholder="Найти в CSS" aria-label="Поиск в CSS"><button class="btn btn-small" type="button" data-css-action="find">Найти далее</button><span class="hint">Ctrl+F — поиск · Ctrl+Shift+Backspace — восстановить стандартный CSS</span></div><textarea id="custom-css-editor" class="customizer-code" maxlength="${MAX_CSS - FULL_CSS_MARKER.length}" spellcheck="false" autocomplete="off" aria-label="Базовый CSS и переопределения">${esc(isFullCss(customCss) ? customCss.slice(FULL_CSS_MARKER.length) : customCss)}</textarea><div class="customizer-preset-row"><button class="btn btn-small" type="button" data-css-action="base">Загрузить исходный CSS</button><button class="btn btn-small" type="button" data-css-action="clear">Восстановить стиль</button><button class="btn btn-small" type="button" data-css-action="download-css">Скачать .css</button><span class="label"></span></div><div class="customizer-code-help"><code>[data-os="sidebar"]</code><code>[data-os-element="toolbar"]</code><code>[data-os="tabs"]</code><code>[data-os="build-card"]</code><code>#ambient</code><code>#trail</code><code>#fx-layer .cfx</code><code>#css-effect-1</code><code>#css-effect-2</code><code>#css-effect-3</code><code>cursor</code><code>@keyframes</code><code>--accent</code><code>--r</code></div><div class="customizer-actions"><button class="btn btn-small" type="button" data-css-action="export">Экспорт темы</button><button class="btn btn-small" type="button" data-css-action="import">Импорт темы / CSS</button><button class="btn btn-small btn-ghost" type="button" data-css-action="copy">Скопировать CSS</button><span class="hint">Файл темы содержит CSS и раскладку — им можно делиться.</span></div><input id="custom-theme-file" type="file" accept=".json,.omtheme,.css,application/json,text/css" hidden></section>`;
+    return `<section class="customizer-section customizer-code-wrap"><div class="customizer-section-head"><svg class="ic"><use href="#i-code"/></svg><div><h3>Базовый CSS и переопределения</h3><p>Исходный styles.css или ранее сохранённые переопределения. Изменения применяются и сохраняются автоматически. Курсор, экранные слои и пример своей анимации описаны в исходном CSS. Canvas-частицы стилизуются только целым слоем; эффекты клика живут до 700 мс. Tab — отступ, Ctrl+S — сохранить. @import отключён.</p></div></div><div class="customizer-actions"><input id="custom-css-find" class="input" type="search" placeholder="Найти в CSS" aria-label="Поиск в CSS"><button class="btn btn-small" type="button" data-css-action="find">Найти далее</button><span class="hint">Ctrl+F — поиск · Ctrl+Shift+Backspace — аварийно восстановить интерфейс</span></div><textarea id="custom-css-editor" class="customizer-code" maxlength="${MAX_CSS - FULL_CSS_MARKER.length}" spellcheck="false" autocomplete="off" aria-label="Базовый CSS и переопределения">${esc(isFullCss(customCss) ? customCss.slice(FULL_CSS_MARKER.length) : customCss)}</textarea><div class="customizer-preset-row"><button class="btn btn-small" type="button" data-css-action="base">Загрузить исходный CSS</button><button class="btn btn-small" type="button" data-css-action="clear">Восстановить стиль</button><button class="btn btn-small" type="button" data-css-action="download-css">Скачать .css</button><span class="label"></span></div><div class="customizer-code-help"><code>[data-os="sidebar"]</code><code>[data-os-element="toolbar"]</code><code>[data-os="tabs"]</code><code>[data-os="build-card"]</code><code>#ambient</code><code>#trail</code><code>#fx-layer .cfx</code><code>#css-effect-1</code><code>#css-effect-2</code><code>#css-effect-3</code><code>cursor</code><code>@keyframes</code><code>--accent</code><code>--r</code></div><div class="customizer-actions"><button class="btn btn-small" type="button" data-css-action="export">Экспорт темы</button><button class="btn btn-small" type="button" data-css-action="import">Импорт темы / CSS</button><button class="btn btn-small btn-ghost" type="button" data-css-action="copy">Скопировать CSS</button><span class="hint">Файл темы содержит CSS и раскладку — им можно делиться.</span></div><input id="custom-theme-file" type="file" accept=".json,.omtheme,.css,application/json,text/css" hidden></section>`;
   }
 
   function normalizeModules(value) {
@@ -1366,7 +1371,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     scriptModules = normalizeScripts(currentSettings().ui_script_modules ?? scriptModules);
     let dragging = null;
     function draw() {
-      host.innerHTML = `<h3 style="margin-top:24px">Готовые компоновки</h3><p class="muted">Выбор компоновки сбрасывает пользовательское расположение элементов.</p><div class="preset-preview-grid">${UI_PRESETS.filter(([id]) => id !== "custom").map(([id, label, description]) => `<label class="preset-preview ${layout.preset === id ? "is-active" : ""}"><input type="radio" name="interface-layout-preset" data-theme-layout="${id}" ${layout.preset === id ? "checked" : ""}><img src="assets/preset-previews/${id}.png" alt="" loading="lazy"><strong>${esc(label)}</strong><small>${esc(description)}</small></label>`).join("")}</div><h3 style="margin-top:24px">Темы и заготовки</h3><p class="muted">Включайте и сочетайте CSS-заготовки. Нижние стили применяются позже; порядок можно менять мышью или кнопками. @import отключён.</p><div data-theme-list>${themeModules.map((m, i) => `<div draggable="true" data-theme-row="${esc(m.id)}" style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--line)"><span title="Перетащить" aria-hidden="true">⋮⋮</span><span style="flex:1;min-width:0">${esc(m.name)}${m.source_file ? " <small class=\"muted\">· из папки</small>" : ""}</span><button type="button" class="switch ${m.enabled ? "on" : ""}" role="switch" aria-label="${esc(m.name)}" aria-checked="${m.enabled}" data-theme-toggle="${esc(m.id)}"></button><button class="btn btn-small" type="button" data-theme-move="-1" data-id="${esc(m.id)}" ${i === 0 ? "disabled" : ""} aria-label="Поднять ${esc(m.name)}">↑</button><button class="btn btn-small" type="button" data-theme-move="1" data-id="${esc(m.id)}" ${i === themeModules.length-1 ? "disabled" : ""} aria-label="Опустить ${esc(m.name)}">↓</button>${m.id.startsWith("builtin-") || m.source_file ? "" : `<button class="btn btn-small" type="button" data-theme-delete="${esc(m.id)}" aria-label="Удалить ${esc(m.name)}">✕</button>`}</div>`).join("")}</div><div data-theme-drop style="margin-top:16px;padding:16px;border:1px dashed var(--line);border-radius:var(--r)"><p>Перетащите сюда CSS-файлы или выберите их.</p><button type="button" class="btn btn-small" data-theme-import>Импорт CSS</button> <button type="button" class="btn btn-small" data-theme-folder>Открыть папку тем</button> <button type="button" class="btn btn-small" data-theme-refresh>Обновить из папки</button><input type="file" accept=".css,text/css" multiple hidden data-theme-file></div><p class="muted" data-theme-status aria-live="polite">Новые темы сначала выключены. Файлы из папки можно удалить через проводник.</p><div data-script-host></div>`;
+      host.innerHTML = `${safeMode ? `<div class="customizer-note" data-safe-notice><strong>Аварийный режим</strong><p>Пользовательский CSS, темы и раскладка временно отключены; настройки и файлы сохранены. При необходимости выключите проблемную тему, затем верните оформление. После возврата кнопки могут снова исчезнуть: Ctrl+Shift+Backspace снова включит восстановление.</p><button class="btn btn-small" type="button" data-safe-restore>Вернуть оформление</button></div>` : ""}<h3 style="margin-top:24px">Готовые компоновки</h3><p class="muted">Выбор компоновки сбрасывает пользовательское расположение элементов.</p><div class="preset-preview-grid">${UI_PRESETS.filter(([id]) => id !== "custom").map(([id, label, description]) => `<label class="preset-preview ${layout.preset === id ? "is-active" : ""}"><input type="radio" name="interface-layout-preset" data-theme-layout="${id}" ${layout.preset === id ? "checked" : ""}><img src="assets/preset-previews/${id}.png" alt="" loading="lazy"><strong>${esc(label)}</strong><small>${esc(description)}</small></label>`).join("")}</div><h3 style="margin-top:24px">Темы и заготовки</h3><p class="muted">Включайте и сочетайте CSS-заготовки. Нижние стили применяются позже; порядок можно менять мышью или кнопками. @import отключён.</p><div data-theme-list>${themeModules.map((m, i) => `<div draggable="true" data-theme-row="${esc(m.id)}" style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--line)"><span title="Перетащить" aria-hidden="true">⋮⋮</span><span style="flex:1;min-width:0">${esc(m.name)}${m.source_file ? " <small class=\"muted\">· из папки</small>" : ""}</span><button type="button" class="switch ${m.enabled ? "on" : ""}" role="switch" aria-label="${esc(m.name)}" aria-checked="${m.enabled}" data-theme-toggle="${esc(m.id)}"></button><button class="btn btn-small" type="button" data-theme-move="-1" data-id="${esc(m.id)}" ${i === 0 ? "disabled" : ""} aria-label="Поднять ${esc(m.name)}">↑</button><button class="btn btn-small" type="button" data-theme-move="1" data-id="${esc(m.id)}" ${i === themeModules.length-1 ? "disabled" : ""} aria-label="Опустить ${esc(m.name)}">↓</button>${m.id.startsWith("builtin-") || m.source_file ? "" : `<button class="btn btn-small" type="button" data-theme-delete="${esc(m.id)}" aria-label="Удалить ${esc(m.name)}">✕</button>`}</div>`).join("")}</div><div data-theme-drop style="margin-top:16px;padding:16px;border:1px dashed var(--line);border-radius:var(--r)"><p>Перетащите сюда CSS-файлы или выберите их.</p><button type="button" class="btn btn-small" data-theme-import>Импорт CSS</button> <button type="button" class="btn btn-small" data-theme-folder>Открыть папку тем</button> <button type="button" class="btn btn-small" data-theme-refresh>Обновить из папки</button><input type="file" accept=".css,text/css" multiple hidden data-theme-file></div><p class="muted" data-theme-status aria-live="polite">Новые темы сначала выключены. Файлы из папки можно удалить через проводник.</p><div data-script-host></div>`;
       renderScripts($("[data-script-host]", host));
     }
     function save() { injectStyles(); queueSave({ ui_theme_modules: themeModules }); draw(); }
@@ -1386,6 +1391,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     });
     host.addEventListener("click", async e => {
       const button = e.target.closest("button"); if (!button) return;
+      if (button.hasAttribute("data-safe-restore")) { if (await confirmChange("Вернуть пользовательский CSS и раскладку? Проблемная тема может снова скрыть кнопки.", "Вернуть")) await activateSafeMode(false); return; }
       if (button.hasAttribute("data-theme-toggle")) { const m = themeModules.find(x => x.id === button.dataset.themeToggle); if (m) { m.enabled = !m.enabled; save(); } return; }
       if (button.hasAttribute("data-theme-refresh")) { await refreshFolder(); return; }
       if (button.hasAttribute("data-theme-folder")) { await openCustomizationFolder("themes", $("[data-theme-status]",host)); return; }
@@ -1435,11 +1441,25 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     clearTimeout(saveTimer); layout = normalizeLayout(DEFAULT_LAYOUT); customCss = ""; injectStyles(); applyLayout(); queueSave({ custom_css: "", ui_layout: layout }); renderEditor(); setStatus("Конструктор сброшен", "saved");
   }
 
+  async function activateSafeMode(enabled) {
+    clearTimeout(saveTimer);
+    try {
+      await saveQueue.catch(() => {});
+      const invoke = window.__TAURI__?.core?.invoke;
+      if (!invoke) throw new Error("Команда доступна только в приложении");
+      await invoke("set_ui_safe_mode", { enabled });
+      window.location.reload();
+    } catch (error) {
+      if (enabled) { safeMode = true; injectStyles(); applyLayout(); }
+      window.omnispecDialogs?.confirm({ title:"Ошибка восстановления", text:`Не удалось сохранить аварийный режим: ${error}`, ok:"Понятно" });
+    }
+  }
+
   function observeUi() {
     markUi();
     const app = $(".app");
     if (app) {
-      const observer = new MutationObserver(() => { markUi(); applyElements(); });
+      const observer = new MutationObserver(() => { markUi(); if (!safeMode) applyElements(); });
       observer.observe(app, { childList: true, subtree: true });
     }
   }
@@ -1450,8 +1470,8 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
       attempts += 1; const state = appState();
       if (state?.settings) {
         const next = state.settings; const local = readLocal(); const nextCss = next.custom_css ?? local.custom_css ?? ""; const nextLayout = next.ui_layout ?? local.ui_layout ?? DEFAULT_LAYOUT;
-        if (nextCss !== customCss || JSON.stringify(normalizeLayout(nextLayout)) !== JSON.stringify(layout)) {
-          settings = next; customCss = String(nextCss); layout = normalizeLayout(nextLayout); injectStyles(); applyLayout();
+        if ((next.ui_safe_mode === true) !== safeMode || nextCss !== customCss || JSON.stringify(normalizeLayout(nextLayout)) !== JSON.stringify(layout)) {
+          settings = next; safeMode = next.ui_safe_mode === true; customCss = String(nextCss); layout = normalizeLayout(nextLayout); injectStyles(); applyLayout();
           if (inlineHost?.isConnected && inlineHost.dataset.prefCategory === "interface") renderInline(inlineHost);
         }
       }
@@ -1460,12 +1480,8 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     window.addEventListener("resize", () => { if (currentTab === "editor" && editorRoot()) populateSnapshots(editorRoot()); });
     document.addEventListener("keydown", async (event) => {
       if (event.ctrlKey && event.shiftKey && event.key === "Backspace") {
-        event.preventDefault();
-        if (await confirmChange("Отключить пользовательский CSS и восстановить стандартный стиль?", "Восстановить")) {
-          clearTimeout(saveTimer); customCss = ""; injectStyles(); queueSave({ custom_css: "" });
-          if (editorRoot()) renderEditor();
-        }
-        return;
+        event.preventDefault(); event.stopImmediatePropagation();
+        activateSafeMode(true); return;
       }
       if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "e") { event.preventDefault(); if (modal?.hidden === false) closeCustomizer(); else openCustomizer(); }
       if (event.key === "Escape" && modal && !modal.hidden) closeCustomizer();

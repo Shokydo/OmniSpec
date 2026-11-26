@@ -518,7 +518,7 @@ body, body * { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2
     await page.locator('[data-css-action="find"]').click();
     const found = await page.locator('#custom-css-editor').evaluate(el => el.value.slice(el.selectionStart, el.selectionEnd));
     assert.equal(found.toLowerCase(), 'sidebar', 'find selects a match in the CSS editor');
-    await page.keyboard.press('Control+Shift+Backspace');
+    await page.locator('[data-css-action="clear"]').click();
     await page.locator('#modal-confirm:not([hidden]) #confirm-ok').click();
     await page.waitForFunction(() => !document.querySelector('link[href="styles.css"]').disabled && window.__v052.settings.custom_css === '');
     // Plain CSS remains an override; saved old themes must not disable the base.
