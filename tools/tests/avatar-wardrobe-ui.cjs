@@ -76,7 +76,7 @@ async function layout(page, width, height) {
     const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height};};
     const body=document.querySelector('#prefs-body'), library=document.querySelector('#skin-library'), capes=document.querySelector('#skin-capes');
     const canvas=document.querySelector('#skin-canvas');
-    return {body:rect('#prefs-body'),model:rect('.profile-model'),favorite:rect('.profile-favorites'),skins:rect('.profile-skins'),capes:rect('.profile-capes'),stage:rect('.skin-stage'),canvas:rect('#skin-canvas'),
+    return {body:rect('#prefs-body'),model:rect('.profile-model'),favorite:rect('.profile-skin-controls'),skins:rect('.profile-skins'),capes:rect('.profile-capes'),stage:rect('.skin-stage'),canvas:rect('#skin-canvas'),
       canvasPixels:{width:canvas.width,height:canvas.height,dpr:Math.min(2,window.devicePixelRatio||1)},
       bodyScroll:body.scrollHeight-body.clientHeight, skinOverflow:library.scrollHeight-library.clientHeight, capeOverflow:capes.scrollWidth-capes.clientWidth};
   });
@@ -112,7 +112,10 @@ async function layout(page, width, height) {
     await page.waitForSelector('#skin-capes [data-cape-id="cape-19"]');
     await page.waitForSelector('#skin-capes [data-cape-id="cape-0"] canvas[data-cape-rendered="3d"]');
     await page.waitForSelector('#skin-library [data-skin-id="skin-71"]');
-    assert.equal(await page.locator('#skin-favorites [data-fav="favorite"]').count(),1);
+    assert.equal(await page.locator('#skin-favorites, .profile-favorites').count(),0);
+    assert.equal(await page.evaluate(()=>window.__avatarTest.settings.skin_favorites.length),1, 'old favorites data preserved');
+    const sizes = await page.locator('#skin-variant > button').evaluateAll(es=>es.map(e=>{const r=e.getBoundingClientRect();return {w:r.width, y:r.top, h:r.height}}));
+    assert.equal(sizes.length,3); assert(sizes.every(x=>Math.abs(x.w-sizes[0].w)<1 && Math.abs(x.y-sizes[0].y)<1 && Math.abs(x.h-sizes[0].h)<1),JSON.stringify(sizes));
     for (const [w,h] of [[1080,640],[1280,720],[1400,880],[1920,1080]]) await layout(page,w,h);
     await layout(page,1080,640);
     if (process.env.OMNISPEC_UI_SHOTS) await page.screenshot({path:path.join(process.env.OMNISPEC_UI_SHOTS,'avatar-1080x640.png')});
@@ -152,6 +155,20 @@ async function layout(page, width, height) {
     await page.locator('#skin-canvas').dblclick();
     assert.equal(await page.evaluate(()=>window.omnispecDebug.state.skin.yaw),-18);
     console.log('AVATAR_MODEL_DRAG_AND_RESET_OK');
+    await page.locator('#skin-canvas').click({button:'right'});
+    assert(await page.locator('#ctx-menu').isVisible());
+    assert.equal(await page.locator('#ctx-menu [data-act="copy"]').innerText(),'Копировать изображение');
+    await page.locator('#ctx-menu [data-act="copy"]').click();
+    await page.waitForFunction(()=>window.__avatarTest.calls.some(c=>c.command==='copy_avatar_image'));
+    const exported=await page.evaluate(async()=>{
+      const src=window.__avatarTest.calls.find(c=>c.command==='copy_avatar_image').args.dataUrl;
+      const img=new Image(); img.src=src; await img.decode(); const c=document.createElement('canvas'); c.width=img.width;c.height=img.height;const x=c.getContext('2d');x.drawImage(img,0,0);const d=x.getImageData(0,0,c.width,c.height).data;let opaque=0;for(let i=3;i<d.length;i+=4)if(d[i])opaque++;return {src:src.slice(0,22),width:c.width,height:c.height,corner:d[3],opaque,total:c.width*c.height};
+    });
+    assert.equal(exported.src,'data:image/png;base64,');assert.equal(exported.corner,0);assert(exported.opaque>100 && exported.opaque<exported.total*.8,JSON.stringify(exported));
+    await page.locator('#skin-canvas').click({button:'right'});await page.locator('#ctx-menu [data-act="save"]').click();
+    await page.waitForFunction(()=>window.__avatarTest.calls.some(c=>c.command==='save_avatar_image'));
+    console.log('AVATAR_CONTEXT_MENU_TRANSPARENT_COPY_AND_SAVE_OK');
+
 
     // The mini is an actual angled cuboid rendered from the official texture's
     // different faces: both the outer face and an edge must produce pixels.
@@ -254,7 +271,6 @@ async function layout(page, width, height) {
     for (const lang of ['en','be','kk','uk','ru']) {
       await page.evaluate(lang=>window.OmniI18n.setLanguage(lang),lang);
       assert.equal(await page.locator('[data-pref="avatar"]').innerText(),labels[lang][0]);
-      assert.equal((await page.locator('.profile-favorites .prefs-label').textContent()).trim(),labels[lang][1]);
       assert.equal(await page.locator('#skin-capes').getAttribute('aria-label'),labels[lang][2]);
       assert.equal(await page.locator('#cape-prev').getAttribute('aria-label'),labels[lang][3]);
       assert.equal(await page.locator('#cape-status').innerText(),labels[lang][4]);

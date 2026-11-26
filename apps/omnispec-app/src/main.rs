@@ -3090,6 +3090,62 @@ async fn pick_save_path(
     Ok(chosen)
 }
 
+// Accept only bounded, valid PNGs rendered by the avatar canvas.
+fn decode_avatar_png(data_url: &str) -> Result<(Vec<u8>, image::RgbaImage), String> {
+    use base64::Engine;
+    let encoded = data_url.strip_prefix("data:image/png;base64,").ok_or("Ожидается изображение PNG")?;
+    if encoded.len() > 16 * 1024 * 1024 { return Err("Изображение слишком большое".into()); }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(err)?;
+    let reader = image::ImageReader::with_format(std::io::Cursor::new(&bytes), image::ImageFormat::Png);
+    let (width, height) = reader.into_dimensions().map_err(err)?;
+    if width == 0 || height == 0 || width > 1600 || height > 1600 { return Err("Недопустимый размер изображения".into()); }
+    let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).map_err(err)?.into_rgba8();
+    Ok((bytes, image))
+}
+
+// The dedicated clipboard thread keeps the Linux X11 clipboard owner alive after
+// the command returns. No clipboard APIs or image data are exposed externally.
+#[tauri::command]
+async fn copy_avatar_image(data_url: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (_, image) = decode_avatar_png(&data_url)?;
+        type Job = (image::RgbaImage, std::sync::mpsc::SyncSender<Result<(), String>>);
+        static WORKER: std::sync::OnceLock<std::sync::mpsc::Sender<Job>> = std::sync::OnceLock::new();
+        let worker = WORKER.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<Job>();
+            std::thread::spawn(move || {
+                let mut clipboard: Option<arboard::Clipboard> = None;
+                for (img, reply) in rx {
+                    let result = (|| {
+                        if clipboard.is_none() { clipboard = Some(arboard::Clipboard::new().map_err(err)?); }
+                        clipboard.as_mut().unwrap().set_image(arboard::ImageData {
+                            width: img.width() as usize, height: img.height() as usize,
+                            bytes: std::borrow::Cow::Owned(img.into_raw()),
+                        }).map_err(err)
+                    })();
+                    let _ = reply.send(result);
+                }
+            });
+            tx
+        });
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        worker.send((image, tx)).map_err(err)?;
+        rx.recv().map_err(err)?
+    }).await.map_err(err)?
+}
+
+#[tauri::command]
+async fn save_avatar_image(data_url: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (bytes, _) = decode_avatar_png(&data_url)?;
+        let Some(path) = rfd::FileDialog::new().set_title("Сохранить изображение модели")
+            .set_file_name("OmniSpec-avatar.png").add_filter("PNG", &["png"]).save_file() else { return Ok(None); };
+        if !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("png")) { return Err("Укажите имя файла с расширением .png".into()); }
+        std::fs::write(&path, bytes).map_err(err)?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }).await.map_err(err)?
+}
+
 /* ==================== СОДЕРЖИМОЕ СБОРКИ ==================== */
 
 /// Подтвердить наличие модов любой версии по содержимому реальных файлов.
@@ -4871,6 +4927,8 @@ fn main() {
             export_instance,
             import_zip,
             pick_save_path,
+            copy_avatar_image,
+            save_avatar_image,
             set_custom_wallpaper,
             download_custom_wallpaper,
             select_wallpaper_history,
@@ -5369,6 +5427,26 @@ mod tests {
         assert!(verify_catalog_download(&path, bytes.len() as u64, &hash).is_err());
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod avatar_image_tests {
+    use base64::Engine;
+    fn url(width: u32, height: u32) -> String {
+        let mut output = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(width, height).write_to(&mut output, image::ImageFormat::Png).unwrap();
+        format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(output.into_inner()))
+    }
+    #[test]
+    fn avatar_png_is_bounded_and_preserves_alpha() {
+        let (bytes, decoded) = super::decode_avatar_png(&url(32, 64)).unwrap();
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!((decoded.width(), decoded.height()), (32, 64));
+        assert_eq!(decoded.get_pixel(0, 0).0[3], 0);
+        assert!(super::decode_avatar_png(&url(1601, 1)).is_err());
+        assert!(super::decode_avatar_png("data:image/png;base64,AAAA").is_err());
+        assert!(super::decode_avatar_png("data:image/jpeg;base64,AAAA").is_err());
     }
 }
 
