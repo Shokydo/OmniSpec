@@ -285,13 +285,13 @@ try {
   $apply=WaitId 'skin-apply'
   if($apply.Current.IsEnabled){throw 'Offline account can incorrectly change its skin'}
   # Actual Windows WebView2 at the minimum 1080×640 window: the skin region is
-  # to the right of the model controls, and the cape region stays below both.
+  # below the model controls, and the cape region stays below both.
   $libraryRect=(WaitId 'skin-library').Current.BoundingRectangle
   $capesRect=(WaitId 'skin-capes').Current.BoundingRectangle
   $modelRect=$apply.Current.BoundingRectangle
   $windowRect=$script:ui.Current.BoundingRectangle
   if($libraryRect.Width -le 0 -or $libraryRect.Height -le 0 -or $capesRect.Width -le 0 -or $capesRect.Height -le 0){throw 'Avatar lists have no visible area'}
-  if($libraryRect.Left -lt $modelRect.Right -or $capesRect.Top -le $libraryRect.Bottom -or $capesRect.Top -le $modelRect.Bottom){throw 'Avatar panels do not follow the requested layout'}
+  if($libraryRect.Top -lt $modelRect.Bottom -or $capesRect.Top -le $libraryRect.Bottom -or $capesRect.Top -le $modelRect.Bottom){throw 'Avatar panels do not follow the requested layout'}
   if($capesRect.Bottom -gt $windowRect.Bottom -or $capesRect.Right -gt $windowRect.Right){throw 'Cape wardrobe is clipped by the minimum window'}
   Screenshot 'windows-avatar-minimum.png'
   Write-Host 'WINDOWS_WEBVIEW2_AVATAR_MINIMUM_LAYOUT_OK'
