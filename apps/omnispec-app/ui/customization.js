@@ -382,6 +382,9 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
   let layout = { ...DEFAULT_LAYOUT };
   let customCss = "";
   let themeModules = [];
+  let scriptModules = [];
+  const scriptSessions = new Map();
+  const trustedScriptRuns = new Set();
   let themeStyleEl = null;
   let effectGuardEl = null;
   let settings = null;
@@ -656,6 +659,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     layout = normalizeLayout(settings.ui_layout || local.ui_layout);
     customCss = String(settings.custom_css ?? local.custom_css ?? "");
     themeModules = normalizeModules(settings.ui_theme_modules ?? local.ui_theme_modules);
+    scriptModules = normalizeScripts(settings.ui_script_modules ?? local.ui_script_modules);
     if (state && !state.settings) state.settings = { ...settings };
     injectStyles(); applyLayout(); markUi();
   }
@@ -672,7 +676,7 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
   function queueSave(patch) {
     clearTimeout(saveTimer);
     const next = stageSettings(patch);
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...readLocal(), custom_css: customCss, ui_layout: layout, ui_theme_modules: themeModules })); } catch { /* hardened webview */ }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...readLocal(), custom_css: customCss, ui_layout: layout, ui_theme_modules: themeModules, ui_script_modules: scriptModules })); } catch { /* hardened webview */ }
     saveQueue = saveQueue.catch(() => {}).then(async () => {
       const invoke = window.__TAURI__?.core?.invoke; if (!invoke) return;
       await invoke("save_settings", { settings: next });
@@ -1234,12 +1238,79 @@ body .instance-list.is-narrow .cat:not(.cat-running) .instance-icon { width: 28p
     for (const b of builtins) if (!clean.some(m => m.id === b.id)) clean.push(b);
     return clean;
   }
+  // Запуск никогда не восстанавливается из файла настроек/импорта: разрешение
+  // действует только в текущем процессе и не переносится вместе со скриптом.
+  function normalizeScripts(value) {
+    const ids = new Set();
+    return (Array.isArray(value) ? value : []).slice(0, 50).filter(m => m && /^script-[a-z0-9-]{1,80}$/.test(m.id) && !ids.has(m.id) && (ids.add(m.id), true) && typeof m.code === "string" && m.code.length <= MAX_CSS).map(m => ({ id: m.id, name: String(m.name || "Скрипт").slice(0, 120), code: m.code, mode: m.mode === "trusted" ? "trusted" : "isolated" }));
+  }
+  function renderScripts(host) {
+    if (!host) return;
+    let dragging = null;
+    function draw() {
+      host.innerHTML = `<h3 style="margin-top:24px">Пользовательские JS-скрипты</h3><p class="muted">Импортированные файлы сначала выключены. Изолированный режим не может изменять интерфейс; для этого нужен доверенный режим. Скрипты не запускаются автоматически после перезапуска. Порядок в списке не влияет на выполнение: скрипты запускаются вручную. Userscript-метаданные и API расширений браузера не поддерживаются.</p><div data-script-list>${scriptModules.map((m,i) => {
+        const active = scriptSessions.has(m.id), ran = trustedScriptRuns.has(m.id);
+        return `<div draggable="true" data-script-row="${esc(m.id)}" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px;border-bottom:1px solid var(--line)"><span aria-hidden="true">⋮⋮</span><span style="flex:1;min-width:120px"><strong>${esc(m.name)}</strong><br><small>${ran && !active ? "Код уже выполнен — для полной остановки перезапустите лаунчер" : active ? "Запущен в этой сессии" : "Выключен"}</small></span><select class="select" data-script-mode="${esc(m.id)}" aria-label="Режим ${esc(m.name)}" ${active || ran ? "disabled" : ""}><option value="isolated" ${m.mode === "isolated" ? "selected" : ""}>Изолированный</option><option value="trusted" ${m.mode === "trusted" ? "selected" : ""}>Доверенный</option></select><button type="button" class="switch ${active ? "on" : ""}" role="switch" aria-label="Запуск ${esc(m.name)}" aria-checked="${active}" data-script-toggle="${esc(m.id)}" ${ran && !active ? "disabled" : ""}></button><button class="btn btn-small" type="button" data-script-move="-1" data-id="${esc(m.id)}" ${i === 0 ? "disabled" : ""} aria-label="Поднять ${esc(m.name)}">↑</button><button class="btn btn-small" type="button" data-script-move="1" data-id="${esc(m.id)}" ${i === scriptModules.length-1 ? "disabled" : ""} aria-label="Опустить ${esc(m.name)}">↓</button><button class="btn btn-small" type="button" data-script-delete="${esc(m.id)}" aria-label="Удалить ${esc(m.name)}">✕</button></div>`;
+      }).join("")}</div><div data-script-drop style="margin-top:16px;padding:16px;border:1px dashed var(--line);border-radius:var(--r)"><p>Перетащите сюда файлы .js или выберите их.</p><button class="btn btn-small" type="button" data-script-import>Импорт JS</button><input type="file" accept=".js,text/javascript,application/javascript" multiple hidden data-script-file></div><p class="muted" data-script-status role="status" aria-live="polite"></p>`;
+    }
+    function save() { queueSave({ ui_script_modules: scriptModules }); draw(); }
+    async function addFiles(files) {
+      const rejected = [];
+      for (const file of files) {
+        if (!/\.js$/i.test(file.name) || file.size > MAX_CSS || scriptModules.length >= 50) { rejected.push(file.name); continue; }
+        try { const code = await file.text(); if (code.length > MAX_CSS) { rejected.push(file.name); continue; }
+          scriptModules.push({ id: `script-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,10)}`, name: file.name.slice(0,120), code, mode: "isolated" });
+        } catch { rejected.push(file.name); }
+      }
+      save(); if (rejected.length) $("[data-script-status]",host).textContent = `Пропущены: ${rejected.join(", ")}. Нужны .js файлы до 1 МБ; не более 50 скриптов.`;
+    }
+    host.addEventListener("change", e => {
+      if (e.target.matches("[data-script-file]")) { const files = [...e.target.files]; e.target.value = ""; addFiles(files); return; }
+      if (e.target.dataset.scriptMode) { const m=scriptModules.find(x => x.id===e.target.dataset.scriptMode); if (m && !scriptSessions.has(m.id) && !trustedScriptRuns.has(m.id)) { m.mode = e.target.value === "trusted" ? "trusted" : "isolated"; save(); } }
+    });
+    host.addEventListener("click", async e => {
+      const b=e.target.closest("button"); if (!b) return;
+      if (b.hasAttribute("data-script-import")) { $("[data-script-file]",host)?.click(); return; }
+      if (b.dataset.scriptToggle) {
+        const m=scriptModules.find(x => x.id===b.dataset.scriptToggle); if (!m) return;
+        if (scriptSessions.has(m.id)) {
+          if (m.mode === "trusted" && !await confirmChange("Скрипт уже выполнился в лаунчере. Выключение не удалит его обработчики, таймеры и изменения. Для полной остановки перезапустите приложение.", "Понятно")) return;
+          scriptSessions.get(m.id)?.remove(); scriptSessions.delete(m.id); draw(); return;
+        }
+        if (trustedScriptRuns.has(m.id)) return;
+        if (m.mode === "trusted" && !await confirmChange(`ОПАСНО: «${m.name}» получит доступ к интерфейсу, командам лаунчера, данным и сети. Код может изменить или отправить ваши данные. Выключение не остановит уже запущенные действия до перезапуска. Запускать только известный и проверенный код.`, "Доверяю и запускаю")) return;
+        if (!scriptModules.includes(m) || scriptSessions.has(m.id) || trustedScriptRuns.has(m.id)) return;
+        if (m.mode === "trusted") {
+          trustedScriptRuns.add(m.id);
+          const script=document.createElement("script"); script.textContent=m.code; scriptSessions.set(m.id,script); document.head.appendChild(script);
+        } else {
+          const frame=document.createElement("iframe"); frame.hidden=true; frame.title=`Изолированный скрипт ${m.name}`; frame.setAttribute("sandbox","allow-scripts");
+          // JSON-экранирование '<' не позволяет исходному коду закрыть script в srcdoc.
+          const encoded=JSON.stringify(m.code).replace(/</g,"\\u003c");
+          frame.srcdoc=`<!doctype html><meta charset="utf-8"><body><script>const s=document.createElement('script');s.textContent=${encoded};document.body.appendChild(s);<\/script>`;
+          scriptSessions.set(m.id,frame); document.body.appendChild(frame);
+        }
+        draw(); return;
+      }
+      if (b.dataset.scriptDelete) {
+        const m=scriptModules.find(x=>x.id===b.dataset.scriptDelete); if (!m || !await confirmChange(trustedScriptRuns.has(m.id) ? "Удалить скрипт? Его действия могут продолжаться до перезапуска приложения." : "Удалить импортированный скрипт?", "Удалить")) return;
+        scriptSessions.get(m.id)?.remove(); scriptSessions.delete(m.id); scriptModules=scriptModules.filter(x=>x.id!==m.id); save(); return;
+      }
+      if (b.dataset.scriptMove) { const i=scriptModules.findIndex(x=>x.id===b.dataset.id), j=i+Number(b.dataset.scriptMove); if (i>=0 && j>=0 && j<scriptModules.length) { [scriptModules[i],scriptModules[j]]=[scriptModules[j],scriptModules[i]]; save(); } }
+    });
+    host.addEventListener("dragstart",e=>{const row=e.target.closest("[data-script-row]"); if(row){e.stopPropagation();dragging=row.dataset.scriptRow;e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain",dragging);}});
+    host.addEventListener("dragover",e=>{if(e.target.closest("[data-script-row], [data-script-drop]")){e.preventDefault();e.stopPropagation();}});
+    host.addEventListener("drop",e=>{ e.preventDefault();e.stopPropagation(); if(e.dataTransfer.files.length){addFiles([...e.dataTransfer.files]);return;} const row=e.target.closest("[data-script-row]");const i=scriptModules.findIndex(x=>x.id===dragging),j=scriptModules.findIndex(x=>x.id===row?.dataset.scriptRow); if(i>=0 && j>=0 && i!==j){const [m]=scriptModules.splice(i,1);scriptModules.splice(j,0,m);save();} dragging=null; });
+    draw();
+  }
   function renderThemes(host) {
     if (!host) return;
     themeModules = normalizeModules(currentSettings().ui_theme_modules ?? themeModules);
+    scriptModules = normalizeScripts(currentSettings().ui_script_modules ?? scriptModules);
     let dragging = null;
     function draw() {
-      host.innerHTML = `<h3 style="margin-top:24px">Готовые компоновки</h3><p class="muted">Выбор компоновки сбрасывает пользовательское расположение элементов.</p><div class="preset-preview-grid">${UI_PRESETS.filter(([id]) => id !== "custom").map(([id, label, description]) => `<label class="preset-preview ${layout.preset === id ? "is-active" : ""}"><input type="radio" name="interface-layout-preset" data-theme-layout="${id}" ${layout.preset === id ? "checked" : ""}><img src="assets/preset-previews/${id}.png" alt="" loading="lazy"><strong>${esc(label)}</strong><small>${esc(description)}</small></label>`).join("")}</div><h3 style="margin-top:24px">Темы и заготовки</h3><p class="muted">Включайте и сочетайте CSS-заготовки. Нижние стили применяются позже; порядок можно менять мышью или кнопками. @import отключён.</p><div data-theme-list>${themeModules.map((m, i) => `<div draggable="true" data-theme-row="${esc(m.id)}" style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--line)"><span title="Перетащить" aria-hidden="true">⋮⋮</span><span style="flex:1;min-width:0">${esc(m.name)}</span><button type="button" class="switch ${m.enabled ? "on" : ""}" role="switch" aria-label="${esc(m.name)}" aria-checked="${m.enabled}" data-theme-toggle="${esc(m.id)}"></button><button class="btn btn-small" type="button" data-theme-move="-1" data-id="${esc(m.id)}" ${i === 0 ? "disabled" : ""} aria-label="Поднять ${esc(m.name)}">↑</button><button class="btn btn-small" type="button" data-theme-move="1" data-id="${esc(m.id)}" ${i === themeModules.length-1 ? "disabled" : ""} aria-label="Опустить ${esc(m.name)}">↓</button>${m.id.startsWith("builtin-") ? "" : `<button class="btn btn-small" type="button" data-theme-delete="${esc(m.id)}" aria-label="Удалить ${esc(m.name)}">✕</button>`}</div>`).join("")}</div><div data-theme-drop style="margin-top:16px;padding:16px;border:1px dashed var(--line);border-radius:var(--r)"><p>Перетащите сюда CSS-файлы или выберите их.</p><button type="button" class="btn btn-small" data-theme-import>Импорт CSS</button><input type="file" accept=".css,text/css" multiple hidden data-theme-file></div><p class="muted" data-theme-status aria-live="polite">Импортированные темы сначала выключены.</p>`;
+      host.innerHTML = `<h3 style="margin-top:24px">Готовые компоновки</h3><p class="muted">Выбор компоновки сбрасывает пользовательское расположение элементов.</p><div class="preset-preview-grid">${UI_PRESETS.filter(([id]) => id !== "custom").map(([id, label, description]) => `<label class="preset-preview ${layout.preset === id ? "is-active" : ""}"><input type="radio" name="interface-layout-preset" data-theme-layout="${id}" ${layout.preset === id ? "checked" : ""}><img src="assets/preset-previews/${id}.png" alt="" loading="lazy"><strong>${esc(label)}</strong><small>${esc(description)}</small></label>`).join("")}</div><h3 style="margin-top:24px">Темы и заготовки</h3><p class="muted">Включайте и сочетайте CSS-заготовки. Нижние стили применяются позже; порядок можно менять мышью или кнопками. @import отключён.</p><div data-theme-list>${themeModules.map((m, i) => `<div draggable="true" data-theme-row="${esc(m.id)}" style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--line)"><span title="Перетащить" aria-hidden="true">⋮⋮</span><span style="flex:1;min-width:0">${esc(m.name)}</span><button type="button" class="switch ${m.enabled ? "on" : ""}" role="switch" aria-label="${esc(m.name)}" aria-checked="${m.enabled}" data-theme-toggle="${esc(m.id)}"></button><button class="btn btn-small" type="button" data-theme-move="-1" data-id="${esc(m.id)}" ${i === 0 ? "disabled" : ""} aria-label="Поднять ${esc(m.name)}">↑</button><button class="btn btn-small" type="button" data-theme-move="1" data-id="${esc(m.id)}" ${i === themeModules.length-1 ? "disabled" : ""} aria-label="Опустить ${esc(m.name)}">↓</button>${m.id.startsWith("builtin-") ? "" : `<button class="btn btn-small" type="button" data-theme-delete="${esc(m.id)}" aria-label="Удалить ${esc(m.name)}">✕</button>`}</div>`).join("")}</div><div data-theme-drop style="margin-top:16px;padding:16px;border:1px dashed var(--line);border-radius:var(--r)"><p>Перетащите сюда CSS-файлы или выберите их.</p><button type="button" class="btn btn-small" data-theme-import>Импорт CSS</button><input type="file" accept=".css,text/css" multiple hidden data-theme-file></div><p class="muted" data-theme-status aria-live="polite">Импортированные темы сначала выключены.</p><div data-script-host></div>`;
+      renderScripts($("[data-script-host]", host));
     }
     function save() { injectStyles(); queueSave({ ui_theme_modules: themeModules }); draw(); }
     async function addFiles(files) {

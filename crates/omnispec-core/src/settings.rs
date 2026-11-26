@@ -16,6 +16,16 @@ pub struct UiThemeModule {
     pub enabled: bool,
 }
 
+/// Импортированный скрипт. Разрешения на запуск не сохраняются в настройках.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct UiScriptModule {
+    pub id: String,
+    pub name: String,
+    pub code: String,
+    pub mode: String,
+}
+
 fn default_username() -> String {
     "Player".into()
 }
@@ -448,6 +458,9 @@ pub struct Settings {
     /// Независимые CSS-заготовки в порядке применения.
     #[serde(default)]
     pub ui_theme_modules: Vec<UiThemeModule>,
+    /// Импортированные JS-скрипты; запускаются только вручную.
+    #[serde(default)]
+    pub ui_script_modules: Vec<UiScriptModule>,
     /// Раскладка крупных областей лаунчера из визуального конструктора.
     #[serde(default)]
     pub ui_layout: UiLayout,
@@ -639,6 +652,7 @@ impl Default for Settings {
             theme_text: None,
             custom_css: String::new(),
             ui_theme_modules: Vec::new(),
+            ui_script_modules: Vec::new(),
             ui_layout: UiLayout::default(),
             click_fx: default_click_fx(),
             ui_scale: default_ui_scale(),
@@ -782,6 +796,7 @@ mod discord_tests {
         assert_eq!(legacy.ui_layout.preset, "omnispec");
         assert!(legacy.ui_layout.elements.is_empty());
         assert!(legacy.ui_layout.custom_widgets.is_empty());
+        assert!(legacy.ui_script_modules.is_empty());
 
         let mut changed = legacy.clone();
         changed.custom_css = "[data-os=sidebar]{width:300px}".into();
@@ -800,6 +815,7 @@ mod discord_tests {
             surface_opacity: Some(0), backdrop_blur: Some(12), surface_radius: Some(20), build_card_size: Some(100), tabs_orientation: "vertical-right".into(), merged_workspace: true, list_view: "grid".into(),
             ..UiElement::default()
         });
+        changed.ui_script_modules.push(UiScriptModule { id: "script-test".into(), name: "demo.js".into(), code: "console.log(1)".into(), mode: "isolated".into() });
         changed.ui_layout.custom_widgets.push(UiCustomWidget {
             id: "widget-test".into(), name: "Example".into(), kind: "html".into(),
             content: "<b>hello</b>".into(), trusted: true,
@@ -809,6 +825,8 @@ mod discord_tests {
         category.rules.mc_versions = vec!["1.21.1".into(), "1.21.4".into()];
         changed.categories.push(category);
         let restored: Settings = serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
+        assert_eq!(restored.ui_script_modules[0].code, "console.log(1)");
+        assert_eq!(restored.ui_script_modules[0].mode, "isolated");
         assert_eq!(restored.ui_layout.custom_widgets[0].content, "<b>hello</b>");
         assert!(restored.ui_layout.custom_widgets[0].trusted);
         assert_eq!(restored.custom_css, changed.custom_css);
