@@ -4267,6 +4267,24 @@ fn open_path(state: State<'_, AppState>, path: String) -> Result<(), String> {
     open_in_file_manager(&folder)
 }
 
+/// Папки для пользовательских файлов. Импорт в настройки выполняется отдельно.
+fn prepare_customization_folder(paths: &Paths, kind: &str) -> Result<PathBuf, String> {
+    let name = match kind {
+        "themes" => "themes",
+        "scripts" => "scripts",
+        _ => return Err("неизвестный тип папки".into()),
+    };
+    let folder = paths.root.join(name);
+    std::fs::create_dir_all(&folder).map_err(err)?;
+    Ok(folder)
+}
+
+#[tauri::command]
+fn open_customization_folder(state: State<'_, AppState>, kind: String) -> Result<(), String> {
+    let folder = prepare_customization_folder(&state.paths, &kind)?;
+    open_in_file_manager(&folder)
+}
+
 fn open_in_file_manager(target: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -4752,6 +4770,7 @@ fn main() {
             toggle_mod,
             list_java,
             open_path,
+            open_customization_folder,
             window_action,
             mod_icons,
             world_icons,
@@ -5007,6 +5026,21 @@ mod tests {
         assert_eq!(stale.wallpaper_workshop_project.as_deref(), Some("chosen"));
         assert_eq!(stale.wallpaper_steam_path.as_deref(), Some("kept-steam"));
         assert_eq!(stale.ui_scale, 125, "unrelated settings still change");
+    }
+
+    #[test]
+    fn customization_folders_are_created_only_for_known_kinds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = super::Paths::new(tmp.path()).unwrap();
+        for kind in ["themes", "scripts"] {
+            let path = super::prepare_customization_folder(&paths, kind).unwrap();
+            assert_eq!(path, tmp.path().join(kind));
+            assert!(path.is_dir());
+            assert_eq!(super::prepare_customization_folder(&paths, kind).unwrap(), path);
+        }
+        for kind in ["", "../escape", "Themes", "/tmp"] {
+            assert!(super::prepare_customization_folder(&paths, kind).is_err());
+        }
     }
 
     #[test]
