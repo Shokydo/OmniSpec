@@ -217,6 +217,8 @@ struct AppState {
     modrinth: Modrinth,
     curseforge: CurseForge,
     settings: Mutex<Settings>,
+    /// CloseRequested приходит синхронно в UI-потоке.
+    close_to_tray: AtomicBool,
     /// Владение нативным значком окна, в том числе ICON_BIG на Windows.
     native_launcher_icon: launcher_icon::NativeIconState,
     /// Потоковый сервер запускается только при выборе видеообоев.
@@ -426,6 +428,7 @@ async fn save_settings(
     settings.save(&state.paths).map_err(err)?;
     state.presence.configure(settings.discord_rpc);
     *current = settings;
+    state.close_to_tray.store(current.minimize_to_tray, Ordering::SeqCst);
     state.rpc_upload_allowed.send_replace(
         current.discord_rpc && current.discord_instance_icon && current.discord_upload_local_icon
     );
@@ -4666,18 +4669,9 @@ async fn window_action(
     window: tauri::WebviewWindow,
     action: String,
 ) -> Result<(), String> {
-    let to_tray = action == "minimize"
-        && state.settings.lock().await.minimize_to_tray
-        && app.tray_by_id(TRAY_ID).is_some();
     match action.as_str() {
         "drag" => window.start_dragging(),
-        "minimize" => {
-            if to_tray {
-                window.hide()
-            } else {
-                window.minimize()
-            }
-        }
+        "minimize" => window.minimize(),
         "maximize" => {
             if window.is_maximized().unwrap_or(false) {
                 window.unmaximize()
@@ -4694,9 +4688,7 @@ async fn window_action(
     }
     .map_err(err)?;
 
-    if to_tray {
-        emit_window_visibility(&app, true);
-    }
+    let _ = (app, state);
     Ok(())
 }
 
@@ -4783,6 +4775,7 @@ fn main() {
         paths,
         http,
         settings: Mutex::new(settings),
+        close_to_tray: AtomicBool::new(initial_minimize_to_tray),
         native_launcher_icon: launcher_icon::NativeIconState::default(),
         video_server: StdMutex::new(None),
         running: Arc::new(Mutex::new(restored_map)),
@@ -4797,6 +4790,20 @@ fn main() {
 
     tauri::Builder::default()
         .manage(state)
+        .on_window_event(|window, event| {
+            if window.label() != "main" { return; }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                let enabled = app.state::<AppState>().close_to_tray.load(Ordering::SeqCst);
+                if enabled && app.tray_by_id(TRAY_ID).is_some() {
+                    // Если спрятать окно не удалось, разрешаем обычное закрытие.
+                    match window.hide() {
+                        Ok(()) => { api.prevent_close(); emit_window_visibility(app, true); }
+                        Err(error) => eprintln!("[omnispec] не удалось скрыть окно в трей: {error}"),
+                    }
+                }
+            }
+        })
         .setup(move |app| {
             if let Err(error) = setup_tray(app.handle(), initial_minimize_to_tray) {
                 // Без системного tray backend сворачиваем обычным способом,

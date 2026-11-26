@@ -61,6 +61,9 @@ jobs:
       - name: Проверить языки и фон в настоящем Windows WebView2
         shell: pwsh
         run: ./tools/tests/windows-language-wallpaper-cdp.ps1 -Launcher 'target/release/omnispec-app.exe'
+      - name: Проверить сворачивание и закрытие в трей в Windows
+        shell: pwsh
+        run: ./tools/tests/windows-tray-cdp.ps1 -Launcher 'target/release/omnispec-app.exe'
       - name: Проверить выбор 3D-плащей в настоящем Windows WebView2
         shell: pwsh
         run: ./tools/tests/windows-avatar-wardrobe-cdp.ps1 -Launcher 'target/release/omnispec-app.exe'
