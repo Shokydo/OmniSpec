@@ -245,6 +245,26 @@ async function layout(page, width, height) {
     await settled();
     assert.equal(await countCalls(),beforeKeyboard+2);
     console.log('CAPE_KEYBOARD_AND_ACTUAL_SELECTION_OK');
+    // No cape and last cape are neighbours in both directions, visually and logically.
+    await page.locator('#skin-capes [data-cape-id="cape-18"]').focus();
+    await page.keyboard.press('Home'); assert.equal(await chosen(),'');
+    const neighbours=await page.locator('#skin-capes').evaluate(list=>{
+      const cards=[...list.querySelectorAll('.cape-card')],i=cards.findIndex(c=>c.getAttribute('aria-pressed')==='true');
+      const a=cards[i].getBoundingClientRect(),r=list.getBoundingClientRect();
+      return {before:cards[i-1]?.dataset.capeId,after:cards[i+1]?.dataset.capeId,offset:Math.abs((a.left+a.right-r.left-r.right)/2)};
+    });
+    assert.equal(neighbours.before,'cape-19');assert.equal(neighbours.after,'cape-0');assert(neighbours.offset<8,JSON.stringify(neighbours));
+    assert(await page.locator('#cape-prev').isEnabled() && await page.locator('#cape-next').isEnabled());
+    await page.locator('#cape-prev').click();assert.equal(await chosen(),'cape-19');
+    await page.locator('#cape-next').click();assert.equal(await chosen(),'');
+    await page.locator('#skin-capes [data-cape-id=""]').focus();await page.keyboard.press('ArrowLeft');assert.equal(await chosen(),'cape-19');
+    await page.keyboard.press('ArrowRight');assert.equal(await chosen(),'');
+    const ringBox=await page.locator('#skin-capes').boundingBox();await page.mouse.move(ringBox.x+ringBox.width/2,ringBox.y+ringBox.height/2);
+    await page.mouse.wheel(0,-50);await page.waitForFunction(()=>document.querySelector('#skin-capes [data-cape-id="cape-19"]')?.getAttribute('aria-pressed')==='true');
+    await page.mouse.wheel(0,50);await page.waitForFunction(()=>document.querySelector('#skin-capes [data-cape-id=""]')?.getAttribute('aria-pressed')==='true');
+    await settled();assert.equal(await page.evaluate(()=>window.__avatarTest.calls.filter(c=>c.command==='set_cape').at(-1).args.capeId),null);
+    console.log('CAPE_INFINITE_LOOP_ARROWS_WHEEL_KEYBOARD_AND_VISUAL_NEIGHBOURS_OK');
+
 
     // Selection rerenders all panels; the independently scrolling skin and cape
     // lists, and their position after switching categories, must not jump.

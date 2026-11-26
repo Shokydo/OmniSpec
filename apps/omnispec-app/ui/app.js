@@ -13314,8 +13314,8 @@
     const cards = $$(".cape-card", list);
     const index = cards.findIndex((card) => card.dataset.capeId === selectedCapeId(capes));
     const blocked = !capes.licensed || capes.loading || (capes.busy && capes.mutationKind !== "wardrobe");
-    prev.disabled = blocked || index <= 0;
-    next.disabled = blocked || index < 0 || index >= cards.length - 1;
+    prev.disabled = blocked || index < 0 || cards.length < 2;
+    next.disabled = blocked || index < 0 || cards.length < 2;
   }
 
   function centerCapeCard(card, list = $("#skin-capes")) {
@@ -13332,6 +13332,25 @@
     list.scrollLeft = left;
   }
 
+  // Карточки остаются единственными DOM-элементами: в режиме списка
+  // циклически переставляем их так, чтобы по обе стороны от выбранного
+  // элемента были соседи, включая переход «последний ↔ без плаща».
+  function rotateCapeCarousel(capes, list = $("#skin-capes")) {
+    if (!list || capeView() !== "list") return false;
+    const all = $$(".cape-card", list);
+    if (all.length < 2) return false;
+    const byId = new Map(all.map(card => [card.dataset.capeId, card]));
+    const order = ["", ...(capes.list || []).map(cape => String(cape.id))].map(id => byId.get(id)).filter(Boolean);
+    const selected = order.findIndex(card => card.dataset.capeId === selectedCapeId(capes));
+    if (selected < 0 || order.length !== all.length) return false;
+    const start = (selected - Math.floor(order.length / 2) + order.length) % order.length;
+    const rotated = order.slice(start).concat(order.slice(0, start));
+    if (rotated.every((card, i) => card === all[i])) return false;
+    const note = list.querySelector(".cape-note");
+    rotated.forEach(card => list.insertBefore(card, note || null));
+    return true;
+  }
+
   function updateCapeSelectionUI(capes) {
     if (state.capes !== capes) return;
     const list = $("#skin-capes");
@@ -13342,6 +13361,7 @@
       card.classList.toggle("is-active", selected);
       card.setAttribute("aria-pressed", String(selected));
     });
+    if (rotateCapeCarousel(capes, list)) centerCapeCard($$(".cape-card", list).find(card => card.dataset.capeId === id), list);
     const busy = Boolean(capes.selectionTimer || (capes.busy && capes.mutationKind === "wardrobe"));
     list.setAttribute("aria-busy", String(busy));
     const status = $("#cape-status");
@@ -13438,12 +13458,18 @@
   function bindCapeCarousel() {
     const list = $("#skin-capes");
     if (!list) return;
-    const cards = () => $$(".cape-card", list);
+    const cards = () => {
+      const byId = new Map($$(".cape-card", list).map(card => [card.dataset.capeId, card]));
+      return ["", ...(capeState().list || []).map(cape => String(cape.id))].map(id => byId.get(id)).filter(Boolean);
+    };
+    rotateCapeCarousel(capeState(), list);
     const index = () => cards().findIndex((card) => card.dataset.capeId === selectedCapeId());
     const select = (next, focus = false) => {
       const all = cards();
-      if (next < 0 || next >= all.length || !chooseCape(all[next].dataset.capeId)) return false;
+      if (all.length < 2) return false;
+      next = ((next % all.length) + all.length) % all.length;
       const card = all[next];
+      if (!chooseCape(card.dataset.capeId)) return false;
       if (focus) card.focus({ preventScroll: true });
       centerCapeCard(card);
       return true;
@@ -13463,9 +13489,7 @@
       if (!delta) return;
       const direction = Math.sign(delta);
       const current = index();
-      if (current < 0 || (direction < 0 && current === 0) || (direction > 0 && current === cards().length - 1)) {
-        wheelRemainder = 0; return;
-      }
+      if (current < 0 || cards().length < 2) { wheelRemainder = 0; return; }
       event.preventDefault();
       if (direction !== wheelDirection) wheelRemainder = 0;
       wheelDirection = direction;
@@ -13473,7 +13497,7 @@
       const steps = Math.min(8, Math.floor(wheelRemainder / 50));
       if (!steps) return;
       wheelRemainder = Math.min(49, Math.max(0, wheelRemainder - steps * 50));
-      select(Math.max(0, Math.min(cards().length - 1, current + direction * steps)));
+      select(current + direction * steps);
     }, { passive: false });
     list.addEventListener("keydown", (event) => {
       if (event.altKey || event.ctrlKey || event.metaKey || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -13481,8 +13505,8 @@
       const current = index();
       if (!all.length || current < 0) return;
       let next = current;
-      if (event.key === "ArrowLeft") next = Math.max(0, current - 1);
-      if (event.key === "ArrowRight") next = Math.min(all.length - 1, current + 1);
+      if (event.key === "ArrowLeft") next = current - 1;
+      if (event.key === "ArrowRight") next = current + 1;
       if (event.key === "Home") next = 0;
       if (event.key === "End") next = all.length - 1;
       event.preventDefault();
