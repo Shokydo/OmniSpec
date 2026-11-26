@@ -128,6 +128,11 @@ const server = http.createServer((req, res) => {
     await page.waitForSelector('#modal-customizer:not([hidden]) [data-editor-root]');
     assert.equal(await page.locator('#modal-prefs:not([hidden]) [data-editor-root]').count(), 0, 'customizer is not mounted in the cramped preferences pane');
     assert.equal(await page.locator('#modal-customizer:not([hidden]) .visual-editor').count(), 1, 'visual editor is mounted in the fullscreen customizer');
+    assert.equal(await page.locator('#modal-customizer [data-ui-preset]').count(), 0, 'presets are no longer displayed above the editor');
+    assert.equal(await page.locator('#modal-customizer [data-widget-action="add"]').innerText(), '+ Добавить');
+    await page.locator('[data-custom-tab="presets"]').click();
+    assert.equal(await page.locator('#modal-customizer [data-ui-preset]').count(), 4, 'all layout presets live in their own tab');
+    await page.locator('[data-custom-tab="editor"]').click();
     const customizerGeometry = await page.locator('#modal-customizer .customizer-box').evaluate((node) => {
       const rect = node.getBoundingClientRect();
       return { width: Math.round(rect.width), height: Math.round(rect.height), viewportWidth: window.innerWidth, viewportHeight: window.innerHeight };
@@ -197,14 +202,18 @@ const server = http.createServer((req, res) => {
     await page.waitForFunction(() => {const e=window.__v052.settings.ui_layout?.elements?.find(x=>x.id==='build-path');return e?.surface_opacity===0 && e?.backdrop_blur===12;});
     await page.locator('[data-surface-reset]').click();
     assert.equal(await page.locator('#build-path').evaluate(el => el.style.getPropertyValue('backdrop-filter')), '', 'theme reset clears custom blur');
+    await page.locator('[data-custom-tab="presets"]').click();
     await page.locator('[data-ui-preset="omnispec"]').click();
+    await page.locator('[data-custom-tab="editor"]').click();
     await page.locator('.visual-element[data-visual-id="build-list"]').click();
     await page.locator('[data-element-select="list_view"]').selectOption('grid');
     assert.equal(await page.locator('#instance-list .cat.is-open .cat-items').first().evaluate(el => getComputedStyle(el).display), 'grid', 'compact cards use actual grid layout');
     await page.waitForFunction(() => window.__v052.settings.ui_layout?.elements?.find(x=>x.id==='build-list')?.list_view==='grid');
     await page.locator('[data-element-select="list_view"]').selectOption('list');
     assert.equal(await page.locator('#instance-list .cat.is-open .cat-items').first().evaluate(el => getComputedStyle(el).display), 'flex', 'list layout can be restored');
+    await page.locator('[data-custom-tab="presets"]').click();
     await page.locator('[data-ui-preset="omnispec"]').click();
+    await page.locator('[data-custom-tab="editor"]').click();
 
     await page.locator('.visual-element[data-visual-id="account"]').click();
     await page.locator('[data-element-select="mode"]').selectOption('absolute');
@@ -221,7 +230,9 @@ const server = http.createServer((req, res) => {
     await page.locator('[data-element-number="width"]').dispatchEvent('input');
     await page.waitForFunction(() => !document.querySelector('#account-chip').classList.contains('is-avatar-only'));
     assert.equal(await page.locator('#account-chip .acc-main').isVisible(), true, 'profile text returns on expansion');
+    await page.locator('[data-custom-tab="presets"]').click();
     await page.locator('[data-ui-preset="omnispec"]').click();
+    await page.locator('[data-custom-tab="editor"]').click();
 
     await page.locator('.visual-element[data-visual-id="build-list"]').click();
     await page.locator('[data-element-select="mode"]').selectOption('absolute');
@@ -238,7 +249,9 @@ const server = http.createServer((req, res) => {
     await page.locator('[data-element-number="width"]').dispatchEvent('input');
     await page.waitForFunction(() => !document.querySelector('#instance-list').classList.contains('is-narrow'));
     assert.equal(await page.locator('#instance-list .instance[data-id="fabric"] .instance-time').first().isVisible(), true, 'expanded rows restore playtime');
+    await page.locator('[data-custom-tab="presets"]').click();
     await page.locator('[data-ui-preset="omnispec"]').click();
+    await page.locator('[data-custom-tab="editor"]').click();
 
     await page.locator('.visual-element[data-visual-id="sidebar-actions"]').click();
     for (const select of await page.locator('.visual-properties [data-element-select]').all()) {
@@ -255,7 +268,9 @@ const server = http.createServer((req, res) => {
     await page.locator('[data-element-number="width"]').dispatchEvent('input');
     await page.waitForFunction(() => !document.querySelector('#btn-quick-settings').classList.contains('is-icon-only'));
     assert.equal(await page.locator('#btn-quick-settings span').isVisible(), true, 'caption returns when the independent actions panel grows');
+    await page.locator('[data-custom-tab="presets"]').click();
     await page.locator('[data-ui-preset="omnispec"]').click();
+    await page.locator('[data-custom-tab="editor"]').click();
     await page.locator('.visual-element[data-visual-id="tabs"]').click();
     await page.locator('[data-element-select="mode"]').selectOption('free');
     await page.locator('[data-element-select="variant"]').selectOption('prominent');
@@ -274,7 +289,9 @@ const server = http.createServer((req, res) => {
       return item?.mode === 'free' && item?.variant === 'prominent' && item?.x === 120 && item?.y === 44
         && item?.width === 510 && item?.height === 80 && item?.margin === 6 && item?.padding === 8 && item?.radius === 18 && item?.visible === true;
     });
+    await page.locator('[data-custom-tab="presets"]').click();
     await page.locator('[data-ui-preset="omnispec"]').click();
+    await page.locator('[data-custom-tab="editor"]').click();
     await page.locator('.visual-element[data-visual-id="tabs"]').click();
     await page.locator('[data-element-select="tabs_orientation"]').selectOption('vertical');
     await page.waitForFunction(() => window.__v052.settings.ui_layout?.elements?.find(e => e.id === 'tabs')?.tabs_orientation === 'vertical');
@@ -290,7 +307,9 @@ const server = http.createServer((req, res) => {
     await page.locator('.visual-element[data-visual-id="tabs"]').click();
     await page.locator('[data-element-select="tabs_orientation"]').selectOption('horizontal');
     assert.equal(await page.locator('.app .tabs').evaluate(el => getComputedStyle(el).flexDirection), 'row', 'horizontal navigation restored');
+    await page.locator('[data-custom-tab="presets"]').click();
     await page.locator('[data-ui-preset="prism"]').click();
+    await page.locator('[data-custom-tab="editor"]').click();
     await page.waitForFunction(() => window.__v052.settings.ui_layout?.preset === 'prism');
     const prism = await page.evaluate(() => {
       const sidebar = document.querySelector('.app .sidebar').getBoundingClientRect();
@@ -309,7 +328,9 @@ const server = http.createServer((req, res) => {
     const positions = await page.evaluate(() => {const a=document.querySelector('.tabs').getBoundingClientRect(), b=document.querySelector('.tab-body').getBoundingClientRect(); return {left:a.left,right:b.right};});
     assert(positions.left >= positions.right - 1, 'Prism pages are to the right of workspace');
     await page.evaluate(() => window.omnispecCustomizer.open());
+    await page.locator('[data-custom-tab="presets"]').click();
     await page.locator('[data-ui-preset="modrinth"]').click();
+    await page.locator('[data-custom-tab="editor"]').click();
     await page.waitForFunction(() => window.__v052.settings.ui_layout?.preset === 'modrinth');
     assert.equal(await page.locator('.app .main').getAttribute('data-tabs-orientation'), 'vertical', 'Modrinth navigation is vertical');
     assert.equal(await page.locator('#tabs [data-tab="console"] .tab-icon').evaluate(el => getComputedStyle(el).display), 'block', 'Modrinth shows icon navigation');
@@ -512,7 +533,9 @@ body, body * { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2
     assert((await page.locator('#omnispec-replacement-base-css').textContent()).includes(css));
     // Реальный список переезжает в рабочую область, а не дублируется.
     await page.locator('[data-custom-tab="editor"]').click();
+    await page.locator('[data-custom-tab="presets"]').click();
     await page.locator('[data-ui-preset="omnispec"]').click();
+    await page.locator('[data-custom-tab="editor"]').click();
     await page.locator('.visual-canvas-item[data-visual-id="content"]').click({button:'right', position: {x:10,y:10}});
     assert.equal(await page.locator('[data-merge-workspace]').getAttribute('aria-checked'), 'false', 'context menu shows unchecked setting');
     await page.locator('[data-merge-workspace]').click();

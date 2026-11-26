@@ -11,10 +11,14 @@ const path = require('node:path');
   const source=fs.readFileSync(path.resolve(__dirname,'../../apps/omnispec-app/ui/customization.js'),'utf8');
   async function setup(settings={}) {
     await page.setContent(markup);
-    await page.evaluate(s=>{window.saved=s;window.omnispecDebug={state:{settings:s}};window._confirm=false;window.omnispecDialogs={confirm:async()=>window._confirm};window.__TAURI__={core:{invoke:async(c,a)=>{if(c==='get_settings')return window.saved;if(c==='save_settings'){window.saved=JSON.parse(JSON.stringify(a.settings));return null;}}}}},settings);
+    await page.evaluate(s=>{window.saved=s;window.folderCalls=[];window.omnispecDebug={state:{settings:s}};window._confirm=false;window.omnispecDialogs={confirm:async()=>window._confirm};window.__TAURI__={core:{invoke:async(c,a)=>{if(c==='open_customization_folder'){window.folderCalls.push(a.kind);return null;}if(c==='get_settings')return window.saved;if(c==='save_settings'){window.saved=JSON.parse(JSON.stringify(a.settings));return null;}}}}},settings);
     await page.addScriptTag({content:source}); await page.evaluate(()=>window.omnispecCustomizer.renderThemes(document.querySelector('#themes')));
   }
   await page.goto('about:blank'); await setup();
+  await page.locator('[data-theme-folder]').click(); await page.locator('[data-script-folder]').click();
+  assert.deepEqual(await page.evaluate(()=>window.folderCalls), ['themes','scripts']);
+  assert((await page.locator('[data-theme-status]').innerText()).includes('не добавляется автоматически'));
+  assert((await page.locator('[data-script-status]').innerText()).includes('не добавляется автоматически'));
   await page.locator('[data-script-file]').setInputFiles({name:'example.js',mimeType:'text/javascript',buffer:Buffer.from('document.body.dataset.ran="isolated"; try { parent.escapeAttempt=1 } catch(e) {}')});
   await page.waitForSelector('[data-script-row]'); assert.equal(await page.locator('[data-script-toggle]').getAttribute('aria-checked'),'false');
   assert.equal(await page.locator('[data-script-mode]').inputValue(),'isolated'); assert.equal(await page.evaluate(()=>window.escapeAttempt),undefined);
