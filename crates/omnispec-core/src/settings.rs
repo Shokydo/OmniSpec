@@ -27,6 +27,8 @@ pub struct UiScriptModule {
     pub name: String,
     pub code: String,
     pub mode: String,
+    #[serde(default)]
+    pub auto_start: bool,
 }
 
 fn default_username() -> String {
@@ -826,7 +828,7 @@ mod discord_tests {
             id: "folder-test".into(), name: "example.css".into(),
             css: ":root { --accent: red }".into(), source_file: Some("example.css".into()), enabled: true,
         });
-        changed.ui_script_modules.push(UiScriptModule { id: "script-test".into(), name: "demo.js".into(), code: "console.log(1)".into(), mode: "isolated".into() });
+        changed.ui_script_modules.push(UiScriptModule { id: "script-test".into(), name: "demo.js".into(), code: "console.log(1)".into(), mode: "isolated".into(), auto_start: true });
         changed.ui_layout.custom_widgets.push(UiCustomWidget {
             id: "widget-test".into(), name: "Example".into(), kind: "html".into(),
             content: "<b>hello</b>".into(), trusted: true,
@@ -840,6 +842,7 @@ mod discord_tests {
         assert!(restored.ui_theme_modules[0].enabled);
         assert_eq!(restored.ui_script_modules[0].code, "console.log(1)");
         assert_eq!(restored.ui_script_modules[0].mode, "isolated");
+        assert!(restored.ui_script_modules[0].auto_start);
         assert_eq!(restored.ui_layout.custom_widgets[0].content, "<b>hello</b>");
         assert!(restored.ui_layout.custom_widgets[0].trusted);
         assert_eq!(restored.custom_css, changed.custom_css);

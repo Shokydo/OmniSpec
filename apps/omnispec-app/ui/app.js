@@ -15682,6 +15682,8 @@
     if (!state.selectedId) state.tab = "discover";
     updateStatus();
     renderTab();
+    window.__omniInterfaceReady = true;
+    window.dispatchEvent(new Event("omnispec-ui-ready"));
     syncPresence();
     try { await initUpdates(); }
     catch (error) { toast(`Не удалось проверить обновления: ${error && error.message ? error.message : error}`, "err"); }
