@@ -6965,6 +6965,19 @@
 
   let contentViewInstance = null;
   let contentRenderSerial = 0;
+  const contentTogglePending = new Set();
+  async function toggleContentEntry(meta, kind, entry) {
+    const key = JSON.stringify([meta.id, kind, entry.filename]);
+    if (contentTogglePending.has(key)) return;
+    contentTogglePending.add(key);
+    try { await api.contentToggle(meta.id, kind, entry.name); }
+    catch (err) { toast(String(err), "err"); }
+    finally {
+      try {
+        if (state.selectedId === meta.id && state.tab === (kind === "mod" ? "mods" : kind === "resourcepack" ? "resourcepacks" : "shaders")) await renderContent(kind);
+      } finally { contentTogglePending.delete(key); }
+    }
+  }
   async function renderContent(kind) {
     const cfg = CONTENT_KINDS[kind] || CONTENT_KINDS.mod;
     const meta = selected();
@@ -7025,8 +7038,8 @@
             <div class="item-sub">${entry.version_number ? `v${esc(entry.version_number)} · ` : ""}${humanSize(entry.size)}${update ? ` · <span class="content-update">есть ${esc(update.latest)}</span>` : ""}</div>
           </div>
           ${update ? `<button class="btn btn-small btn-primary" data-update-one="${esc(entry.filename)}">Обновить</button>` : ""}
-          <button class="switch ${entry.enabled ? "on" : ""}" data-toggle="${esc(entry.filename)}" title="Включить/выключить"></button>
-          <button class="icon-btn" data-delete="${esc(entry.filename)}" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
+          <button class="switch ${entry.enabled ? "on" : ""}" data-toggle="${esc(entry.name)}" title="Включить/выключить"></button>
+          <button class="icon-btn" data-delete="${esc(entry.name)}" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>
         </div>`;
     }).join("");
 
@@ -7096,8 +7109,8 @@
     input.addEventListener("keydown", (event) => { if (event.key === "Escape") { input.value = ""; state.contentQuery[kind] = ""; renderContent(kind); } });
 
     $$("#tab-body [data-toggle]").forEach((el) => el.addEventListener("click", async () => {
-      try { await api.contentToggle(meta.id, kind, el.dataset.toggle); renderContent(kind); }
-      catch (err) { toast(String(err), "err"); }
+      const entry = entries.find(item => item.name === el.dataset.toggle);
+      if (entry) await toggleContentEntry(meta, kind, entry);
     }));
     $$("#tab-body [data-delete]").forEach((el) => el.addEventListener("click", async () => {
       const name = el.dataset.delete;
@@ -7149,11 +7162,11 @@
         else if (act === "update") await updateContentFile(kind, entry.filename);
         else if (act === "replace") await openVersions(entry.project_id, kind, contentTitle(entry), entry);
         else if (act === "page") await api.openUrl(pageUrl);
-        else if (act === "toggle") { await api.contentToggle(meta.id, kind, entry.name); renderContent(kind); }
+        else if (act === "toggle") await toggleContentEntry(meta, kind, entry);
         else if (act === "folder") await api.openPath(`/instances/${meta.id}/minecraft/${cfg.folder}`);
         else if (act === "delete") {
           const ok = await askConfirm({ title: "Удалить файл?", text: `«${entry.filename}» будет удалён из сборки.`, ok: "Удалить", danger: true });
-          if (ok) { await api.contentDelete(meta.id, kind, entry.filename); renderContent(kind); toast("Удалено", "ok"); }
+          if (ok) { await api.contentDelete(meta.id, kind, entry.name); renderContent(kind); toast("Удалено", "ok"); }
         }
       } catch (err) { toast(String(err), "err"); }
     });
@@ -12783,7 +12796,13 @@
     const originY = H / 2;
     const project = ([x, y, z]) => [originX + x * unit, originY - (y - 16) * unit, z];
 
-    const parts = capeOnly ? [] : (SKIN_MODEL[variant] || SKIN_MODEL.classic).slice();
+    // В исходной модели правая/левая конечность оказались по неверные
+    // стороны тела. Меняем геометрию, сохраняя свои UV у каждой конечности.
+    const parts = capeOnly ? [] : (SKIN_MODEL[variant] || SKIN_MODEL.classic).map(part => {
+      if (!/^(Right|Left) (Arm|Leg)/.test(part.n)) return part;
+      const [x0,y0,z0,x1,y1,z1] = part.b;
+      return { ...part, b: [-x1,y0,z0,-x0,y1,z1] };
+    });
     // плащ — отдельная деталь со своей картинкой (64×32), показываем, если он есть
     if (capeTexture) parts.push({ ...SKIN_CAPE, tex: capeTexture });
 
@@ -12801,7 +12820,7 @@
         const normal = rotate(part.cape ? tiltCapeNormal(SKIN_FACE_NORMALS[dir]) : SKIN_FACE_NORMALS[dir]);
         if (normal[2] >= -0.001) return; // грань смотрит от камеры
         const pts = corners[dir].map((point) => rotate(part.cape ? tiltCape(point) : point)).map(project);
-        faces.push({ uv: part.uv[dir], pts, cape: part.cape, part: part.n, tex: part.tex || texture, depth: (pts[0][2] + pts[1][2] + pts[2][2] + pts[3][2]) / 4 });
+        faces.push({ uv: part.uv[dir], dir, pts, cape: part.cape, part: part.n, tex: part.tex || texture, depth: (pts[0][2] + pts[1][2] + pts[2][2] + pts[3][2]) / 4 });
       });
     });
 
@@ -12827,10 +12846,11 @@
         ctx.closePath();
         ctx.clip();
         // аффинное преобразование: прямоугольник текстуры → четырёхугольник на экране
-        // У плаща UV могут идти в обратном направлении; игнорирование знака
-        // зеркалило рисунок. Поведение старой модели скина не меняем.
-        const flipU = face.cape && face.uv[0] > face.uv[2];
-        const flipV = face.cape && face.uv[1] > face.uv[3];
+        // Вершины боковых граней скина перечислены справа налево;
+        // UV нужно развернуть относительно их порядка на текстуре. У плаща
+        // собственное соглашение UV и его ориентацию не меняем.
+        const flipU = face.cape ? face.uv[0] > face.uv[2] : (["north", "south", "east", "west"].includes(face.dir) ? face.uv[0] < face.uv[2] : face.uv[0] > face.uv[2]);
+        const flipV = face.uv[1] > face.uv[3];
         const a = (p1[0] - p0[0]) / (flipU ? -uw : uw), b = (p1[1] - p0[1]) / (flipU ? -uw : uw);
         const c = (p3[0] - p0[0]) / (flipV ? -vh : vh), d = (p3[1] - p0[1]) / (flipV ? -vh : vh);
         const startU = flipU ? u2 : u1, startV = flipV ? v2 : v1;
