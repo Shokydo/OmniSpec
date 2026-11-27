@@ -3902,7 +3902,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-app"
-version = "0.63.1"
+version = "0.63.2"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -3932,7 +3932,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-core"
-version = "0.63.1"
+version = "0.63.2"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -3956,7 +3956,7 @@ dependencies = [
 
 [[package]]
 name = "omnispec-setup"
-version = "0.63.1"
+version = "0.63.2"
 dependencies = [
  "eframe",
  "image",
